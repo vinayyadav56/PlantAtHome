@@ -1,0 +1,26 @@
+name: Get Railway Domain
+
+on:
+  workflow_dispatch:
+
+jobs:
+  get-domain:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Query Railway Service Domains
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          # Check existing domains
+          DOMAIN_RESP=$(curl -sf -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -d '{"query": "{ service(id: \"5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e\") { name serviceInstances { edges { node { domains { serviceDomains { domain } } } } } } }"}')
+          echo "Domain response: $DOMAIN_RESP"
+          
+          # Also check deployments
+          DEPLOY_RESP=$(curl -sf -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -d '{"query": "{ deployments(input: { serviceId: \"5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e\" }) { edges { node { id status createdAt } } } }"}')
+          echo "Deployments: $DEPLOY_RESP"
