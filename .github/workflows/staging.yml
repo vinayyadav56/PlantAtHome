@@ -58,53 +58,50 @@ jobs:
     if: github.ref == 'refs/heads/staging' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
 
     steps:
-      - name: Delete PORT override and deploy via Railway
+      - name: Deploy to Railway
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_SERVICE_ID: 5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e
           RAILWAY_PROJECT_ID: 3261e461-4321-4974-b86c-6e0d1675f032
           RAILWAY_ENV_ID: a12e9f73-752a-4556-a065-b6a7657bae63
         run: |
-          # Delete PORT override - let Railway inject its own PORT dynamically
-          echo "Deleting PORT override..."
-          curl -sf -X POST https://backboard.railway.app/graphql/v2 \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d "{\"query\": \"mutation { variableDelete(projectId: \\\"$RAILWAY_PROJECT_ID\\\", environmentId: \\\"$RAILWAY_ENV_ID\\\", serviceId: \\\"$RAILWAY_SERVICE_ID\\\", name: \\\"PORT\\\") }\"}" 2>/dev/null && echo "PORT deleted" || echo "PORT delete attempted"
-
-          # Trigger deploy (nixpacks builder now, from railway.json)
           DEPLOY_RESP=$(curl -sf -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -d "{\"query\": \"mutation { serviceInstanceDeployV2(serviceId: \\\"$RAILWAY_SERVICE_ID\\\", environmentId: \\\"$RAILWAY_ENV_ID\\\") }\"}")
-          echo "Deploy: $DEPLOY_RESP"
-
           DEPLOY_ID=$(echo "$DEPLOY_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['serviceInstanceDeployV2'])" 2>/dev/null)
           echo "Deploy ID: $DEPLOY_ID"
           echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
 
-      - name: Wait for build and check health from GitHub Actions
+      - name: Wait 7min then get build logs + health check
         if: always()
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_SERVICE_ID: 5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e
         run: |
-          echo "Waiting 6 minutes for nixpacks build..."
-          sleep 360
+          DEPLOY_ID="${{ env.DEPLOY_ID }}"
+          echo "Deploy ID: $DEPLOY_ID"
+          echo "Waiting 7 minutes for build..."
+          sleep 420
 
-          echo "=== Deployment Status ==="
+          echo "=== Status ==="
           curl -sf -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d '{"query": "{ deployments(input: { serviceId: \"5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e\" }) { edges { node { id status createdAt } } } }"}' | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e['node']['status'], e['node']['createdAt'][:19], e['node']['id'][:8]) for e in d['data']['deployments']['edges'][:3]]" 2>/dev/null
+            -d "{\"query\": \"{ deployment(id: \\\"$DEPLOY_ID\\\") { status } }\"}" 2>/dev/null
 
-          echo "=== Health check from GitHub Actions ==="
-          for i in $(seq 1 4); do
-            CODE=$(curl -s -w "%{http_code}" -o /tmp/hh.txt --max-time 15 \
-              "https://plantathome-api-production.up.railway.app/api/health" 2>/dev/null)
-            rm -f /tmp/hh.txt
-            BODY=$(curl -s --max-time 10 "https://plantathome-api-production.up.railway.app/api/health" 2>/dev/null)
-            echo "Attempt $i: HTTP $CODE body: $BODY"
-            [ "$CODE" = "200" ] || [ "$CODE" = "500" ] && echo "APP IS RESPONDING!" && break
-            sleep 20
-          done
+          echo ""
+          echo "=== Build logs (last 30 lines) ==="
+          curl -sf -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -d "{\"query\": \"{ deploymentLogs(deploymentId: \\\"$DEPLOY_ID\\\", limit: 30) { message severity } }\"}" 2>/dev/null | python3 -c "import sys,json; d=json.load(sys.stdin); [print(l.get('severity','?'), l.get('message','')) for l in d.get('data',{}).get('deploymentLogs',[])]" 2>/dev/null || echo "Log query failed"
+
+          echo ""
+          echo "=== DNS check from runner ==="
+          dig +short plantathome-api-production.up.railway.app || echo "dig failed"
+          host plantathome-api-production.up.railway.app || echo "host failed"
+
+          echo ""
+          echo "=== Curl health check (verbose) ==="
+          curl -v --max-time 20 "https://plantathome-api-production.up.railway.app/api/health" 2>&1 | grep -E "(Trying|Connected|HTTP|error|timed|refused|502|200|Application)" | head -10 || true
