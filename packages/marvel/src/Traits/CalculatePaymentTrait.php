@@ -18,20 +18,22 @@ trait CalculatePaymentTrait
             throw new MarvelException(CART_ITEMS_NOT_FOUND);
         }
         $subtotal = 0;
-        try {
-            foreach ($cartItems as $item) {
-                if (isset($item['variation_option_id'])) {
-                    $variation = Variation::findOrFail($item['variation_option_id']);
-                    $subtotal += $this->calculateEachItemTotal($variation, $item['order_quantity']);
-                } else {
-                    $product = Product::findOrFail($item['product_id']);
-                    $subtotal += $this->calculateEachItemTotal($product, $item['order_quantity']);
+        foreach ($cartItems as $item) {
+            if (isset($item['variation_option_id'])) {
+                $variation = Variation::find($item['variation_option_id']);
+                if (!$variation) {
+                    throw new MarvelException(CART_ITEMS_NOT_FOUND);
                 }
+                $subtotal += $this->calculateEachItemTotal($variation, $item['order_quantity']);
+            } else {
+                $product = Product::find($item['product_id']);
+                if (!$product) {
+                    throw new MarvelException(CART_ITEMS_NOT_FOUND);
+                }
+                $subtotal += $this->calculateEachItemTotal($product, $item['order_quantity']);
             }
-            return $subtotal;
-        } catch (\Throwable $th) {
-            throw new MarvelException(NOT_FOUND);
         }
+        return $subtotal;
     }
 
     public function calculateDiscount($coupon, $subtotal)
