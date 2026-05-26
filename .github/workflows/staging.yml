@@ -1,4 +1,4 @@
-name: CI/CD → Staging
+name: Fix Railway Domain
 
 on:
   push:
@@ -58,52 +58,86 @@ jobs:
     if: github.ref == 'refs/heads/staging' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
 
     steps:
-      - name: Configure and Deploy to Railway
+      - name: Fix domain and deploy
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_SERVICE_ID: 5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e
           RAILWAY_PROJECT_ID: 3261e461-4321-4974-b86c-6e0d1675f032
           RAILWAY_ENV_ID: a12e9f73-752a-4556-a065-b6a7657bae63
         run: |
+          # Get existing domain ID
+          echo "=== Getting existing domain ==="
+          DOMAIN_INFO=$(curl -sf -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -d "{\"query\": \"{ service(id: \\\"$RAILWAY_SERVICE_ID\\\") { serviceInstances { edges { node { domains { serviceDomains { id domain } } } } } } }\"}")
+          echo "Domain info: $DOMAIN_INFO"
+
+          # Extract domain ID
+          DOMAIN_ID=$(echo "$DOMAIN_INFO" | python3 -c "import sys,json; d=json.load(sys.stdin); insts=d['data']['service']['serviceInstances']['edges']; sds=[sd for inst in insts for sd in inst['node']['domains']['serviceDomains']]; print(sds[0]['id'] if sds else 'NONE')" 2>/dev/null || echo "NONE")
+          echo "Domain ID: $DOMAIN_ID"
+
+          # Delete existing domain
+          if [ "$DOMAIN_ID" != "NONE" ] && [ -n "$DOMAIN_ID" ]; then
+            echo "Deleting existing domain..."
+            DEL_RESP=$(curl -sf -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
+              -d "{\"query\": \"mutation { serviceDomainDelete(id: \\\"$DOMAIN_ID\\\") }\"}")
+            echo "Delete response: $DEL_RESP"
+            sleep 5
+          fi
+
+          # Set PORT env var
           curl -sf -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -d "{\"query\": \"mutation { variableCollectionUpsert(input: { projectId: \\\"$RAILWAY_PROJECT_ID\\\", environmentId: \\\"$RAILWAY_ENV_ID\\\", serviceId: \\\"$RAILWAY_SERVICE_ID\\\", variables: { PORT: \\\"3000\\\" } }) }\"}" && echo "PORT=3000 set"
 
+          # Trigger new deploy
           DEPLOY_RESP=$(curl -sf -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -d "{\"query\": \"mutation { serviceInstanceDeployV2(serviceId: \\\"$RAILWAY_SERVICE_ID\\\", environmentId: \\\"$RAILWAY_ENV_ID\\\") }\"}")
           echo "Deploy: $DEPLOY_RESP"
-
           DEPLOY_ID=$(echo "$DEPLOY_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['serviceInstanceDeployV2'])" 2>/dev/null)
           echo "Deploy ID: $DEPLOY_ID"
           echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
 
-      - name: Wait and check deployment logs
+      - name: Create new domain and wait for health
         if: always()
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_SERVICE_ID: 5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e
+          RAILWAY_ENV_ID: a12e9f73-752a-4556-a065-b6a7657bae63
         run: |
-          DEPLOY_ID="${{ env.DEPLOY_ID }}"
-          echo "Checking deployment: $DEPLOY_ID"
-          echo "Waiting 4 minutes for Docker build..."
-          sleep 240
+          echo "Waiting 5 minutes for Docker build..."
+          sleep 300
 
+          # Create new domain
+          echo "=== Creating new domain ==="
+          NEW_DOMAIN=$(curl -sf -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -d "{\"query\": \"mutation { serviceDomainCreate(input: { serviceId: \\\"$RAILWAY_SERVICE_ID\\\", environmentId: \\\"$RAILWAY_ENV_ID\\\" }) { id domain } }\"}")
+          echo "New domain: $NEW_DOMAIN"
+
+          DOMAIN=$(echo "$NEW_DOMAIN" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['serviceDomainCreate']['domain'])" 2>/dev/null || echo "unknown")
+          echo "Railway API URL: https://$DOMAIN/api/health"
+
+          # Check deployment status
           echo "=== Deployment Status ==="
           curl -sf -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d "{\"query\": \"{ deployment(id: \\\"$DEPLOY_ID\\\") { id status } }\"}" 2>/dev/null || echo "Status query failed"
+            -d '{"query": "{ deployments(input: { serviceId: \"5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e\" }) { edges { node { id status createdAt } } } }"}' | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e['node']['status'], e['node']['createdAt'][:19], e['node']['id'][:8]) for e in d['data']['deployments']['edges'][:3]]" 2>/dev/null
 
-          echo ""
-          echo "=== All Recent Deployments ==="
-          curl -sf -X POST https://backboard.railway.app/graphql/v2 \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d '{"query": "{ deployments(input: { serviceId: \"5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e\" }) { edges { node { id status createdAt } } } }"}' | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e['node']['status'], e['node']['createdAt'][:19], e['node']['id'][:8]) for e in d['data']['deployments']['edges'][:5]]" 2>/dev/null
-
-          echo ""
+          # Health check from GitHub Actions (US East)
           echo "=== Health check from GitHub Actions (US East) ==="
-          curl -s -w "\nHTTP: %{http_code}\n" --max-time 10 \
-            "https://plantathome-api-production.up.railway.app/api/health" 2>/dev/null || echo "curl failed"
+          for i in $(seq 1 3); do
+            CODE=$(curl -s -w "%{http_code}" -o /tmp/hh.txt --max-time 15 "https://$DOMAIN/api/health" 2>/dev/null)
+            BODY=$(cat /tmp/hh.txt)
+            echo "Attempt $i: HTTP $CODE: $BODY"
+            [ "$CODE" = "200" ] || [ "$CODE" = "500" ] && break
+            sleep 20
+          done
