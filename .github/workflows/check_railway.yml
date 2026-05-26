@@ -1,0 +1,17 @@
+name: Check Railway Status
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check Railway deployments
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          curl -sf -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -d '{"query": "{ deployments(input: { serviceId: \"5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e\" }) { edges { node { id status createdAt } } } }"}' | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e['node']['status'], e['node']['id'], e['node']['createdAt']) for e in d['data']['deployments']['edges'][:5]]"
