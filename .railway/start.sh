@@ -1,6 +1,11 @@
 #!/bin/sh
 set -e
 
+# Railway injects PORT; nginx must listen on it
+PORT=${PORT:-80}
+sed -i "s/listen 80;/listen $PORT;/g" /etc/nginx/nginx.conf
+echo "==> Nginx configured to listen on port $PORT"
+
 echo "==> Running migrations..."
 php artisan migrate --force
 
