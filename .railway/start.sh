@@ -1,19 +1,13 @@
 #!/bin/sh
 
-# Railway injects PORT; nginx must listen on it
-PORT=${PORT:-80}
-sed -i "s/listen 80;/listen $PORT;/g" /etc/nginx/nginx.conf
-echo "==> Nginx configured to listen on port $PORT"
-
-echo "==> APP_ENV=$APP_ENV DB_HOST=$DB_HOST DB_DATABASE=$DB_DATABASE"
+echo "==> APP_ENV=${APP_ENV} DB_HOST=${DB_HOST} PORT=${PORT}"
 
 echo "==> Running migrations (non-fatal)..."
-php artisan migrate --force || echo "WARNING: Migrations failed - continuing startup"
+php artisan migrate --force || echo "WARNING: Migrations failed, DB may not be ready yet"
 
-echo "==> Clearing and caching config..."
-php artisan config:cache || true
-php artisan route:cache || true
-php artisan view:cache || true
+echo "==> Clearing config cache..."
+php artisan config:clear || true
+php artisan route:clear || true
 
-echo "==> Starting services..."
-exec /usr/bin/supervisord -c /etc/supervisord.conf
+echo "==> Starting Laravel server on port ${PORT:-8080}..."
+exec php artisan serve --host=0.0.0.0 --port=${PORT:-8080}
