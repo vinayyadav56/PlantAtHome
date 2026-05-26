@@ -96,21 +96,12 @@ jobs:
             -d "{\"query\": \"{ service(id: \\\"$RAILWAY_SERVICE_ID\\\") { serviceInstances { edges { node { domains { serviceDomains { domain } } } } } } }\"}")
           echo "Service domains: $DOMAIN_RESP"
 
-          # Create domain if none exists
-          EXISTING=$(echo "$DOMAIN_RESP" | python3 -c "
-import sys,json
-d=json.load(sys.stdin)
-instances=d.get('data',{}).get('service',{}).get('serviceInstances',{}).get('edges',[])
-domains=[]
-for inst in instances:
-    for sd in inst.get('node',{}).get('domains',{}).get('serviceDomains',[]):
-        domains.append(sd['domain'])
-print(','.join(domains) if domains else 'NONE')
-" 2>/dev/null || echo "NONE")
+          # Parse existing domains (single-line python)
+          EXISTING=$(echo "$DOMAIN_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); insts=d.get('data',{}).get('service',{}).get('serviceInstances',{}).get('edges',[]); sds=[sd['domain'] for i in insts for sd in i.get('node',{}).get('domains',{}).get('serviceDomains',[])]; print(','.join(sds) if sds else 'NONE')" 2>/dev/null || echo "NONE")
           echo "Existing domains: $EXISTING"
 
           if [ "$EXISTING" = "NONE" ] || [ -z "$EXISTING" ]; then
-            echo "No domain found — creating one..."
+            echo "No domain found - creating one..."
             CREATE_RESP=$(curl -sf -X POST https://backboard.railway.app/graphql/v2 \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer $RAILWAY_TOKEN" \
