@@ -58,13 +58,33 @@ jobs:
     if: github.ref == 'refs/heads/staging' && github.event_name == 'push'
 
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Railway CLI
-        run: npm install -g @railway/cli
-
-      - name: Deploy to Railway
-        run: railway up --service plantathome-api --detach
+      - name: Trigger Railway Deploy via GraphQL
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_SERVICE_ID: 5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e
           RAILWAY_PROJECT_ID: 3261e461-4321-4974-b86c-6e0d1675f032
+        run: |
+          # Fetch environment ID for this project
+          ENV_RESPONSE=$(curl -sf -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -d '{"query": "{ project(id: \"3261e461-4321-4974-b86c-6e0d1675f032\") { environments { edges { node { id name } } } } }"}')
+          echo "Environments: $ENV_RESPONSE"
+
+          ENV_ID=$(echo "$ENV_RESPONSE" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['project']['environments']['edges'][0]['node']['id'])")
+          echo "Using environment ID: $ENV_ID"
+
+          # Trigger deploy for the service
+          DEPLOY_RESP=$(curl -sf -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -d "{\"query\": \"mutation { serviceInstanceDeployV2(serviceId: \\\"$RAILWAY_SERVICE_ID\\\", environmentId: \\\"$ENV_ID\\\") }\"}")
+          echo "Deploy response: $DEPLOY_RESP"
+
+          # Check for errors
+          if echo "$DEPLOY_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('data',{}).get('serviceInstanceDeployV2') else 1)"; then
+            echo "Deploy triggered successfully"
+          else
+            echo "Deploy may have failed - check Railway dashboard"
+            exit 1
+          fi
