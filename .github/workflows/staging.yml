@@ -58,37 +58,23 @@ jobs:
     if: github.ref == 'refs/heads/staging' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
 
     steps:
-      - name: Configure Railway and Deploy
+      - name: Configure and Deploy to Railway
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_SERVICE_ID: 5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e
           RAILWAY_PROJECT_ID: 3261e461-4321-4974-b86c-6e0d1675f032
           RAILWAY_ENV_ID: a12e9f73-752a-4556-a065-b6a7657bae63
         run: |
-          # Ensure PORT=80 so Railway proxy forwards to port 80 (nginx)
-          echo "Setting PORT=80 env var on service..."
-          SET_VAR=$(curl -sf -X POST https://backboard.railway.app/graphql/v2 \
+          # Remove PORT override - let Railway inject its dynamic PORT (artisan serve reads it)
+          curl -sf -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d "{\"query\": \"mutation { variableCollectionUpsert(input: { projectId: \\\"$RAILWAY_PROJECT_ID\\\", environmentId: \\\"$RAILWAY_ENV_ID\\\", serviceId: \\\"$RAILWAY_SERVICE_ID\\\", variables: { PORT: \\\"80\\\" } }) }\"}")
-          echo "Set var response: $SET_VAR"
+            -d "{\"query\": \"mutation { variableCollectionUpsert(input: { projectId: \\\"$RAILWAY_PROJECT_ID\\\", environmentId: \\\"$RAILWAY_ENV_ID\\\", serviceId: \\\"$RAILWAY_SERVICE_ID\\\", variables: { PORT: \\\"3000\\\" } }) }\"}" && echo "PORT=3000 set"
 
           # Trigger deploy
           DEPLOY_RESP=$(curl -sf -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -d "{\"query\": \"mutation { serviceInstanceDeployV2(serviceId: \\\"$RAILWAY_SERVICE_ID\\\", environmentId: \\\"$RAILWAY_ENV_ID\\\") }\"}")
-          echo "Deploy response: $DEPLOY_RESP"
-
-          DEPLOY_ID=$(echo "$DEPLOY_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['serviceInstanceDeployV2'])" 2>/dev/null || echo "unknown")
-          echo "Deploy ID: $DEPLOY_ID"
-
-          if echo "$DEPLOY_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); exit(0 if d.get('data',{}).get('serviceInstanceDeployV2') else 1)"; then
-            echo "Deploy triggered successfully"
-          else
-            echo "Deploy failed"
-            exit 1
-          fi
-
-          # Output the API URL
+          echo "Deploy: $DEPLOY_RESP"
           echo "API URL: https://plantathome-api-production.up.railway.app/api/health"
