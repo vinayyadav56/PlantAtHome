@@ -5,6 +5,7 @@ on:
     branches: [staging]
   pull_request:
     branches: [staging, main]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -63,6 +64,7 @@ jobs:
         run: npm install -g @railway/cli
 
       - name: Deploy to Railway
-        run: railway up --service plantathome-api-staging --detach
+        run: railway up --service plantathome-api --detach
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          RAILWAY_PROJECT_ID: 3261e461-4321-4974-b86c-6e0d1675f032
