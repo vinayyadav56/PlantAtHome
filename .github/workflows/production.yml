@@ -1,25 +1,46 @@
 name: API – Production Deploy
 
 # ─── Manual trigger only ───────────────────────────────────────────────────────
+# Production ALWAYS deploys from main. Any other branch is rejected.
 # Requires GitHub Secret:  EC2_SSH_KEY  (content of plantathome-key.pem)
 #                          EC2_HOST     (3.7.30.178)
 #                          EC2_USER     (ubuntu)
 on:
   workflow_dispatch:
     inputs:
+      branch:
+        description: 'Branch to deploy — must be "main" for production'
+        required: true
+        default: 'main'
+        type: string
       confirm:
         description: 'Type "deploy-production" to confirm — this touches live traffic'
         required: true
         type: string
 
 jobs:
+  # ── 0. Enforce main-only ──────────────────────────────────────────────────────
+  validate:
+    name: Validate Branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject non-main branches
+        run: |
+          if [ "${{ inputs.branch }}" != "main" ]; then
+            echo "ERROR: Production deploys must use branch 'main'. Got: ${{ inputs.branch }}"
+            exit 1
+          fi
+          echo "Branch check passed: ${{ inputs.branch }}"
+
   # ── 1. Security & Vulnerability Scan ─────────────────────────────────────────
   security:
     name: Security Scan
     runs-on: ubuntu-latest
+    needs: validate
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.branch }}
           fetch-depth: 0
 
       - name: Secret scan (Gitleaks)
@@ -74,6 +95,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch }}
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2

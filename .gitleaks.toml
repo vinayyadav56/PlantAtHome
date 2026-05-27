@@ -1,0 +1,7 @@
+title = "PlantAtHome Gitleaks Config"
+
+[allowlist]
+  description = "SQL seed files contain Cloudinary public IDs (image upload identifiers), not real secrets"
+  paths = [
+    '''.+\.sql$'''
+  ]
