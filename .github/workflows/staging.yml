@@ -58,47 +58,26 @@ jobs:
     if: github.ref == 'refs/heads/staging' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
 
     steps:
-      - name: Set start command and deploy
+      - name: Set startCommand and deploy
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_SERVICE_ID: 5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e
           RAILWAY_PROJECT_ID: 3261e461-4321-4974-b86c-6e0d1675f032
           RAILWAY_ENV_ID: a12e9f73-752a-4556-a065-b6a7657bae63
         run: |
-          echo "=== Building serviceInstanceUpdate mutation via Python ==="
-          QUERY=$(python3 - <<'PYTHON'
-import json, os
-sid = os.environ['RAILWAY_SERVICE_ID']
-eid = os.environ['RAILWAY_ENV_ID']
-cmd = 'php artisan serve --host=0.0.0.0 --port=$PORT'
-mutation = 'mutation { serviceInstanceUpdate(serviceId: "' + sid + '", environmentId: "' + eid + '", input: { startCommandOverride: "' + cmd + '" }) }'
-print(json.dumps({"query": mutation}))
-PYTHON
-)
-          echo "Query built: ${QUERY:0:120}..."
+          SID="$RAILWAY_SERVICE_ID"
+          EID="$RAILWAY_ENV_ID"
+          MUTATION='mutation { serviceInstanceUpdate(serviceId: "'"$SID"'", environmentId: "'"$EID"'", input: { startCommand: "php artisan serve --host=0.0.0.0 --port=$PORT" }) }'
+          echo "Mutation: $MUTATION"
+          QUERY=$(MUTATION="$MUTATION" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
+          echo "Query JSON: ${QUERY:0:150}..."
 
-          echo "=== Calling serviceInstanceUpdate ==="
+          echo "=== serviceInstanceUpdate (startCommand) ==="
           UPDATE_RESP=$(curl -s -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -d "$QUERY")
           echo "Response: $UPDATE_RESP"
-
-          echo "=== Also try with startCommand field name ==="
-          QUERY2=$(python3 - <<'PYTHON'
-import json, os
-sid = os.environ['RAILWAY_SERVICE_ID']
-eid = os.environ['RAILWAY_ENV_ID']
-cmd = 'php artisan serve --host=0.0.0.0 --port=$PORT'
-mutation = 'mutation { serviceInstanceUpdate(serviceId: "' + sid + '", environmentId: "' + eid + '", input: { startCommand: "' + cmd + '" }) }'
-print(json.dumps({"query": mutation}))
-PYTHON
-)
-          UPDATE_RESP2=$(curl -s -X POST https://backboard.railway.app/graphql/v2 \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d "$QUERY2")
-          echo "startCommand response: $UPDATE_RESP2"
 
           echo "=== Setting PORT=8080 ==="
           curl -s -X POST https://backboard.railway.app/graphql/v2 \
@@ -122,8 +101,7 @@ PYTHON
           RAILWAY_SERVICE_ID: 5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e
         run: |
           DEPLOY_ID="${{ env.DEPLOY_ID }}"
-          echo "Deploy ID: $DEPLOY_ID"
-          echo "Waiting 10 minutes..."
+          echo "Waiting 10 minutes for build..."
           sleep 600
 
           echo "=== Status ==="
