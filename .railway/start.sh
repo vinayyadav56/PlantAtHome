@@ -1,7 +1,7 @@
 #!/bin/sh
 
 echo "==> Creating .env from environment variables..."
-cat > /app/.env << ENVEOF
+cat > /var/www/html/.env << ENVEOF
 APP_NAME=PlantAtHome
 APP_ENV=staging
 APP_KEY=
@@ -25,7 +25,7 @@ RAZORPAY_SECRET=${RAZORPAY_SECRET:-}
 MEDIA_DISK=local
 ENVEOF
 
-cd /app
+cd /var/www/html
 php artisan key:generate --force
 
 echo "==> Running migrations (non-fatal)..."
@@ -35,5 +35,8 @@ echo "==> Clearing cache..."
 php artisan config:clear || true
 php artisan route:clear || true
 
-echo "==> Starting Laravel server on 0.0.0.0:${PORT:-3000}..."
-exec php artisan serve --host=0.0.0.0 --port=${PORT:-3000}
+echo "==> Configuring nginx to listen on port ${PORT:-80}..."
+sed -i "s/listen 80;/listen ${PORT:-80};/g" /etc/nginx/nginx.conf
+
+echo "==> Starting nginx + php-fpm via supervisord on port ${PORT:-80}..."
+exec /usr/bin/supervisord -c /etc/supervisord.conf
