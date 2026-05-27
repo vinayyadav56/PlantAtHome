@@ -68,17 +68,17 @@ jobs:
           SID="$RAILWAY_SERVICE_ID"
           EID="$RAILWAY_ENV_ID"
 
-          # Query service source to confirm GitHub connection
+          # Query service source (branch field removed - not valid on ServiceSource type)
           echo "=== Service source ==="
           curl -s -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d '{"query": "{ service(id: \"5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e\") { id name serviceInstances { edges { node { source { repo branch } startCommand } } } } }"}' \
+            -d '{"query": "{ service(id: \"5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e\") { id name serviceInstances { edges { node { source { repo } startCommand } } } } }"}' \
             | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d, indent=2))" 2>/dev/null || echo "source query failed"
 
-          # Set startCommand: explicitly cd to /app before serving
-          # (Railway runs startCommand from container root, not /app)
-          CMD='bash -c '"'"'if [ -f /app/artisan ]; then cd /app && php artisan migrate --force || true && php artisan serve --host=0.0.0.0 --port=$PORT; else echo "ARTISAN NOT FOUND"; find / -name artisan -maxdepth 8 2>/dev/null | head -5; ls /; sleep 120; fi'"'"''
+          # Set startCommand: cd /app then serve
+          # Single-quoted bash arg has no embedded double quotes => no GraphQL parse error
+          CMD='bash -c '"'"'cd /app && php artisan migrate --force || true && php artisan serve --host=0.0.0.0 --port=$PORT'"'"''
           MUTATION='mutation { serviceInstanceUpdate(serviceId: "'"$SID"'", environmentId: "'"$EID"'", input: { startCommand: "'"$CMD"'" }) }'
           QUERY=$(MUTATION="$MUTATION" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
           echo "Query JSON: ${QUERY:0:200}..."
