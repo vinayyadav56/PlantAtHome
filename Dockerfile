@@ -6,6 +6,8 @@ RUN apk add --no-cache \
     supervisor \
     curl \
     libpng-dev \
+    freetype-dev \
+    libjpeg-turbo-dev \
     libzip-dev \
     icu-dev \
     oniguruma-dev \
@@ -13,8 +15,9 @@ RUN apk add --no-cache \
     make \
     autoconf
 
-# PHP extensions
-RUN docker-php-ext-configure intl \
+# PHP extensions — gd requires explicit --with-freetype --with-jpeg on Alpine
+RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
+ && docker-php-ext-configure intl \
  && docker-php-ext-install pdo pdo_mysql mbstring exif gd intl zip opcache bcmath
 
 # Composer
@@ -22,11 +25,13 @@ COPY --from=composer:2.6 /usr/bin/composer /usr/bin/composer
 
 WORKDIR /var/www/html
 
-# Install PHP dependencies (cached layer)
+# Copy composer manifests + local path dependency before installing
+# (composer.json references packages/marvel as a path repo — must exist first)
 COPY composer.json composer.lock ./
+COPY packages/ ./packages/
 RUN composer install --no-dev --optimize-autoloader --no-interaction --no-scripts
 
-# Copy application code
+# Copy rest of application code
 COPY . .
 
 # Run post-install scripts (package discovery)
