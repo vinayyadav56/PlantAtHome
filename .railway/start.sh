@@ -39,7 +39,8 @@ try {
 } catch (Exception \$e) { echo 0; }
 " 2>/dev/null)
 if [ "${SETTINGS_COUNT:-0}" = "0" ]; then
-  php artisan db:seed --force || echo "WARNING: Seeding failed"
+  php artisan db:seed --class="Marvel\\Database\\Seeders\\SettingsSeeder" --force || echo "WARNING: SettingsSeeder failed"
+  php artisan db:seed --class="Marvel\\Database\\Seeders\\MarvelSeeder" --force || echo "WARNING: MarvelSeeder failed"
 else
   echo "DB already seeded (settings rows: $SETTINGS_COUNT), skipping"
 fi
