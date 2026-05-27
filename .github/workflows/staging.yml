@@ -68,10 +68,19 @@ jobs:
           SID="$RAILWAY_SERVICE_ID"
           EID="$RAILWAY_ENV_ID"
 
-          # Diagnostic: find where nixpacks puts the PHP code
-          CMD='php -r '"'"'echo "CWD=".getcwd()."\n"; $r=scandir("/"); echo "ROOT=".implode(",", array_slice($r,0,20))."\n"; if(is_dir("/app")){$a=scandir("/app"); echo "APP=".implode(",",array_slice($a,0,20))."\n";}else{echo "NOAPP\n";} echo file_exists("artisan")?"ARTISAN_IN_CWD\n":"ARTISAN_NOT_IN_CWD\n"; $found=shell_exec("find / -name artisan -maxdepth 6 2>/dev/null"); echo "FIND=$found\n"; sleep(90);'"'"''
-          MUTATION='mutation { serviceInstanceUpdate(serviceId: "'"$SID"'", environmentId: "'"$EID"'", input: { startCommand: "'"$CMD"'" }) }'
-          QUERY=$(MUTATION="$MUTATION" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
+          # Build mutation via Python to handle arbitrary chars in startCommand
+          QUERY=$(SID="$SID" EID="$EID" python3 - << 'PYEOF'
+import json, os
+sid = os.environ['SID']
+eid = os.environ['EID']
+# Diagnostic: find CWD and where artisan lives - no double-quote issues via json.dumps
+cmd = "php -r 'echo getcwd().PHP_EOL; echo is_dir(\"/app\")?\"HAS_APP\":\"NO_APP\"; echo PHP_EOL; echo file_exists(\"/app/artisan\")?\"ARTISAN_AT_APP\":\"NO_APP_ARTISAN\"; echo PHP_EOL; $f=trim(shell_exec(\"find / -name artisan -maxdepth 6 2>/dev/null\")); echo $f?\"FOUND:\".$f:\"ARTISAN_NOWHERE\"; echo PHP_EOL; sleep(120);'"
+mutation = ('mutation { serviceInstanceUpdate(serviceId: "' + sid +
+            '", environmentId: "' + eid +
+            '", input: { startCommand: ' + json.dumps(cmd) + ' }) }')
+print(json.dumps({"query": mutation}))
+PYEOF
+)
           echo "=== Setting startCommand ==="
           curl -s -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
@@ -106,8 +115,8 @@ jobs:
         run: |
           DEPLOY_ID="${{ env.DEPLOY_ID }}"
           echo "Deploy ID: $DEPLOY_ID"
-          echo "Waiting 8 minutes for build + diagnostic..."
-          sleep 480
+          echo "Waiting 15 minutes for build + diagnostic output..."
+          sleep 900
 
           echo "=== Deployment status ==="
           curl -s -X POST https://backboard.railway.app/graphql/v2 \
