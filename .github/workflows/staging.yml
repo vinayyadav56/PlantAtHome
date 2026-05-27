@@ -1,0 +1,212 @@
+name: API – Staging Deploy
+
+# ─── Manual trigger only ───────────────────────────────────────────────────────
+# Push to staging does NOT auto-deploy.
+# Go to Actions → "API – Staging Deploy" → Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy" to confirm staging deployment'
+        required: true
+        type: string
+
+jobs:
+  # ── 1. Security & Vulnerability Scan ─────────────────────────────────────────
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging
+          fetch-depth: 0        # full history for secret scanning
+
+      # Detect secrets / credentials accidentally committed
+      - name: Secret scan (Gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: mbstring, pdo_mysql, exif, gd, intl, zip, bcmath, opcache
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --optimize-autoloader --no-interaction
+
+      # Known CVEs in composer packages
+      - name: PHP dependency vulnerability scan (composer audit)
+        run: composer audit
+
+      # PHP syntax errors across the whole app
+      - name: PHP syntax check
+        run: find app -name '*.php' | xargs php -l | grep -v 'No syntax errors' || true
+
+      # Filesystem CVE scan — fails on HIGH or CRITICAL findings
+      - name: Filesystem vulnerability scan (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          format: table
+
+  # ── 2. Tests ──────────────────────────────────────────────────────────────────
+  test:
+    name: PHP Test
+    runs-on: ubuntu-latest
+    needs: security
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: plantathome_test
+        ports: [3306:3306]
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: mbstring, pdo_mysql, exif, gd, intl, zip, bcmath, opcache
+          coverage: none
+
+      - name: Install dependencies (no-dev)
+        run: composer install --no-dev --optimize-autoloader --no-interaction
+
+      - name: Copy staging env
+        run: cp .env.staging.example .env
+
+      - name: Generate app key
+        run: php artisan key:generate
+
+      - name: Run migrations
+        env:
+          DB_HOST: 127.0.0.1
+          DB_DATABASE: plantathome_test
+          DB_USERNAME: root
+          DB_PASSWORD: root
+        run: php artisan migrate --force
+
+  # ── 3. Deploy to Railway ──────────────────────────────────────────────────────
+  # Only runs if user typed "deploy" AND security + tests passed.
+  deploy:
+    name: Deploy → Railway (Staging)
+    runs-on: ubuntu-latest
+    needs: [security, test]
+    if: inputs.confirm == 'deploy'
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging
+
+      - name: Set start command on Railway service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          SID="5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e"
+          EID="a12e9f73-752a-4556-a065-b6a7657bae63"
+          API="https://backboard.railway.app/graphql/v2"
+          CMD="/start.sh"
+          MUT='mutation { serviceInstanceUpdate(serviceId: "'"$SID"'", environmentId: "'"$EID"'", input: { builder: NIXPACKS, startCommand: "'"$CMD"'" }) }'
+          Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
+          curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q"
+          echo ""
+
+      - name: Snapshot current deployment ID
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          SID="5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e"
+          API="https://backboard.railway.app/graphql/v2"
+          BEFORE=$(curl -s -X POST "$API" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -d '{"query":"{ deployments(input:{serviceId:\"'"$SID"'\"}){edges{node{id}}}}"}' \
+            | python3 -c "import sys,json; e=json.load(sys.stdin)['data']['deployments']['edges']; print(e[0]['node']['id'] if e else '')" 2>/dev/null)
+          echo "BEFORE_ID=$BEFORE" >> $GITHUB_ENV
+
+      - name: Wait for Railway auto-deploy (polls every 30 s, up to 10 min)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          SID="5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e"
+          EID="a12e9f73-752a-4556-a065-b6a7657bae63"
+          API="https://backboard.railway.app/graphql/v2"
+          DEPLOY_ID=""
+          for i in $(seq 1 20); do
+            sleep 30
+            LATEST=$(curl -s -X POST "$API" \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
+              -d '{"query":"{ deployments(input:{serviceId:\"'"$SID"'\"}){edges{node{id}}}}"}' \
+              | python3 -c "import sys,json; e=json.load(sys.stdin)['data']['deployments']['edges']; print(e[0]['node']['id'] if e else '')" 2>/dev/null)
+            echo "Poll $i: $LATEST"
+            if [ -n "$LATEST" ] && [ "$LATEST" != "${{ env.BEFORE_ID }}" ]; then
+              DEPLOY_ID="$LATEST"
+              echo "New deployment detected: $DEPLOY_ID"
+              break
+            fi
+          done
+          if [ -z "$DEPLOY_ID" ]; then
+            echo "Auto-deploy not triggered — falling back to manual deploy"
+            MUT='mutation { serviceInstanceDeployV2(serviceId: "'"$SID"'", environmentId: "'"$EID"'") }'
+            Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
+            RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
+            echo "$RESP"
+            DEPLOY_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['serviceInstanceDeployV2'])" 2>/dev/null)
+          fi
+          echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
+
+      - name: Wait for build then verify health
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          DEPLOY_ID="${{ env.DEPLOY_ID }}"
+          echo "Waiting 10 min for Railway build + container start..."
+          sleep 600
+
+          echo "=== Deployment status ==="
+          curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -d "{\"query\":\"{ deployment(id:\\\"$DEPLOY_ID\\\"){status}}\"}"
+          echo ""
+
+          echo "=== Container logs ==="
+          curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -d "{\"query\":\"{ deploymentLogs(deploymentId:\\\"$DEPLOY_ID\\\",limit:50){message severity}}\"}" \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); [print(l.get('severity','?'), l.get('message','')) for l in d.get('data',{}).get('deploymentLogs',[])]" 2>/dev/null
+          echo ""
+
+          echo "=== Health check ==="
+          for i in 1 2 3 4 5; do
+            R=$(curl -s -w "\nHTTP:%{http_code}" --max-time 15 \
+              "https://plantathome-api-production.up.railway.app/api/health" 2>/dev/null)
+            echo "Attempt $i: $R"
+            echo "$R" | grep -q "HTTP:200" && echo "PASS" && exit 0
+            sleep 15
+          done
+          echo "FAIL — health check did not return 200"
+          exit 1

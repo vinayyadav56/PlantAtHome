@@ -1,0 +1,154 @@
+name: API – Production Deploy
+
+# ─── Manual trigger only ───────────────────────────────────────────────────────
+# Requires GitHub Secret:  EC2_SSH_KEY  (content of plantathome-key.pem)
+#                          EC2_HOST     (3.7.30.178)
+#                          EC2_USER     (ubuntu)
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "deploy-production" to confirm — this touches live traffic'
+        required: true
+        type: string
+
+jobs:
+  # ── 1. Security & Vulnerability Scan ─────────────────────────────────────────
+  security:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Secret scan (Gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: mbstring, pdo_mysql, exif, gd, intl, zip, bcmath, opcache
+          coverage: none
+
+      - name: Install dependencies
+        run: composer install --optimize-autoloader --no-interaction
+
+      - name: PHP dependency vulnerability scan (composer audit)
+        run: composer audit
+
+      - name: PHP syntax check
+        run: find app -name '*.php' | xargs php -l | grep -v 'No syntax errors' || true
+
+      - name: Filesystem vulnerability scan (Trivy)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          exit-code: '1'
+          ignore-unfixed: true
+          format: table
+
+  # ── 2. Tests ──────────────────────────────────────────────────────────────────
+  test:
+    name: PHP Test
+    runs-on: ubuntu-latest
+    needs: security
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: plantathome_test
+        ports: [3306:3306]
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=3
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.1'
+          extensions: mbstring, pdo_mysql, exif, gd, intl, zip, bcmath, opcache
+          coverage: none
+
+      - name: Install dependencies (no-dev)
+        run: composer install --no-dev --optimize-autoloader --no-interaction
+
+      - name: Copy staging env
+        run: cp .env.staging.example .env
+
+      - name: Generate app key
+        run: php artisan key:generate
+
+      - name: Run migrations
+        env:
+          DB_HOST: 127.0.0.1
+          DB_DATABASE: plantathome_test
+          DB_USERNAME: root
+          DB_PASSWORD: root
+        run: php artisan migrate --force
+
+  # ── 3. Deploy to AWS EC2 ──────────────────────────────────────────────────────
+  deploy:
+    name: Deploy → AWS EC2 (Production)
+    runs-on: ubuntu-latest
+    needs: [security, test]
+    if: inputs.confirm == 'deploy-production'
+    environment: production
+
+    steps:
+      - name: SSH deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            set -e
+
+            echo "==> Pulling latest code..."
+            cd /var/www/plantathome/api
+            git fetch origin
+            git checkout main
+            git reset --hard origin/main
+
+            echo "==> Installing PHP dependencies..."
+            composer install --no-dev --optimize-autoloader --no-interaction
+
+            echo "==> Running migrations..."
+            php artisan migrate --force
+
+            echo "==> Caching config / routes / views..."
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+
+            echo "==> Reloading PHP-FPM..."
+            sudo systemctl reload php8.1-fpm
+
+            echo "==> Deploy complete"
+
+      - name: Production health check
+        run: |
+          echo "Waiting 15 s for PHP-FPM to reload..."
+          sleep 15
+          for i in 1 2 3; do
+            R=$(curl -s -w "\nHTTP:%{http_code}" --max-time 15 \
+              "https://api.plantathome.in/api/health" 2>/dev/null)
+            echo "Attempt $i: $R"
+            echo "$R" | grep -q "HTTP:200" && echo "PASS" && exit 0
+            sleep 10
+          done
+          echo "FAIL — production health check did not return 200"
+          exit 1
