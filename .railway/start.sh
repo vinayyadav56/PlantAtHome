@@ -4,7 +4,7 @@ echo "==> Creating .env from environment variables..."
 cat > /var/www/html/.env << ENVEOF
 APP_NAME=PlantAtHome
 APP_ENV=staging
-APP_KEY=
+APP_KEY=${APP_KEY}
 APP_DEBUG=false
 APP_URL=https://plantathome-api-production.up.railway.app
 LOG_CHANNEL=stderr
@@ -26,31 +26,38 @@ MEDIA_DISK=local
 ENVEOF
 
 cd /var/www/html
-php artisan key:generate --force
 
-echo "==> Running migrations (non-fatal)..."
-php artisan migrate --force || echo "WARNING: Migrations failed"
+if [ -z "${APP_KEY}" ]; then
+  echo "==> Generating APP_KEY (not set in Railway env)..."
+  php artisan key:generate --force
+fi
 
-echo "==> Seeding database if empty..."
-SETTINGS_COUNT=$(php -r "
+echo "==> Configuring nginx to listen on port ${PORT:-80}..."
+sed -i "s/listen 80;/listen ${PORT:-80};/g" /etc/nginx/nginx.conf
+
+# Run DB setup in background so supervisord (nginx + php-fpm) starts immediately.
+# Railway health check polls /api/health — nginx returns 200 natively while migrations run.
+(
+  echo "==> Running migrations (background)..."
+  php artisan migrate --force || echo "WARNING: Migrations failed"
+
+  SETTINGS_COUNT=$(php -r "
 try {
   \$pdo = new PDO('mysql:host=${MYSQLHOST};port=${MYSQLPORT:-3306};dbname=${MYSQLDATABASE}', '${MYSQLUSER}', '${MYSQLPASSWORD}');
   echo \$pdo->query('SELECT COUNT(*) FROM settings')->fetchColumn();
 } catch (Exception \$e) { echo 0; }
 " 2>/dev/null)
-if [ "${SETTINGS_COUNT:-0}" = "0" ]; then
-  php artisan db:seed --class="Marvel\\Database\\Seeders\\SettingsSeeder" --force || echo "WARNING: SettingsSeeder failed"
-  php artisan db:seed --class="Marvel\\Database\\Seeders\\MarvelSeeder" --force || echo "WARNING: MarvelSeeder failed"
-else
-  echo "DB already seeded (settings rows: $SETTINGS_COUNT), skipping"
-fi
+  if [ "${SETTINGS_COUNT:-0}" = "0" ]; then
+    php artisan db:seed --class="Marvel\\Database\\Seeders\\SettingsSeeder" --force || echo "WARNING: SettingsSeeder failed"
+    php artisan db:seed --class="Marvel\\Database\\Seeders\\MarvelSeeder" --force || echo "WARNING: MarvelSeeder failed"
+  else
+    echo "DB already seeded (settings rows: $SETTINGS_COUNT), skipping"
+  fi
 
-echo "==> Clearing cache..."
-php artisan config:clear || true
-php artisan route:clear || true
-
-echo "==> Configuring nginx to listen on port ${PORT:-80}..."
-sed -i "s/listen 80;/listen ${PORT:-80};/g" /etc/nginx/nginx.conf
+  php artisan config:clear || true
+  php artisan route:clear || true
+  echo "==> DB setup complete"
+) &
 
 echo "==> Starting nginx + php-fpm via supervisord on port ${PORT:-80}..."
 exec /usr/bin/supervisord -c /etc/supervisord.conf
