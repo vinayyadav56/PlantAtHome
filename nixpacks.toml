@@ -2,4 +2,4 @@
 cmds = ["composer install --no-dev --optimize-autoloader --no-interaction"]
 
 [start]
-cmd = "/bin/sh -c 'cd /app && cp .env.staging.example .env && php artisan key:generate --force && php artisan serve --host=0.0.0.0 --port=$PORT'"
+cmd = "/bin/sh -c 'cp .env.staging.example .env && php artisan key:generate --force && php artisan serve --host=0.0.0.0 --port=$PORT'"
