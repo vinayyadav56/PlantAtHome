@@ -44,7 +44,7 @@ jobs:
         run: find app -name '*.php' | xargs php -l | grep -v 'No syntax errors' || true
 
       - name: Filesystem vulnerability scan (Trivy)
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scan-ref: .
@@ -109,7 +109,7 @@ jobs:
 
     steps:
       - name: SSH deploy to EC2
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
