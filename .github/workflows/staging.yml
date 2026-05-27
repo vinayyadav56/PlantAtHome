@@ -1,19 +1,22 @@
 name: API – Staging Deploy
 
-# ─── Manual trigger only ───────────────────────────────────────────────────────
-# Push to staging does NOT auto-deploy.
-# Go to Actions → "API – Staging Deploy" → Run workflow.
+# ─── Auto-deploy on push to staging; manual trigger also available ────────────
+# Push to the staging branch → auto-deploys to Railway (no confirm needed).
+# Manual run via workflow_dispatch → branch selector + confirm required.
 on:
+  push:
+    branches: [staging]
   workflow_dispatch:
     inputs:
       branch:
         description: 'Branch to deploy (any branch allowed for staging)'
-        required: true
+        required: false
         default: 'staging'
         type: string
       confirm:
         description: 'Type "deploy" to confirm staging deployment'
-        required: true
+        required: false
+        default: ''
         type: string
 
 jobs:
@@ -24,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch }}
+          ref: ${{ inputs.branch || github.ref_name }}
           fetch-depth: 0        # full history for secret scanning
 
       # Detect secrets / credentials accidentally committed
@@ -84,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch }}
+          ref: ${{ inputs.branch || github.ref_name }}
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -116,13 +119,13 @@ jobs:
     name: Deploy → Railway (Staging)
     runs-on: ubuntu-latest
     needs: [security, test]
-    if: inputs.confirm == 'deploy'
+    if: inputs.confirm == 'deploy' || github.event_name == 'push'
     environment: staging
 
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch }}
+          ref: ${{ inputs.branch || github.ref_name }}
 
       - name: Set start command on Railway service
         env:
