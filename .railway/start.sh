@@ -19,7 +19,7 @@ CACHE_DRIVER=file
 FILESYSTEM_DISK=local
 QUEUE_CONNECTION=sync
 SESSION_DRIVER=file
-SANCTUM_STATEFUL_DOMAINS=plantathome-staging.vercel.app,plantathome-admin-staging.vercel.app
+SANCTUM_STATEFUL_DOMAINS=plantathome-shop-staging.vercel.app,plantathome-admin-staging.vercel.app
 RAZORPAY_KEY=rzp_test_Sth5xcsZyNoPR4
 RAZORPAY_SECRET=${RAZORPAY_SECRET:-}
 MEDIA_DISK=local
@@ -30,6 +30,19 @@ php artisan key:generate --force
 
 echo "==> Running migrations (non-fatal)..."
 php artisan migrate --force || echo "WARNING: Migrations failed"
+
+echo "==> Seeding database if empty..."
+SETTINGS_COUNT=$(php -r "
+try {
+  \$pdo = new PDO('mysql:host=${MYSQLHOST};port=${MYSQLPORT:-3306};dbname=${MYSQLDATABASE}', '${MYSQLUSER}', '${MYSQLPASSWORD}');
+  echo \$pdo->query('SELECT COUNT(*) FROM settings')->fetchColumn();
+} catch (Exception \$e) { echo 0; }
+" 2>/dev/null)
+if [ "${SETTINGS_COUNT:-0}" = "0" ]; then
+  php artisan db:seed --force || echo "WARNING: Seeding failed"
+else
+  echo "DB already seeded (settings rows: $SETTINGS_COUNT), skipping"
+fi
 
 echo "==> Clearing cache..."
 php artisan config:clear || true
