@@ -60,7 +60,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Update startCommand and find auto-deploy
+      - name: Update startCommand and wait for Railway auto-deploy
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_PROJECT_ID: 3261e461-4321-4974-b86c-6e0d1675f032
@@ -73,27 +73,36 @@ jobs:
           HDR_AUTH="Authorization: Bearer $RAILWAY_TOKEN"
           HDR_CT="Content-Type: application/json"
 
-          echo "=== Update startCommand (no redeploy — auto-deploy from git push handles it) ==="
+          echo "=== Update startCommand ==="
           CMD="/bin/sh /app/.railway/start.sh"
           MUTATION='mutation { serviceInstanceUpdate(serviceId: "'"$SID"'", environmentId: "'"$EID"'", input: { builder: NIXPACKS, startCommand: "'"$CMD"'" }) }'
           QUERY=$(MUTATION="$MUTATION" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
           curl -s -X POST "$API" -H "$HDR_CT" -H "$HDR_AUTH" -d "$QUERY"
           echo ""
 
-          echo "=== Try deploymentRedeploy on latest deployment (forces fresh build from source) ==="
-          LATEST_ID=$(curl -s -X POST "$API" -H "$HDR_CT" -H "$HDR_AUTH" \
+          echo "=== Snapshot current latest deployment ==="
+          BEFORE_ID=$(curl -s -X POST "$API" -H "$HDR_CT" -H "$HDR_AUTH" \
             -d '{"query": "{ deployments(input: { serviceId: \"'"$SID"'\" }) { edges { node { id status } } } }"}' \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['deployments']['edges'][0]['node']['id'])" 2>/dev/null)
-          echo "Latest deployment: $LATEST_ID"
-          REDEPLOY_MUT='mutation { deploymentRedeploy(id: "'"$LATEST_ID"'") { id status } }'
-          REDEPLOY_Q=$(MUTATION="$REDEPLOY_MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
-          REDEPLOY_RESP=$(curl -s -X POST "$API" -H "$HDR_CT" -H "$HDR_AUTH" -d "$REDEPLOY_Q")
-          echo "Redeploy response: $REDEPLOY_RESP"
-          DEPLOY_ID=$(echo "$REDEPLOY_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('deploymentRedeploy',{}).get('id',''))" 2>/dev/null)
+            | python3 -c "import sys,json; d=json.load(sys.stdin); edges=d['data']['deployments']['edges']; print(edges[0]['node']['id'] if edges else '')" 2>/dev/null)
+          echo "Baseline deployment: $BEFORE_ID"
 
-          echo "=== Fallback: serviceInstanceDeployV2 if redeploy failed ==="
+          echo "=== Polling for Railway auto-deploy (up to 10 min) ==="
+          DEPLOY_ID=""
+          for i in $(seq 1 20); do
+            sleep 30
+            LATEST_ID=$(curl -s -X POST "$API" -H "$HDR_CT" -H "$HDR_AUTH" \
+              -d '{"query": "{ deployments(input: { serviceId: \"'"$SID"'\" }) { edges { node { id status } } } }"}' \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); edges=d['data']['deployments']['edges']; print(edges[0]['node']['id'] if edges else '')" 2>/dev/null)
+            echo "Poll $i: latest=$LATEST_ID"
+            if [ -n "$LATEST_ID" ] && [ "$LATEST_ID" != "$BEFORE_ID" ]; then
+              DEPLOY_ID="$LATEST_ID"
+              echo "New deployment detected: $DEPLOY_ID"
+              break
+            fi
+          done
+
           if [ -z "$DEPLOY_ID" ]; then
-            echo "deploymentRedeploy failed, using serviceInstanceDeployV2"
+            echo "No auto-deploy detected after 10 min — falling back to serviceInstanceDeployV2"
             DEPLOY_MUT='mutation { serviceInstanceDeployV2(serviceId: "'"$SID"'", environmentId: "'"$EID"'") }'
             DEPLOY_Q=$(MUTATION="$DEPLOY_MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
             RESP=$(curl -s -X POST "$API" -H "$HDR_CT" -H "$HDR_AUTH" -d "$DEPLOY_Q")
@@ -104,7 +113,7 @@ jobs:
           echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
           echo "Monitoring deploy: $DEPLOY_ID"
 
-      - name: Wait for Railway build then check logs and health
+      - name: Wait for build then check logs and health
         if: always()
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
@@ -112,32 +121,32 @@ jobs:
         run: |
           DEPLOY_ID="${{ env.DEPLOY_ID }}"
           echo "Monitoring deploy ID: $DEPLOY_ID"
-          echo "Waiting 15 minutes for Railway build + start..."
-          sleep 900
+          echo "Waiting 10 minutes for Railway build + start..."
+          sleep 600
 
           echo "=== Deployment status ==="
           curl -s -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -d "{\"query\": \"{ deployment(id: \\\"$DEPLOY_ID\\\") { status } }\"}" 2>/dev/null
-
           echo ""
+
           echo "=== Recent deployments ==="
           curl -s -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -d '{"query": "{ deployments(input: { serviceId: \"5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e\" }) { edges { node { id status createdAt } } } }"}' \
             | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e['node']['status'], e['node']['createdAt'][:19], e['node']['id'][:8]) for e in d['data']['deployments']['edges'][:3]]" 2>/dev/null
-
           echo ""
-          echo "=== Container logs (last 50) ==="
+
+          echo "=== Container logs for new deploy (last 100) ==="
           curl -s -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d "{\"query\": \"{ deploymentLogs(deploymentId: \\\"$DEPLOY_ID\\\", limit: 50) { message severity } }\"}" \
+            -d "{\"query\": \"{ deploymentLogs(deploymentId: \\\"$DEPLOY_ID\\\", limit: 100) { message severity } }\"}" \
             | python3 -c "import sys,json; d=json.load(sys.stdin); [print(l.get('severity','?'), l.get('message','')) for l in d.get('data',{}).get('deploymentLogs',[])]" 2>/dev/null || echo "Log query failed"
-
           echo ""
+
           echo "=== Health check ==="
           for i in 1 2 3 4 5; do
             RESULT=$(curl -s -w "\nHTTP:%{http_code}" --max-time 15 "https://plantathome-api-production.up.railway.app/api/health" 2>/dev/null)

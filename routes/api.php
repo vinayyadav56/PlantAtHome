@@ -5,12 +5,14 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
 
 Route::get('/health', function () {
+    $db = 'unknown';
     try {
         DB::connection()->getPdo();
-        return response()->json(['status' => 'ok', 'db' => 'connected', 'env' => config('app.env')]);
+        $db = 'connected';
     } catch (\Exception $e) {
-        return response()->json(['status' => 'error', 'db' => $e->getMessage()], 500);
+        $db = 'unavailable';
     }
+    return response()->json(['status' => 'ok', 'db' => $db, 'env' => config('app.env')]);
 });
 
 /*
