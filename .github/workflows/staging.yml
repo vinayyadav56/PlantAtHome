@@ -74,7 +74,7 @@ jobs:
           HDR_CT="Content-Type: application/json"
 
           echo "=== Update startCommand ==="
-          CMD="/bin/sh /app/.railway/start.sh"
+          CMD="/start.sh"
           MUTATION='mutation { serviceInstanceUpdate(serviceId: "'"$SID"'", environmentId: "'"$EID"'", input: { builder: NIXPACKS, startCommand: "'"$CMD"'" }) }'
           QUERY=$(MUTATION="$MUTATION" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
           curl -s -X POST "$API" -H "$HDR_CT" -H "$HDR_AUTH" -d "$QUERY"
