@@ -80,15 +80,27 @@ jobs:
           curl -s -X POST "$API" -H "$HDR_CT" -H "$HDR_AUTH" -d "$QUERY"
           echo ""
 
-          echo "=== Find the auto-deploy deployment (started by git push) ==="
-          sleep 10
-          DEPLOY_JSON=$(curl -s -X POST "$API" -H "$HDR_CT" -H "$HDR_AUTH" \
-            -d '{"query": "{ deployments(input: { serviceId: \"'"$SID"'\" }) { edges { node { id status createdAt } } } }"}')
-          echo "$DEPLOY_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e['node']['status'], e['node']['createdAt'][:19], e['node']['id'][:8]) for e in d['data']['deployments']['edges'][:5]]" 2>/dev/null
-          DEPLOY_ID=$(echo "$DEPLOY_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e['node']['id']) for e in d['data']['deployments']['edges'][:5] if e['node']['status'] in ('BUILDING','QUEUED','DEPLOYING','WAITING')][:1]" 2>/dev/null | head -1)
+          echo "=== Try deploymentRedeploy on latest deployment (forces fresh build from source) ==="
+          LATEST_ID=$(curl -s -X POST "$API" -H "$HDR_CT" -H "$HDR_AUTH" \
+            -d '{"query": "{ deployments(input: { serviceId: \"'"$SID"'\" }) { edges { node { id status } } } }"}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['deployments']['edges'][0]['node']['id'])" 2>/dev/null)
+          echo "Latest deployment: $LATEST_ID"
+          REDEPLOY_MUT='mutation { deploymentRedeploy(id: "'"$LATEST_ID"'") { id status } }'
+          REDEPLOY_Q=$(MUTATION="$REDEPLOY_MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
+          REDEPLOY_RESP=$(curl -s -X POST "$API" -H "$HDR_CT" -H "$HDR_AUTH" -d "$REDEPLOY_Q")
+          echo "Redeploy response: $REDEPLOY_RESP"
+          DEPLOY_ID=$(echo "$REDEPLOY_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('data',{}).get('deploymentRedeploy',{}).get('id',''))" 2>/dev/null)
+
+          echo "=== Fallback: serviceInstanceDeployV2 if redeploy failed ==="
           if [ -z "$DEPLOY_ID" ]; then
-            DEPLOY_ID=$(echo "$DEPLOY_JSON" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['deployments']['edges'][0]['node']['id'])" 2>/dev/null)
+            echo "deploymentRedeploy failed, using serviceInstanceDeployV2"
+            DEPLOY_MUT='mutation { serviceInstanceDeployV2(serviceId: "'"$SID"'", environmentId: "'"$EID"'") }'
+            DEPLOY_Q=$(MUTATION="$DEPLOY_MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
+            RESP=$(curl -s -X POST "$API" -H "$HDR_CT" -H "$HDR_AUTH" -d "$DEPLOY_Q")
+            echo "$RESP"
+            DEPLOY_ID=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['serviceInstanceDeployV2'])" 2>/dev/null)
           fi
+
           echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
           echo "Monitoring deploy: $DEPLOY_ID"
 
