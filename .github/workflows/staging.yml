@@ -60,17 +60,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Deploy via GraphQL (no CLI)
+      - name: Ensure startCommand and get deploy ID
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          RAILWAY_PROJECT_ID: 3261e461-4321-4974-b86c-6e0d1675f032
           RAILWAY_SERVICE_ID: 5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e
           RAILWAY_ENV_ID: a12e9f73-752a-4556-a065-b6a7657bae63
         run: |
           SID="$RAILWAY_SERVICE_ID"
           EID="$RAILWAY_ENV_ID"
 
-          echo "=== Setting startCommand ==="
+          echo "=== Confirming startCommand ==="
           CMD='php artisan serve --host=0.0.0.0 --port=$PORT'
           MUTATION='mutation { serviceInstanceUpdate(serviceId: "'"$SID"'", environmentId: "'"$EID"'", input: { startCommand: "'"$CMD"'" }) }'
           QUERY=$(MUTATION="$MUTATION" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
@@ -79,24 +78,16 @@ jobs:
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -d "$QUERY"
           echo ""
+          echo "Railway auto-deploy is triggered by this push. Waiting for build..."
 
-          echo "=== Triggering deploy from GitHub source ==="
-          DEPLOY_MUT='mutation { serviceInstanceDeployV2(serviceId: "'"$SID"'", environmentId: "'"$EID"'") }'
-          DEPLOY_Q=$(MUTATION="$DEPLOY_MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
-          RESULT=$(curl -s -X POST https://backboard.railway.app/graphql/v2 \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d "$DEPLOY_Q")
-          echo "Deploy trigger result: $RESULT"
-
-          sleep 10
-          echo "=== Latest deployment ==="
+          sleep 30
+          echo "=== Latest deployment ID ==="
           DEPLOY_ID=$(curl -s -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -d '{"query": "{ deployments(input: { serviceId: \"'"$SID"'\" }) { edges { node { id status createdAt } } } }"}' \
             | python3 -c "import sys,json; d=json.load(sys.stdin); edges=d['data']['deployments']['edges']; n=edges[0]['node']; print(n['id']); print(n['status'], n['createdAt'][:19])" 2>/dev/null)
-          echo "Deploy ID: $DEPLOY_ID"
+          echo "$DEPLOY_ID"
           echo "DEPLOY_ID=$(echo "$DEPLOY_ID" | head -1)" >> $GITHUB_ENV
 
       - name: Wait 15min then check logs and health
