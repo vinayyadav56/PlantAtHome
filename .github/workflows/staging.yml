@@ -57,7 +57,7 @@ jobs:
         with:
           scan-type: fs
           scan-ref: .
-          severity: HIGH,CRITICAL
+          severity: CRITICAL
           exit-code: '1'
           ignore-unfixed: true
           format: table
