@@ -58,29 +58,22 @@ jobs:
     if: github.ref == 'refs/heads/staging' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
 
     steps:
-      - name: Set startCommand and trigger deploy
+      - uses: actions/checkout@v4
+
+      - name: Deploy via railway up
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          RAILWAY_SERVICE_ID: 5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e
           RAILWAY_PROJECT_ID: 3261e461-4321-4974-b86c-6e0d1675f032
+          RAILWAY_SERVICE_ID: 5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e
           RAILWAY_ENV_ID: a12e9f73-752a-4556-a065-b6a7657bae63
         run: |
           SID="$RAILWAY_SERVICE_ID"
           EID="$RAILWAY_ENV_ID"
 
-          # Build mutation via Python to handle arbitrary chars in startCommand
-          QUERY=$(SID="$SID" EID="$EID" python3 - << 'PYEOF'
-import json, os
-sid = os.environ['SID']
-eid = os.environ['EID']
-# Diagnostic: find CWD and where artisan lives - no double-quote issues via json.dumps
-cmd = "php -r 'echo getcwd().PHP_EOL; echo is_dir(\"/app\")?\"HAS_APP\":\"NO_APP\"; echo PHP_EOL; echo file_exists(\"/app/artisan\")?\"ARTISAN_AT_APP\":\"NO_APP_ARTISAN\"; echo PHP_EOL; $f=trim(shell_exec(\"find / -name artisan -maxdepth 6 2>/dev/null\")); echo $f?\"FOUND:\".$f:\"ARTISAN_NOWHERE\"; echo PHP_EOL; sleep(120);'"
-mutation = ('mutation { serviceInstanceUpdate(serviceId: "' + sid +
-            '", environmentId: "' + eid +
-            '", input: { startCommand: ' + json.dumps(cmd) + ' }) }')
-print(json.dumps({"query": mutation}))
-PYEOF
-)
+          # Set startCommand (simple - nixpacks WORKDIR is /app)
+          CMD='php artisan serve --host=0.0.0.0 --port=$PORT'
+          MUTATION='mutation { serviceInstanceUpdate(serviceId: "'"$SID"'", environmentId: "'"$EID"'", input: { startCommand: "'"$CMD"'" }) }'
+          QUERY=$(MUTATION="$MUTATION" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
           echo "=== Setting startCommand ==="
           curl -s -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
@@ -88,26 +81,27 @@ PYEOF
             -d "$QUERY"
           echo ""
 
-          # Print service domains so we know the correct URL
-          echo "=== Service domains ==="
-          curl -s -X POST https://backboard.railway.app/graphql/v2 \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d '{"query": "{ service(id: \"'"$SID"'\") { serviceInstances { edges { node { domains { serviceDomains { domain } } } } } } }"}' \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); [print('Domain:', sd['domain']) for node in d['data']['service']['serviceInstances']['edges'] for sd in node['node']['domains']['serviceDomains']]" 2>/dev/null || echo "domain query failed"
+          # Install Railway CLI and push code directly
+          echo "=== Installing Railway CLI ==="
+          curl -fsSL https://railway.app/install.sh | sh
+          export PATH="$HOME/.local/bin:$PATH"
+          railway --version
 
-          # Trigger deployment from connected GitHub source
-          echo "=== Triggering deployment ==="
-          DEPLOY_RESP=$(curl -s -X POST https://backboard.railway.app/graphql/v2 \
+          echo "=== Deploying via railway up ==="
+          railway up -s plantathome-api -e production --detach
+          echo "railway up triggered"
+
+          # Get latest deploy ID
+          sleep 15
+          DEPLOY_ID=$(curl -s -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d "{\"query\": \"mutation { serviceInstanceDeployV2(serviceId: \\\"$RAILWAY_SERVICE_ID\\\", environmentId: \\\"$RAILWAY_ENV_ID\\\") }\"}")
-          echo "Deploy response: $DEPLOY_RESP"
-          DEPLOY_ID=$(echo "$DEPLOY_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['serviceInstanceDeployV2'])" 2>/dev/null)
+            -d '{"query": "{ deployments(input: { serviceId: \"'"$SID"'\" }) { edges { node { id status createdAt } } } }"}' \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['deployments']['edges'][0]['node']['id'])" 2>/dev/null)
           echo "Deploy ID: $DEPLOY_ID"
           echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
 
-      - name: Wait 12min then check logs and health
+      - name: Wait 15min then check logs and health
         if: always()
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
@@ -115,7 +109,7 @@ PYEOF
         run: |
           DEPLOY_ID="${{ env.DEPLOY_ID }}"
           echo "Deploy ID: $DEPLOY_ID"
-          echo "Waiting 15 minutes for build + diagnostic output..."
+          echo "Waiting 15 minutes for nixpacks build..."
           sleep 900
 
           echo "=== Deployment status ==="
@@ -133,15 +127,7 @@ PYEOF
             | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e['node']['status'], e['node']['createdAt'][:19], e['node']['id'][:8]) for e in d['data']['deployments']['edges'][:3]]" 2>/dev/null
 
           echo ""
-          echo "=== Build logs ==="
-          curl -s -X POST https://backboard.railway.app/graphql/v2 \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d "{\"query\": \"{ buildLogs(deploymentId: \\\"$DEPLOY_ID\\\", limit: 50) { message severity } }\"}" \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); [print(l.get('severity','?'), l.get('message','')) for l in d.get('data',{}).get('buildLogs',[])]" 2>/dev/null || echo "build log query failed"
-
-          echo ""
-          echo "=== Container logs (50 lines) ==="
+          echo "=== Container logs (last 50) ==="
           curl -s -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
