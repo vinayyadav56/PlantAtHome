@@ -68,8 +68,8 @@ jobs:
           SID="$RAILWAY_SERVICE_ID"
           EID="$RAILWAY_ENV_ID"
 
-          # Absolute path ensures artisan is found regardless of container WORKDIR
-          CMD='php /app/artisan serve --host=0.0.0.0 --port=$PORT'
+          # Diagnostic: find where nixpacks puts the PHP code
+          CMD='php -r '"'"'echo "CWD=".getcwd()."\n"; $r=scandir("/"); echo "ROOT=".implode(",", array_slice($r,0,20))."\n"; if(is_dir("/app")){$a=scandir("/app"); echo "APP=".implode(",",array_slice($a,0,20))."\n";}else{echo "NOAPP\n";} echo file_exists("artisan")?"ARTISAN_IN_CWD\n":"ARTISAN_NOT_IN_CWD\n"; $found=shell_exec("find / -name artisan -maxdepth 6 2>/dev/null"); echo "FIND=$found\n"; sleep(90);'"'"''
           MUTATION='mutation { serviceInstanceUpdate(serviceId: "'"$SID"'", environmentId: "'"$EID"'", input: { startCommand: "'"$CMD"'" }) }'
           QUERY=$(MUTATION="$MUTATION" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
           echo "=== Setting startCommand ==="
@@ -106,8 +106,8 @@ jobs:
         run: |
           DEPLOY_ID="${{ env.DEPLOY_ID }}"
           echo "Deploy ID: $DEPLOY_ID"
-          echo "Waiting 12 minutes for build..."
-          sleep 720
+          echo "Waiting 8 minutes for build + diagnostic..."
+          sleep 480
 
           echo "=== Deployment status ==="
           curl -s -X POST https://backboard.railway.app/graphql/v2 \
@@ -122,6 +122,14 @@ jobs:
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -d '{"query": "{ deployments(input: { serviceId: \"5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e\" }) { edges { node { id status createdAt } } } }"}' \
             | python3 -c "import sys,json; d=json.load(sys.stdin); [print(e['node']['status'], e['node']['createdAt'][:19], e['node']['id'][:8]) for e in d['data']['deployments']['edges'][:3]]" 2>/dev/null
+
+          echo ""
+          echo "=== Build logs ==="
+          curl -s -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer $RAILWAY_TOKEN" \
+            -d "{\"query\": \"{ buildLogs(deploymentId: \\\"$DEPLOY_ID\\\", limit: 50) { message severity } }\"}" \
+            | python3 -c "import sys,json; d=json.load(sys.stdin); [print(l.get('severity','?'), l.get('message','')) for l in d.get('data',{}).get('buildLogs',[])]" 2>/dev/null || echo "build log query failed"
 
           echo ""
           echo "=== Container logs (50 lines) ==="
