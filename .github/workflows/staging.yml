@@ -6,6 +6,11 @@ name: API – Staging Deploy
 on:
   workflow_dispatch:
     inputs:
+      branch:
+        description: 'Branch to deploy (any branch allowed for staging)'
+        required: true
+        default: 'staging'
+        type: string
       confirm:
         description: 'Type "deploy" to confirm staging deployment'
         required: true
@@ -19,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: staging
+          ref: ${{ inputs.branch }}
           fetch-depth: 0        # full history for secret scanning
 
       # Detect secrets / credentials accidentally committed
@@ -79,7 +84,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: staging
+          ref: ${{ inputs.branch }}
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -117,7 +122,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: staging
+          ref: ${{ inputs.branch }}
 
       - name: Set start command on Railway service
         env:
