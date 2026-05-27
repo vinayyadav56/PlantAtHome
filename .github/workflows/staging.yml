@@ -1,19 +1,22 @@
 name: API – Staging Deploy
 
-# ─── Manual trigger only ───────────────────────────────────────────────────────
-# Push to staging does NOT auto-deploy.
-# Go to Actions → "API – Staging Deploy" → Run workflow.
+# ─── Auto-deploy on push to staging; manual trigger also available ────────────
+# Push to the staging branch → auto-deploys to Railway (no confirm needed).
+# Manual run via workflow_dispatch → branch selector + confirm required.
 on:
+  push:
+    branches: [staging]
   workflow_dispatch:
     inputs:
       branch:
         description: 'Branch to deploy (any branch allowed for staging)'
-        required: true
+        required: false
         default: 'staging'
         type: string
       confirm:
         description: 'Type "deploy" to confirm staging deployment'
-        required: true
+        required: false
+        default: ''
         type: string
 
 jobs:
@@ -24,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch }}
+          ref: ${{ inputs.branch || github.ref_name }}
           fetch-depth: 0        # full history for secret scanning
 
       # Detect secrets / credentials accidentally committed
@@ -84,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch }}
+          ref: ${{ inputs.branch || github.ref_name }}
 
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
@@ -111,31 +114,19 @@ jobs:
         run: php artisan migrate --force
 
   # ── 3. Deploy to Railway ──────────────────────────────────────────────────────
-  # Only runs if user typed "deploy" AND security + tests passed.
+  # On push: auto-runs (Railway auto-deploys from the staging branch).
+  # On manual: runs only if user typed "deploy".
   deploy:
     name: Deploy → Railway (Staging)
     runs-on: ubuntu-latest
     needs: [security, test]
-    if: inputs.confirm == 'deploy'
+    if: inputs.confirm == 'deploy' || github.event_name == 'push'
     environment: staging
 
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.branch }}
-
-      - name: Set start command on Railway service
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          SID="5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e"
-          EID="a12e9f73-752a-4556-a065-b6a7657bae63"
-          API="https://backboard.railway.app/graphql/v2"
-          CMD="/start.sh"
-          MUT='mutation { serviceInstanceUpdate(serviceId: "'"$SID"'", environmentId: "'"$EID"'", input: { builder: NIXPACKS, startCommand: "'"$CMD"'" }) }'
-          Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
-          curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q"
-          echo ""
+          ref: ${{ inputs.branch || github.ref_name }}
 
       - name: Snapshot current deployment ID
         env:
