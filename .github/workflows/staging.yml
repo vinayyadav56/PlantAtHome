@@ -58,37 +58,43 @@ jobs:
     if: github.ref == 'refs/heads/staging' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
 
     steps:
-      - name: Configure Railway service and deploy
+      - name: Fix start command and deploy
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           RAILWAY_SERVICE_ID: 5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e
           RAILWAY_PROJECT_ID: 3261e461-4321-4974-b86c-6e0d1675f032
           RAILWAY_ENV_ID: a12e9f73-752a-4556-a065-b6a7657bae63
         run: |
-          echo "=== Step 1: Set start command via serviceInstanceUpdate ==="
+          echo "=== Setting start command via serviceInstanceUpdate (jq-built JSON) ==="
+          QUERY=$(jq -n \
+            --arg sid "$RAILWAY_SERVICE_ID" \
+            --arg eid "$RAILWAY_ENV_ID" \
+            '{"query": ("mutation { serviceInstanceUpdate(serviceId: \"" + $sid + "\", environmentId: \"" + $eid + "\", input: { startCommandOverride: \"php artisan serve --host=0.0.0.0 --port=$PORT\" }) }")}')
+          echo "Sending mutation..."
           UPDATE_RESP=$(curl -s -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d "{\"query\": \"mutation { serviceInstanceUpdate(serviceId: \\\"$RAILWAY_SERVICE_ID\\\", environmentId: \\\"$RAILWAY_ENV_ID\\\", input: { startCommandOverride: \\\"php artisan serve --host=0.0.0.0 --port=\\\$PORT\\\" }) }\"}")
+            -d "$QUERY")
           echo "serviceInstanceUpdate response: $UPDATE_RESP"
 
-          echo "=== Step 2: Delete PORT override so Railway injects dynamically ==="
-          curl -s -X POST https://backboard.railway.app/graphql/v2 \
+          echo "=== Setting PORT=8080 as Railway env var ==="
+          PORT_RESP=$(curl -s -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d "{\"query\": \"mutation { variableDelete(projectId: \\\"$RAILWAY_PROJECT_ID\\\", environmentId: \\\"$RAILWAY_ENV_ID\\\", serviceId: \\\"$RAILWAY_SERVICE_ID\\\", name: \\\"PORT\\\") }\"}" && echo "PORT deleted" || echo "PORT delete attempted"
+            -d "{\"query\": \"mutation { variableCollectionUpsert(input: { projectId: \\\"$RAILWAY_PROJECT_ID\\\", environmentId: \\\"$RAILWAY_ENV_ID\\\", serviceId: \\\"$RAILWAY_SERVICE_ID\\\", variables: { PORT: \\\"8080\\\" } }) }\"}")
+          echo "PORT set response: $PORT_RESP"
 
-          echo "=== Step 3: Trigger deployment ==="
+          echo "=== Triggering deployment ==="
           DEPLOY_RESP=$(curl -s -X POST https://backboard.railway.app/graphql/v2 \
             -H "Content-Type: application/json" \
             -H "Authorization: Bearer $RAILWAY_TOKEN" \
             -d "{\"query\": \"mutation { serviceInstanceDeployV2(serviceId: \\\"$RAILWAY_SERVICE_ID\\\", environmentId: \\\"$RAILWAY_ENV_ID\\\") }\"}")
-          echo "Deploy response: $DEPLOY_RESP"
+          echo "Deploy: $DEPLOY_RESP"
           DEPLOY_ID=$(echo "$DEPLOY_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['data']['serviceInstanceDeployV2'])" 2>/dev/null)
           echo "Deploy ID: $DEPLOY_ID"
           echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
 
-      - name: Wait 8min then check logs and health
+      - name: Wait 10min then check logs and health
         if: always()
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
@@ -96,8 +102,8 @@ jobs:
         run: |
           DEPLOY_ID="${{ env.DEPLOY_ID }}"
           echo "Deploy ID: $DEPLOY_ID"
-          echo "Waiting 8 minutes for build and startup..."
-          sleep 480
+          echo "Waiting 10 minutes for build..."
+          sleep 600
 
           echo "=== Deployment Status ==="
           curl -s -X POST https://backboard.railway.app/graphql/v2 \
@@ -120,7 +126,7 @@ jobs:
             -d "{\"query\": \"{ deploymentLogs(deploymentId: \\\"$DEPLOY_ID\\\", limit: 50) { message severity } }\"}" | python3 -c "import sys,json; d=json.load(sys.stdin); [print(l.get('severity','?'), l.get('message','')) for l in d.get('data',{}).get('deploymentLogs',[])]" 2>/dev/null || echo "Log query failed"
 
           echo ""
-          echo "=== Health check from US East ==="
+          echo "=== Health check ==="
           for i in 1 2 3 4 5; do
             RESULT=$(curl -s -w "\nHTTP:%{http_code}" --max-time 15 "https://plantathome-api-production.up.railway.app/api/health" 2>/dev/null)
             echo "Attempt $i: $RESULT"
