@@ -1,5 +1,9 @@
 #!/bin/sh
 
+echo "==> Setting up .env..."
+cp /var/www/html/.env.staging.example /var/www/html/.env
+php artisan key:generate --force
+
 echo "==> Starting with PORT=${PORT:-3000} APP_ENV=${APP_ENV}"
 
 echo "==> Running migrations (non-fatal)..."
