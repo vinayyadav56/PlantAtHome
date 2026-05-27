@@ -68,8 +68,8 @@ jobs:
           SID="$RAILWAY_SERVICE_ID"
           EID="$RAILWAY_ENV_ID"
 
-          # Set startCommand (nixpacks sets WORKDIR=/app so no cd needed)
-          CMD='php artisan serve --host=0.0.0.0 --port=$PORT'
+          # Absolute path ensures artisan is found regardless of container WORKDIR
+          CMD='php /app/artisan serve --host=0.0.0.0 --port=$PORT'
           MUTATION='mutation { serviceInstanceUpdate(serviceId: "'"$SID"'", environmentId: "'"$EID"'", input: { startCommand: "'"$CMD"'" }) }'
           QUERY=$(MUTATION="$MUTATION" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
           echo "=== Setting startCommand ==="
