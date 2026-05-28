@@ -9,11 +9,11 @@ APP_DEBUG=false
 APP_URL=https://${RAILWAY_PUBLIC_DOMAIN:-plantathome-api-production.up.railway.app}
 LOG_CHANNEL=stderr
 DB_CONNECTION=mysql
-DB_HOST=${MYSQLHOST}
-DB_PORT=${MYSQLPORT:-3306}
-DB_DATABASE=${MYSQLDATABASE}
-DB_USERNAME=${MYSQLUSER}
-DB_PASSWORD=${MYSQLPASSWORD}
+DB_HOST=${DB_HOST:-${MYSQLHOST}}
+DB_PORT=${DB_PORT:-${MYSQLPORT:-3306}}
+DB_DATABASE=${DB_DATABASE:-${MYSQLDATABASE}}
+DB_USERNAME=${DB_USERNAME:-${MYSQLUSER}}
+DB_PASSWORD=${DB_PASSWORD:-${MYSQLPASSWORD}}
 BROADCAST_DRIVER=log
 CACHE_DRIVER=file
 FILESYSTEM_DISK=local
@@ -49,7 +49,12 @@ sed -i "s/listen 80;/listen ${PORT:-80};/g" /etc/nginx/nginx.conf
 (
   echo "==> [bg] Waiting for MySQL (up to 60s)..."
   WAIT=0
-  until php -r "new PDO('mysql:host=${MYSQLHOST};port=${MYSQLPORT:-3306};dbname=${MYSQLDATABASE}', '${MYSQLUSER}', '${MYSQLPASSWORD}');" 2>/dev/null; do
+  _HOST="${DB_HOST:-${MYSQLHOST}}"
+  _PORT="${DB_PORT:-${MYSQLPORT:-3306}}"
+  _DB="${DB_DATABASE:-${MYSQLDATABASE}}"
+  _USER="${DB_USERNAME:-${MYSQLUSER}}"
+  _PASS="${DB_PASSWORD:-${MYSQLPASSWORD}}"
+  until php -r "new PDO('mysql:host=${_HOST};port=${_PORT};dbname=${_DB}', '${_USER}', '${_PASS}');" 2>/dev/null; do
     if [ "$WAIT" -ge 60 ]; then
       echo "[bg] WARNING: MySQL not ready after 60s, continuing..."
       break
@@ -62,8 +67,8 @@ sed -i "s/listen 80;/listen ${PORT:-80};/g" /etc/nginx/nginx.conf
   echo "==> [bg] Checking database state..."
   TABLE_COUNT=$(php -r "
 try {
-  \$pdo = new PDO('mysql:host=${MYSQLHOST};port=${MYSQLPORT:-3306};dbname=${MYSQLDATABASE}', '${MYSQLUSER}', '${MYSQLPASSWORD}');
-  echo \$pdo->query('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = \"${MYSQLDATABASE}\"')->fetchColumn();
+  \$pdo = new PDO('mysql:host=${_HOST};port=${_PORT};dbname=${_DB}', '${_USER}', '${_PASS}');
+  echo \$pdo->query('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = \"${_DB}\"')->fetchColumn();
 } catch (Exception \$e) { echo 0; }
 " 2>/dev/null)
 
