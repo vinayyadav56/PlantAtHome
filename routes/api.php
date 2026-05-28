@@ -58,7 +58,7 @@ Route::get('/bootstrap-setup', function () {
         } else {
             $results[] = 'ERROR: could not create settings record';
         }
-    } catch (\Exception $e) {
+    } catch (\Throwable $e) {
         $results[] = 'settings error: ' . $e->getMessage();
     }
 
@@ -73,7 +73,7 @@ Route::get('/bootstrap-setup', function () {
         \Spatie\Permission\Models\Role::firstOrCreate(['name' => 'customer'])
             ->syncPermissions(['customer']);
         $results[] = 'permissions + roles: ok';
-    } catch (\Exception $e) {
+    } catch (\Throwable $e) {
         $results[] = 'roles error: ' . $e->getMessage();
     }
 
@@ -98,7 +98,7 @@ Route::get('/bootstrap-setup', function () {
         $user->givePermissionTo(['super_admin', 'store_owner', 'customer']);
         $user->assignRole('super_admin');
         $results[] = 'admin roles assigned';
-    } catch (\Exception $e) {
+    } catch (\Throwable $e) {
         $results[] = 'admin error: ' . $e->getMessage();
     }
 
