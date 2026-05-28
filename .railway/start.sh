@@ -41,8 +41,6 @@ if [ -z "${APP_KEY}" ]; then
   php artisan key:generate --force
 fi
 
-echo "==> Configuring nginx to listen on port ${PORT:-80}..."
-sed -i "s/listen 80;/listen ${PORT:-80};/g" /etc/nginx/nginx.conf
 
 # Full marvel:install equivalent — runs in background so supervisord (nginx + php-fpm)
 # starts immediately and Railway's health check passes while setup is in progress.
