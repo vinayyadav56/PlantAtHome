@@ -12,7 +12,7 @@ Route::get('/health', function () {
     } catch (\Exception $e) {
         $db = 'unavailable';
     }
-    return response()->json(['status' => 'ok', 'db' => $db, 'env' => config('app.env')]);
+    return response()->json(['status' => 'ok', 'db' => $db, 'env' => config('app.env'), 'v' => 'v3']);
 });
 
 /*
@@ -34,12 +34,11 @@ Route::get('/health', function () {
     return response()->json(['status' => 'ok', 'service' => 'plantathome-api'], 200);
 });
 
-// One-time bootstrap: sets app_settings.trust=true and activates admin user.
-// Safe to call multiple times (idempotent). Remove after initial setup is confirmed.
 Route::get('/bootstrap-setup', function () {
-    $results = [];
     try {
-        // Ensure settings record exists with app_settings.trust = true
+        $results = [];
+
+        // Settings: ensure record exists and app_settings.trust = true
         $settings = \Marvel\Database\Models\Settings::getData();
         if (!$settings) {
             \Illuminate\Support\Facades\Artisan::call('db:seed', [
@@ -54,17 +53,13 @@ Route::get('/bootstrap-setup', function () {
             $opts['app_settings'] = ['trust' => true, 'last_checking_time' => now()->toISOString()];
             $settings->update(['options' => $opts]);
             \Illuminate\Support\Facades\Cache::flush();
-            $results[] = 'settings.app_settings.trust = true';
+            $results[] = 'settings.trust = true';
         } else {
-            $results[] = 'ERROR: could not create settings record';
+            $results[] = 'WARNING: no settings record';
         }
-    } catch (\Throwable $e) {
-        $results[] = 'settings error: ' . $e->getMessage();
-    }
 
-    try {
-        // Ensure permissions and roles exist
-        \app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
+        // Permissions + roles
+        app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
         foreach (['super_admin', 'customer', 'store_owner', 'staff'] as $perm) {
             \Spatie\Permission\Models\Permission::firstOrCreate(['name' => $perm]);
         }
@@ -73,19 +68,17 @@ Route::get('/bootstrap-setup', function () {
         \Spatie\Permission\Models\Role::firstOrCreate(['name' => 'customer'])
             ->syncPermissions(['customer']);
         $results[] = 'permissions + roles: ok';
-    } catch (\Throwable $e) {
-        $results[] = 'roles error: ' . $e->getMessage();
-    }
 
-    try {
-        $adminEmail = env('ADMIN_EMAIL', 'yadavvinay9996@gmail.com');
+        // Admin user
+        $adminEmail    = env('ADMIN_EMAIL',    'yadavvinay9996@gmail.com');
         $adminPassword = env('ADMIN_PASSWORD', 'Admin@1234');
-        $adminName = env('ADMIN_NAME', 'Admin');
+        $adminName     = env('ADMIN_NAME',     'Admin');
         $user = \Marvel\Database\Models\User::where('email', $adminEmail)->first();
         if (!$user) {
             $user = \Marvel\Database\Models\User::create([
-                'name' => $adminName, 'email' => $adminEmail,
-                'password' => \Illuminate\Support\Facades\Hash::make($adminPassword),
+                'name'      => $adminName,
+                'email'     => $adminEmail,
+                'password'  => \Illuminate\Support\Facades\Hash::make($adminPassword),
                 'is_active' => true,
             ]);
             $results[] = "admin created: {$adminEmail}";
@@ -98,9 +91,16 @@ Route::get('/bootstrap-setup', function () {
         $user->givePermissionTo(['super_admin', 'store_owner', 'customer']);
         $user->assignRole('super_admin');
         $results[] = 'admin roles assigned';
-    } catch (\Throwable $e) {
-        $results[] = 'admin error: ' . $e->getMessage();
-    }
 
-    return response()->json(['status' => 'ok', 'results' => $results]);
+        return response()->json(['status' => 'ok', 'results' => $results]);
+
+    } catch (\Throwable $e) {
+        return response()->json([
+            'status'  => 'error',
+            'error'   => $e->getMessage(),
+            'class'   => get_class($e),
+            'file'    => $e->getFile() . ':' . $e->getLine(),
+            'trace'   => array_slice(explode("\n", $e->getTraceAsString()), 0, 8),
+        ], 500);
+    }
 });
