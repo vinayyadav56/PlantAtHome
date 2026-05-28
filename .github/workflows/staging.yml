@@ -132,7 +132,7 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          SID="5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e"
+          SID="d53df789-0df1-41f8-9e35-8c24a8b6721c"
           API="https://backboard.railway.app/graphql/v2"
           BEFORE=$(curl -s -X POST "$API" \
             -H "Content-Type: application/json" \
@@ -145,7 +145,7 @@ jobs:
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
-          SID="5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e"
+          SID="d53df789-0df1-41f8-9e35-8c24a8b6721c"
           EID="a12e9f73-752a-4556-a065-b6a7657bae63"
           API="https://backboard.railway.app/graphql/v2"
           DEPLOY_ID=""
