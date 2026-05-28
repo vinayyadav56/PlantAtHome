@@ -158,6 +158,19 @@ PHPEOF
     echo "[bg] DB has ${TABLE_COUNT} tables. Running pending migrations..."
     php artisan migrate --force || echo "[bg] WARNING: Migrations failed"
 
+    echo "[bg] Checking if settings record exists..."
+    SETTINGS_COUNT=$(php -r "
+try {
+  \$pdo = new PDO('mysql:host=${_HOST};port=${_PORT};dbname=${_DB}', '${_USER}', '${_PASS}');
+  echo \$pdo->query('SELECT COUNT(*) FROM settings')->fetchColumn();
+} catch (Exception \$e) { echo 0; }
+" 2>/dev/null)
+    if [ "${SETTINGS_COUNT:-0}" = "0" ]; then
+      echo "[bg] No settings record found — running SettingsSeeder..."
+      php artisan db:seed --class="Marvel\\Database\\Seeders\\SettingsSeeder" --force \
+        || echo "[bg] WARNING: SettingsSeeder failed"
+    fi
+
     echo "[bg] Ensuring permissions, roles, and admin user exist (idempotent)..."
     php /tmp/marvel_setup.php || echo "[bg] WARNING: Admin setup script failed"
   fi

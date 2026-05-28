@@ -41,17 +41,14 @@ class SettingsController extends CoreController
             }
         );
 
-        // Format maintenance start and until data
-        $maintenanceStart = Carbon::parse($data['options']['maintenance']['start'])->format('F j, Y h:i A');
-        $maintenanceUntil = Carbon::parse($data['options']['maintenance']['until'])->format('F j, Y h:i A');
-
-        $formattedMaintenance = [
-            "start" => $maintenanceStart,
-            "until" => $maintenanceUntil,
-        ];
-
-        // Add formatted maintenance data to the existing data
-        $data['maintenance'] = $formattedMaintenance;
+        if ($data) {
+            $maintenance = $data['options']['maintenance'] ?? [];
+            $formattedMaintenance = [
+                "start" => Carbon::parse($maintenance['start'] ?? null)->format('F j, Y h:i A'),
+                "until" => Carbon::parse($maintenance['until'] ?? null)->format('F j, Y h:i A'),
+            ];
+            $data['maintenance'] = $formattedMaintenance;
+        }
 
         return $data;
     }
