@@ -44,6 +44,12 @@ if [ -z "${APP_KEY}" ]; then
   php artisan key:generate --force
 fi
 
+echo "==> Discovering service providers (package:discover)..."
+php artisan package:discover --ansi || true
+
+echo "==> Clearing stale caches..."
+php artisan config:clear || true
+php artisan route:clear  || true
 
 # Full marvel:install equivalent — runs in background so supervisord (nginx + php-fpm)
 # starts immediately and Railway's health check passes while setup is in progress.
