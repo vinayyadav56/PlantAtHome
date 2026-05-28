@@ -6,7 +6,7 @@ APP_NAME=PlantAtHome
 APP_ENV=staging
 APP_KEY=${APP_KEY}
 APP_DEBUG=false
-APP_URL=https://plantathome-api-production.up.railway.app
+APP_URL=https://${RAILWAY_PUBLIC_DOMAIN:-plantathome-api-production.up.railway.app}
 LOG_CHANNEL=stderr
 DB_CONNECTION=mysql
 DB_HOST=${MYSQLHOST}
@@ -23,6 +23,15 @@ SANCTUM_STATEFUL_DOMAINS=plantathome-shop-staging.vercel.app,plantathome-admin-s
 RAZORPAY_KEY=rzp_test_Sth5xcsZyNoPR4
 RAZORPAY_SECRET=${RAZORPAY_SECRET:-}
 MEDIA_DISK=local
+MAIL_MAILER=smtp
+MAIL_HOST=smtp.sendgrid.net
+MAIL_PORT=587
+MAIL_USERNAME=apikey
+MAIL_PASSWORD=${SENDGRID_API_KEY:-}
+MAIL_ENCRYPTION=tls
+MAIL_FROM_ADDRESS=no-reply@plantathome.in
+ADMIN_EMAIL=${ADMIN_EMAIL:-yadavvinay9996@gmail.com}
+DUMMY_DATA_PATH=pickbazar
 ENVEOF
 
 cd /var/www/html
@@ -35,28 +44,111 @@ fi
 echo "==> Configuring nginx to listen on port ${PORT:-80}..."
 sed -i "s/listen 80;/listen ${PORT:-80};/g" /etc/nginx/nginx.conf
 
-# Run DB setup in background so supervisord (nginx + php-fpm) starts immediately.
-# Railway health check polls /api/health — nginx returns 200 natively while migrations run.
+# Full marvel:install equivalent — runs in background so supervisord (nginx + php-fpm)
+# starts immediately and Railway's health check passes while setup is in progress.
 (
-  echo "==> Running migrations (background)..."
-  php artisan migrate --force || echo "WARNING: Migrations failed"
+  echo "==> [bg] Waiting for MySQL (up to 60s)..."
+  WAIT=0
+  until php -r "new PDO('mysql:host=${MYSQLHOST};port=${MYSQLPORT:-3306};dbname=${MYSQLDATABASE}', '${MYSQLUSER}', '${MYSQLPASSWORD}');" 2>/dev/null; do
+    if [ "$WAIT" -ge 60 ]; then
+      echo "[bg] WARNING: MySQL not ready after 60s, continuing..."
+      break
+    fi
+    sleep 3
+    WAIT=$((WAIT + 3))
+  done
+  echo "[bg] MySQL OK."
 
-  SETTINGS_COUNT=$(php -r "
+  echo "==> [bg] Checking database state..."
+  TABLE_COUNT=$(php -r "
 try {
   \$pdo = new PDO('mysql:host=${MYSQLHOST};port=${MYSQLPORT:-3306};dbname=${MYSQLDATABASE}', '${MYSQLUSER}', '${MYSQLPASSWORD}');
-  echo \$pdo->query('SELECT COUNT(*) FROM settings')->fetchColumn();
+  echo \$pdo->query('SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = \"${MYSQLDATABASE}\"')->fetchColumn();
 } catch (Exception \$e) { echo 0; }
 " 2>/dev/null)
-  if [ "${SETTINGS_COUNT:-0}" = "0" ]; then
-    php artisan db:seed --class="Marvel\\Database\\Seeders\\SettingsSeeder" --force || echo "WARNING: SettingsSeeder failed"
-    php artisan db:seed --class="Marvel\\Database\\Seeders\\MarvelSeeder" --force || echo "WARNING: MarvelSeeder failed"
+
+  if [ "${TABLE_COUNT:-0}" = "0" ]; then
+    echo "==> [bg] Fresh database — running full marvel:install..."
+
+    echo "[bg]   [1/7] migrate:fresh..."
+    php artisan migrate:fresh --force
+
+    echo "[bg]   [2/7] marvel:seed (products, categories, shops demo data)..."
+    php artisan marvel:seed || echo "[bg] WARNING: marvel:seed failed"
+
+    echo "[bg]   [3/7] MarvelSeeder..."
+    php artisan db:seed --class="Marvel\\Database\\Seeders\\MarvelSeeder" --force \
+      || echo "[bg] WARNING: MarvelSeeder failed"
+
+    echo "[bg]   [4/7] SettingsSeeder..."
+    php artisan db:seed --class="Marvel\\Database\\Seeders\\SettingsSeeder" --force \
+      || echo "[bg] WARNING: SettingsSeeder failed"
+
+    echo "[bg]   [5/7] Permissions, roles, and admin user..."
+    cat > /tmp/marvel_setup.php << 'PHPEOF'
+<?php
+define('LARAVEL_START', microtime(true));
+require '/var/www/html/vendor/autoload.php';
+$app = require_once '/var/www/html/bootstrap/app.php';
+$kernel = $app->make(Illuminate\Contracts\Console\Kernel::class);
+$kernel->bootstrap();
+
+app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
+
+\Spatie\Permission\Models\Permission::firstOrCreate(['name' => 'super_admin']);
+\Spatie\Permission\Models\Permission::firstOrCreate(['name' => 'customer']);
+\Spatie\Permission\Models\Permission::firstOrCreate(['name' => 'store_owner']);
+\Spatie\Permission\Models\Permission::firstOrCreate(['name' => 'staff']);
+
+\Spatie\Permission\Models\Role::firstOrCreate(['name' => 'super_admin'])
+    ->syncPermissions(['super_admin', 'store_owner', 'customer']);
+\Spatie\Permission\Models\Role::firstOrCreate(['name' => 'store_owner'])
+    ->syncPermissions(['store_owner', 'customer']);
+\Spatie\Permission\Models\Role::firstOrCreate(['name' => 'staff'])
+    ->syncPermissions(['staff', 'customer']);
+\Spatie\Permission\Models\Role::firstOrCreate(['name' => 'customer'])
+    ->syncPermissions(['customer']);
+
+$adminEmail    = getenv('ADMIN_EMAIL')    ?: 'yadavvinay9996@gmail.com';
+$adminPassword = getenv('ADMIN_PASSWORD') ?: 'Admin@1234';
+$adminName     = getenv('ADMIN_NAME')     ?: 'Admin';
+
+$user = Marvel\Database\Models\User::where('email', $adminEmail)->first();
+if (!$user) {
+    $user = Marvel\Database\Models\User::create([
+        'name'     => $adminName,
+        'email'    => $adminEmail,
+        'password' => \Illuminate\Support\Facades\Hash::make($adminPassword),
+    ]);
+    echo "Admin created: {$adminEmail}\n";
+} else {
+    echo "Admin already exists: {$adminEmail}\n";
+}
+$user->email_verified_at = now()->timestamp;
+$user->save();
+$user->givePermissionTo(['super_admin', 'store_owner', 'customer']);
+$user->assignRole('super_admin');
+echo "Roles + permissions assigned to {$adminEmail}\n";
+PHPEOF
+    php /tmp/marvel_setup.php || echo "[bg] WARNING: Admin setup script failed"
+
+    echo "[bg]   [6/7] marvel:copy-files (email/PDF templates)..."
+    php artisan marvel:copy-files || echo "[bg] WARNING: copy-files failed"
+
+    echo "[bg]   [7/7] optimize:clear..."
+    php artisan optimize:clear || true
+
+    echo "==> [bg] marvel:install complete!"
+
   else
-    echo "DB already seeded (settings rows: $SETTINGS_COUNT), skipping"
+    echo "[bg] DB has ${TABLE_COUNT} tables. Running pending migrations only..."
+    php artisan migrate --force || echo "[bg] WARNING: Migrations failed"
   fi
 
   php artisan config:clear || true
-  php artisan route:clear || true
-  echo "==> DB setup complete"
+  php artisan route:clear  || true
+  php artisan view:clear   || true
+  echo "==> [bg] Setup done."
 ) &
 
 echo "==> Starting nginx + php-fpm via supervisord on port ${PORT:-80}..."

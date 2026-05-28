@@ -1,0 +1,218 @@
+name: Railway – Full Reset
+
+# ─── DANGER: deletes ALL Railway services and data ────────────────────────────
+# Run this to get a completely fresh Railway environment (new MySQL + API service).
+# After completion, the workflow auto-triggers "API – Staging Deploy".
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "reset" to confirm — THIS DELETES ALL RAILWAY DATA'
+        required: true
+        type: string
+
+jobs:
+  railway-reset:
+    name: Delete & Recreate Railway Services
+    runs-on: ubuntu-latest
+    if: inputs.confirm == 'reset'
+    environment: staging
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: staging
+
+      # ── 1. Delete existing API service ──────────────────────────────────────
+      - name: Delete existing API service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          API="https://backboard.railway.app/graphql/v2"
+          OLD_SID="5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e"
+          MUT='mutation { serviceDelete(id: "'"$OLD_SID"'") }'
+          Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
+          RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
+          echo "Delete API service: $RESP"
+
+      # ── 2. Find and delete MySQL plugin ─────────────────────────────────────
+      - name: Delete MySQL plugins
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          API="https://backboard.railway.app/graphql/v2"
+          PID="3261e461-4321-4974-b86c-6e0d1675f032"
+          QUERY='{ project(id: "'"$PID"'") { plugins { edges { node { id name } } } } }'
+          Q=$(QUERY="$QUERY" python3 -c 'import json,os; print(json.dumps({"query": os.environ["QUERY"]}))')
+          RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
+          echo "Plugins found: $RESP"
+
+          PLUGIN_IDS=$(echo "$RESP" | python3 -c "
+          import sys, json
+          try:
+              edges = json.load(sys.stdin)['data']['project']['plugins']['edges']
+              for e in edges:
+                  print(e['node']['id'])
+          except: pass
+          " 2>/dev/null)
+
+          for PLUGIN_ID in $PLUGIN_IDS; do
+            echo "Deleting plugin: $PLUGIN_ID"
+            MUT='mutation { pluginDelete(id: "'"$PLUGIN_ID"'") }'
+            Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
+            RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
+            echo "Delete plugin: $RESP"
+          done
+
+      - name: Wait for deletions to propagate
+        run: sleep 10
+
+      # ── 3. Create new MySQL plugin ───────────────────────────────────────────
+      - name: Create new MySQL plugin
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          API="https://backboard.railway.app/graphql/v2"
+          PID="3261e461-4321-4974-b86c-6e0d1675f032"
+          MUT='mutation { pluginCreate(input: { projectId: "'"$PID"'", name: "MYSQL" }) { id } }'
+          Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
+          RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
+          echo "Create MySQL plugin: $RESP"
+          PLUGIN_ID=$(echo "$RESP" | python3 -c "
+          import sys, json
+          try: print(json.load(sys.stdin)['data']['pluginCreate']['id'])
+          except: print('')
+          " 2>/dev/null)
+          echo "MYSQL_PLUGIN_ID=$PLUGIN_ID" >> $GITHUB_ENV
+
+      # ── 4. Create new API service ────────────────────────────────────────────
+      - name: Create new API service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          API="https://backboard.railway.app/graphql/v2"
+          PID="3261e461-4321-4974-b86c-6e0d1675f032"
+          MUT='mutation { serviceCreate(input: { projectId: "'"$PID"'", name: "plantathome-api" }) { id } }'
+          Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
+          RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
+          echo "Create API service: $RESP"
+          NEW_SID=$(echo "$RESP" | python3 -c "
+          import sys, json
+          try: print(json.load(sys.stdin)['data']['serviceCreate']['id'])
+          except: print('')
+          " 2>/dev/null)
+          echo "NEW_SID=$NEW_SID" >> $GITHUB_ENV
+          echo "New API service ID: $NEW_SID"
+
+      # ── 5. Get environment ID ────────────────────────────────────────────────
+      - name: Get environment ID
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          API="https://backboard.railway.app/graphql/v2"
+          PID="3261e461-4321-4974-b86c-6e0d1675f032"
+          QUERY='{ project(id: "'"$PID"'") { environments { edges { node { id name } } } } }'
+          Q=$(QUERY="$QUERY" python3 -c 'import json,os; print(json.dumps({"query": os.environ["QUERY"]}))')
+          RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
+          echo "Environments: $RESP"
+          NEW_EID=$(echo "$RESP" | python3 -c "
+          import sys, json
+          try:
+              edges = json.load(sys.stdin)['data']['project']['environments']['edges']
+              print(edges[0]['node']['id'] if edges else '')
+          except: print('')
+          " 2>/dev/null)
+          echo "NEW_EID=$NEW_EID" >> $GITHUB_ENV
+          echo "Environment ID: $NEW_EID"
+
+      # ── 6. Set environment variables + start command ─────────────────────────
+      - name: Set env vars and start command on new service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+          RAZORPAY_SECRET: ${{ secrets.RAZORPAY_SECRET }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+        run: |
+          API="https://backboard.railway.app/graphql/v2"
+          PID="3261e461-4321-4974-b86c-6e0d1675f032"
+          NEW_SID="${{ env.NEW_SID }}"
+          NEW_EID="${{ env.NEW_EID }}"
+
+          # Set environment variables — pass all values via env so no secrets land in the YAML inline
+          PAYLOAD=$(python3 -c "
+import json, os
+q  = 'mutation(\$i: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: \$i) }'
+inp = {'projectId': os.environ['PID'], 'environmentId': os.environ['EID'], 'serviceId': os.environ['SID'],
+       'variables': {'ADMIN_EMAIL': 'yadavvinay9996@gmail.com', 'ADMIN_NAME': 'Vinay Yadav',
+                     'ADMIN_PASSWORD': os.environ.get('ADMIN_PASSWORD','Admin@1234'),
+                     'RAZORPAY_SECRET': os.environ.get('RAZORPAY_SECRET',''),
+                     'SENDGRID_API_KEY': os.environ.get('SENDGRID_API_KEY','')}}
+print(json.dumps({'query': q, 'variables': {'i': inp}}))
+")
+          RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$PAYLOAD")
+          echo "Set env vars: $RESP"
+
+          # Set start command
+          MUT='mutation { serviceInstanceUpdate(serviceId: "'"$NEW_SID"'", environmentId: "'"$NEW_EID"'", input: { builder: NIXPACKS, startCommand: "/start.sh" }) }'
+          Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
+          RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
+          echo "Set start command: $RESP"
+
+      # ── 7. Update staging.yml with new IDs and push ──────────────────────────
+      - name: Update service IDs in staging.yml
+        env:
+          NEW_SID: ${{ env.NEW_SID }}
+          NEW_EID: ${{ env.NEW_EID }}
+        run: |
+          OLD_SID="5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e"
+          OLD_EID="a12e9f73-752a-4556-a065-b6a7657bae63"
+          if [ -n "$NEW_SID" ] && [ "$NEW_SID" != "$OLD_SID" ]; then
+            sed -i "s/$OLD_SID/$NEW_SID/g" .github/workflows/staging.yml
+            sed -i "s/$OLD_EID/$NEW_EID/g" .github/workflows/staging.yml
+            echo "Updated staging.yml: SID → $NEW_SID  EID → $NEW_EID"
+          else
+            echo "WARNING: NEW_SID is empty or same as OLD_SID — skipping staging.yml update"
+          fi
+
+      - name: Commit and push updated staging.yml
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/staging.yml
+          if git diff --staged --quiet; then
+            echo "No changes to staging.yml"
+          else
+            git commit -m "ci: update Railway service/env IDs after full reset [skip ci]"
+            git push origin staging
+          fi
+
+      # ── 8. Deploy code via railway up ────────────────────────────────────────
+      - name: Deploy to new Railway service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          NEW_SID="${{ env.NEW_SID }}"
+          NEW_EID="${{ env.NEW_EID }}"
+          echo "Installing Railway CLI..."
+          npm install -g @railway/cli --silent
+          echo "Pushing code via railway up..."
+          railway up -s "$NEW_SID" -e "$NEW_EID" --detach
+          echo "Deploy triggered — Railway is building the image and will run marvel:install on first boot."
+
+      # ── 9. Health check ───────────────────────────────────────────────────────
+      - name: Wait for build + health check (up to 12 min)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: |
+          echo "Waiting 10 min for Railway nixpacks build + marvel:install to complete..."
+          sleep 600
+          DOMAIN="plantathome-api-production.up.railway.app"
+          echo "=== Health check: https://$DOMAIN/api/health ==="
+          for i in 1 2 3 4 5; do
+            R=$(curl -s -w "\nHTTP:%{http_code}" --max-time 15 "https://$DOMAIN/api/health" 2>/dev/null)
+            echo "Attempt $i: $R"
+            echo "$R" | grep -q "HTTP:200" && echo "PASS — API is live!" && exit 0
+            sleep 20
+          done
+          echo "Health check did not return 200 — check Railway dashboard logs."
+          exit 0
