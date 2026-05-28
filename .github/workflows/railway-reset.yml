@@ -25,17 +25,36 @@ jobs:
         with:
           ref: staging
 
-      # ── 1. Delete existing API service ──────────────────────────────────────
-      - name: Delete existing API service
+      # ── 1. Delete ALL existing services in the project ───────────────────────
+      - name: Delete all existing services
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           API="https://backboard.railway.app/graphql/v2"
-          OLD_SID="5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e"
-          MUT='mutation { serviceDelete(id: "'"$OLD_SID"'") }'
-          Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
+          PID="3261e461-4321-4974-b86c-6e0d1675f032"
+
+          # Query all services in the project
+          QUERY='{ project(id: "'"$PID"'") { services { edges { node { id name } } } } }'
+          Q=$(QUERY="$QUERY" python3 -c 'import json,os; print(json.dumps({"query": os.environ["QUERY"]}))')
           RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
-          echo "Delete API service: $RESP"
+          echo "Services found: $RESP"
+
+          SERVICE_IDS=$(echo "$RESP" | python3 -c "
+          import sys, json
+          try:
+              edges = json.load(sys.stdin)['data']['project']['services']['edges']
+              for e in edges:
+                  print(e['node']['id'])
+          except: pass
+          " 2>/dev/null)
+
+          for SID in $SERVICE_IDS; do
+            echo "Deleting service: $SID"
+            MUT='mutation { serviceDelete(id: "'"$SID"'") }'
+            Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
+            RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
+            echo "Delete service $SID: $RESP"
+          done
 
       # ── 2. Find and delete MySQL plugin ─────────────────────────────────────
       - name: Delete MySQL plugins
@@ -195,14 +214,21 @@ jobs:
           NEW_SID: ${{ env.NEW_SID }}
           NEW_EID: ${{ env.NEW_EID }}
         run: |
-          OLD_SID="5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e"
-          OLD_EID="a12e9f73-752a-4556-a065-b6a7657bae63"
-          if [ -n "$NEW_SID" ] && [ "$NEW_SID" != "$OLD_SID" ]; then
+          if [ -z "$NEW_SID" ]; then
+            echo "WARNING: NEW_SID is empty — skipping staging.yml update"
+            exit 0
+          fi
+          # Extract the current SID and EID from the assignment lines in staging.yml
+          OLD_SID=$(grep -m1 'SID="' .github/workflows/staging.yml | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+          OLD_EID=$(grep -m1 'EID="' .github/workflows/staging.yml | grep -oE '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+          echo "OLD_SID=$OLD_SID  OLD_EID=$OLD_EID"
+          if [ -n "$OLD_SID" ] && [ "$OLD_SID" != "$NEW_SID" ]; then
             sed -i "s/$OLD_SID/$NEW_SID/g" .github/workflows/staging.yml
+            echo "Replaced SID: $OLD_SID → $NEW_SID"
+          fi
+          if [ -n "$OLD_EID" ] && [ "$OLD_EID" != "$NEW_EID" ] && [ -n "$NEW_EID" ]; then
             sed -i "s/$OLD_EID/$NEW_EID/g" .github/workflows/staging.yml
-            echo "Updated staging.yml: SID → $NEW_SID  EID → $NEW_EID"
-          else
-            echo "WARNING: NEW_SID is empty or same as OLD_SID — skipping staging.yml update"
+            echo "Replaced EID: $OLD_EID → $NEW_EID"
           fi
 
       - name: Commit and push updated staging.yml
@@ -217,26 +243,53 @@ jobs:
             git push origin staging
           fi
 
-      # ── 8. Deploy code via railway up ────────────────────────────────────────
-      - name: Deploy to new Railway service
+      # ── 8. Trigger deployment via GraphQL ────────────────────────────────────
+      - name: Trigger deployment on new Railway service
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
           NEW_SID="${{ env.NEW_SID }}"
           NEW_EID="${{ env.NEW_EID }}"
-          echo "Installing Railway CLI..."
-          npm install -g @railway/cli --silent
-          echo "Pushing code via railway up..."
-          railway up -s "$NEW_SID" -e "$NEW_EID" --detach
-          echo "Deploy triggered — Railway is building the image and will run marvel:install on first boot."
+          API="https://backboard.railway.app/graphql/v2"
+          if [ -z "$NEW_SID" ]; then
+            echo "ERROR: NEW_SID is empty — cannot deploy"
+            exit 1
+          fi
+          MUT='mutation { serviceInstanceDeployV2(serviceId: "'"$NEW_SID"'", environmentId: "'"$NEW_EID"'") }'
+          Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
+          RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
+          echo "Deploy triggered: $RESP"
+          DEPLOY_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['serviceInstanceDeployV2'])" 2>/dev/null)
+          echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
+          echo "Deployment ID: $DEPLOY_ID"
+          echo "Railway is building the image and will run marvel:install on first boot."
 
-      # ── 9. Health check ───────────────────────────────────────────────────────
+      # ── 9. Wait for build + health check ─────────────────────────────────────
       - name: Wait for build + health check (up to 12 min)
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
         run: |
+          DEPLOY_ID="${{ env.DEPLOY_ID }}"
           echo "Waiting 10 min for Railway nixpacks build + marvel:install to complete..."
           sleep 600
+
+          if [ -n "$DEPLOY_ID" ]; then
+            echo "=== Deployment status ==="
+            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
+              -d "{\"query\":\"{ deployment(id:\\\"$DEPLOY_ID\\\"){status}}\"}"
+            echo ""
+
+            echo "=== Container logs (last 50) ==="
+            curl -s -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $RAILWAY_TOKEN" \
+              -d "{\"query\":\"{ deploymentLogs(deploymentId:\\\"$DEPLOY_ID\\\",limit:50){message severity}}\"}" \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); [print(l.get('severity','?'), l.get('message','')) for l in d.get('data',{}).get('deploymentLogs',[])]" 2>/dev/null
+            echo ""
+          fi
+
           DOMAIN="plantathome-api-production.up.railway.app"
           echo "=== Health check: https://$DOMAIN/api/health ==="
           for i in 1 2 3 4 5; do
