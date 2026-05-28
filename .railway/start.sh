@@ -36,6 +36,9 @@ ENVEOF
 
 cd /var/www/html
 
+echo "==> Configuring nginx to listen on port ${PORT:-80}..."
+sed -i "s/listen 80;/listen ${PORT:-80};/g" /etc/nginx/nginx.conf
+
 if [ -z "${APP_KEY}" ]; then
   echo "==> Generating APP_KEY (not set in Railway env)..."
   php artisan key:generate --force
