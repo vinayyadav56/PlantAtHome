@@ -113,11 +113,10 @@ jobs:
           DB_PASSWORD: root
         run: php artisan migrate --force
 
-  # ── 3. Deploy to Railway ──────────────────────────────────────────────────────
-  # On push: auto-runs (Railway auto-deploys from the staging branch).
-  # On manual: runs only if user typed "deploy".
+  # ── 3. Deploy to Fly.io ───────────────────────────────────────────────────────
+  # On push: auto-runs. On manual: runs only if user typed "deploy".
   deploy:
-    name: Deploy → Railway (Staging)
+    name: Deploy → Fly.io (Staging)
     runs-on: ubuntu-latest
     needs: [security, test]
     if: inputs.confirm == 'deploy' || github.event_name == 'push'
@@ -128,81 +127,23 @@ jobs:
         with:
           ref: ${{ inputs.branch || github.ref_name }}
 
-      - name: Snapshot current deployment ID
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Deploy to Fly.io
+        run: fly deploy --remote-only --wait-timeout 600
         env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Health check
         run: |
-          SID="d53df789-0df1-41f8-9e35-8c24a8b6721c"
-          API="https://backboard.railway.app/graphql/v2"
-          BEFORE=$(curl -s -X POST "$API" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d '{"query":"{ deployments(input:{serviceId:\"'"$SID"'\"}){edges{node{id}}}}"}' \
-            | python3 -c "import sys,json; e=json.load(sys.stdin)['data']['deployments']['edges']; print(e[0]['node']['id'] if e else '')" 2>/dev/null)
-          echo "BEFORE_ID=$BEFORE" >> $GITHUB_ENV
-
-      - name: Wait for Railway auto-deploy (polls every 30 s, up to 10 min)
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          SID="d53df789-0df1-41f8-9e35-8c24a8b6721c"
-          EID="a12e9f73-752a-4556-a065-b6a7657bae63"
-          API="https://backboard.railway.app/graphql/v2"
-          DEPLOY_ID=""
-          for i in $(seq 1 20); do
-            sleep 30
-            LATEST=$(curl -s -X POST "$API" \
-              -H "Content-Type: application/json" \
-              -H "Authorization: Bearer $RAILWAY_TOKEN" \
-              -d '{"query":"{ deployments(input:{serviceId:\"'"$SID"'\"}){edges{node{id}}}}"}' \
-              | python3 -c "import sys,json; e=json.load(sys.stdin)['data']['deployments']['edges']; print(e[0]['node']['id'] if e else '')" 2>/dev/null)
-            echo "Poll $i: $LATEST"
-            if [ -n "$LATEST" ] && [ "$LATEST" != "${{ env.BEFORE_ID }}" ]; then
-              DEPLOY_ID="$LATEST"
-              echo "New deployment detected: $DEPLOY_ID"
-              break
-            fi
-          done
-          if [ -z "$DEPLOY_ID" ]; then
-            echo "Auto-deploy not triggered — falling back to manual deploy"
-            MUT='mutation { serviceInstanceDeployV2(serviceId: "'"$SID"'", environmentId: "'"$EID"'") }'
-            Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
-            RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
-            echo "$RESP"
-            DEPLOY_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['serviceInstanceDeployV2'])" 2>/dev/null)
-          fi
-          echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
-
-      - name: Wait for build then verify health
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          DEPLOY_ID="${{ env.DEPLOY_ID }}"
-          echo "Waiting 10 min for Railway build + container start..."
-          sleep 600
-
-          echo "=== Deployment status ==="
-          curl -s -X POST https://backboard.railway.app/graphql/v2 \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d "{\"query\":\"{ deployment(id:\\\"$DEPLOY_ID\\\"){status}}\"}"
-          echo ""
-
-          echo "=== Container logs ==="
-          curl -s -X POST https://backboard.railway.app/graphql/v2 \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d "{\"query\":\"{ deploymentLogs(deploymentId:\\\"$DEPLOY_ID\\\",limit:50){message severity}}\"}" \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); [print(l.get('severity','?'), l.get('message','')) for l in d.get('data',{}).get('deploymentLogs',[])]" 2>/dev/null
-          echo ""
-
-          echo "=== Health check ==="
+          echo "Waiting 30s for container to start..."
+          sleep 30
           for i in 1 2 3 4 5; do
             R=$(curl -s -w "\nHTTP:%{http_code}" --max-time 15 \
-              "https://plantathome-api-production.up.railway.app/api/health" 2>/dev/null)
+              "https://plantathome-api.fly.dev/api/health" 2>/dev/null)
             echo "Attempt $i: $R"
             echo "$R" | grep -q "HTTP:200" && echo "PASS" && exit 0
-            sleep 15
+            sleep 20
           done
           echo "FAIL — health check did not return 200"
           exit 1
