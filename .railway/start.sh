@@ -5,7 +5,7 @@ cat > /var/www/html/.env << ENVEOF
 APP_NAME=PlantAtHome
 APP_ENV=staging
 APP_KEY=${APP_KEY}
-APP_DEBUG=true
+APP_DEBUG=false
 APP_URL=https://${RAILWAY_PUBLIC_DOMAIN:-plantathome-production.up.railway.app}
 LOG_CHANNEL=stderr
 DB_CONNECTION=mysql
@@ -111,19 +111,41 @@ $adminName     = getenv('ADMIN_NAME')     ?: 'Admin';
 $user = Marvel\Database\Models\User::where('email', $adminEmail)->first();
 if (!$user) {
     $user = Marvel\Database\Models\User::create([
-        'name'     => $adminName,
-        'email'    => $adminEmail,
-        'password' => \Illuminate\Support\Facades\Hash::make($adminPassword),
+        'name'      => $adminName,
+        'email'     => $adminEmail,
+        'password'  => \Illuminate\Support\Facades\Hash::make($adminPassword),
+        'is_active' => true,
     ]);
     echo "Admin created: {$adminEmail}\n";
 } else {
     echo "Admin already exists: {$adminEmail}\n";
+    $user->is_active = true;
 }
-$user->email_verified_at = now()->timestamp;
+$user->email_verified_at = now();
 $user->save();
 $user->givePermissionTo(['super_admin', 'store_owner', 'customer']);
 $user->assignRole('super_admin');
 echo "Roles + permissions assigned to {$adminEmail}\n";
+
+// Seed settings if table is empty, then ensure app_settings.trust = true so login works
+$settings = Marvel\Database\Models\Settings::getData();
+if (!$settings) {
+    echo "No settings record — running SettingsSeeder...\n";
+    \Illuminate\Support\Facades\Artisan::call('db:seed', [
+        '--class' => 'Marvel\\Database\\Seeders\\SettingsSeeder',
+        '--force' => true,
+    ]);
+    $settings = Marvel\Database\Models\Settings::getData();
+}
+if ($settings) {
+    $opts = $settings->options ?? [];
+    $opts['app_settings'] = ['trust' => true, 'last_checking_time' => now()->toISOString()];
+    $settings->update(['options' => $opts]);
+    \Illuminate\Support\Facades\Cache::flush();
+    echo "Settings app_settings.trust set to true\n";
+} else {
+    echo "WARNING: still no settings record — trust not set\n";
+}
 PHPEOF
 
   if [ "${TABLE_COUNT:-0}" = "0" ]; then
