@@ -79,25 +79,8 @@ try {
 } catch (Exception \$e) { echo 0; }
 " 2>/dev/null)
 
-  if [ "${TABLE_COUNT:-0}" = "0" ]; then
-    echo "==> [bg] Fresh database — running full marvel:install..."
-
-    echo "[bg]   [1/7] migrate:fresh..."
-    php artisan migrate:fresh --force
-
-    echo "[bg]   [2/7] marvel:seed (products, categories, shops demo data)..."
-    php artisan marvel:seed || echo "[bg] WARNING: marvel:seed failed"
-
-    echo "[bg]   [3/7] MarvelSeeder..."
-    php artisan db:seed --class="Marvel\\Database\\Seeders\\MarvelSeeder" --force \
-      || echo "[bg] WARNING: MarvelSeeder failed"
-
-    echo "[bg]   [4/7] SettingsSeeder..."
-    php artisan db:seed --class="Marvel\\Database\\Seeders\\SettingsSeeder" --force \
-      || echo "[bg] WARNING: SettingsSeeder failed"
-
-    echo "[bg]   [5/7] Permissions, roles, and admin user..."
-    cat > /tmp/marvel_setup.php << 'PHPEOF'
+  # Write setup script now — used in both fresh and existing DB paths (idempotent via firstOrCreate)
+  cat > /tmp/marvel_setup.php << 'PHPEOF'
 <?php
 define('LARAVEL_START', microtime(true));
 require '/var/www/html/vendor/autoload.php';
@@ -142,6 +125,25 @@ $user->givePermissionTo(['super_admin', 'store_owner', 'customer']);
 $user->assignRole('super_admin');
 echo "Roles + permissions assigned to {$adminEmail}\n";
 PHPEOF
+
+  if [ "${TABLE_COUNT:-0}" = "0" ]; then
+    echo "==> [bg] Fresh database — running full marvel:install..."
+
+    echo "[bg]   [1/7] migrate:fresh..."
+    php artisan migrate:fresh --force
+
+    echo "[bg]   [2/7] marvel:seed (products, categories, shops demo data)..."
+    php artisan marvel:seed || echo "[bg] WARNING: marvel:seed failed"
+
+    echo "[bg]   [3/7] MarvelSeeder..."
+    php artisan db:seed --class="Marvel\\Database\\Seeders\\MarvelSeeder" --force \
+      || echo "[bg] WARNING: MarvelSeeder failed"
+
+    echo "[bg]   [4/7] SettingsSeeder..."
+    php artisan db:seed --class="Marvel\\Database\\Seeders\\SettingsSeeder" --force \
+      || echo "[bg] WARNING: SettingsSeeder failed"
+
+    echo "[bg]   [5/7] Permissions, roles, and admin user..."
     php /tmp/marvel_setup.php || echo "[bg] WARNING: Admin setup script failed"
 
     echo "[bg]   [6/7] marvel:copy-files (email/PDF templates)..."
@@ -153,8 +155,11 @@ PHPEOF
     echo "==> [bg] marvel:install complete!"
 
   else
-    echo "[bg] DB has ${TABLE_COUNT} tables. Running pending migrations only..."
+    echo "[bg] DB has ${TABLE_COUNT} tables. Running pending migrations..."
     php artisan migrate --force || echo "[bg] WARNING: Migrations failed"
+
+    echo "[bg] Ensuring permissions, roles, and admin user exist (idempotent)..."
+    php /tmp/marvel_setup.php || echo "[bg] WARNING: Admin setup script failed"
   fi
 
   php artisan config:clear || true
