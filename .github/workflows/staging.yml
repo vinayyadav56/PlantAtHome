@@ -126,7 +126,7 @@ jobs:
     steps:
       - name: Wait for Railway build + health check (up to 15 min)
         run: |
-          DOMAIN="plantathome-api-production.up.railway.app"
+          DOMAIN="plantathome-production.up.railway.app"
           echo "Railway auto-deploys on push. Polling https://$DOMAIN/api/health ..."
           for i in $(seq 1 30); do
             sleep 30
