@@ -138,17 +138,8 @@ jobs:
           NEW_SID="${{ env.NEW_SID }}"
           NEW_EID="${{ env.NEW_EID }}"
 
-          # Set environment variables — pass all values via env so no secrets land in the YAML inline
-          PAYLOAD=$(python3 -c "
-import json, os
-q  = 'mutation(\$i: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: \$i) }'
-inp = {'projectId': os.environ['PID'], 'environmentId': os.environ['EID'], 'serviceId': os.environ['SID'],
-       'variables': {'ADMIN_EMAIL': 'yadavvinay9996@gmail.com', 'ADMIN_NAME': 'Vinay Yadav',
-                     'ADMIN_PASSWORD': os.environ.get('ADMIN_PASSWORD','Admin@1234'),
-                     'RAZORPAY_SECRET': os.environ.get('RAZORPAY_SECRET',''),
-                     'SENDGRID_API_KEY': os.environ.get('SENDGRID_API_KEY','')}}
-print(json.dumps({'query': q, 'variables': {'i': inp}}))
-")
+          # Set environment variables — all values via env, single-line python3 -c avoids YAML indent issues
+          PAYLOAD=$(PID="$PID" EID="$NEW_EID" SID="$NEW_SID" ADMIN_PASSWORD="$ADMIN_PASSWORD" RAZORPAY_SECRET="$RAZORPAY_SECRET" SENDGRID_API_KEY="$SENDGRID_API_KEY" python3 -c 'import json,os; q="mutation($i: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $i) }"; v={"ADMIN_EMAIL":"yadavvinay9996@gmail.com","ADMIN_NAME":"Vinay Yadav","ADMIN_PASSWORD":os.environ.get("ADMIN_PASSWORD",""),"RAZORPAY_SECRET":os.environ.get("RAZORPAY_SECRET",""),"SENDGRID_API_KEY":os.environ.get("SENDGRID_API_KEY","")}; inp={"projectId":os.environ["PID"],"environmentId":os.environ["EID"],"serviceId":os.environ["SID"],"variables":v}; print(json.dumps({"query":q,"variables":{"i":inp}}))')
           RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$PAYLOAD")
           echo "Set env vars: $RESP"
 
