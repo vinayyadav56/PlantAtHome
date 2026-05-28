@@ -203,11 +203,12 @@ jobs:
           RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$PAYLOAD")
           echo "Set env vars: $RESP"
 
-          # Set start command
-          MUT='mutation { serviceInstanceUpdate(serviceId: "'"$NEW_SID"'", environmentId: "'"$NEW_EID"'", input: { builder: NIXPACKS, startCommand: "/start.sh" }) }'
+          # Connect to GitHub repo + set start command + builder in one call
+          # source.repo connects the service to GitHub so Railway can auto-deploy on push
+          MUT='mutation { serviceInstanceUpdate(serviceId: "'"$NEW_SID"'", environmentId: "'"$NEW_EID"'", input: { source: { repo: "vinayyadav56/PlantAtHome" }, builder: NIXPACKS, startCommand: "/start.sh" }) }'
           Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
           RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
-          echo "Set start command: $RESP"
+          echo "Set start command + GitHub source: $RESP"
 
       # ── 7. Update staging.yml with new IDs and push ──────────────────────────
       - name: Update service IDs in staging.yml
