@@ -17,6 +17,8 @@ jobs:
     runs-on: ubuntu-latest
     if: inputs.confirm == 'reset'
     environment: staging
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -67,23 +69,27 @@ jobs:
       - name: Wait for deletions to propagate
         run: sleep 10
 
-      # ── 3. Create new MySQL plugin ───────────────────────────────────────────
-      - name: Create new MySQL plugin
+      # ── 3. Create new MySQL service (Docker image, pluginCreate requires owner token) ──
+      - name: Create new MySQL service
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
         run: |
           API="https://backboard.railway.app/graphql/v2"
           PID="3261e461-4321-4974-b86c-6e0d1675f032"
-          MUT='mutation { pluginCreate(input: { projectId: "'"$PID"'", name: "MYSQL" }) { id } }'
+          # Create MySQL as a regular service with mysql:8.0 image
+          MUT='mutation { serviceCreate(input: { projectId: "'"$PID"'", name: "MySQL" }) { id } }'
           Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
           RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
-          echo "Create MySQL plugin: $RESP"
-          PLUGIN_ID=$(echo "$RESP" | python3 -c "
+          echo "Create MySQL service: $RESP"
+          MYSQL_SID=$(echo "$RESP" | python3 -c "
           import sys, json
-          try: print(json.load(sys.stdin)['data']['pluginCreate']['id'])
+          try: print(json.load(sys.stdin)['data']['serviceCreate']['id'])
           except: print('')
           " 2>/dev/null)
-          echo "MYSQL_PLUGIN_ID=$PLUGIN_ID" >> $GITHUB_ENV
+          echo "MYSQL_SID=$MYSQL_SID" >> $GITHUB_ENV
+          echo "MySQL service ID: $MYSQL_SID"
 
       # ── 4. Create new API service ────────────────────────────────────────────
       - name: Create new API service
@@ -125,21 +131,55 @@ jobs:
           echo "NEW_EID=$NEW_EID" >> $GITHUB_ENV
           echo "Environment ID: $NEW_EID"
 
-      # ── 6. Set environment variables + start command ─────────────────────────
+      # ── 6a. Configure MySQL service with image + env vars ───────────────────────
+      - name: Configure MySQL service
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          MYSQL_ROOT_PASSWORD: ${{ secrets.MYSQL_ROOT_PASSWORD }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
+        run: |
+          API="https://backboard.railway.app/graphql/v2"
+          PID="3261e461-4321-4974-b86c-6e0d1675f032"
+          MYSQL_SID="${{ env.MYSQL_SID }}"
+          NEW_EID="${{ env.NEW_EID }}"
+          if [ -z "$MYSQL_SID" ]; then echo "WARN: MYSQL_SID empty, skipping MySQL config"; exit 0; fi
+
+          # Set MySQL docker image
+          MUT='mutation { serviceInstanceUpdate(serviceId: "'"$MYSQL_SID"'", environmentId: "'"$NEW_EID"'", input: { source: { image: "mysql:8.0" } }) }'
+          Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
+          RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
+          echo "Set MySQL image: $RESP"
+
+          # Set MySQL env vars
+          ROOT_PASS="${MYSQL_ROOT_PASSWORD:-PlantAtHomeRoot2024}"
+          DB_PASS="${MYSQL_PASSWORD:-PlantAtHome2024}"
+          PAYLOAD=$(PID="$PID" EID="$NEW_EID" SID="$MYSQL_SID" RPASS="$ROOT_PASS" DPASS="$DB_PASS" python3 -c 'import json,os; q="mutation($i: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $i) }"; v={"MYSQL_ROOT_PASSWORD":os.environ["RPASS"],"MYSQL_DATABASE":"railway","MYSQL_USER":"railway","MYSQL_PASSWORD":os.environ["DPASS"]}; inp={"projectId":os.environ["PID"],"environmentId":os.environ["EID"],"serviceId":os.environ["SID"],"variables":v}; print(json.dumps({"query":q,"variables":{"i":inp}}))')
+          RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$PAYLOAD")
+          echo "Set MySQL env vars: $RESP"
+
+      # ── 6b. Set environment variables + start command on API service ─────────
       - name: Set env vars and start command on new service
         env:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
           RAZORPAY_SECRET: ${{ secrets.RAZORPAY_SECRET }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          MYSQL_PASSWORD: ${{ secrets.MYSQL_PASSWORD }}
         run: |
           API="https://backboard.railway.app/graphql/v2"
           PID="3261e461-4321-4974-b86c-6e0d1675f032"
           NEW_SID="${{ env.NEW_SID }}"
+          MYSQL_SID="${{ env.MYSQL_SID }}"
+          DB_PASS="${MYSQL_PASSWORD:-PlantAtHome2024}"
+          # MySQL hostname: service_name.railway.internal (Railway internal networking)
+          MYSQL_HOST="mysql.railway.internal"
+          if [ -n "$MYSQL_SID" ]; then
+            MYSQL_HOST="MySQL.railway.internal"
+          fi
           NEW_EID="${{ env.NEW_EID }}"
 
-          # Set environment variables — all values via env, single-line python3 -c avoids YAML indent issues
-          PAYLOAD=$(PID="$PID" EID="$NEW_EID" SID="$NEW_SID" ADMIN_PASSWORD="$ADMIN_PASSWORD" RAZORPAY_SECRET="$RAZORPAY_SECRET" SENDGRID_API_KEY="$SENDGRID_API_KEY" python3 -c 'import json,os; q="mutation($i: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $i) }"; v={"ADMIN_EMAIL":"yadavvinay9996@gmail.com","ADMIN_NAME":"Vinay Yadav","ADMIN_PASSWORD":os.environ.get("ADMIN_PASSWORD",""),"RAZORPAY_SECRET":os.environ.get("RAZORPAY_SECRET",""),"SENDGRID_API_KEY":os.environ.get("SENDGRID_API_KEY","")}; inp={"projectId":os.environ["PID"],"environmentId":os.environ["EID"],"serviceId":os.environ["SID"],"variables":v}; print(json.dumps({"query":q,"variables":{"i":inp}}))')
+          # Set env vars on API service (includes MySQL connection pointing to internal MySQL service)
+          PAYLOAD=$(PID="$PID" EID="$NEW_EID" SID="$NEW_SID" MHOST="$MYSQL_HOST" MPASS="$DB_PASS" ADMIN_PASSWORD="$ADMIN_PASSWORD" RAZORPAY_SECRET="$RAZORPAY_SECRET" SENDGRID_API_KEY="$SENDGRID_API_KEY" python3 -c 'import json,os; q="mutation($i: VariableCollectionUpsertInput!) { variableCollectionUpsert(input: $i) }"; v={"ADMIN_EMAIL":"yadavvinay9996@gmail.com","ADMIN_NAME":"Vinay Yadav","ADMIN_PASSWORD":os.environ.get("ADMIN_PASSWORD",""),"RAZORPAY_SECRET":os.environ.get("RAZORPAY_SECRET",""),"SENDGRID_API_KEY":os.environ.get("SENDGRID_API_KEY",""),"MYSQLHOST":os.environ.get("MHOST",""),"MYSQLDATABASE":"railway","MYSQLUSER":"railway","MYSQLPASSWORD":os.environ.get("MPASS",""),"MYSQLPORT":"3306"}; inp={"projectId":os.environ["PID"],"environmentId":os.environ["EID"],"serviceId":os.environ["SID"],"variables":v}; print(json.dumps({"query":q,"variables":{"i":inp}}))')
           RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$PAYLOAD")
           echo "Set env vars: $RESP"
 
