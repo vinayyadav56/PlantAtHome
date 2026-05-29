@@ -37,7 +37,7 @@ ENVEOF
 cd /var/www/html
 
 echo "==> Ensuring storage directories exist with correct permissions..."
-mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs storage/app/public
+mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs storage/app/public /tmp/nginx_client_body
 chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
 chmod -R 775 storage bootstrap/cache 2>/dev/null || true
 
