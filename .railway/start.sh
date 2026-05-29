@@ -145,6 +145,25 @@ if (!$settings) {
 if ($settings) {
     $opts = $settings->options ?? [];
     $opts['app_settings'] = ['trust' => true, 'last_checking_time' => now()->toISOString()];
+
+    // Ensure Razorpay is in paymentGateway (idempotent)
+    $gateways = $opts['paymentGateway'] ?? [];
+    $hasRazorpay = false;
+    foreach ($gateways as $gw) {
+        if (strtolower($gw['name'] ?? '') === 'razorpay') { $hasRazorpay = true; break; }
+    }
+    if (!$hasRazorpay) {
+        $gateways[] = ['name' => 'Razorpay', 'title' => 'Razorpay'];
+        $opts['paymentGateway'] = $gateways;
+        echo "Razorpay added to paymentGateway settings\n";
+    }
+
+    // Ensure currency is INR
+    if (($opts['currency'] ?? '') !== 'INR') {
+        $opts['currency'] = 'INR';
+        echo "Currency set to INR\n";
+    }
+
     $settings->update(['options' => $opts]);
     \Illuminate\Support\Facades\Cache::flush();
     echo "Settings app_settings.trust set to true\n";

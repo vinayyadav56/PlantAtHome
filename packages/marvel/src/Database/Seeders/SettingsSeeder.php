@@ -46,7 +46,7 @@ class SettingsSeeder extends Seeder
                     'file_name' => 'Pickbazar.png'
                 ],
                 "useOtp" => false,
-                "currency" => "USD",
+                "currency" => "INR",
                 "taxClass" => "1",
                 "siteTitle" => "Pickbazar",
                 "deliveryTime" => [
@@ -106,8 +106,8 @@ class SettingsSeeder extends Seeder
                 ],
                 "paymentGateway" => [
                     [
-                        "name" => "stripe",
-                        "title" => "Stripe"
+                        "name" => "Razorpay",
+                        "title" => "Razorpay"
                     ]
                 ],
                 "currencyOptions" => [
