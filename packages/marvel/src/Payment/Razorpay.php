@@ -51,7 +51,13 @@ class Razorpay extends Base implements PaymentInterface
                 'is_redirect'           => false,
             ];
         } catch (Exception $e) {
-            throw new HttpException(400, SOMETHING_WENT_WRONG_WITH_PAYMENT);
+            \Illuminate\Support\Facades\Log::error('Razorpay::getIntent failed: ' . $e->getMessage(), [
+                'key_id_set' => !empty(config('shop.razorpay.key_id')),
+                'key_len'    => strlen(config('shop.razorpay.key_id') ?? ''),
+                'currency'   => $this->currency ?? null,
+            ]);
+            $detail = app()->environment('production') ? '' : ' | ' . $e->getMessage();
+            throw new HttpException(400, SOMETHING_WENT_WRONG_WITH_PAYMENT . $detail);
         }
     }
 
