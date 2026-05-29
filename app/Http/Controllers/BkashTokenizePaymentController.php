@@ -18,7 +18,7 @@ class BkashTokenizePaymentController extends Controller
         $request['mode'] = '0011'; //0011 for checkout
         $request['payerReference'] = $inv;
         $request['currency'] = 'BDT';
-        $request['amount'] = 10;
+        $request['amount'] = $request->input('amount', 10);
         $request['merchantInvoiceNumber'] = $inv;
         $request['callbackURL'] = config("bkash.callbackURL");;
 
