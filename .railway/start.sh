@@ -5,7 +5,7 @@ cat > /var/www/html/.env << ENVEOF
 APP_NAME=PlantAtHome
 APP_ENV=staging
 APP_KEY=${APP_KEY}
-APP_DEBUG=${APP_DEBUG:-false}
+APP_DEBUG=false
 APP_URL=https://${RAILWAY_PUBLIC_DOMAIN:-plantathome-production.up.railway.app}
 LOG_CHANNEL=stderr
 DB_CONNECTION=mysql
@@ -35,6 +35,11 @@ DUMMY_DATA_PATH=pickbazar
 ENVEOF
 
 cd /var/www/html
+
+echo "==> Ensuring storage directories exist with correct permissions..."
+mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs
+chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
+chmod -R 775 storage bootstrap/cache 2>/dev/null || true
 
 echo "==> Configuring nginx to listen on port ${PORT:-80}..."
 sed -i "s/listen 80;/listen ${PORT:-80};/g" /etc/nginx/nginx.conf
