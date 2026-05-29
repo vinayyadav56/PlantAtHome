@@ -151,6 +151,12 @@ if ($settings) {
 } else {
     echo "WARNING: still no settings record — trust not set\n";
 }
+
+// Create shop.config.json (license file) — required by EnsureEmailIsVerified middleware.
+// verify() sets trust=true and writes encrypted file using APP_KEY; no external HTTP call is made.
+$verification = new Marvel\Console\MarvelVerification();
+$verification->verify('staging-bypass-key');
+echo "shop.config.json (license) written\n";
 PHPEOF
 
   if [ "${TABLE_COUNT:-0}" = "0" ]; then
