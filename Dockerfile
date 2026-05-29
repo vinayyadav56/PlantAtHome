@@ -1,39 +1,37 @@
-FROM php:8.1-fpm
+FROM php:8.1-fpm-alpine
 
-# Install system dependencies + nginx
-RUN apt-get update && apt-get install -y \
+# System deps
+RUN apk add --no-cache \
     nginx \
+    supervisor \
+    curl \
     libpng-dev \
+    freetype-dev \
+    libjpeg-turbo-dev \
     libzip-dev \
-    libicu-dev \
+    icu-dev \
+    oniguruma-dev \
     g++ \
-    zip \
-    unzip \
-    && rm -rf /var/lib/apt/lists/*
+    make \
+    autoconf
 
-# Install PHP extensions
-RUN docker-php-ext-configure intl \
- && docker-php-ext-configure gd \
- && docker-php-ext-install \
-        pdo_mysql \
-        mbstring \
-        exif \
-        gd \
-        intl \
-        zip \
-        bcmath \
-        opcache
+# PHP extensions — gd requires explicit --with-freetype --with-jpeg on Alpine
+RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
+ && docker-php-ext-configure intl \
+ && docker-php-ext-install pdo pdo_mysql mbstring exif gd intl zip opcache bcmath
 
-# Install Composer
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+# Composer
+COPY --from=composer:2.6 /usr/bin/composer /usr/bin/composer
 
-WORKDIR /app
+WORKDIR /var/www/html
 
-# Install PHP dependencies (separate layer for caching)
+# Copy composer manifests + local path dependency before installing
+# (composer.json references packages/marvel as a path repo — must exist first)
 COPY composer.json composer.lock ./
+COPY packages/ ./packages/
 RUN composer install --no-dev --optimize-autoloader --no-interaction --no-scripts
 
-# Copy application code
+# Copy rest of application code
 COPY . .
 
 # Run post-install scripts (package discovery)
@@ -43,10 +41,12 @@ RUN composer run-script post-autoload-dump || true
 RUN chown -R www-data:www-data storage bootstrap/cache \
  && chmod -R 775 storage bootstrap/cache
 
-# Startup script
-COPY docker/start.sh /start.sh
+# Railway deployment configs
+COPY .railway/nginx.conf /etc/nginx/nginx.conf
+COPY .railway/supervisord.conf /etc/supervisord.conf
+COPY .railway/start.sh /start.sh
 RUN chmod +x /start.sh
 
-EXPOSE 8080
+EXPOSE 80
 
 CMD ["/start.sh"]

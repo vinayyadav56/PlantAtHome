@@ -113,108 +113,27 @@ jobs:
           DB_PASSWORD: root
         run: php artisan migrate --force
 
-  # ── 3. Deploy to Railway ──────────────────────────────────────────────────────
-  # Only runs if user typed "deploy" AND security + tests passed.
+  # ── 3. Verify Railway deploy ──────────────────────────────────────────────────
+  # Railway auto-deploys when a push lands on staging (GitHub integration).
+  # This job just waits for the build to finish and confirms health.
   deploy:
-    name: Deploy → Railway (Staging)
+    name: Verify → Railway (Staging)
     runs-on: ubuntu-latest
     needs: [security, test]
     if: inputs.confirm == 'deploy' || github.event_name == 'push'
     environment: staging
 
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.branch || github.ref_name }}
-
-      - name: Set start command on Railway service
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+      - name: Wait for Railway build + health check (up to 15 min)
         run: |
-          SID="5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e"
-          EID="a12e9f73-752a-4556-a065-b6a7657bae63"
-          API="https://backboard.railway.app/graphql/v2"
-          CMD="/start.sh"
-          MUT='mutation { serviceInstanceUpdate(serviceId: "'"$SID"'", environmentId: "'"$EID"'", input: { builder: NIXPACKS, startCommand: "'"$CMD"'" }) }'
-          Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
-          curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q"
-          echo ""
-
-      - name: Snapshot current deployment ID
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          SID="5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e"
-          API="https://backboard.railway.app/graphql/v2"
-          BEFORE=$(curl -s -X POST "$API" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d '{"query":"{ deployments(input:{serviceId:\"'"$SID"'\"}){edges{node{id}}}}"}' \
-            | python3 -c "import sys,json; e=json.load(sys.stdin)['data']['deployments']['edges']; print(e[0]['node']['id'] if e else '')" 2>/dev/null)
-          echo "BEFORE_ID=$BEFORE" >> $GITHUB_ENV
-
-      - name: Wait for Railway auto-deploy (polls every 30 s, up to 10 min)
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          SID="5bd0c7cc-49fa-4f3b-a30b-d8df07909e7e"
-          EID="a12e9f73-752a-4556-a065-b6a7657bae63"
-          API="https://backboard.railway.app/graphql/v2"
-          DEPLOY_ID=""
-          for i in $(seq 1 20); do
+          DOMAIN="plantathome-production.up.railway.app"
+          echo "Railway auto-deploys on push. Polling https://$DOMAIN/api/health ..."
+          for i in $(seq 1 30); do
             sleep 30
-            LATEST=$(curl -s -X POST "$API" \
-              -H "Content-Type: application/json" \
-              -H "Authorization: Bearer $RAILWAY_TOKEN" \
-              -d '{"query":"{ deployments(input:{serviceId:\"'"$SID"'\"}){edges{node{id}}}}"}' \
-              | python3 -c "import sys,json; e=json.load(sys.stdin)['data']['deployments']['edges']; print(e[0]['node']['id'] if e else '')" 2>/dev/null)
-            echo "Poll $i: $LATEST"
-            if [ -n "$LATEST" ] && [ "$LATEST" != "${{ env.BEFORE_ID }}" ]; then
-              DEPLOY_ID="$LATEST"
-              echo "New deployment detected: $DEPLOY_ID"
-              break
-            fi
-          done
-          if [ -z "$DEPLOY_ID" ]; then
-            echo "Auto-deploy not triggered — falling back to manual deploy"
-            MUT='mutation { serviceInstanceDeployV2(serviceId: "'"$SID"'", environmentId: "'"$EID"'") }'
-            Q=$(MUTATION="$MUT" python3 -c 'import json,os; print(json.dumps({"query": os.environ["MUTATION"]}))')
-            RESP=$(curl -s -X POST "$API" -H "Content-Type: application/json" -H "Authorization: Bearer $RAILWAY_TOKEN" -d "$Q")
-            echo "$RESP"
-            DEPLOY_ID=$(echo "$RESP" | python3 -c "import sys,json; print(json.load(sys.stdin)['data']['serviceInstanceDeployV2'])" 2>/dev/null)
-          fi
-          echo "DEPLOY_ID=$DEPLOY_ID" >> $GITHUB_ENV
-
-      - name: Wait for build then verify health
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: |
-          DEPLOY_ID="${{ env.DEPLOY_ID }}"
-          echo "Waiting 10 min for Railway build + container start..."
-          sleep 600
-
-          echo "=== Deployment status ==="
-          curl -s -X POST https://backboard.railway.app/graphql/v2 \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d "{\"query\":\"{ deployment(id:\\\"$DEPLOY_ID\\\"){status}}\"}"
-          echo ""
-
-          echo "=== Container logs ==="
-          curl -s -X POST https://backboard.railway.app/graphql/v2 \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer $RAILWAY_TOKEN" \
-            -d "{\"query\":\"{ deploymentLogs(deploymentId:\\\"$DEPLOY_ID\\\",limit:50){message severity}}\"}" \
-            | python3 -c "import sys,json; d=json.load(sys.stdin); [print(l.get('severity','?'), l.get('message','')) for l in d.get('data',{}).get('deploymentLogs',[])]" 2>/dev/null
-          echo ""
-
-          echo "=== Health check ==="
-          for i in 1 2 3 4 5; do
             R=$(curl -s -w "\nHTTP:%{http_code}" --max-time 15 \
-              "https://plantathome-api-production.up.railway.app/api/health" 2>/dev/null)
-            echo "Attempt $i: $R"
-            echo "$R" | grep -q "HTTP:200" && echo "PASS" && exit 0
-            sleep 15
+              "https://$DOMAIN/api/health" 2>/dev/null)
+            echo "Poll $i: $R"
+            echo "$R" | grep -q "HTTP:200" && echo "PASS — API is live!" && exit 0
           done
-          echo "FAIL — health check did not return 200"
+          echo "FAIL — health check timed out after 15 min"
           exit 1

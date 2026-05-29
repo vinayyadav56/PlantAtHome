@@ -1,7 +1,19 @@
 <?php
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Route;
+
+Route::get('/health', function () {
+    $db = 'unknown';
+    try {
+        DB::connection()->getPdo();
+        $db = 'connected';
+    } catch (\Exception $e) {
+        $db = 'unavailable';
+    }
+    return response()->json(['status' => 'ok', 'db' => $db, 'env' => config('app.env')]);
+});
 
 /*
 |--------------------------------------------------------------------------
@@ -16,8 +28,4 @@ use Illuminate\Support\Facades\Route;
 
 Route::middleware('auth:api')->get('/user', function (Request $request) {
     return $request->user();
-});
-
-Route::get('/health', function () {
-    return response()->json(['status' => 'ok', 'service' => 'plantathome-api'], 200);
 });
