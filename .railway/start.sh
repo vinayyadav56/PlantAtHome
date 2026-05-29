@@ -37,9 +37,12 @@ ENVEOF
 cd /var/www/html
 
 echo "==> Ensuring storage directories exist with correct permissions..."
-mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs
+mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs storage/app/public
 chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
 chmod -R 775 storage bootstrap/cache 2>/dev/null || true
+
+echo "==> Creating public/storage symlink for media file access..."
+php artisan storage:link --force || true
 
 echo "==> Configuring nginx to listen on port ${PORT:-80}..."
 sed -i "s/listen 80;/listen ${PORT:-80};/g" /etc/nginx/nginx.conf
