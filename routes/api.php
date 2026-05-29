@@ -12,7 +12,7 @@ Route::get('/health', function () {
     } catch (\Exception $e) {
         $db = 'unavailable';
     }
-    return response()->json(['status' => 'ok', 'db' => $db, 'env' => config('app.env'), 'v' => 'v3']);
+    return response()->json(['status' => 'ok', 'db' => $db, 'env' => config('app.env')]);
 });
 
 /*
@@ -28,79 +28,4 @@ Route::get('/health', function () {
 
 Route::middleware('auth:api')->get('/user', function (Request $request) {
     return $request->user();
-});
-
-Route::get('/health', function () {
-    return response()->json(['status' => 'ok', 'service' => 'plantathome-api'], 200);
-});
-
-Route::get('/bootstrap-setup', function () {
-    try {
-        $results = [];
-
-        // Settings: ensure record exists and app_settings.trust = true
-        $settings = \Marvel\Database\Models\Settings::getData();
-        if (!$settings) {
-            \Illuminate\Support\Facades\Artisan::call('db:seed', [
-                '--class' => 'Marvel\\Database\\Seeders\\SettingsSeeder',
-                '--force' => true,
-            ]);
-            $settings = \Marvel\Database\Models\Settings::getData();
-            $results[] = 'settings: seeded';
-        }
-        if ($settings) {
-            $opts = $settings->options ?? [];
-            $opts['app_settings'] = ['trust' => true, 'last_checking_time' => now()->toISOString()];
-            $settings->update(['options' => $opts]);
-            \Illuminate\Support\Facades\Cache::flush();
-            $results[] = 'settings.trust = true';
-        } else {
-            $results[] = 'WARNING: no settings record';
-        }
-
-        // Permissions + roles
-        app()[\Spatie\Permission\PermissionRegistrar::class]->forgetCachedPermissions();
-        foreach (['super_admin', 'customer', 'store_owner', 'staff'] as $perm) {
-            \Spatie\Permission\Models\Permission::firstOrCreate(['name' => $perm]);
-        }
-        \Spatie\Permission\Models\Role::firstOrCreate(['name' => 'super_admin'])
-            ->syncPermissions(['super_admin', 'store_owner', 'customer']);
-        \Spatie\Permission\Models\Role::firstOrCreate(['name' => 'customer'])
-            ->syncPermissions(['customer']);
-        $results[] = 'permissions + roles: ok';
-
-        // Admin user
-        $adminEmail    = env('ADMIN_EMAIL',    'yadavvinay9996@gmail.com');
-        $adminPassword = env('ADMIN_PASSWORD', 'Admin@1234');
-        $adminName     = env('ADMIN_NAME',     'Admin');
-        $user = \Marvel\Database\Models\User::where('email', $adminEmail)->first();
-        if (!$user) {
-            $user = \Marvel\Database\Models\User::create([
-                'name'      => $adminName,
-                'email'     => $adminEmail,
-                'password'  => \Illuminate\Support\Facades\Hash::make($adminPassword),
-                'is_active' => true,
-            ]);
-            $results[] = "admin created: {$adminEmail}";
-        } else {
-            $user->is_active = true;
-            $user->email_verified_at = now();
-            $user->save();
-            $results[] = "admin activated: {$adminEmail}";
-        }
-        $user->givePermissionTo(['super_admin', 'store_owner', 'customer']);
-        $user->assignRole('super_admin');
-        $results[] = 'admin roles assigned';
-
-        return response()->json(['status' => 'ok', 'results' => $results]);
-
-    } catch (\Throwable $e) {
-        return response()->json([
-            'status'  => 'error',
-            'error'   => $e->getMessage(),
-            'class'   => get_class($e),
-            'file'    => $e->getFile() . ':' . $e->getLine(),
-            'trace'   => array_slice(explode("\n", $e->getTraceAsString()), 0, 8),
-        ], 500);
-    }
 });

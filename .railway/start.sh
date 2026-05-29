@@ -5,7 +5,7 @@ cat > /var/www/html/.env << ENVEOF
 APP_NAME=PlantAtHome
 APP_ENV=staging
 APP_KEY=${APP_KEY}
-APP_DEBUG=true
+APP_DEBUG=false
 APP_URL=https://${RAILWAY_PUBLIC_DOMAIN:-plantathome-production.up.railway.app}
 LOG_CHANNEL=stderr
 DB_CONNECTION=mysql
