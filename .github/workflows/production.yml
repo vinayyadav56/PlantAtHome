@@ -160,6 +160,10 @@ jobs:
             git checkout main
             git reset --hard origin/main
 
+            echo "==> Fixing permissions for deploy user..."
+            sudo chown -R ubuntu:ubuntu storage bootstrap/cache 2>/dev/null || true
+            chmod -R 775 storage bootstrap/cache 2>/dev/null || true
+
             echo "==> Installing PHP dependencies..."
             composer install --no-dev --optimize-autoloader --no-interaction
 
@@ -168,7 +172,8 @@ jobs:
 
             echo "==> Ensuring storage directories and public symlink..."
             mkdir -p storage/app/public storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs
-            chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
+            sudo chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
+            chmod -R 775 storage bootstrap/cache 2>/dev/null || true
             php artisan storage:link --force || true
 
             echo "==> Ensuring MEDIA_DISK=public in .env..."
