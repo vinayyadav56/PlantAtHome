@@ -156,6 +156,7 @@ jobs:
             echo "==> Pulling latest code..."
             cd /var/www/plantathome/api
             git fetch origin
+            git checkout -- . 2>/dev/null || true
             git checkout main
             git reset --hard origin/main
 
