@@ -164,6 +164,9 @@ jobs:
             sudo chown -R ubuntu:ubuntu storage bootstrap/cache 2>/dev/null || true
             chmod -R 775 storage bootstrap/cache 2>/dev/null || true
 
+            echo "==> Clearing stale caches before install..."
+            php artisan optimize:clear 2>/dev/null || true
+
             echo "==> Installing PHP dependencies..."
             composer install --no-dev --optimize-autoloader --no-interaction
 
@@ -182,9 +185,9 @@ jobs:
             fi
 
             echo "==> Caching config / routes / views..."
-            php artisan config:cache
-            php artisan route:cache
-            php artisan view:cache
+            php artisan config:cache || echo "WARNING: config:cache failed — running without config cache"
+            php artisan route:cache  || echo "WARNING: route:cache failed — running without route cache"
+            php artisan view:cache   || echo "WARNING: view:cache failed — running without view cache"
 
             echo "==> Restoring www-data ownership for PHP-FPM..."
             sudo chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
