@@ -1,20 +1,27 @@
-/node_modules
-/public/hot
+# Laravel & PHP
+/vendor/
 /public/storage
-/public/license
 /storage/*.key
-/storage/framework/cache
-/storage/debugbar
-/vendor
-.env
-.env.backup
+/bootstrap/cache/
 .phpunit.result.cache
-docker-compose.override.yml
-Homestead.json
-Homestead.yaml
-npm-debug.log
-yarn-error.log
+
+# Node / build tools
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
 .DS_Store
-docker-compose.yml
-.idea
-.vscode
+*.pem
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+
+# Environment files — never commit secrets
+.env
+.env.*
+!.env.*.example
+.env.backup
