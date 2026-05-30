@@ -2,6 +2,7 @@
 
 namespace Marvel\Providers;
 
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
 
 
@@ -20,6 +21,8 @@ class RestApiServiceProvider extends ServiceProvider
 
     public function loadRoutes(): void
     {
-        $this->loadRoutesFrom(__DIR__ . '/../Rest/Routes.php');
+        Route::prefix('api')->group(function () {
+            $this->loadRoutesFrom(__DIR__ . '/../Rest/Routes.php');
+        });
     }
 }
