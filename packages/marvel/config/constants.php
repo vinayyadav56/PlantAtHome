@@ -1,5 +1,9 @@
 <?php
 
+if (defined('APP_NOTICE_DOMAIN')) {
+    return;
+}
+
 define('APP_NOTICE_DOMAIN', config('shop.app_notice_domain'));
 define('DEFAULT_LANGUAGE', config('shop.default_language'));
 define('TRANSLATION_ENABLED', config('shop.translation_enabled'));
