@@ -230,6 +230,130 @@ try {
     php /tmp/marvel_setup.php || echo "[bg] WARNING: Admin setup script failed"
   fi
 
+  # ── PlantAtHome data seed (idempotent — skips if plants type already exists) ──
+  cat > /tmp/seed_plants.php << 'SEEDEOF'
+<?php
+define('LARAVEL_START', microtime(true));
+require '/var/www/html/vendor/autoload.php';
+$app = require_once '/var/www/html/bootstrap/app.php';
+$kernel = $app->make(Illuminate\Contracts\Console\Kernel::class);
+$kernel->bootstrap();
+
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Cache;
+
+if (DB::table('types')->where('slug', 'plants')->exists()) {
+    echo "[seed_plants] Plants type already exists — skipping.\n";
+    exit(0);
+}
+
+echo "[seed_plants] Seeding PlantAtHome data...\n";
+
+// Clear Pickbazar demo data
+DB::statement('SET FOREIGN_KEY_CHECKS=0');
+DB::table('order_product')->truncate();
+DB::table('reviews')->truncate();
+DB::table('questions')->truncate();
+DB::table('products')->truncate();
+DB::table('category_product')->truncate();
+DB::table('categories')->truncate();
+DB::table('types')->truncate();
+DB::statement('SET FOREIGN_KEY_CHECKS=1');
+
+$now = now();
+
+// ── 1. Plants type ──────────────────────────────────────────────────────────
+DB::table('types')->insert([
+    'id'                   => 1,
+    'name'                 => 'Plants',
+    'slug'                 => 'plants',
+    'language'             => 'en',
+    'icon'                 => 'Leaf',
+    'promotional_sliders'  => null,
+    'settings'             => json_encode([
+        'isHome'      => true,
+        'layoutType'  => 'classic',
+        'productCard' => 'argon',
+    ]),
+    'created_at' => $now,
+    'updated_at' => $now,
+]);
+echo "[seed_plants] Type inserted: plants\n";
+
+// ── 2. Categories ───────────────────────────────────────────────────────────
+$categories = [
+    ['id'=>1,'name'=>'Indoor Plants',      'slug'=>'indoor-plants',      'details'=>'Perfect for home and office spaces',      'image'=>null,'icon'=>'Leaf'],
+    ['id'=>2,'name'=>'Outdoor Plants',     'slug'=>'outdoor-plants',     'details'=>'Hardy plants for gardens and balconies',  'image'=>null,'icon'=>'Tree'],
+    ['id'=>3,'name'=>'Flowering Plants',   'slug'=>'flowering-plants',   'details'=>'Beautiful blooms for every season',       'image'=>null,'icon'=>'Flower'],
+    ['id'=>4,'name'=>'Succulents & Cacti', 'slug'=>'succulents-cacti',   'details'=>'Low maintenance, high visual impact',     'image'=>null,'icon'=>'Cactus'],
+    ['id'=>5,'name'=>'Air Purifying',      'slug'=>'air-purifying',      'details'=>'Plants that clean and freshen your air',  'image'=>null,'icon'=>'Wind'],
+    ['id'=>6,'name'=>'Gifts & Planters',   'slug'=>'gifts-planters',     'details'=>'Curated gift sets and premium planters',  'image'=>null,'icon'=>'Gift'],
+];
+foreach ($categories as $cat) {
+    DB::table('categories')->insert(array_merge($cat, [
+        'type_id'    => 1,
+        'language'   => 'en',
+        'parent'     => null,
+        'created_at' => $now,
+        'updated_at' => $now,
+    ]));
+}
+echo "[seed_plants] Categories inserted: " . count($categories) . "\n";
+
+// ── 3. Products ─────────────────────────────────────────────────────────────
+$products = [
+    ['id'=>1, 'name'=>'Monstera Deliciosa', 'slug'=>'monstera-deliciosa', 'price'=>1299, 'sale_price'=>999,  'unit'=>'1 Plant', 'quantity'=>50,  'description'=>'The iconic split-leaf plant — bold, architectural, and perfect for bright interiors.'],
+    ['id'=>2, 'name'=>'Peace Lily',          'slug'=>'peace-lily',          'price'=>649,  'sale_price'=>549,  'unit'=>'1 Plant', 'quantity'=>100, 'description'=>'Elegant white blooms, excellent air purifier, thrives in low light.'],
+    ['id'=>3, 'name'=>'Snake Plant',         'slug'=>'snake-plant',         'price'=>799,  'sale_price'=>699,  'unit'=>'1 Plant', 'quantity'=>80,  'description'=>'Nearly indestructible, filters indoor air toxins, ideal for beginners.'],
+    ['id'=>4, 'name'=>'Golden Pothos',       'slug'=>'golden-pothos',       'price'=>399,  'sale_price'=>349,  'unit'=>'1 Plant', 'quantity'=>150, 'description'=>'Cascading vines with heart-shaped leaves, thrives in any light.'],
+    ['id'=>5, 'name'=>'Fiddle Leaf Fig',     'slug'=>'fiddle-leaf-fig',     'price'=>1499, 'sale_price'=>1299, 'unit'=>'1 Plant', 'quantity'=>30,  'description'=>'Statement tree with large, violin-shaped leaves — Instagram favourite.'],
+    ['id'=>6, 'name'=>'Areca Palm',          'slug'=>'areca-palm',          'price'=>899,  'sale_price'=>799,  'unit'=>'1 Plant', 'quantity'=>60,  'description'=>'Tropical elegance, natural humidifier, great for living rooms.'],
+    ['id'=>7, 'name'=>'ZZ Plant',            'slug'=>'zz-plant',            'price'=>549,  'sale_price'=>499,  'unit'=>'1 Plant', 'quantity'=>90,  'description'=>'Glossy dark-green leaves, extremely drought tolerant.'],
+    ['id'=>8, 'name'=>'Money Plant',         'slug'=>'money-plant',         'price'=>299,  'sale_price'=>249,  'unit'=>'1 Plant', 'quantity'=>200, 'description'=>'Classic Indian favourite — believed to bring prosperity and luck.'],
+    ['id'=>9, 'name'=>'Aloe Vera',           'slug'=>'aloe-vera',           'price'=>349,  'sale_price'=>299,  'unit'=>'1 Plant', 'quantity'=>120, 'description'=>'Medicinal succulent with soothing gel, very low maintenance.'],
+    ['id'=>10,'name'=>'Bird of Paradise',    'slug'=>'bird-of-paradise',    'price'=>1999, 'sale_price'=>1799, 'unit'=>'1 Plant', 'quantity'=>20,  'description'=>'Dramatic tropical leaves, makes a bold statement in any room.'],
+];
+foreach ($products as $p) {
+    DB::table('products')->insert(array_merge($p, [
+        'type_id'        => 1,
+        'status'         => 'publish',
+        'visibility'     => 'visibility_public',
+        'language'       => 'en',
+        'in_stock'       => true,
+        'is_taxable'     => false,
+        'product_type'   => 'simple',
+        'min_price'      => $p['sale_price'],
+        'max_price'      => $p['price'],
+        'sku'            => 'PAH-' . strtoupper(substr($p['slug'], 0, 6)) . '-001',
+        'created_at'     => $now,
+        'updated_at'     => $now,
+    ]));
+}
+echo "[seed_plants] Products inserted: " . count($products) . "\n";
+
+// ── 4. Link products to categories ──────────────────────────────────────────
+$catMap = [
+    1 => 1, 2 => 1, 3 => 1, 4 => 1, 5 => 1,  // indoor plants
+    6 => 2,                                    // outdoor
+    7 => 4, 9 => 4,                            // succulents
+    8 => 1, 10 => 2,                           // indoor / outdoor
+];
+foreach ($catMap as $productId => $categoryId) {
+    DB::table('category_product')->insert([
+        'product_id'  => $productId,
+        'category_id' => $categoryId,
+    ]);
+}
+
+// ── 5. Flush cache so new data is served immediately ─────────────────────────
+Cache::flush();
+echo "[seed_plants] Cache flushed.\n";
+echo "[seed_plants] Done: 1 type, " . count($categories) . " categories, " . count($products) . " products.\n";
+SEEDEOF
+
+  echo "==> [bg] Running PlantAtHome data seed..."
+  php /tmp/seed_plants.php || echo "[bg] WARNING: seed_plants.php failed"
+
   php artisan config:clear || true
   php artisan route:clear  || true
   php artisan view:clear   || true
