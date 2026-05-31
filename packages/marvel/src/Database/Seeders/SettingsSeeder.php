@@ -34,21 +34,21 @@ class SettingsSeeder extends Seeder
                     'twitterCardType' => null
                 ],
                 "logo" => [
-                    'thumbnail' => 'https://pickbazarlaravel.s3.ap-southeast-1.amazonaws.com/2295/conversions/Logo-new-thumbnail.jpg',
-                    'original' => 'https://pickbazarlaravel.s3.ap-southeast-1.amazonaws.com/2295/Logo-new.png',
-                    'id' => 2298,
-                    'file_name' => 'Logo-new.png'
+                    'thumbnail' => null,
+                    'original'  => null,
+                    'id'        => null,
+                    'file_name' => 'logo.svg'
                 ],
                 "collapseLogo" => [
-                    'thumbnail' => 'https://pickbazarlaravel.s3.ap-southeast-1.amazonaws.com/2283/conversions/Pickbazar-thumbnail.jpg',
-                    'original' => 'https://pickbazarlaravel.s3.ap-southeast-1.amazonaws.com/2283/Pickbazar.png',
+                    'thumbnail' => null,
+                    'original'  => null,
                     'id' => 2286,
-                    'file_name' => 'Pickbazar.png'
+                    'file_name' => 'collapse-logo.svg'
                 ],
                 "useOtp" => false,
                 "currency" => "INR",
                 "taxClass" => "1",
-                "siteTitle" => "Pickbazar",
+                "siteTitle" => "PlantAtHome",
                 "deliveryTime" => [
                     [
                         "title" => "Express Delivery",
@@ -222,7 +222,7 @@ class SettingsSeeder extends Seeder
                 "overlayColorRange"     => null,
                 "description"           => "We are currently undergoing essential maintenance to elevate your browsing experience. Our team is working diligently to implement improvements that will bring you an even more seamless and enjoyable interaction with our site. During this period, you may experience temporary inconveniences. We appreciate your patience and understanding. Thank you for being a part of our community, and we look forward to unveiling the enhanced features and content soon.",
                 "newsLetterDescription" => "Stay in the loop! Subscribe to our newsletter for exclusive deals and the latest trends delivered straight to your inbox. Elevate your shopping experience with insider access.",
-                "aboutUsDescription"    => "Welcome to Pickbazar, your go-to destination for curated excellence. Discover a fusion of style, quality, and affordability in every click. Join our community and elevate your shopping experience with us!",
+                "aboutUsDescription"    => "Welcome to PlantAtHome — India's premium botanical nursery. We curate the finest indoor and outdoor plants, delivered fresh to your doorstep. Bring nature home.",
                 "image" => [
                     'id'        => 1794,
                     'file_name' => "background.png",
