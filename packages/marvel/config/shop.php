@@ -32,7 +32,7 @@ return [
 
     'app_notice_domain' => env('APP_NOTICE_DOMAIN', 'MARVEL_'),
 
-    'dummy_data_path' => env('DUMMY_DATA_PATH', 'pickbazar'),
+    'dummy_data_path' => env('DUMMY_DATA_PATH', 'plantathome'),
 
     'default_language' => env('DEFAULT_LANGUAGE', 'en'),
 
