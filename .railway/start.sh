@@ -242,19 +242,16 @@ $kernel->bootstrap();
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
 
-$plantsType = DB::table('types')->where('slug', 'plants')->first();
-$plantsProducts = $plantsType ? DB::table('products')->where('type_id', $plantsType->id)->count() : 0;
+$plantsType   = DB::table('types')->where('slug', 'plants')->first();
+$hasMonstera  = DB::table('products')->where('slug', 'monstera-deliciosa')->exists();
 
-if ($plantsType && $plantsProducts >= 10) {
-    echo "[seed_plants] Plants type + {$plantsProducts} products already exist — skipping.\n";
+if ($plantsType && $hasMonstera) {
+    $count = DB::table('products')->where('type_id', $plantsType->id)->count();
+    echo "[seed_plants] PlantAtHome data already seeded ({$count} products) — skipping.\n";
     exit(0);
 }
 
-if ($plantsType) {
-    echo "[seed_plants] Plants type exists but only {$plantsProducts} products found — re-seeding data...\n";
-} else {
-    echo "[seed_plants] No plants type found — seeding fresh PlantAtHome data...\n";
-}
+echo "[seed_plants] Seeding fresh PlantAtHome data (Pickbazar data detected or missing Monstera)...\n";
 
 echo "[seed_plants] Seeding PlantAtHome data...\n";
 
