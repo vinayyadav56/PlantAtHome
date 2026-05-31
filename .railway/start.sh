@@ -242,9 +242,18 @@ $kernel->bootstrap();
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
 
-if (DB::table('types')->where('slug', 'plants')->exists()) {
-    echo "[seed_plants] Plants type already exists — skipping.\n";
+$plantsType = DB::table('types')->where('slug', 'plants')->first();
+$plantsProducts = $plantsType ? DB::table('products')->where('type_id', $plantsType->id)->count() : 0;
+
+if ($plantsType && $plantsProducts >= 10) {
+    echo "[seed_plants] Plants type + {$plantsProducts} products already exist — skipping.\n";
     exit(0);
+}
+
+if ($plantsType) {
+    echo "[seed_plants] Plants type exists but only {$plantsProducts} products found — re-seeding data...\n";
+} else {
+    echo "[seed_plants] No plants type found — seeding fresh PlantAtHome data...\n";
 }
 
 echo "[seed_plants] Seeding PlantAtHome data...\n";
