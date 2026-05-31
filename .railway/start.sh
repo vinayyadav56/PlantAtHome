@@ -242,18 +242,7 @@ $kernel->bootstrap();
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Cache;
 
-$plantsType   = DB::table('types')->where('slug', 'plants')->first();
-$hasMonstera  = DB::table('products')->where('slug', 'monstera-deliciosa')->exists();
-
-if ($plantsType && $hasMonstera) {
-    $count = DB::table('products')->where('type_id', $plantsType->id)->count();
-    echo "[seed_plants] PlantAtHome data already seeded ({$count} products) — skipping.\n";
-    exit(0);
-}
-
-echo "[seed_plants] Seeding fresh PlantAtHome data (Pickbazar data detected or missing Monstera)...\n";
-
-echo "[seed_plants] Seeding PlantAtHome data...\n";
+echo "[seed_plants] Resetting to PlantAtHome plant catalog...\n";
 
 // Clear Pickbazar demo data
 DB::statement('SET FOREIGN_KEY_CHECKS=0');
