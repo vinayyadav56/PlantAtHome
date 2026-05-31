@@ -137,3 +137,9 @@ jobs:
           done
           echo "FAIL — health check timed out after 15 min"
           exit 1
+
+      - name: Warm settings cache (prevents ISR 404 cascade on shop redeploy)
+        run: |
+          DOMAIN="plantathome-production.up.railway.app"
+          echo "Warming /api/settings?language=en ..."
+          curl -sf "https://$DOMAIN/api/settings?language=en" -o /dev/null && echo "Settings cache warmed." || echo "WARNING: settings warm-up returned non-200 (may still be starting)"

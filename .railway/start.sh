@@ -31,7 +31,7 @@ MAIL_PASSWORD=${SENDGRID_API_KEY:-}
 MAIL_ENCRYPTION=tls
 MAIL_FROM_ADDRESS=no-reply@plantathome.in
 ADMIN_EMAIL=${ADMIN_EMAIL:-yadavvinay9996@gmail.com}
-DUMMY_DATA_PATH=pickbazar
+DUMMY_DATA_PATH=${DUMMY_DATA_PATH:-plantathome}
 ENVEOF
 
 cd /var/www/html
@@ -237,4 +237,19 @@ try {
 ) &
 
 echo "==> Starting nginx + php-fpm via supervisord on port ${PORT:-80}..."
-exec /usr/bin/supervisord -c /etc/supervisord.conf
+/usr/bin/supervisord -c /etc/supervisord.conf &
+SUPERVISORD_PID=$!
+
+# Warm up settings cache so Railway health check + first ISR revalidation never see a cold 404
+echo "==> Waiting for API to respond before warming settings cache..."
+for i in $(seq 1 40); do
+  sleep 3
+  if curl -sf "http://localhost:${PORT:-80}/api/health" > /dev/null 2>&1; then
+    echo "==> API ready — warming /api/settings?language=en cache..."
+    curl -sf "http://localhost:${PORT:-80}/api/settings?language=en" > /dev/null 2>&1 || true
+    echo "==> Settings cache warmed."
+    break
+  fi
+done
+
+wait $SUPERVISORD_PID

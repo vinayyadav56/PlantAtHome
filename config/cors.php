@@ -19,9 +19,18 @@ return [
 
     'allowed_methods' => ['*'],
 
-    'allowed_origins' => ['*'],
+    'allowed_origins' => [
+        'https://plantathome-shop-staging.vercel.app',
+        'https://plantathome-admin-staging.vercel.app',
+        'https://plantathome.in',
+        'https://admin.plantathome.in',
+        'http://localhost:3002',
+        'http://localhost:3003',
+    ],
 
-    'allowed_origins_patterns' => [],
+    'allowed_origins_patterns' => [
+        '#^https://plantathome-.*\.vercel\.app$#',
+    ],
 
     'allowed_headers' => ['*'],
 
