@@ -1,0 +1,34 @@
+name: API Probe (external reachability ground-truth)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Probe public API 10x
+        run: |
+          URL="https://plantathome-production.up.railway.app/api/settings?language=en"
+          HEALTH="https://plantathome-production.up.railway.app/api/health"
+          echo "== settings endpoint, 10 tries =="
+          ok=0
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /tmp/b.txt -w "%{http_code}" --max-time 20 \
+              -H "User-Agent: Mozilla/5.0" "$URL" || echo "000")
+            t=$(curl -s -o /dev/null -w "%{time_total}" --max-time 1 "$URL" 2>/dev/null || echo "-")
+            echo "try $i: HTTP $code"
+            [ "$code" = "200" ] && ok=$((ok+1))
+            sleep 3
+          done
+          echo "== settings body (first 400 chars) =="
+          head -c 400 /tmp/b.txt; echo
+          echo "== health =="
+          curl -s -w "\nHTTP %{http_code}\n" --max-time 20 "$HEALTH" | head -c 300
+          echo ""
+          echo "== CORS header for admin origin =="
+          curl -s -D - -o /dev/null --max-time 20 \
+            -H "Origin: https://plantathome-admin-staging.vercel.app" "$URL" \
+            | grep -i "access-control-allow-origin" || echo "(no ACAO header)"
+          echo ""
+          echo "RESULT: $ok/10 settings calls returned 200"

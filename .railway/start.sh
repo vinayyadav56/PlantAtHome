@@ -31,7 +31,7 @@ MAIL_PASSWORD=${SENDGRID_API_KEY:-}
 MAIL_ENCRYPTION=tls
 MAIL_FROM_ADDRESS=no-reply@plantathome.in
 ADMIN_EMAIL=${ADMIN_EMAIL:-yadavvinay9996@gmail.com}
-DUMMY_DATA_PATH=pickbazar
+DUMMY_DATA_PATH=${DUMMY_DATA_PATH:-plantathome}
 ENVEOF
 
 cd /var/www/html
@@ -230,6 +230,29 @@ try {
     php /tmp/marvel_setup.php || echo "[bg] WARNING: Admin setup script failed"
   fi
 
+  # ── PlantAtHome data seed — enterprise three-tier approach ──────────────────
+  # Tier 2: type + categories — updateOrCreate, safe for ALL environments
+  # Tier 3: demo products    — truncate+insert, STAGING only (guarded in seeder)
+  APP_ENV_VAL=$(grep "^APP_ENV=" /var/www/html/.env 2>/dev/null | cut -d= -f2 | tr -d '[:space:]')
+  APP_ENV_VAL="${APP_ENV_VAL:-staging}"
+  echo "==> [bg] Running PlantAtHome seeders (APP_ENV=${APP_ENV_VAL})..."
+
+  cd /var/www/html
+
+  php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeTypeSeeder" --force \
+    || echo "[bg] WARNING: PlantAtHomeTypeSeeder failed"
+
+  php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeCategorySeeder" --force \
+    || echo "[bg] WARNING: PlantAtHomeCategorySeeder failed"
+
+  if [ "$APP_ENV_VAL" = "staging" ]; then
+    echo "==> [bg] Staging env — running Tier 3 demo product seed..."
+    php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeProductSeeder" --force \
+      || echo "[bg] WARNING: PlantAtHomeProductSeeder failed"
+  else
+    echo "==> [bg] Non-staging env (${APP_ENV_VAL}) — Tier 3 demo products skipped (production data preserved)."
+  fi
+
   php artisan config:clear || true
   php artisan route:clear  || true
   php artisan view:clear   || true
@@ -237,4 +260,19 @@ try {
 ) &
 
 echo "==> Starting nginx + php-fpm via supervisord on port ${PORT:-80}..."
-exec /usr/bin/supervisord -c /etc/supervisord.conf
+/usr/bin/supervisord -c /etc/supervisord.conf &
+SUPERVISORD_PID=$!
+
+# Warm up settings cache so Railway health check + first ISR revalidation never see a cold 404
+echo "==> Waiting for API to respond before warming settings cache..."
+for i in $(seq 1 40); do
+  sleep 3
+  if curl -sf "http://localhost:${PORT:-80}/api/health" > /dev/null 2>&1; then
+    echo "==> API ready — warming /api/settings?language=en cache..."
+    curl -sf "http://localhost:${PORT:-80}/api/settings?language=en" > /dev/null 2>&1 || true
+    echo "==> Settings cache warmed."
+    break
+  fi
+done
+
+wait $SUPERVISORD_PID
