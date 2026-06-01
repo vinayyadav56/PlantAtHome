@@ -27,6 +27,8 @@ class ProductImageController extends CoreController
             'url'           => ['required', 'string', 'max:2048'],
             'thumbnail_url' => ['nullable', 'string', 'max:2048'],
             'alt'           => ['nullable', 'string', 'max:255'],
+            'source'        => ['nullable', 'string', 'max:30'],
+            'attribution'   => ['nullable', 'string', 'max:500'],
         ]);
 
         $product = Product::findOrFail($id);
@@ -39,7 +41,8 @@ class ProductImageController extends CoreController
             'alt'           => $request->input('alt'),
             'sort_order'    => $nextOrder,
             'is_primary'    => $isFirst,
-            'source'        => 'manual',
+            'source'        => $request->input('source', 'manual'),
+            'attribution'   => $request->input('attribution'),
         ]);
 
         $product->syncImageColumns();
