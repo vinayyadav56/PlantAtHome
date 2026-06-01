@@ -99,6 +99,14 @@ class Product extends Model
     }
 
     /**
+     * @return HasOne
+     */
+    public function plantAttribute(): HasOne
+    {
+        return $this->hasOne(PlantAttribute::class, 'product_id');
+    }
+
+    /**
      * @return BelongsTo
      */
     public function type(): BelongsTo
