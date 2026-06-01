@@ -120,14 +120,17 @@ class Product extends Model
     /**
      * Rebuild the legacy `image` (primary) + `gallery` JSON columns from the
      * product_images rows, so existing Pickbazar components (cards, list
-     * endpoint, SEO) keep working without a refactor. Called after any image
-     * mutation (admin management + the fetch pipeline).
+     * endpoint, SEO) keep working without a refactor. The library
+     * (product_images) is the source of truth: only rows flagged `in_gallery`
+     * are published into `gallery`, and the in-gallery primary becomes the
+     * featured `image`. Called after any image mutation (admin management,
+     * the fetch pipeline, and product save via reconcilePlantImages()).
      */
     public function syncImageColumns(): void
     {
-        $images = $this->images()->get();
+        $published = $this->images()->get()->filter(fn (ProductImage $img) => (bool) $img->in_gallery)->values();
 
-        if ($images->isEmpty()) {
+        if ($published->isEmpty()) {
             $this->forceFill(['image' => null, 'gallery' => null])->saveQuietly();
             return;
         }
@@ -138,12 +141,86 @@ class Product extends Model
             'thumbnail' => $img->thumbnail_url ?: $img->url,
         ];
 
-        $primary = $images->firstWhere('is_primary', true) ?? $images->first();
+        $primary = $published->firstWhere('is_primary', true) ?? $published->first();
 
         $this->forceFill([
             'image'   => $toAttachment($primary),
-            'gallery' => $images->map($toAttachment)->values()->all(),
+            'gallery' => $published->map($toAttachment)->values()->all(),
         ])->saveQuietly();
+    }
+
+    /**
+     * Reconcile the plant's photo library with the curated set submitted from
+     * the product form. Keeps the library (product_images) as the source of
+     * truth while honouring what the editor published:
+     *   - a submitted photo already in the library  → marked in_gallery=true
+     *   - a submitted photo NOT in the library (a local upload) → added as a
+     *     new library row (source='upload', in_gallery=true)
+     *   - a library photo NOT in the submitted gallery → in_gallery=false
+     *     (kept in the library, just unpublished — "remove from gallery but
+     *     stays in plant pictures")
+     *   - the featured photo → is_primary=true (others cleared)
+     * Then re-derives the image/gallery columns.
+     *
+     * @param array|null $image   featured attachment {id?, original, thumbnail}
+     * @param array|null $gallery array of attachments {id?, original, thumbnail}
+     */
+    public function reconcilePlantImages(?array $image, ?array $gallery): void
+    {
+        $gallery = is_array($gallery) ? array_values(array_filter($gallery, 'is_array')) : [];
+        $featuredUrl = is_array($image) ? ($image['original'] ?? null) : null;
+
+        // Every submitted attachment that should be published (gallery + featured).
+        $submitted = $gallery;
+        if (is_array($image)) {
+            $submitted[] = $image;
+        }
+
+        $library = $this->images()->get()->keyBy(fn (ProductImage $img) => $img->url);
+        $publishedUrls = [];
+        $nextOrder = (int) ($this->images()->max('sort_order')) + 1;
+
+        foreach ($submitted as $att) {
+            $url = $att['original'] ?? null;
+            if (!$url) {
+                continue;
+            }
+            $publishedUrls[$url] = true;
+
+            if ($library->has($url)) {
+                $row = $library->get($url);
+                if (!$row->in_gallery) {
+                    $row->update(['in_gallery' => true]);
+                }
+            } else {
+                // A local upload (or any URL not in the library yet) → register it.
+                $created = $this->images()->create([
+                    'url'           => $url,
+                    'thumbnail_url' => $att['thumbnail'] ?? null,
+                    'in_gallery'    => true,
+                    'is_primary'    => false,
+                    'sort_order'    => $nextOrder++,
+                    'source'        => 'upload',
+                ]);
+                $library->put($url, $created);
+            }
+        }
+
+        // Unpublish library rows the editor removed from the gallery (keep the row).
+        foreach ($library as $url => $row) {
+            $shouldPublish = isset($publishedUrls[$url]);
+            if ((bool) $row->in_gallery !== $shouldPublish) {
+                $row->update(['in_gallery' => $shouldPublish]);
+            }
+        }
+
+        // Featured photo → is_primary.
+        $this->images()->update(['is_primary' => false]);
+        if ($featuredUrl && $library->has($featuredUrl)) {
+            $library->get($featuredUrl)->update(['is_primary' => true]);
+        }
+
+        $this->syncImageColumns();
     }
 
     /**

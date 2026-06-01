@@ -294,12 +294,14 @@ Route::group(
         Route::post('products/{id}/images', [ProductImageController::class, 'store']);
         Route::patch('products/{id}/images/reorder', [ProductImageController::class, 'reorder']);
         Route::patch('products/{id}/images/{image}/primary', [ProductImageController::class, 'setPrimary']);
+        Route::patch('products/{id}/images/{image}/gallery', [ProductImageController::class, 'setGalleryFlag']);
         Route::delete('products/{id}/images/{image}', [ProductImageController::class, 'destroy']);
         Route::post('products/{id}/images/fetch', [ProductImageController::class, 'fetch']);
         // bulk + coverage report (non-products/{id} paths to avoid the show route shadow)
         Route::post('plant-images/fetch-missing', [ProductImageController::class, 'fetchMissing']);
         Route::get('plant-images/coverage-summary', [ProductImageController::class, 'coverageSummary']);
         Route::get('plant-images/coverage-report', [ProductImageController::class, 'coverageReport']);
+        Route::get('plant-images/list', [ProductImageController::class, 'list']);
 
         Route::apiResource('resources', ResourceController::class, [
             'only' => ['store']

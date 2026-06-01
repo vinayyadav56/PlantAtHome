@@ -70,12 +70,43 @@ class ProductImageController extends CoreController
         return $product->images()->get();
     }
 
-    /** PATCH /products/{id}/images/{image}/primary — set the hero image. */
+    /** PATCH /products/{id}/images/{image}/primary — set the hero (featured) image. */
     public function setPrimary($id, $imageId)
     {
         $product = Product::findOrFail($id);
         ProductImage::where('product_id', $product->id)->update(['is_primary' => false]);
-        ProductImage::where('product_id', $product->id)->where('id', $imageId)->update(['is_primary' => true]);
+        // The featured photo must be published, so mark it in_gallery too.
+        ProductImage::where('product_id', $product->id)->where('id', $imageId)
+            ->update(['is_primary' => true, 'in_gallery' => true]);
+
+        $product->syncImageColumns();
+
+        return $product->images()->get();
+    }
+
+    /**
+     * PATCH /products/{id}/images/{image}/gallery — publish/unpublish a library
+     * photo. body { in_gallery: bool }. Unpublishing keeps the row in the
+     * library (the plant's pictures) but drops it from the product gallery.
+     */
+    public function setGalleryFlag(Request $request, $id, $imageId)
+    {
+        $request->validate(['in_gallery' => ['required', 'boolean']]);
+        $inGallery = (bool) $request->input('in_gallery');
+
+        $product = Product::findOrFail($id);
+        $image = ProductImage::where('product_id', $product->id)->findOrFail($imageId);
+        $image->update(['in_gallery' => $inGallery]);
+
+        // If we just unpublished the featured photo, hand the crown to another
+        // published photo so the product keeps a featured image when possible.
+        if (!$inGallery && $image->is_primary) {
+            $image->update(['is_primary' => false]);
+            $next = $product->images()->where('in_gallery', true)->first();
+            if ($next) {
+                $next->update(['is_primary' => true]);
+            }
+        }
 
         $product->syncImageColumns();
 
@@ -154,6 +185,59 @@ class ProductImageController extends CoreController
             'Content-Type'        => 'text/csv',
             'Content-Disposition' => "attachment; filename=\"{$filename}\"",
         ]);
+    }
+
+    /**
+     * GET /plant-images/list — paginated list of plants with their image
+     * count + status, for the admin "Plant Images" management screen.
+     * Query: status=all|complete|partial|missing, name, page, limit, target.
+     */
+    public function list(Request $request)
+    {
+        $target = (int) $request->input('target', 5) ?: 5;
+        $status = $request->input('status', 'all');
+        $search = trim((string) $request->input('name', ''));
+        $limit  = (int) $request->input('limit', 20) ?: 20;
+
+        $type = Type::where('slug', 'plants')->where('language', 'en')->first();
+        if (!$type) {
+            return ['data' => [], 'current_page' => 1, 'last_page' => 1, 'per_page' => $limit, 'total' => 0];
+        }
+
+        $query = Product::where('type_id', $type->id)
+            ->withCount('images')
+            ->with('plantAttribute:id,product_id,scientific_name');
+
+        // Filter by image count using count-subquery constraints (NOT a `having`
+        // on the withCount alias — that breaks paginate()'s separate count query).
+        switch ($status) {
+            case 'missing':
+                $query->whereDoesntHave('images');
+                break;
+            case 'partial':
+                $query->has('images', '>=', 1)->has('images', '<', $target);
+                break;
+            case 'complete':
+                $query->has('images', '>=', $target);
+                break;
+        }
+
+        if ($search !== '') {
+            $query->where('name', 'like', "%{$search}%");
+        }
+
+        return $query->orderBy('name')->paginate($limit)->through(function ($p) use ($target) {
+            $n = (int) $p->images_count;
+            return [
+                'id'              => $p->id,
+                'slug'            => $p->slug,
+                'name'            => $p->name,
+                'scientific_name' => optional($p->plantAttribute)->scientific_name,
+                'image_count'     => $n,
+                'status'          => $n >= $target ? 'complete' : ($n > 0 ? 'partial' : 'missing'),
+                'thumbnail'       => data_get($p->image, 'thumbnail') ?: data_get($p->image, 'original'),
+            ];
+        });
     }
 
     /** Build coverage summary + rows (slug,name,scientific_name,image_count,status). */
