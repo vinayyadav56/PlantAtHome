@@ -118,6 +118,35 @@ class Product extends Model
     }
 
     /**
+     * Rebuild the legacy `image` (primary) + `gallery` JSON columns from the
+     * product_images rows, so existing Pickbazar components (cards, list
+     * endpoint, SEO) keep working without a refactor. Called after any image
+     * mutation (admin management + the fetch pipeline).
+     */
+    public function syncImageColumns(): void
+    {
+        $images = $this->images()->get();
+
+        if ($images->isEmpty()) {
+            $this->forceFill(['image' => null, 'gallery' => null])->saveQuietly();
+            return;
+        }
+
+        $toAttachment = fn (ProductImage $img) => [
+            'id'        => $img->id,
+            'original'  => $img->url,
+            'thumbnail' => $img->thumbnail_url ?: $img->url,
+        ];
+
+        $primary = $images->firstWhere('is_primary', true) ?? $images->first();
+
+        $this->forceFill([
+            'image'   => $toAttachment($primary),
+            'gallery' => $images->map($toAttachment)->values()->all(),
+        ])->saveQuietly();
+    }
+
+    /**
      * @return BelongsTo
      */
     public function type(): BelongsTo
