@@ -170,6 +170,9 @@ class ProductController extends CoreController
             $related_products = $this->repository->fetchRelated($slug, $limit, $language);
             $product->setRelation('related_products', $related_products);
 
+            // PlantAtHome: eager-load botanical details for the product detail page
+            $product->load('plantAttribute');
+
             return $product;
         } catch (Exception $e) {
             throw new MarvelNotFoundException();
