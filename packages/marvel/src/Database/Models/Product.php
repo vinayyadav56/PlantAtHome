@@ -107,6 +107,17 @@ class Product extends Model
     }
 
     /**
+     * Ordered gallery images (managed from the admin; files on S3).
+     * @return HasMany
+     */
+    public function images(): HasMany
+    {
+        return $this->hasMany(ProductImage::class, 'product_id')
+            ->orderBy('sort_order')
+            ->orderBy('id');
+    }
+
+    /**
      * @return BelongsTo
      */
     public function type(): BelongsTo
