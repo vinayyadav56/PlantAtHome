@@ -81,39 +81,30 @@ class PlantAtHomePlantBulkSeeder extends Seeder
                 $desc = $p['description'] ?? null;
 
                 // ── products row ────────────────────────────────────────────
-                [$product, $wasCreated] = tap(
-                    Product::updateOrCreate(
-                        ['slug' => $slug, 'language' => 'en'],
-                        [
-                            'name'         => $name,
-                            'description'  => $desc,
-                            'type_id'      => $type->id,
-                            'language'     => 'en',
-                            'status'       => 'publish',
-                            'visibility'   => 'visibility_public',
-                            'product_type' => 'simple',
-                            'in_stock'     => true,
-                            'is_taxable'   => false,
-                            'unit'         => '1 Plant',
-                            'price'        => 0,
-                            'sale_price'   => 0,
-                            'min_price'    => 0,
-                            'max_price'    => 0,
-                            'quantity'     => 0,   // admin sets actual stock
-                            'image'        => null, // images to be sourced later
-                            'gallery'      => null,
-                            'updated_at'   => $now,
-                        ]
-                    ),
-                    fn ($prod) => null
+                $product = Product::updateOrCreate(
+                    ['slug' => $slug, 'language' => 'en'],
+                    [
+                        'name'         => $name,
+                        'description'  => $desc,
+                        'type_id'      => $type->id,
+                        'language'     => 'en',
+                        'status'       => 'publish',
+                        'visibility'   => 'visibility_public',
+                        'product_type' => 'simple',
+                        'in_stock'     => true,
+                        'is_taxable'   => false,
+                        'unit'         => '1 Plant',
+                        'price'        => 0,
+                        'sale_price'   => 0,
+                        'min_price'    => 0,
+                        'max_price'    => 0,
+                        'quantity'     => 0,   // admin sets actual stock
+                        'image'        => null, // images to be sourced later
+                        'gallery'      => null,
+                    ]
                 );
-                // Set created_at only on first insert (updateOrCreate doesn't preserve it)
-                if (!$product->created_at) {
-                    $product->created_at = $now;
-                    $product->saveQuietly();
-                }
 
-                $wasCreated ? $created++ : $updated++;
+                $product->wasRecentlyCreated ? $created++ : $updated++;
 
                 // ── plant_attributes row ────────────────────────────────────
                 PlantAttribute::updateOrCreate(
