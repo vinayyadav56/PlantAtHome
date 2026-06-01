@@ -52,6 +52,7 @@ class GetSingleProductResource extends Resource
             'sku'                          => $this->sku,
             'gallery'                      => $this->gallery,
             'image'                        => $this->image,
+            'plant_attribute'              => $this->plantAttribute,
             'video'                        => $this->video,
             'status'                       => $this->status,
             'height'                       => $this->height,
