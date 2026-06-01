@@ -261,6 +261,12 @@ try {
     echo "==> [bg] Non-staging env (${APP_ENV_VAL}) — Tier 3 demo products skipped (production data preserved)."
   fi
 
+  # Rebuild image/gallery columns from the product_images library so every
+  # downloaded photo shows up on the storefront + product edit page (idempotent).
+  echo "==> [bg] Syncing plant image/gallery columns from the photo library..."
+  php artisan plantathome:sync-image-columns \
+    || echo "[bg] WARNING: sync-image-columns failed"
+
   php artisan config:clear || true
   php artisan route:clear  || true
   php artisan view:clear   || true
