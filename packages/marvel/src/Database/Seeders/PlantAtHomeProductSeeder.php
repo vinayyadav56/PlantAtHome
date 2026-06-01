@@ -30,24 +30,9 @@ class PlantAtHomeProductSeeder extends Seeder
     /** typeSlug => [ products… ]  (price = MRP, sale_price = selling price). */
     private function productsByType(): array
     {
+        // NOTE: real plants come from PlantAtHomePlantBulkSeeder (1530 items).
+        // This demo seeder only covers tools + farmbox for the staging switcher.
         return [
-            'plants' => [
-                ['name' => 'Monstera Deliciosa', 'slug' => 'monstera-deliciosa', 'price' => 1299, 'sale_price' => 999,  'quantity' => 50,  'unit' => '1 Plant', 'sku' => 'PAH-MONSTE-001', 'photo' => '1614594975525-e45190c55d0b', 'cats' => ['indoor-plants'],                                   'description' => 'The iconic split-leaf plant — bold, architectural, and perfect for bright interiors. A must-have for modern homes.'],
-                ['name' => 'Peace Lily',         'slug' => 'peace-lily',         'price' => 649,  'sale_price' => 549,  'quantity' => 100, 'unit' => '1 Plant', 'sku' => 'PAH-PEACEL-001', 'photo' => '1593691509543-c55fb32d8de5', 'cats' => ['indoor-plants', 'flowering-plants', 'air-purifying'], 'description' => 'Elegant white blooms, excellent air purifier, thrives in low light. One of the easiest flowering plants to care for.'],
-                ['name' => 'Snake Plant',        'slug' => 'snake-plant',        'price' => 799,  'sale_price' => 699,  'quantity' => 80,  'unit' => '1 Plant', 'sku' => 'PAH-SNAKEP-001', 'photo' => '1593482892290-f54927ae1bb6', 'cats' => ['indoor-plants', 'air-purifying'],                  'description' => 'Nearly indestructible, filters indoor air toxins. Thrives in low light and needs minimal watering.'],
-                ['name' => 'Golden Pothos',      'slug' => 'golden-pothos',      'price' => 399,  'sale_price' => 349,  'quantity' => 150, 'unit' => '1 Plant', 'sku' => 'PAH-GOLDPO-001', 'photo' => '1622547748225-3fc4abd2cca0', 'cats' => ['indoor-plants', 'air-purifying'],                  'description' => 'Cascading vines with heart-shaped leaves, thrives in any light condition.'],
-                ['name' => 'Fiddle Leaf Fig',    'slug' => 'fiddle-leaf-fig',    'price' => 1499, 'sale_price' => 1299, 'quantity' => 30,  'unit' => '1 Plant', 'sku' => 'PAH-FIDDLF-001', 'photo' => '1597055181300-e3633a917b6f', 'cats' => ['indoor-plants'],                                   'description' => 'Statement tree with large violin-shaped leaves — the interior design favourite.'],
-                ['name' => 'Areca Palm',         'slug' => 'areca-palm',         'price' => 899,  'sale_price' => 799,  'quantity' => 60,  'unit' => '1 Plant', 'sku' => 'PAH-ARECP-001',  'photo' => '1446071103084-c257b5f70672', 'cats' => ['indoor-plants', 'air-purifying'],                  'description' => 'Tropical elegance, natural humidifier, great for living rooms and lobbies.'],
-                ['name' => 'ZZ Plant',           'slug' => 'zz-plant',           'price' => 549,  'sale_price' => 499,  'quantity' => 90,  'unit' => '1 Plant', 'sku' => 'PAH-ZZPLAN-001', 'photo' => '1632207691143-643e2a9a9361', 'cats' => ['indoor-plants', 'succulents-cacti'],               'description' => 'Glossy dark-green leaves, extremely drought tolerant.'],
-                ['name' => 'Money Plant',        'slug' => 'money-plant',        'price' => 299,  'sale_price' => 249,  'quantity' => 200, 'unit' => '1 Plant', 'sku' => 'PAH-MONEYP-001', 'photo' => '1622547748225-3fc4abd2cca0', 'cats' => ['indoor-plants'],                                   'description' => 'Classic Indian favourite — believed to bring prosperity. Easy to grow in water or soil.'],
-                ['name' => 'Aloe Vera',          'slug' => 'aloe-vera',          'price' => 349,  'sale_price' => 299,  'quantity' => 120, 'unit' => '1 Plant', 'sku' => 'PAH-ALOEVE-001', 'photo' => '1509423350716-97f2360af2e4', 'cats' => ['succulents-cacti'],                                'description' => 'Medicinal succulent with soothing gel, very low maintenance.'],
-                ['name' => 'Bird of Paradise',   'slug' => 'bird-of-paradise',   'price' => 1999, 'sale_price' => 1799, 'quantity' => 20,  'unit' => '1 Plant', 'sku' => 'PAH-BIRDOP-001', 'photo' => '1597055181300-e3633a917b6f', 'cats' => ['outdoor-plants'],                                  'description' => 'Dramatic tropical leaves, makes a bold statement in any room or entrance.'],
-                ['name' => 'Spider Plant',       'slug' => 'spider-plant',       'price' => 349,  'sale_price' => 299,  'quantity' => 100, 'unit' => '1 Plant', 'sku' => 'PAH-SPIDER-001', 'photo' => '1593482892290-f54927ae1bb6', 'cats' => ['indoor-plants', 'air-purifying'],                  'description' => 'Air-purifying champion, pet-friendly, produces baby plants effortlessly.'],
-                ['name' => 'Rubber Plant',       'slug' => 'rubber-plant',       'price' => 899,  'sale_price' => 799,  'quantity' => 45,  'unit' => '1 Plant', 'sku' => 'PAH-RUBBER-001', 'photo' => '1632207691143-643e2a9a9361', 'cats' => ['indoor-plants'],                                   'description' => 'Bold burgundy or dark-green leaves, grows tall. Excellent for contemporary interiors.'],
-                ['name' => 'Jade Plant',         'slug' => 'jade-plant',         'price' => 499,  'sale_price' => 449,  'quantity' => 70,  'unit' => '1 Plant', 'sku' => 'PAH-JADEP-001',  'photo' => '1509423350716-97f2360af2e4', 'cats' => ['succulents-cacti'],                                'description' => 'Succulent bonsai-like shrub, long-lived, easy care, symbol of good luck.'],
-                ['name' => 'Bougainvillea',      'slug' => 'bougainvillea',      'price' => 599,  'sale_price' => 499,  'quantity' => 55,  'unit' => '1 Plant', 'sku' => 'PAH-BOUGN-001',  'photo' => '1490750967868-88aa4486c946', 'cats' => ['outdoor-plants', 'flowering-plants'],              'description' => 'Vibrant magenta bracts, perfect for balconies and garden walls.'],
-                ['name' => 'Anthurium',          'slug' => 'anthurium',          'price' => 799,  'sale_price' => 699,  'quantity' => 65,  'unit' => '1 Plant', 'sku' => 'PAH-ANTHU-001',  'photo' => '1593691509543-c55fb32d8de5', 'cats' => ['flowering-plants'],                                'description' => 'Heart-shaped glossy red spathes, long-lasting blooms, air-purifying.'],
-            ],
             'tools' => [
                 ['name' => 'Brass Secateurs',         'slug' => 'brass-secateurs',         'price' => 1699, 'sale_price' => 1299, 'quantity' => 60,  'unit' => '1 Pair',   'sku' => 'PAH-TOOL-001', 'photo' => '1416879595882-3373a0480b5b', 'cats' => ['pruning-cutting'],   'description' => 'Precision forged-brass secateurs with a sap groove and replaceable blade — a lifetime companion for clean cuts.'],
                 ['name' => 'Copper Watering Can',     'slug' => 'copper-watering-can',     'price' => 2399, 'sale_price' => 1899, 'quantity' => 40,  'unit' => '1 Can',    'sku' => 'PAH-TOOL-002', 'photo' => '1466692476868-aef1dfb1e735', 'cats' => ['watering-tools'],    'description' => 'Hand-finished copper watering can with a long brass rose for a soft, even pour. Ages into a beautiful patina.'],
@@ -73,15 +58,10 @@ class PlantAtHomeProductSeeder extends Seeder
 
     public function run(): void
     {
-        // Safe truncate — staging only, no real orders against these demo products
-        DB::statement('SET FOREIGN_KEY_CHECKS=0');
-        DB::table('order_product')->truncate();
-        DB::table('reviews')->truncate();
-        DB::table('questions')->truncate();
-        DB::table('category_product')->truncate();
-        DB::table('products')->truncate();
-        DB::statement('SET FOREIGN_KEY_CHECKS=1');
-
+        // NON-destructive (idempotent updateOrCreate). NEVER truncates — the real
+        // plant catalog (PlantAtHomePlantBulkSeeder) owns the products table.
+        // This only seeds the tools + farmbox demo products so the staging
+        // vertical switcher has products to show for those two demo verticals.
         $categoryIndex = Category::where('language', 'en')->pluck('id', 'slug');
 
         $now   = now();
@@ -98,22 +78,25 @@ class PlantAtHomeProductSeeder extends Seeder
             foreach ($products as $p) {
                 $catSlugs = $p['cats'];
                 $photo    = $p['photo'];
+                $slug     = $p['slug'];
                 unset($p['cats'], $p['photo']);
 
-                $product = Product::create(array_merge($p, [
-                    'type_id'      => $type->id,
-                    'language'     => 'en',
-                    'status'       => 'publish',
-                    'visibility'   => 'visibility_public',
-                    'product_type' => 'simple',
-                    'in_stock'     => true,
-                    'is_taxable'   => false,
-                    'image'        => $this->img(++$imgId, $photo),
-                    'min_price'    => $p['sale_price'],
-                    'max_price'    => $p['price'],
-                    'created_at'   => $now,
-                    'updated_at'   => $now,
-                ]));
+                $product = Product::updateOrCreate(
+                    ['slug' => $slug, 'language' => 'en'],
+                    array_merge($p, [
+                        'type_id'      => $type->id,
+                        'language'     => 'en',
+                        'status'       => 'publish',
+                        'visibility'   => 'visibility_public',
+                        'product_type' => 'simple',
+                        'in_stock'     => true,
+                        'is_taxable'   => false,
+                        'image'        => $this->img(++$imgId, $photo),
+                        'min_price'    => $p['sale_price'],
+                        'max_price'    => $p['price'],
+                        'updated_at'   => $now,
+                    ])
+                );
 
                 $catIds = array_filter(array_map(fn($s) => $categoryIndex[$s] ?? null, $catSlugs));
                 if ($catIds) {
@@ -123,6 +106,6 @@ class PlantAtHomeProductSeeder extends Seeder
             }
         }
 
-        $this->command->info("[Tier 3] PlantAtHome demo products seeded across 3 verticals: {$count} (staging only)");
+        $this->command->info("[Tier 3] PlantAtHome demo tools+farmbox products seeded: {$count} (staging only, non-destructive)");
     }
 }
