@@ -28,6 +28,7 @@ use Marvel\Http\Controllers\OrderController;
 use Marvel\Http\Controllers\PaymentIntentController;
 use Marvel\Http\Controllers\PaymentMethodController;
 use Marvel\Http\Controllers\ProductController;
+use Marvel\Http\Controllers\ProductImageController;
 use Marvel\Http\Controllers\QuestionController;
 use Marvel\Http\Controllers\RefundController;
 use Marvel\Http\Controllers\ResourceController;
@@ -287,6 +288,14 @@ Route::group(
         Route::apiResource('products', ProductController::class, [
             'only' => ['store', 'update', 'destroy'],
         ]);
+
+        // PlantAtHome — product image (gallery) management
+        Route::get('products/{id}/images', [ProductImageController::class, 'index']);
+        Route::post('products/{id}/images', [ProductImageController::class, 'store']);
+        Route::patch('products/{id}/images/reorder', [ProductImageController::class, 'reorder']);
+        Route::patch('products/{id}/images/{image}/primary', [ProductImageController::class, 'setPrimary']);
+        Route::delete('products/{id}/images/{image}', [ProductImageController::class, 'destroy']);
+
         Route::apiResource('resources', ResourceController::class, [
             'only' => ['store']
         ]);
