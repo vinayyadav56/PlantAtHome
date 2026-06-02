@@ -267,6 +267,12 @@ try {
   php artisan plantathome:assign-shop \
     || echo "[bg] WARNING: assign-shop failed"
 
+  # Replace the 193 granular plant categories with ~10 curated type categories
+  # and re-assign plants (clean, usable filter). Idempotent.
+  echo "==> [bg] Categorising plants into curated type categories..."
+  php artisan plantathome:categorize-plants \
+    || echo "[bg] WARNING: categorize-plants failed"
+
   # Rebuild image/gallery columns from the product_images library so every
   # downloaded photo shows up on the storefront + product edit page (idempotent).
   echo "==> [bg] Syncing plant image/gallery columns from the photo library..."

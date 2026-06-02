@@ -71,9 +71,9 @@ class ProductController extends CoreController
         $unavailableProducts = [];
         $language = $request->language ? $request->language : DEFAULT_LANGUAGE;
 
-        // PlantAtHome — eager-load botanical details so the list resource can
-        // expose scientific_name + care chips for the storefront card (no N+1).
-        $products_query = $this->repository->with('plantAttribute')->where('language', $language);
+        // PlantAtHome — eager-load botanical details + bundle items so the list
+        // resource can expose scientific_name, care chips and bundle totals (no N+1).
+        $products_query = $this->repository->with(['plantAttribute', 'bundleItems'])->where('language', $language);
 
         if (isset($request->date_range)) {
             $dateRange = explode('//', $request->date_range);
@@ -173,7 +173,8 @@ class ProductController extends CoreController
             $product->setRelation('related_products', $related_products);
 
             // PlantAtHome: eager-load botanical details + ordered gallery images
-            $product->load(['plantAttribute', 'images']);
+            // + bundle items + buy-together add-ons.
+            $product->load(['plantAttribute', 'images', 'bundleItems', 'addons']);
 
             return $product;
         } catch (Exception $e) {

@@ -297,6 +297,11 @@ class ProductRepository extends BaseRepository
                 $product->reconcilePlantImages($data['image'] ?? null, $data['gallery'] ?? null);
             }
 
+            // PlantAtHome: bundle items + buy-together add-ons.
+            if (isset($request['bundle_items']) || isset($request['addons'])) {
+                $product->syncInclusions($request['bundle_items'] ?? [], $request['addons'] ?? []);
+            }
+
             return $product;
         } catch (Exception $e) {
             throw $e;
@@ -506,6 +511,11 @@ class ProductRepository extends BaseRepository
             // the curated Featured/Gallery the editor submitted. Plants only.
             if (optional($product->type)->slug === 'plants') {
                 $product->reconcilePlantImages($data['image'] ?? null, $data['gallery'] ?? null);
+            }
+
+            // PlantAtHome: bundle items + buy-together add-ons.
+            if (isset($request['bundle_items']) || isset($request['addons'])) {
+                $product->syncInclusions($request['bundle_items'] ?? [], $request['addons'] ?? []);
             }
 
             if (TRANSLATION_ENABLED) {

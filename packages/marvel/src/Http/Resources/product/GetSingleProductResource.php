@@ -54,6 +54,10 @@ class GetSingleProductResource extends Resource
             'image'                        => $this->image,
             'plant_attribute'              => $this->plantAttribute,
             'images'                       => $this->images,
+            // PlantAtHome — bundle items + buy-together add-ons
+            'bundle_items'                 => $this->relationLoaded('bundleItems') ? ProductResource::mapInclusions($this->bundleItems) : [],
+            'bundle_total_value'           => $this->relationLoaded('bundleItems') ? $this->bundle_total_value : null,
+            'addons'                       => $this->relationLoaded('addons') ? ProductResource::mapInclusions($this->addons) : [],
             'video'                        => $this->video,
             'status'                       => $this->status,
             'height'                       => $this->height,
