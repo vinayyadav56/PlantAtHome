@@ -261,6 +261,12 @@ try {
     echo "==> [bg] Non-staging env (${APP_ENV_VAL}) — Tier 3 demo products skipped (production data preserved)."
   fi
 
+  # Ensure the PlantAtHome shop exists and assign shop-less products to it so
+  # plants can be edited/saved in the admin (shop_id is required). Idempotent.
+  echo "==> [bg] Ensuring PlantAtHome shop + assigning products..."
+  php artisan plantathome:assign-shop \
+    || echo "[bg] WARNING: assign-shop failed"
+
   # Rebuild image/gallery columns from the product_images library so every
   # downloaded photo shows up on the storefront + product edit page (idempotent).
   echo "==> [bg] Syncing plant image/gallery columns from the photo library..."
