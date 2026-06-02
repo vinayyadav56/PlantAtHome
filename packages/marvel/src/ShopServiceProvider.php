@@ -94,6 +94,8 @@ class ShopServiceProvider extends ServiceProvider
     ];
 
     protected $commandList = [
+        \Marvel\Console\FetchPlantImagesCommand::class,
+        \Marvel\Console\SyncImageColumnsCommand::class,
         InstallCommand::class,
         AdminCreateCommand::class,
         ImportDemoData::class,
