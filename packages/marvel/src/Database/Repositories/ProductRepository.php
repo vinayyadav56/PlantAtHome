@@ -290,6 +290,13 @@ class ProductRepository extends BaseRepository
             }
 
             $product->save();
+
+            // PlantAtHome: register any uploaded Featured/Gallery photos into the
+            // plant photo library (product_images) on create. Plants only.
+            if (optional($product->type)->slug === 'plants') {
+                $product->reconcilePlantImages($data['image'] ?? null, $data['gallery'] ?? null);
+            }
+
             return $product;
         } catch (Exception $e) {
             throw $e;
@@ -494,6 +501,12 @@ class ProductRepository extends BaseRepository
                 $product->variation_options()->delete();
             }
             $product->save();
+
+            // PlantAtHome: keep the plant photo library (product_images) in sync with
+            // the curated Featured/Gallery the editor submitted. Plants only.
+            if (optional($product->type)->slug === 'plants') {
+                $product->reconcilePlantImages($data['image'] ?? null, $data['gallery'] ?? null);
+            }
 
             if (TRANSLATION_ENABLED) {
                 $this->where('sku', $product->sku)->where('id', '=',  $product->id)->update([

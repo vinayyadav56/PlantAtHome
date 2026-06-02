@@ -22,9 +22,11 @@ class PlantAtHomeSeeder extends Seeder
 
         // Tier 2 — both envs
         $this->call(PlantAtHomeTypeSeeder::class);
-        $this->call(PlantAtHomeCategorySeeder::class);
+        $this->call(PlantAtHomeCategorySeeder::class);      // original 18 demo categories
+        $this->call(PlantAtHomeCategoryBulkSeeder::class);  // 193 real plant categories
+        $this->call(PlantAtHomePlantBulkSeeder::class);     // 1,530 real plants + attributes
 
-        // Tier 3 — staging only
+        // Tier 3 — staging only (demo products; skipped if real plants are already seeded)
         if (app()->environment('staging')) {
             $this->call(PlantAtHomeProductSeeder::class);
         } else {

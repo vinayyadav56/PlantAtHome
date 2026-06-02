@@ -50,7 +50,12 @@ return [
             'bucket' => env('AWS_BUCKET'),
             'url' => env('AWS_URL'),
             'endpoint' => env('AWS_ENDPOINT'),
-            'visibility' => 'public',
+            // NOTE: plantathome-media-prod has ACLs disabled (Bucket owner
+            // enforced) + a bucket policy for public read. Do NOT set
+            // 'visibility' => 'public' — it sends a public-read ACL which the
+            // bucket rejects (AccessControlListNotSupported). Objects are public
+            // via the bucket policy.
+            'throw' => false,
         ],
 
     ],

@@ -30,4 +30,9 @@ return [
         'region' => env('AWS_DEFAULT_REGION', 'us-east-1'),
     ],
 
+    // PlantAtHome — plant image fetch pipeline
+    'pixabay' => [
+        'key' => env('PIXABAY_API_KEY'),
+    ],
+
 ];

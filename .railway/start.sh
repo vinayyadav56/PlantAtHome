@@ -245,6 +245,14 @@ try {
   php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeCategorySeeder" --force \
     || echo "[bg] WARNING: PlantAtHomeCategorySeeder failed"
 
+  echo "==> [bg] [4a/7] Real plant categories (193)..."
+  php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeCategoryBulkSeeder" --force \
+    || echo "[bg] WARNING: PlantAtHomeCategoryBulkSeeder failed"
+
+  echo "==> [bg] [4b/7] Real plant catalog (1530 plants + attributes)..."
+  php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomePlantBulkSeeder" --force \
+    || echo "[bg] WARNING: PlantAtHomePlantBulkSeeder failed"
+
   if [ "$APP_ENV_VAL" = "staging" ]; then
     echo "==> [bg] Staging env — running Tier 3 demo product seed..."
     php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeProductSeeder" --force \
@@ -252,6 +260,12 @@ try {
   else
     echo "==> [bg] Non-staging env (${APP_ENV_VAL}) — Tier 3 demo products skipped (production data preserved)."
   fi
+
+  # Rebuild image/gallery columns from the product_images library so every
+  # downloaded photo shows up on the storefront + product edit page (idempotent).
+  echo "==> [bg] Syncing plant image/gallery columns from the photo library..."
+  php artisan plantathome:sync-image-columns \
+    || echo "[bg] WARNING: sync-image-columns failed"
 
   php artisan config:clear || true
   php artisan route:clear  || true
