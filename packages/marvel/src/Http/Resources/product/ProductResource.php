@@ -34,7 +34,40 @@ class ProductResource extends Resource
             'sku'                  => $this->sku,
             'sold_quantity'        => $this->sold_quantity,
             'in_flash_sale'        => $this->in_flash_sale,
-            'visibility'           => $this->visibility
+            'visibility'           => $this->visibility,
+            // PlantAtHome — botanical name + short care chips for the storefront card
+            'scientific_name'      => optional($this->plantAttribute)->scientific_name,
+            'care'                 => $this->plantCareChips(),
         ];
+    }
+
+    /** Up to three short care chips (Light · Water · Ease) from plant_attribute. */
+    protected function plantCareChips(): array
+    {
+        $pa = $this->plantAttribute;
+        if (!$pa) {
+            return [];
+        }
+
+        $chips = [];
+
+        $sun = strtolower((string) $pa->sunlight);
+        if ($sun !== '') {
+            if (preg_match('/low|shade/', $sun))                   $chips[] = 'Low light';
+            elseif (preg_match('/full|direct/', $sun))             $chips[] = 'Full sun';
+            elseif (preg_match('/bright|indirect|partial/', $sun)) $chips[] = 'Bright';
+            else                                                   $chips[] = ucfirst(strtok($sun, ' '));
+        }
+
+        $water = strtolower((string) $pa->water_requirement);
+        if ($water !== '') {
+            if (preg_match('/low|drought|month/', $water))   $chips[] = 'Monthly';
+            elseif (preg_match('/high|daily|moist/', $water)) $chips[] = 'Frequent';
+            else                                              $chips[] = 'Weekly';
+        }
+
+        $chips[] = 'Easy';
+
+        return array_values(array_filter(array_slice($chips, 0, 3)));
     }
 }

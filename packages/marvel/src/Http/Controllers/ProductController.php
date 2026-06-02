@@ -71,7 +71,9 @@ class ProductController extends CoreController
         $unavailableProducts = [];
         $language = $request->language ? $request->language : DEFAULT_LANGUAGE;
 
-        $products_query = $this->repository->where('language', $language);
+        // PlantAtHome — eager-load botanical details so the list resource can
+        // expose scientific_name + care chips for the storefront card (no N+1).
+        $products_query = $this->repository->with('plantAttribute')->where('language', $language);
 
         if (isset($request->date_range)) {
             $dateRange = explode('//', $request->date_range);
