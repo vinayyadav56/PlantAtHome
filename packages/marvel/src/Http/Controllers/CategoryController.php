@@ -67,20 +67,36 @@ class CategoryController extends CoreController
         $limit = $request->limit ?? 15;
         $page = $request->page ?? 1;
 
+        // The storefront filters per vertical via `search=type.slug:plants`
+        // (or a bare `type` param). Resolve the vertical slug and apply the
+        // filter EXPLICITLY below — don't rely on RequestCriteria firing
+        // inside the cache closure — and make it part of the cache key, else
+        // every vertical collides on one entry and an unfiltered request
+        // poisons the rest (plants would show tool/farmbox categories).
+        $typeSlug = $request->type ?? '';
+        if (!$typeSlug && ($search = $request->search) && preg_match('/type\.slug:([^;]+)/', $search, $m)) {
+            $typeSlug = $m[1];
+        }
+
         // Categories rarely change but the storefront filter sidebar requests
         // them (with the recursive children eager-load) on every load — cache
         // the formatted payload, busted by a version key on any category write.
-        // `c2` is a static code version — bump it to abandon any old poisoned
-        // cache entries (the previous build cached JsonResponse objects).
+        // `c3` is a static code version — bump it to abandon any old poisoned
+        // cache entries (c2 omitted the type from the key → cross-vertical mix).
         $ver = \Illuminate\Support\Facades\Cache::get('categories:ver', 1);
-        $key = "categories:c2:v{$ver}:{$language}:{$parent}:{$selfId}:{$limit}:{$page}";
+        $key = "categories:c3:v{$ver}:{$language}:{$parent}:{$selfId}:{$limit}:{$page}:{$typeSlug}";
 
         // Cache the plain data ARRAY (not the JsonResponse — that would
         // re-serialize to {headers,original,exception} and break the shop).
-        $data = \Illuminate\Support\Facades\Cache::remember($key, 600, function () use ($language, $parent, $selfId, $limit) {
+        $data = \Illuminate\Support\Facades\Cache::remember($key, 600, function () use ($language, $parent, $selfId, $limit, $typeSlug) {
             $categoriesQuery = $this->repository->with(['type', 'parent', 'children'])
                 ->where('language', $language);
 
+            if ($typeSlug) {
+                $categoriesQuery->whereHas('type', function ($q) use ($typeSlug) {
+                    $q->where('slug', $typeSlug);
+                });
+            }
             if ($parent === 'null') {
                 $categoriesQuery->whereNull('parent');
             }
