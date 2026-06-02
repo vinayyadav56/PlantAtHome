@@ -53,10 +53,12 @@ class ProductResource extends Resource
 
         $sun = strtolower((string) $pa->sunlight);
         if ($sun !== '') {
-            if (preg_match('/low|shade/', $sun))                   $chips[] = 'Low light';
-            elseif (preg_match('/full|direct/', $sun))             $chips[] = 'Full sun';
-            elseif (preg_match('/bright|indirect|partial/', $sun)) $chips[] = 'Bright';
-            else                                                   $chips[] = ucfirst(strtok($sun, ' '));
+            // order matters: check indirect/bright before full/direct so
+            // "bright indirect" isn't matched as "full sun" (indirect ⊃ direct)
+            if (preg_match('/low light|shade/', $sun))                       $chips[] = 'Low light';
+            elseif (preg_match('/bright|indirect|partial|filtered/', $sun))  $chips[] = 'Bright';
+            elseif (preg_match('/full sun|direct/', $sun))                   $chips[] = 'Full sun';
+            else                                                             $chips[] = ucfirst(strtok($sun, ' '));
         }
 
         $water = strtolower((string) $pa->water_requirement);
