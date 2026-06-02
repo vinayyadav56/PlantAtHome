@@ -97,6 +97,7 @@ class ShopServiceProvider extends ServiceProvider
         \Marvel\Console\FetchPlantImagesCommand::class,
         \Marvel\Console\SyncImageColumnsCommand::class,
         \Marvel\Console\AssignProductShopCommand::class,
+        \Marvel\Console\CategorizePlantsCommand::class,
         InstallCommand::class,
         AdminCreateCommand::class,
         ImportDemoData::class,

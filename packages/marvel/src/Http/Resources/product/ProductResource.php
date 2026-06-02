@@ -38,7 +38,24 @@ class ProductResource extends Resource
             // PlantAtHome — botanical name + short care chips for the storefront card
             'scientific_name'      => optional($this->plantAttribute)->scientific_name,
             'care'                 => $this->plantCareChips(),
+            // PlantAtHome — bundle support (only meaningful for product_type=bundle)
+            'bundle_items'         => $this->whenLoaded('bundleItems', fn () => static::mapInclusions($this->bundleItems)),
+            'bundle_total_value'   => $this->relationLoaded('bundleItems') ? $this->bundle_total_value : null,
         ];
+    }
+
+    /** Compact representation of included/add-on products. */
+    public static function mapInclusions($items): array
+    {
+        return collect($items)->map(fn ($p) => [
+            'id'         => $p->id,
+            'name'       => $p->name,
+            'slug'       => $p->slug,
+            'image'      => $p->image,
+            'price'      => $p->price,
+            'sale_price' => $p->sale_price,
+            'quantity'   => (int) (optional($p->pivot)->quantity ?: 1),
+        ])->values()->all();
     }
 
     /** Up to three short care chips (Light · Water · Ease) from plant_attribute. */
