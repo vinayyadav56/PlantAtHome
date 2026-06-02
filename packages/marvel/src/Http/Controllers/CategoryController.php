@@ -65,20 +65,39 @@ class CategoryController extends CoreController
         $parent = $request->parent;
         $selfId = $request->self;
         $limit = $request->limit ?? 15;
+        $page = $request->page ?? 1;
 
-        $categoriesQuery = $this->repository->with(['type', 'parent', 'children'])
-            ->where('language', $language);
+        // Categories rarely change but the storefront filter sidebar requests
+        // them (with the recursive children eager-load) on every load — cache
+        // the formatted payload, busted by a version key on any category write.
+        $ver = \Illuminate\Support\Facades\Cache::get('categories:ver', 1);
+        $key = "categories:v{$ver}:{$language}:{$parent}:{$selfId}:{$limit}:{$page}";
 
-        if ($parent === 'null') {
-            $categoriesQuery->whereNull('parent');
-        }
-        if ($selfId) {
-            $categoriesQuery->where('id', '!=', $selfId);
-        }
+        $payload = \Illuminate\Support\Facades\Cache::remember($key, 600, function () use ($language, $parent, $selfId, $limit) {
+            $categoriesQuery = $this->repository->with(['type', 'parent', 'children'])
+                ->where('language', $language);
 
-        $categories = $categoriesQuery->paginate($limit);
-        $data = CategoryResource::collection($categories)->response()->getData(true);
-        return formatAPIResourcePaginate($data);
+            if ($parent === 'null') {
+                $categoriesQuery->whereNull('parent');
+            }
+            if ($selfId) {
+                $categoriesQuery->where('id', '!=', $selfId);
+            }
+
+            $categories = $categoriesQuery->paginate($limit);
+            $data = CategoryResource::collection($categories)->response()->getData(true);
+            return formatAPIResourcePaginate($data);
+        });
+
+        return response()->json($payload)
+            ->header('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600');
+    }
+
+    /** Invalidate the categories cache (called on any category write). */
+    protected function bustCategoryCache(): void
+    {
+        $ver = (int) \Illuminate\Support\Facades\Cache::get('categories:ver', 1);
+        \Illuminate\Support\Facades\Cache::forever('categories:ver', $ver + 1);
     }
 
     /**
@@ -91,6 +110,7 @@ class CategoryController extends CoreController
     public function store(CategoryCreateRequest $request)
     {
         try {
+            $this->bustCategoryCache();
             return $this->repository->saveCategory($request);
         } catch (MarvelException $th) {
             throw new MarvelException(COULD_NOT_CREATE_THE_RESOURCE);
@@ -144,6 +164,7 @@ class CategoryController extends CoreController
     public function categoryUpdate(CategoryUpdateRequest $request)
     {
         $category = $this->repository->findOrFail($request->id);
+        $this->bustCategoryCache();
         return $this->repository->updateCategory($request, $category);
     }
 
@@ -156,6 +177,7 @@ class CategoryController extends CoreController
     public function destroy($id)
     {
         try {
+            $this->bustCategoryCache();
             return $this->repository->findOrFail($id)->delete();
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
