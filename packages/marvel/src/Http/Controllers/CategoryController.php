@@ -70,10 +70,14 @@ class CategoryController extends CoreController
         // Categories rarely change but the storefront filter sidebar requests
         // them (with the recursive children eager-load) on every load — cache
         // the formatted payload, busted by a version key on any category write.
+        // `c2` is a static code version — bump it to abandon any old poisoned
+        // cache entries (the previous build cached JsonResponse objects).
         $ver = \Illuminate\Support\Facades\Cache::get('categories:ver', 1);
-        $key = "categories:v{$ver}:{$language}:{$parent}:{$selfId}:{$limit}:{$page}";
+        $key = "categories:c2:v{$ver}:{$language}:{$parent}:{$selfId}:{$limit}:{$page}";
 
-        $payload = \Illuminate\Support\Facades\Cache::remember($key, 600, function () use ($language, $parent, $selfId, $limit) {
+        // Cache the plain data ARRAY (not the JsonResponse — that would
+        // re-serialize to {headers,original,exception} and break the shop).
+        $data = \Illuminate\Support\Facades\Cache::remember($key, 600, function () use ($language, $parent, $selfId, $limit) {
             $categoriesQuery = $this->repository->with(['type', 'parent', 'children'])
                 ->where('language', $language);
 
@@ -85,11 +89,10 @@ class CategoryController extends CoreController
             }
 
             $categories = $categoriesQuery->paginate($limit);
-            $data = CategoryResource::collection($categories)->response()->getData(true);
-            return formatAPIResourcePaginate($data);
+            return CategoryResource::collection($categories)->response()->getData(true);
         });
 
-        return response()->json($payload)
+        return formatAPIResourcePaginate($data)
             ->header('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600');
     }
 
