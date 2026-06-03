@@ -50,6 +50,7 @@ use Marvel\Http\Controllers\RefundPolicyController;
 use Marvel\Http\Controllers\RefundReasonController;
 use Marvel\Http\Controllers\VoiceSearchController;
 use Marvel\Http\Controllers\GardenController;
+use Marvel\Http\Controllers\SystemController;
 use Marvel\Http\Controllers\StoreNoticeController;
 use Marvel\Http\Controllers\TermsAndConditionsController;
 
@@ -571,4 +572,14 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('garden-packages/{id}/payment-link', [GardenController::class, 'createPaymentLink']);
     Route::post('garden-packages/{id}/visits', [GardenController::class, 'addVisit']);
     Route::put('garden-package-visits/{visitId}', [GardenController::class, 'updateVisit']);
+
+    // System — pending tasks checklist + request/response logging viewer
+    Route::get('admin-tasks', [SystemController::class, 'tasks']);
+    Route::post('admin-tasks', [SystemController::class, 'storeTask']);
+    Route::put('admin-tasks/{id}', [SystemController::class, 'updateTask']);
+    Route::delete('admin-tasks/{id}', [SystemController::class, 'destroyTask']);
+    Route::get('request-logs', [SystemController::class, 'logs']);
+    Route::get('request-logs/settings', [SystemController::class, 'logSettings']);
+    Route::post('request-logs/settings', [SystemController::class, 'updateLogSettings']);
+    Route::post('request-logs/clear', [SystemController::class, 'clearLogs']);
 });

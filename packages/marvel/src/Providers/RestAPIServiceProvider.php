@@ -21,7 +21,7 @@ class RestApiServiceProvider extends ServiceProvider
 
     public function loadRoutes(): void
     {
-        Route::prefix('api')->group(function () {
+        Route::prefix('api')->middleware(\Marvel\Http\Middleware\LogRequests::class)->group(function () {
             $this->loadRoutesFrom(__DIR__ . '/../Rest/Routes.php');
         });
     }
