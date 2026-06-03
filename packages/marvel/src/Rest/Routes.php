@@ -49,6 +49,7 @@ use Marvel\Http\Controllers\OwnershipTransferController;
 use Marvel\Http\Controllers\RefundPolicyController;
 use Marvel\Http\Controllers\RefundReasonController;
 use Marvel\Http\Controllers\VoiceSearchController;
+use Marvel\Http\Controllers\GardenController;
 use Marvel\Http\Controllers\StoreNoticeController;
 use Marvel\Http\Controllers\TermsAndConditionsController;
 
@@ -108,6 +109,19 @@ Route::post('webhooks/flutterwave', [WebHookController::class, 'flutterwave']);
 // side posts query usage for cost tracking (guarded by an optional shared secret).
 Route::get('voice-search/settings', [VoiceSearchController::class, 'getSettings']);
 Route::post('voice-search/log', [VoiceSearchController::class, 'storeLog']);
+
+// Garden service — public lead capture + active package templates for the page,
+// and the Razorpay payment-link webhook.
+Route::post('garden-leads', [GardenController::class, 'storeLead']);
+Route::get('garden-package-templates', [GardenController::class, 'templates']);
+Route::post('webhooks/razorpay-garden', [GardenController::class, 'razorpayWebhook']);
+
+// Garden service — logged-in customer: their packages + visit tracking + pay.
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('my-garden-packages', [GardenController::class, 'myPackages']);
+    Route::get('my-garden-packages/{id}', [GardenController::class, 'showMyPackage']);
+    Route::post('garden-packages/{id}/pay', [GardenController::class, 'pay']);
+});
 
 Route::post('license-key/verify', [UserController::class, 'verifyLicenseKey']);
 
@@ -542,4 +556,19 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('voice-search/settings', [VoiceSearchController::class, 'updateSettings']);
     Route::get('voice-search/stats', [VoiceSearchController::class, 'getStats']);
     Route::get('voice-search/logs', [VoiceSearchController::class, 'getLogs']);
+
+    // Garden service — admin management
+    Route::get('garden-leads', [GardenController::class, 'leads']);
+    Route::put('garden-leads/{id}', [GardenController::class, 'updateLead']);
+    Route::get('garden-templates', [GardenController::class, 'allTemplates']);
+    Route::post('garden-templates', [GardenController::class, 'storeTemplate']);
+    Route::put('garden-templates/{id}', [GardenController::class, 'updateTemplate']);
+    Route::delete('garden-templates/{id}', [GardenController::class, 'destroyTemplate']);
+    Route::get('garden-packages', [GardenController::class, 'packages']);
+    Route::get('garden-packages/{id}', [GardenController::class, 'showPackage']);
+    Route::post('garden-packages', [GardenController::class, 'storePackage']);
+    Route::put('garden-packages/{id}', [GardenController::class, 'updatePackage']);
+    Route::post('garden-packages/{id}/payment-link', [GardenController::class, 'createPaymentLink']);
+    Route::post('garden-packages/{id}/visits', [GardenController::class, 'addVisit']);
+    Route::put('garden-package-visits/{visitId}', [GardenController::class, 'updateVisit']);
 });
