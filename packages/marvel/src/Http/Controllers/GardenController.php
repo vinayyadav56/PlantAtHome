@@ -30,8 +30,10 @@ class GardenController extends CoreController
             'occasion' => 'nullable|string|max:64',
             'quantity' => 'nullable|string|max:64',
         ]);
-        $lead = GardenLead::create($data + ['status' => 'new', 'source' => $data['source'] ?? 'garden']);
-        $msg = ($data['source'] ?? '') === 'corporate'
+        // The /corporate-leads route is authoritative for the source.
+        $source = $request->is('*corporate-leads') ? 'corporate' : ($data['source'] ?? 'garden');
+        $lead = GardenLead::create($data + ['status' => 'new', 'source' => $source]);
+        $msg = $source === 'corporate'
             ? 'Thanks! Our gifting team will reach out with a tailored proposal.'
             : 'Thanks! Our garden team will reach out shortly.';
         return response()->json(['data' => ['id' => $lead->id], 'message' => $msg], 201);
