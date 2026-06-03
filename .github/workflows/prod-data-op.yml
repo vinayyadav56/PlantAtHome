@@ -1,0 +1,109 @@
+name: Production Data Op (size-pricing / bundle)
+
+# Manual, confirm-gated one-off data operations on the LIVE production catalog.
+# Never runs automatically. Mirrors production.yml's SSH/security-group pattern.
+#
+#   mode:
+#     dry-run        → plantathome:size-price-prod --dry-run   (no writes; prints plan)
+#     limit10        → plantathome:size-price-prod --limit=10  (convert 10 plants)
+#     full           → plantathome:size-price-prod             (convert all plants)
+#     rollback       → plantathome:size-price-prod --rollback  (restore originals)
+#     create-bundle  → plantathome:create-demo-bundle
+#     remove-bundle  → plantathome:create-demo-bundle --remove
+#
+# Every conversion snapshots originals to pah_plant_price_backup first; rollback
+# restores them exactly.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type "run-prod-data-op" to confirm — this touches the LIVE catalog'
+        required: true
+        default: ''
+      mode:
+        description: 'Operation to run'
+        required: true
+        type: choice
+        options:
+          - dry-run
+          - limit10
+          - full
+          - rollback
+          - create-bundle
+          - remove-bundle
+        default: dry-run
+
+jobs:
+  validate:
+    name: Validate confirmation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject without confirmation
+        run: |
+          if [ "${{ inputs.confirm }}" != "run-prod-data-op" ]; then
+            echo "ERROR: confirmation phrase missing. Type 'run-prod-data-op'."
+            exit 1
+          fi
+          echo "Confirmed. Mode: ${{ inputs.mode }}"
+
+  run:
+    name: Run on EC2 (Production)
+    runs-on: ubuntu-latest
+    needs: [validate]
+    if: inputs.confirm == 'run-prod-data-op'
+    environment: production
+    steps:
+      - name: Resolve artisan command from mode
+        run: |
+          case "${{ inputs.mode }}" in
+            dry-run)       ARGS="plantathome:size-price-prod --dry-run" ;;
+            limit10)       ARGS="plantathome:size-price-prod --limit=10" ;;
+            full)          ARGS="plantathome:size-price-prod" ;;
+            rollback)      ARGS="plantathome:size-price-prod --rollback" ;;
+            create-bundle) ARGS="plantathome:create-demo-bundle" ;;
+            remove-bundle) ARGS="plantathome:create-demo-bundle --remove" ;;
+            *) echo "Unknown mode"; exit 1 ;;
+          esac
+          echo "ARTISAN_ARGS=$ARGS" >> $GITHUB_ENV
+
+      - name: Open port 22 for this runner
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          RUNNER_IP=$(curl -s ifconfig.me/ip)
+          echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_ENV
+          aws ec2 authorize-security-group-ingress \
+            --group-id ${{ secrets.AWS_EC2_SG_ID }} \
+            --protocol tcp --port 22 --cidr "${RUNNER_IP}/32" \
+            --region ${{ secrets.AWS_REGION }} || true
+
+      - name: SSH run artisan command
+        uses: appleboy/ssh-action@v1.2.5
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: ARTISAN_ARGS
+          script: |
+            set -e
+            cd /var/www/plantathome/api
+            echo "==> Running: php artisan ${ARTISAN_ARGS}"
+            sudo chown -R ubuntu:ubuntu storage bootstrap/cache 2>/dev/null || true
+            php artisan ${ARTISAN_ARGS}
+            sudo chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
+            echo "==> Done."
+
+      - name: Close port 22 for this runner
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id ${{ secrets.AWS_EC2_SG_ID }} \
+            --protocol tcp --port 22 --cidr "${RUNNER_IP}/32" \
+            --region ${{ secrets.AWS_REGION }} || true
