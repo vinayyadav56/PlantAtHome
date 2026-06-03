@@ -48,6 +48,7 @@ use Marvel\Http\Controllers\NotifyLogsController;
 use Marvel\Http\Controllers\OwnershipTransferController;
 use Marvel\Http\Controllers\RefundPolicyController;
 use Marvel\Http\Controllers\RefundReasonController;
+use Marvel\Http\Controllers\VoiceSearchController;
 use Marvel\Http\Controllers\StoreNoticeController;
 use Marvel\Http\Controllers\TermsAndConditionsController;
 
@@ -529,4 +530,12 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::apiResource('ownership-transfer', OwnershipTransferController::class, [
         'only' => ['update', 'destroy'],
     ]);
+
+    // Voice Search — public settings read, admin-only writes/stats
+    Route::get('voice-search/settings', [VoiceSearchController::class, 'getSettings']);
+    Route::middleware('auth:sanctum')->group(function () {
+        Route::post('voice-search/settings', [VoiceSearchController::class, 'updateSettings']);
+        Route::get('voice-search/stats', [VoiceSearchController::class, 'getStats']);
+        Route::get('voice-search/logs', [VoiceSearchController::class, 'getLogs']);
+    });
 });
