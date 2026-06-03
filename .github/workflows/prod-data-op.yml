@@ -37,6 +37,7 @@ on:
           - cat-backup
           - cat-restore
           - cat-seed
+          - cat-prune
         default: dry-run
 
 jobs:
@@ -73,6 +74,7 @@ jobs:
             img-full)      ARGS="plantathome:repair-plant-images" ;;
             img-rollback)  ARGS="plantathome:repair-plant-images --rollback" ;;
             cat-backup|cat-restore|cat-seed) ARGS="" ;;
+            cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             *) echo "Unknown mode"; exit 1 ;;
           esac
           echo "ARTISAN_ARGS=$ARGS" >> $GITHUB_ENV
