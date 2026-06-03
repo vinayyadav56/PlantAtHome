@@ -129,14 +129,20 @@ class ApplySizePricingCommand extends Command
 
         foreach (self::SIZES as $size) {
             // Preserve any existing row (admin edits survive re-deploys).
-            if ($product->variation_options()->where('title', $size)->exists()) {
+            $existing = $product->variation_options()->where('title', $size)->first();
+            if ($existing) {
+                // Preserve admin price/stock edits, but keep size rows sale-free
+                // so min_price (= cheapest size price) can never drift out of sync.
+                if ($existing->sale_price !== null) {
+                    $existing->forceFill(['sale_price' => null])->save();
+                }
                 continue;
             }
             $price = $this->roundTo9($base * self::SIZE_MULT[$size]);
             $product->variation_options()->create([
                 'title'      => $size,
                 'price'      => $price,
-                'sale_price' => $this->saleFor($slug, $price),
+                'sale_price' => null,
                 'quantity'   => 8 + ($this->crc($slug . $size) % 33),
                 'sku'        => $slug . '-' . Str::slug($size),
                 'is_disable' => false,
@@ -148,14 +154,15 @@ class ApplySizePricingCommand extends Command
         // Link the Size attribute values (drives the PDP selector).
         $product->variations()->sync($allValueIds);
 
-        // Recompute the summary from the actual rows (respects admin edits).
+        // Recompute the summary from the actual prices (no sales on size rows,
+        // so "from {min_price}" always equals the cheapest selectable size).
         $rows = $product->variation_options()->get();
         $product->forceFill([
             'product_type' => 'variable',
             'price'        => null,
             'sale_price'   => null,
             'sku'          => null,
-            'min_price'    => (float) $rows->min(fn ($v) => (float) ($v->sale_price ?: $v->price)),
+            'min_price'    => (float) $rows->min(fn ($v) => (float) $v->price),
             'max_price'    => (float) $rows->max(fn ($v) => (float) $v->price),
             'quantity'     => (int) $rows->sum('quantity'),
             'in_stock'     => $rows->sum('quantity') > 0,
@@ -197,16 +204,6 @@ class ApplySizePricingCommand extends Command
             return strtolower($last[2]) === 'cm' ? $v / 100 : $v;
         }
         return 1.0;
-    }
-
-    /** ~35% of products get a deterministic 12–18% discount; rest none. */
-    private function saleFor(string $slug, int $price): ?int
-    {
-        if (($this->crc($slug . 'sale') % 100) >= 35) {
-            return null;
-        }
-        $pct = 12 + ($this->crc($slug . 'pct') % 7);
-        return $this->roundTo9($price * (1 - $pct / 100));
     }
 
     /** Round to a retail-looking …9 ending. */
