@@ -115,7 +115,9 @@ jobs:
                 TS=$(date +%Y%m%d-%H%M%S)
                 BK="storage/app/backups/pah-catalog-${TS}.sql.gz"
                 echo "==> mysqldump catalog tables → ${BK}"
-                mysqldump --single-transaction --quick --no-tablespaces \
+                # --skip-lock-tables + no --single-transaction: SELECT-only, avoids
+                # FLUSH TABLES WITH READ LOCK / LOCK TABLES (app user lacks RELOAD).
+                mysqldump --skip-lock-tables --no-tablespaces --quick \
                   -h "$DBHOST" -u "$DBUSER" -p"$DBPASS" "$DBNAME" $CATALOG_TABLES | gzip > "$BK"
                 ls -la "$BK"
                 SZ=$(stat -c%s "$BK" 2>/dev/null || echo 0)
