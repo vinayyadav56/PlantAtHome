@@ -1,18 +1,16 @@
-name: Production Data Op (size-pricing / bundle)
+name: Production Data Op (size-pricing / bundle / images / catalog)
 
 # Manual, confirm-gated one-off data operations on the LIVE production catalog.
 # Never runs automatically. Mirrors production.yml's SSH/security-group pattern.
 #
-#   mode:
-#     dry-run        → plantathome:size-price-prod --dry-run   (no writes; prints plan)
-#     limit10        → plantathome:size-price-prod --limit=10  (convert 10 plants)
-#     full           → plantathome:size-price-prod             (convert all plants)
-#     rollback       → plantathome:size-price-prod --rollback  (restore originals)
-#     create-bundle  → plantathome:create-demo-bundle
-#     remove-bundle  → plantathome:create-demo-bundle --remove
-#
-# Every conversion snapshots originals to pah_plant_price_backup first; rollback
-# restores them exactly.
+#   size-pricing : dry-run | limit10 | full | rollback
+#   bundle       : create-bundle | remove-bundle
+#   images       : img-dry-run | img-limit10 | img-full | img-rollback
+#   CATALOG REPLACE (destructive — backup first!):
+#     cat-backup   → mysqldump catalog tables → storage/app/backups + S3
+#     cat-restore  → restore the latest backup (rollback the replace)
+#     cat-seed     → seed 1530 plants from plants.json, unpublish non-seed,
+#                    assign shop, categorize, size-price, repair images
 
 on:
   workflow_dispatch:
@@ -36,6 +34,9 @@ on:
           - img-limit10
           - img-full
           - img-rollback
+          - cat-backup
+          - cat-restore
+          - cat-seed
         default: dry-run
 
 jobs:
@@ -71,9 +72,11 @@ jobs:
             img-limit10)   ARGS="plantathome:repair-plant-images --limit=10" ;;
             img-full)      ARGS="plantathome:repair-plant-images" ;;
             img-rollback)  ARGS="plantathome:repair-plant-images --rollback" ;;
+            cat-backup|cat-restore|cat-seed) ARGS="" ;;
             *) echo "Unknown mode"; exit 1 ;;
           esac
           echo "ARTISAN_ARGS=$ARGS" >> $GITHUB_ENV
+          echo "OP_MODE=${{ inputs.mode }}" >> $GITHUB_ENV
 
       - name: Open port 22 for this runner
         env:
@@ -88,19 +91,82 @@ jobs:
             --protocol tcp --port 22 --cidr "${RUNNER_IP}/32" \
             --region ${{ secrets.AWS_REGION }} || true
 
-      - name: SSH run artisan command
+      - name: SSH run operation
         uses: appleboy/ssh-action@v1.2.5
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: ARTISAN_ARGS
+          command_timeout: 40m
+          envs: ARTISAN_ARGS,OP_MODE
           script: |
             set -e
             cd /var/www/plantathome/api
-            echo "==> Running: php artisan ${ARTISAN_ARGS}"
             sudo chown -R ubuntu:ubuntu storage bootstrap/cache 2>/dev/null || true
-            php artisan ${ARTISAN_ARGS}
+
+            # read a value from .env, stripping surrounding quotes
+            getenv() { grep -E "^$1=" .env | head -1 | cut -d '=' -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//"; }
+            CATALOG_TABLES="products plant_attributes variation_options product_inclusions attribute_product category_product categories attributes attribute_values types"
+
+            case "$OP_MODE" in
+              cat-backup)
+                DBHOST=$(getenv DB_HOST); DBNAME=$(getenv DB_DATABASE); DBUSER=$(getenv DB_USERNAME); DBPASS=$(getenv DB_PASSWORD)
+                mkdir -p storage/app/backups
+                TS=$(date +%Y%m%d-%H%M%S)
+                BK="storage/app/backups/pah-catalog-${TS}.sql.gz"
+                echo "==> mysqldump catalog tables → ${BK}"
+                mysqldump --single-transaction --quick --no-tablespaces \
+                  -h "$DBHOST" -u "$DBUSER" -p"$DBPASS" "$DBNAME" $CATALOG_TABLES | gzip > "$BK"
+                ls -la "$BK"
+                SZ=$(stat -c%s "$BK" 2>/dev/null || echo 0)
+                echo "==> backup size: ${SZ} bytes"
+                if [ "$SZ" -lt 10000 ]; then echo "ERROR: backup suspiciously small"; exit 1; fi
+                # best-effort offsite copy to S3
+                AWSKEY=$(getenv AWS_ACCESS_KEY_ID); AWSSEC=$(getenv AWS_SECRET_ACCESS_KEY); AWSBUCKET=$(getenv AWS_BUCKET)
+                if command -v aws >/dev/null 2>&1 && [ -n "$AWSBUCKET" ]; then
+                  AWS_ACCESS_KEY_ID="$AWSKEY" AWS_SECRET_ACCESS_KEY="$AWSSEC" AWS_DEFAULT_REGION="$(getenv AWS_DEFAULT_REGION)" \
+                    aws s3 cp "$BK" "s3://${AWSBUCKET}/backups/$(basename $BK)" && echo "==> uploaded to S3" || echo "WARN: S3 upload failed (local backup is the restore point)"
+                fi
+                echo "==> BACKUP COMPLETE: $BK"
+                ;;
+
+              cat-restore)
+                DBHOST=$(getenv DB_HOST); DBNAME=$(getenv DB_DATABASE); DBUSER=$(getenv DB_USERNAME); DBPASS=$(getenv DB_PASSWORD)
+                BK=$(ls -t storage/app/backups/pah-catalog-*.sql.gz 2>/dev/null | head -1)
+                if [ -z "$BK" ]; then echo "ERROR: no backup found in storage/app/backups"; exit 1; fi
+                echo "==> Restoring catalog from ${BK}"
+                gunzip -c "$BK" | mysql -h "$DBHOST" -u "$DBUSER" -p"$DBPASS" "$DBNAME"
+                php artisan cache:clear 2>/dev/null || true
+                echo "==> RESTORE COMPLETE from $BK"
+                ;;
+
+              cat-seed)
+                echo "==> [1/8] Seed categories..."
+                php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeCategorySeeder" --force
+                php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeCategoryBulkSeeder" --force
+                echo "==> [2/8] Seed 1530 plants from plants.json (₹0, upsert by slug)..."
+                php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomePlantBulkSeeder" --force
+                echo "==> [3/8] Unpublish non-seed (old) plants..."
+                php artisan plantathome:prune-non-seed-plants
+                echo "==> [4/8] Assign shop..."
+                php artisan plantathome:assign-shop
+                echo "==> [5/8] Categorize plants (curated categories)..."
+                php artisan plantathome:categorize-plants
+                echo "==> [6/8] Apply size pricing (derive S/M/L)..."
+                php artisan plantathome:apply-size-pricing
+                echo "==> [7/8] Repair images from S3..."
+                php artisan plantathome:repair-plant-images
+                echo "==> [8/8] Clear caches..."
+                php artisan cache:clear 2>/dev/null || true
+                echo "==> CAT-SEED COMPLETE"
+                ;;
+
+              *)
+                echo "==> Running: php artisan ${ARTISAN_ARGS}"
+                php artisan ${ARTISAN_ARGS}
+                ;;
+            esac
+
             sudo chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
             echo "==> Done."
 
