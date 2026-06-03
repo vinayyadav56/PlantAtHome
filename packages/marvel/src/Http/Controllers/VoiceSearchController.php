@@ -4,16 +4,26 @@ namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\VoiceSearchSetting;
 use Marvel\Database\Models\VoiceSearchLog;
 use Marvel\Enums\Permission;
 
 class VoiceSearchController extends CoreController
 {
-    // gpt-4o-mini pricing (USD per token) and INR conversion.
-    private const PRICE_PROMPT_PER_TOKEN = 0.15 / 1000000;
-    private const PRICE_COMPLETION_PER_TOKEN = 0.60 / 1000000;
+    // OpenAI chat pricing, USD per 1M tokens [prompt, completion].
+    private const MODEL_PRICES = [
+        'gpt-4o-mini'  => [0.15, 0.60],
+        'gpt-4o'       => [2.50, 10.00],
+        'gpt-4.1-mini' => [0.40, 1.60],
+        'gpt-4.1'      => [2.00, 8.00],
+    ];
     private const USD_TO_INR = 83.5;
+
+    private function tokenPrice(?string $model): array
+    {
+        return self::MODEL_PRICES[$model] ?? self::MODEL_PRICES['gpt-4o-mini'];
+    }
 
     /** Public — the storefront reads this to know if the feature is on. */
     public function getSettings(): JsonResponse
@@ -22,16 +32,20 @@ class VoiceSearchController extends CoreController
         if (!$setting) {
             return response()->json(['data' => ['enabled' => false]]);
         }
-        $thisMonth = now()->startOfMonth();
-        $logs = VoiceSearchLog::where('created_at', '>=', $thisMonth)->get();
+
+        // SQL aggregate (no row hydration). INR derived from precise USD sum.
+        $row = VoiceSearchLog::where('created_at', '>=', now()->startOfMonth())
+            ->selectRaw('COUNT(*) as calls, COALESCE(SUM(cost_usd),0) as usd')
+            ->first();
+        $usd = (float) ($row->usd ?? 0);
 
         return response()->json(['data' => [
             'enabled' => (bool) $setting->enabled,
             'monthly_budget_inr' => (float) $setting->monthly_budget_inr,
             'openai_model' => $setting->openai_model,
-            'current_month_cost_usd' => round((float) $logs->sum('cost_usd'), 4),
-            'current_month_cost_inr' => round((float) $logs->sum('cost_inr'), 2),
-            'current_month_calls' => $logs->count(),
+            'current_month_cost_usd' => round($usd, 6),
+            'current_month_cost_inr' => round($usd * self::USD_TO_INR, 4),
+            'current_month_calls' => (int) ($row->calls ?? 0),
         ]]);
     }
 
@@ -47,7 +61,7 @@ class VoiceSearchController extends CoreController
         return response()->json(['data' => $setting, 'message' => 'Settings updated.']);
     }
 
-    /** Admin only — daily call/cost breakdown for a month. */
+    /** Admin only — daily call/cost breakdown for a month (SQL grouped). */
     public function getStats(Request $request): JsonResponse
     {
         if ($denied = $this->denyUnlessAdmin($request)) {
@@ -60,20 +74,26 @@ class VoiceSearchController extends CoreController
         $start = \Carbon\Carbon::createFromFormat('Y-m', $month)->startOfMonth();
         $end = $start->copy()->endOfMonth();
 
-        $logs = VoiceSearchLog::whereBetween('created_at', [$start, $end])->get();
-        $daily = $logs->groupBy(fn ($l) => $l->created_at->format('Y-m-d'))->map(fn ($g) => [
-            'date' => $g->first()->created_at->format('Y-m-d'),
-            'count' => $g->count(),
-            'cost_usd' => round((float) $g->sum('cost_usd'), 4),
-            'cost_inr' => round((float) $g->sum('cost_inr'), 2),
+        $rate = self::USD_TO_INR;
+        $rows = VoiceSearchLog::whereBetween('created_at', [$start, $end])
+            ->selectRaw('DATE(created_at) as d, COUNT(*) as cnt, COALESCE(SUM(cost_usd),0) as usd, COALESCE(SUM(total_tokens),0) as toks')
+            ->groupBy('d')->orderBy('d')->get();
+
+        $daily = $rows->map(fn ($r) => [
+            'date' => (string) $r->d,
+            'count' => (int) $r->cnt,
+            'cost_usd' => round((float) $r->usd, 6),
+            'cost_inr' => round((float) $r->usd * $rate, 4),
         ])->values();
+
+        $totalUsd = (float) $rows->sum('usd');
 
         return response()->json(['data' => [
             'month' => $month,
-            'total_cost_usd' => round((float) $logs->sum('cost_usd'), 4),
-            'total_cost_inr' => round((float) $logs->sum('cost_inr'), 2),
-            'total_calls' => $logs->count(),
-            'total_tokens' => (int) $logs->sum('total_tokens'),
+            'total_cost_usd' => round($totalUsd, 6),
+            'total_cost_inr' => round($totalUsd * $rate, 4),
+            'total_calls' => (int) $rows->sum('cnt'),
+            'total_tokens' => (int) $rows->sum('toks'),
             'daily_stats' => $daily,
         ]]);
     }
@@ -93,9 +113,8 @@ class VoiceSearchController extends CoreController
 
     /**
      * Server-to-server ingest from the storefront's Next.js API route after it
-     * calls OpenAI. Computes cost from token counts and records the query.
-     * Guarded by a shared secret when VOICE_SEARCH_INGEST_SECRET is configured;
-     * open otherwise (staging default) so it works without extra setup.
+     * calls OpenAI. Prices the tokens using the configured model and records the
+     * query. Guarded by a shared secret when VOICE_SEARCH_INGEST_SECRET is set.
      */
     public function storeLog(Request $request): JsonResponse
     {
@@ -115,7 +134,10 @@ class VoiceSearchController extends CoreController
 
         $prompt = (int) ($data['prompt_tokens'] ?? 0);
         $completion = (int) ($data['completion_tokens'] ?? 0);
-        $costUsd = $prompt * self::PRICE_PROMPT_PER_TOKEN + $completion * self::PRICE_COMPLETION_PER_TOKEN;
+
+        $model = optional(VoiceSearchSetting::first())->openai_model;
+        [$pPrice, $cPrice] = $this->tokenPrice($model);
+        $costUsd = ($prompt * $pPrice + $completion * $cPrice) / 1000000;
 
         $log = VoiceSearchLog::create([
             'session_id' => $data['session_id'] ?? null,
