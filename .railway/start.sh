@@ -273,6 +273,13 @@ try {
   php artisan plantathome:categorize-plants \
     || echo "[bg] WARNING: categorize-plants failed"
 
+  # Give the catalog real prices: convert plants to variable products with
+  # Small/Medium/Large size pricing + stock; flat-price the demo tools/farmbox.
+  # Deterministic + idempotent (preserves admin per-size edits).
+  echo "==> [bg] Applying size-based pricing to plants..."
+  php artisan plantathome:apply-size-pricing \
+    || echo "[bg] WARNING: apply-size-pricing failed"
+
   # Rebuild image/gallery columns from the product_images library so every
   # downloaded photo shows up on the storefront + product edit page (idempotent).
   echo "==> [bg] Syncing plant image/gallery columns from the photo library..."

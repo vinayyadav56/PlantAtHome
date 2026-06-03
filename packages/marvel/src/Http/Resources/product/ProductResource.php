@@ -54,6 +54,7 @@ class ProductResource extends Resource
             'image'      => $p->image,
             'price'      => $p->price,
             'sale_price' => $p->sale_price,
+            'min_price'  => $p->min_price, // variable children: NULL price → shop falls back to this
             'quantity'   => (int) (optional($p->pivot)->quantity ?: 1),
         ])->values()->all();
     }
