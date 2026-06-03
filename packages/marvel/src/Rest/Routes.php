@@ -104,6 +104,11 @@ Route::post('webhooks/iyzico', [WebHookController::class, 'iyzico']);
 Route::post('webhooks/bkash', [WebHookController::class, 'bkash']);
 Route::post('webhooks/flutterwave', [WebHookController::class, 'flutterwave']);
 
+// Voice Search — public: storefront reads the feature flag; the shop's server
+// side posts query usage for cost tracking (guarded by an optional shared secret).
+Route::get('voice-search/settings', [VoiceSearchController::class, 'getSettings']);
+Route::post('voice-search/log', [VoiceSearchController::class, 'storeLog']);
+
 Route::post('license-key/verify', [UserController::class, 'verifyLicenseKey']);
 
 Route::get('callback/flutterwave', [WebHookController::class, 'callback'])->name('callback.flutterwave');
@@ -531,13 +536,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
         'only' => ['update', 'destroy'],
     ]);
 
-    // Voice Search — public settings read + server-to-server log ingest,
-    // admin-only writes/stats/logs.
-    Route::get('voice-search/settings', [VoiceSearchController::class, 'getSettings']);
-    Route::post('voice-search/log', [VoiceSearchController::class, 'storeLog']);
-    Route::middleware('auth:sanctum')->group(function () {
-        Route::post('voice-search/settings', [VoiceSearchController::class, 'updateSettings']);
-        Route::get('voice-search/stats', [VoiceSearchController::class, 'getStats']);
-        Route::get('voice-search/logs', [VoiceSearchController::class, 'getLogs']);
-    });
+    // Voice Search — admin writes/stats/logs (this group already enforces
+    // permission:SUPER_ADMIN + auth:sanctum). The public read + ingest routes
+    // live in the public section above.
+    Route::post('voice-search/settings', [VoiceSearchController::class, 'updateSettings']);
+    Route::get('voice-search/stats', [VoiceSearchController::class, 'getStats']);
+    Route::get('voice-search/logs', [VoiceSearchController::class, 'getLogs']);
 });
