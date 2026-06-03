@@ -174,7 +174,8 @@ class Product extends Model
             return 0.0;
         }
         return (float) $this->bundleItems->sum(function ($p) {
-            $unit = (float) ($p->sale_price ?: $p->price);
+            // Variable children carry NULL price/sale_price → use their min_price.
+            $unit = (float) ($p->sale_price ?: $p->price ?: $p->min_price);
             $qty  = (int) ($p->pivot->quantity ?: 1);
             return $unit * $qty;
         });
