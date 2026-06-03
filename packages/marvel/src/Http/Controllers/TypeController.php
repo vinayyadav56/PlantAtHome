@@ -10,10 +10,14 @@ use Marvel\Database\Repositories\TypeRepository;
 use Marvel\Exceptions\MarvelException;
 use Marvel\Http\Requests\TypeRequest;
 use Marvel\Http\Resources\TypeResource;
+use Marvel\Traits\ApiResponseCache;
+use Illuminate\Support\Facades\Cache;
 use Prettus\Validator\Exceptions\ValidatorException;
 
 class TypeController extends CoreController
 {
+    use ApiResponseCache;
+
     public $repository;
 
     public function __construct(TypeRepository $repository)
@@ -31,8 +35,21 @@ class TypeController extends CoreController
     public function index(Request $request)
     {
         $language = $request->language ?? DEFAULT_LANGUAGE;
-        $types = $this->repository->where('language', $language)->get();
-        return TypeResource::collection($types);
+
+        // Types (verticals) rarely change but every storefront page (SSR)
+        // fetches them. Server-cache + edge-cache for anonymous reads; admin
+        // (real Bearer) stays fresh.
+        if (!$this->isPublicCacheable($request)) {
+            return TypeResource::collection($this->repository->where('language', $language)->get());
+        }
+
+        $key = 'types:v' . $this->cacheVersion('types') . ':' . $language;
+        $data = Cache::remember($key, 600, function () use ($language) {
+            $types = $this->repository->where('language', $language)->get();
+            return TypeResource::collection($types)->response()->getData(true);
+        });
+
+        return response()->json($data)->header('Cache-Control', $this->cacheControl());
     }
 
     /**
@@ -45,7 +62,9 @@ class TypeController extends CoreController
     public function store(TypeRequest $request)
     {
         try {
-            return $this->repository->storeType($request);
+            $type = $this->repository->storeType($request);
+            $this->bustResponseCache('types');
+            return $type;
         } catch (MarvelException $th) {
             throw new MarvelException(COULD_NOT_CREATE_THE_RESOURCE);
         }
@@ -94,7 +113,9 @@ class TypeController extends CoreController
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
         }
-        return $this->repository->updateType($request, $type);
+        $updated = $this->repository->updateType($request, $type);
+        $this->bustResponseCache('types');
+        return $updated;
     }
 
     /**
@@ -106,7 +127,9 @@ class TypeController extends CoreController
     public function destroy($id)
     {
         try {
-            return $this->repository->findOrFail($id)->delete();
+            $deleted = $this->repository->findOrFail($id)->delete();
+            $this->bustResponseCache('types');
+            return $deleted;
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
         }

@@ -12,10 +12,13 @@ use Marvel\Events\Maintenance;
 use Marvel\Exceptions\MarvelException;
 use Illuminate\Support\Facades\Cache;
 use Marvel\Http\Requests\SettingsRequest;
+use Marvel\Traits\ApiResponseCache;
 use Prettus\Validator\Exceptions\ValidatorException;
 
 class SettingsController extends CoreController
 {
+    use ApiResponseCache;
+
     public $repository;
 
     public function __construct(SettingsRepository $repository)
@@ -52,6 +55,14 @@ class SettingsController extends CoreController
 
         // Add formatted maintenance data to the existing data
         $data['maintenance'] = $formattedMaintenance;
+
+        // Already server-cached above (rememberForever, busted on store).
+        // For anonymous storefront reads also allow the Vercel edge to cache
+        // it — every page (SSR) fetches settings. Admin (real Bearer) stays
+        // uncached so the dashboard reflects edits immediately.
+        if ($this->isPublicCacheable($request)) {
+            return response()->json($data)->header('Cache-Control', $this->cacheControl());
+        }
 
         return $data;
     }
