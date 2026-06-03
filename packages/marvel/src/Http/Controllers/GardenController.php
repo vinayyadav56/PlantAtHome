@@ -25,17 +25,27 @@ class GardenController extends CoreController
             'space_size' => 'nullable|string|max:64',
             'budget_range' => 'nullable|string|max:64',
             'message' => 'nullable|string|max:2000',
+            'source' => 'nullable|string|max:32',
+            'company' => 'nullable|string|max:191',
+            'occasion' => 'nullable|string|max:64',
+            'quantity' => 'nullable|string|max:64',
         ]);
-        $lead = GardenLead::create($data + ['status' => 'new']);
-        return response()->json(['data' => ['id' => $lead->id], 'message' => 'Thanks! Our garden team will reach out shortly.'], 201);
+        $lead = GardenLead::create($data + ['status' => 'new', 'source' => $data['source'] ?? 'garden']);
+        $msg = ($data['source'] ?? '') === 'corporate'
+            ? 'Thanks! Our gifting team will reach out with a tailored proposal.'
+            : 'Thanks! Our garden team will reach out shortly.';
+        return response()->json(['data' => ['id' => $lead->id], 'message' => $msg], 201);
     }
 
-    /** Admin — list/manage leads. */
+    /** Admin — list/manage leads (filter by status and/or source). */
     public function leads(Request $request): JsonResponse
     {
         $q = GardenLead::query()->latest();
         if ($status = $request->query('status')) {
             $q->where('status', $status);
+        }
+        if ($source = $request->query('source')) {
+            $q->where('source', $source);
         }
         return response()->json($q->paginate(min((int) $request->query('limit', 30), 200)));
     }
@@ -48,10 +58,12 @@ class GardenController extends CoreController
     }
 
     // ------------------------------------------------------------ TEMPLATES
-    /** Public — active templates shown on the landing page. */
-    public function templates(): JsonResponse
+    /** Public — active templates for a service (garden|gifting) on the landing page. */
+    public function templates(Request $request): JsonResponse
     {
-        $rows = GardenPackageTemplate::where('is_active', true)->orderBy('sort')->orderBy('suggested_price')->get();
+        $service = $request->query('service', 'garden');
+        $rows = GardenPackageTemplate::where('is_active', true)->where('service', $service)
+            ->orderBy('sort')->orderBy('suggested_price')->get();
         return response()->json(['data' => $rows]);
     }
 
@@ -140,6 +152,7 @@ class GardenController extends CoreController
             'price' => 'nullable|numeric',
             'duration_days' => 'nullable|integer',
             'status' => 'nullable|string',
+            'service' => 'nullable|string|max:32',
         ]);
         // Admin can assign by the customer's email instead of a raw id.
         if (!empty($v['user_email'])) {
@@ -199,6 +212,34 @@ class GardenController extends CoreController
     {
         $pkg = GardenPackage::with('visits')->where('user_id', $request->user()->id)->findOrFail($id);
         return response()->json(['data' => $pkg]);
+    }
+
+    /**
+     * Customer buys a gifting package directly from a template: create a package
+     * for them from the template, generate a Razorpay link, return the pay URL.
+     */
+    public function giftingCheckout(Request $request): JsonResponse
+    {
+        $data = $request->validate(['template_id' => 'required|integer']);
+        $tpl = GardenPackageTemplate::where('service', 'gifting')->findOrFail($data['template_id']);
+        $user = $request->user();
+
+        $pkg = GardenPackage::create([
+            'user_id' => $user->id,
+            'service' => 'gifting',
+            'name' => $tpl->name,
+            'description' => $tpl->tagline,
+            'items' => $tpl->items ?? [],
+            'total_visits' => 0,
+            'price' => $tpl->suggested_price,
+            'duration_days' => 0,
+            'status' => 'draft',
+            'payment_status' => 'unpaid',
+        ]);
+        $this->createLinkFor($pkg, $user);
+        $pkg->refresh();
+
+        return response()->json(['data' => ['url' => $pkg->razorpay_link_url, 'package_id' => $pkg->id]]);
     }
 
     /** Customer taps "Pay now" — returns the Razorpay hosted link. */

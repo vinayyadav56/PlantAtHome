@@ -10,7 +10,7 @@ class GardenPackage extends Model
 {
     protected $table = 'garden_packages';
     protected $fillable = [
-        'user_id', 'lead_id', 'name', 'description', 'items',
+        'user_id', 'lead_id', 'name', 'description', 'items', 'service',
         'total_visits', 'price', 'duration_days', 'start_date', 'end_date',
         'status', 'payment_status', 'razorpay_link_id', 'razorpay_link_url', 'razorpay_payment_id',
     ];

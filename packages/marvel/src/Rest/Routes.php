@@ -114,6 +114,7 @@ Route::post('voice-search/log', [VoiceSearchController::class, 'storeLog']);
 // Garden service — public lead capture + active package templates for the page,
 // and the Razorpay payment-link webhook.
 Route::post('garden-leads', [GardenController::class, 'storeLead']);
+Route::post('corporate-leads', [GardenController::class, 'storeLead']);
 Route::get('garden-package-templates', [GardenController::class, 'templates']);
 Route::post('webhooks/razorpay-garden', [GardenController::class, 'razorpayWebhook']);
 
@@ -122,6 +123,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::get('my-garden-packages', [GardenController::class, 'myPackages']);
     Route::get('my-garden-packages/{id}', [GardenController::class, 'showMyPackage']);
     Route::post('garden-packages/{id}/pay', [GardenController::class, 'pay']);
+    Route::post('gifting/checkout', [GardenController::class, 'giftingCheckout']);
 });
 
 Route::post('license-key/verify', [UserController::class, 'verifyLicenseKey']);
