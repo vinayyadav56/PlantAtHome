@@ -131,6 +131,7 @@ class GardenController extends CoreController
     {
         $v = $request->validate([
             'user_id' => 'nullable|integer',
+            'user_email' => 'nullable|email',
             'lead_id' => 'nullable|integer',
             'name' => 'required|string|max:191',
             'description' => 'nullable|string',
@@ -140,6 +141,14 @@ class GardenController extends CoreController
             'duration_days' => 'nullable|integer',
             'status' => 'nullable|string',
         ]);
+        // Admin can assign by the customer's email instead of a raw id.
+        if (!empty($v['user_email'])) {
+            $user = \Marvel\Database\Models\User::where('email', $v['user_email'])->first();
+            if ($user) {
+                $v['user_id'] = $user->id;
+            }
+        }
+        unset($v['user_email']);
         $v['items'] = $request->input('items', []);
         return $v;
     }
