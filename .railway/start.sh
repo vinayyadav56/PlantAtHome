@@ -286,13 +286,6 @@ try {
   php artisan plantathome:sync-image-columns \
     || echo "[bg] WARNING: sync-image-columns failed"
 
-  # TEMP (staging validation only — REMOVE before promoting): exercise the
-  # prod image-repair command on staging to confirm it runs cleanly + is
-  # idempotent (staging is already on S3 → expect ~all skipped).
-  echo "==> [bg] [TEMP] Validating plantathome:repair-plant-images on staging..."
-  php artisan plantathome:repair-plant-images \
-    || echo "[bg] WARNING: repair-plant-images failed"
-
   php artisan config:clear || true
   php artisan route:clear  || true
   php artisan view:clear   || true
