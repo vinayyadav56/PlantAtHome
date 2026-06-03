@@ -117,14 +117,15 @@ class CreateDemoBundleCommand extends Command
         return self::SUCCESS;
     }
 
-    /** A child's representative price = its Medium size, else price, else min_price. */
+    /**
+     * A child's value as the bundle total counts it — must match
+     * Product::getBundleTotalValueAttribute (sale ?: price ?: min_price), i.e.
+     * the cheapest/Small size for a variable plant — so the offer price is
+     * always below the displayed total value (a real saving, not a loss).
+     */
     private function representativePrice(Product $c): float
     {
-        $med = $c->variation_options()->where('title', 'Medium')->value('price');
-        if ($med) {
-            return (float) $med;
-        }
-        return (float) ($c->price ?: $c->min_price ?: 0);
+        return (float) ($c->sale_price ?: $c->price ?: $c->min_price ?: 0);
     }
 
     private function round9(float $p): int
