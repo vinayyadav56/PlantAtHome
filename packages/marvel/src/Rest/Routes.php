@@ -531,8 +531,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
         'only' => ['update', 'destroy'],
     ]);
 
-    // Voice Search — public settings read, admin-only writes/stats
+    // Voice Search — public settings read + server-to-server log ingest,
+    // admin-only writes/stats/logs.
     Route::get('voice-search/settings', [VoiceSearchController::class, 'getSettings']);
+    Route::post('voice-search/log', [VoiceSearchController::class, 'storeLog']);
     Route::middleware('auth:sanctum')->group(function () {
         Route::post('voice-search/settings', [VoiceSearchController::class, 'updateSettings']);
         Route::get('voice-search/stats', [VoiceSearchController::class, 'getStats']);
