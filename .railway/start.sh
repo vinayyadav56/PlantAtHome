@@ -261,6 +261,25 @@ try {
     echo "==> [bg] Non-staging env (${APP_ENV_VAL}) — Tier 3 demo products skipped (production data preserved)."
   fi
 
+  # Ensure the PlantAtHome shop exists and assign shop-less products to it so
+  # plants can be edited/saved in the admin (shop_id is required). Idempotent.
+  echo "==> [bg] Ensuring PlantAtHome shop + assigning products..."
+  php artisan plantathome:assign-shop \
+    || echo "[bg] WARNING: assign-shop failed"
+
+  # Replace the 193 granular plant categories with ~10 curated type categories
+  # and re-assign plants (clean, usable filter). Idempotent.
+  echo "==> [bg] Categorising plants into curated type categories..."
+  php artisan plantathome:categorize-plants \
+    || echo "[bg] WARNING: categorize-plants failed"
+
+  # Give the catalog real prices: convert plants to variable products with
+  # Small/Medium/Large size pricing + stock; flat-price the demo tools/farmbox.
+  # Deterministic + idempotent (preserves admin per-size edits).
+  echo "==> [bg] Applying size-based pricing to plants..."
+  php artisan plantathome:apply-size-pricing \
+    || echo "[bg] WARNING: apply-size-pricing failed"
+
   # Rebuild image/gallery columns from the product_images library so every
   # downloaded photo shows up on the storefront + product edit page (idempotent).
   echo "==> [bg] Syncing plant image/gallery columns from the photo library..."

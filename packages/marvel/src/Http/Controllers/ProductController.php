@@ -30,9 +30,12 @@ use \OpenAI;
 use Marvel\Enums\Permission;
 use Marvel\Http\Resources\GetSingleProductResource;
 use Marvel\Http\Resources\ProductResource;
+use Marvel\Traits\ApiResponseCache;
 
 class ProductController extends CoreController
 {
+    use ApiResponseCache;
+
     public $repository;
 
     public $settings;
@@ -53,9 +56,31 @@ class ProductController extends CoreController
     public function index(Request $request)
     {
         $limit = $request->limit ?   $request->limit : 15;
-        $products = $this->fetchProducts($request)->paginate($limit)->withQueryString();
-        $data = ProductResource::collection($products)->response()->getData(true);
-        return formatAPIResourcePaginate($data);
+        $language = $request->language ?: DEFAULT_LANGUAGE;
+
+        // The storefront grids + filter sidebar hammer this endpoint. For
+        // anonymous, non-time-sensitive reads serve a version-keyed server
+        // cache AND let the Vercel edge cache the response. Admin (real
+        // Bearer) and availability/flash-sale queries fall through to a fresh,
+        // uncached response so the dashboard always sees current data.
+        $cacheable = $this->isPublicCacheable($request)
+            && !$request->filled('date_range')
+            && !$request->boolean('flash_sale_builder');
+
+        if (!$cacheable) {
+            $products = $this->fetchProducts($request)->paginate($limit)->withQueryString();
+            $data = ProductResource::collection($products)->response()->getData(true);
+            return formatAPIResourcePaginate($data);
+        }
+
+        $key = 'products:v' . $this->cacheVersion('products') . ':' . $language . ':' . md5($request->getRequestUri());
+        $data = Cache::remember($key, 300, function () use ($request, $limit) {
+            $products = $this->fetchProducts($request)->paginate($limit)->withQueryString();
+            return ProductResource::collection($products)->response()->getData(true);
+        });
+
+        return formatAPIResourcePaginate($data)
+            ->header('Cache-Control', $this->cacheControl());
     }
 
 
@@ -71,7 +96,9 @@ class ProductController extends CoreController
         $unavailableProducts = [];
         $language = $request->language ? $request->language : DEFAULT_LANGUAGE;
 
-        $products_query = $this->repository->where('language', $language);
+        // PlantAtHome — eager-load botanical details + bundle items so the list
+        // resource can expose scientific_name, care chips and bundle totals (no N+1).
+        $products_query = $this->repository->with(['plantAttribute', 'bundleItems'])->where('language', $language);
 
         if (isset($request->date_range)) {
             $dateRange = explode('//', $request->date_range);
@@ -116,7 +143,9 @@ class ProductController extends CoreController
             // inform_purchased_customer
             $setting = $this->settings->first();
             if ($this->repository->hasPermission($request->user(), $request->shop_id)) {
-                return $this->repository->storeProduct($request, $setting);
+                $product = $this->repository->storeProduct($request, $setting);
+                $this->bustResponseCache('products'); // refresh storefront list/PDP caches
+                return $product;
             } else {
                 throw new AuthorizationException(NOT_AUTHORIZED);
             }
@@ -137,8 +166,20 @@ class ProductController extends CoreController
     {
         $request->merge(['slug' => $slug]);
         try {
+            // Anonymous PDP reads that don't request gated digital files are
+            // edge-cacheable (the storefront PDP is ISR, so this also speeds
+            // repeat client-side navigations). Keep the exact resource shape —
+            // only attach a Cache-Control header, never re-serialize.
+            $withDigital = in_array('variation_options.digital_file', explode(';', (string) $request->with))
+                || in_array('digital_file', explode(';', (string) $request->with));
+            $cacheable = $this->isPublicCacheable($request) && !$withDigital;
+
             $product = $this->fetchSingleProduct($request);
-            return new GetSingleProductResource($product);
+            $response = (new GetSingleProductResource($product))->response();
+            if ($cacheable) {
+                $response->header('Cache-Control', $this->cacheControl());
+            }
+            return $response;
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
         }
@@ -171,7 +212,8 @@ class ProductController extends CoreController
             $product->setRelation('related_products', $related_products);
 
             // PlantAtHome: eager-load botanical details + ordered gallery images
-            $product->load(['plantAttribute', 'images']);
+            // + bundle items + buy-together add-ons.
+            $product->load(['plantAttribute', 'images', 'bundleItems', 'addons']);
 
             return $product;
         } catch (Exception $e) {
@@ -209,7 +251,9 @@ class ProductController extends CoreController
         $setting = $this->settings->first();
         if ($this->repository->hasPermission($request->user(), $request->shop_id)) {
             $id = $request->id;
-            return $this->repository->updateProduct($request, $id, $setting);
+            $product = $this->repository->updateProduct($request, $id, $setting);
+            $this->bustResponseCache('products'); // refresh storefront list/PDP caches (incl. bundle/add-on edits)
+            return $product;
         } else {
             throw new AuthorizationException(NOT_AUTHORIZED);
         }
@@ -241,6 +285,7 @@ class ProductController extends CoreController
             $product = $this->repository->findOrFail($request->id);
             if ($this->repository->hasPermission($request->user(), $product->shop_id)) {
                 $product->delete();
+                $this->bustResponseCache('products'); // refresh storefront list/PDP caches
                 return $product;
             }
             throw new AuthorizationException(NOT_AUTHORIZED);

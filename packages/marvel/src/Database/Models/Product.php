@@ -117,6 +117,70 @@ class Product extends Model
             ->orderBy('id');
     }
 
+    /** Products that make up this bundle (parent = bundle, child = plant). */
+    public function bundleItems()
+    {
+        return $this->belongsToMany(Product::class, 'product_inclusions', 'parent_id', 'child_id')
+            ->withPivot('quantity', 'sort_order', 'relation')
+            ->wherePivot('relation', 'bundle')
+            ->orderBy('product_inclusions.sort_order');
+    }
+
+    /** Suggested buy-together add-ons for this product (e.g. pots/planters). */
+    public function addons()
+    {
+        return $this->belongsToMany(Product::class, 'product_inclusions', 'parent_id', 'child_id')
+            ->withPivot('quantity', 'sort_order', 'relation')
+            ->wherePivot('relation', 'addon')
+            ->orderBy('product_inclusions.sort_order');
+    }
+
+    /**
+     * Rebuild this product's bundle items + buy-together add-ons from the admin
+     * form. Each entry is an id or {id, quantity}. Pass null to leave unchanged.
+     */
+    public function syncInclusions(?array $bundleItems, ?array $addons): void
+    {
+        \Illuminate\Support\Facades\DB::table('product_inclusions')->where('parent_id', $this->id)->delete();
+
+        $rows = [];
+        $add = function ($list, $relation) use (&$rows) {
+            foreach (array_values($list ?? []) as $i => $item) {
+                $cid = is_array($item) ? ($item['id'] ?? $item['child_id'] ?? null) : $item;
+                if (!$cid || (int) $cid === (int) $this->id) continue;
+                $rows[] = [
+                    'parent_id'  => $this->id,
+                    'child_id'   => (int) $cid,
+                    'relation'   => $relation,
+                    'quantity'   => (int) (is_array($item) ? ($item['quantity'] ?? 1) : 1) ?: 1,
+                    'sort_order' => $i,
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ];
+            }
+        };
+        $add($bundleItems, 'bundle');
+        $add($addons, 'addon');
+
+        if ($rows) {
+            \Illuminate\Support\Facades\DB::table('product_inclusions')->insert($rows);
+        }
+    }
+
+    /** Total catalog value of a bundle's items (before the offer price). */
+    public function getBundleTotalValueAttribute(): float
+    {
+        if (!$this->relationLoaded('bundleItems')) {
+            return 0.0;
+        }
+        return (float) $this->bundleItems->sum(function ($p) {
+            // Variable children carry NULL price/sale_price → use their min_price.
+            $unit = (float) ($p->sale_price ?: $p->price ?: $p->min_price);
+            $qty  = (int) ($p->pivot->quantity ?: 1);
+            return $unit * $qty;
+        });
+    }
+
     /**
      * Rebuild the legacy `image` (primary) + `gallery` JSON columns from the
      * product_images rows, so existing Pickbazar components (cards, list

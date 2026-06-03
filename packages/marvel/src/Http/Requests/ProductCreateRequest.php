@@ -40,7 +40,8 @@ class ProductCreateRequest extends FormRequest
 
         $productType = [
             ProductType::SIMPLE,
-            ProductType::VARIABLE
+            ProductType::VARIABLE,
+            ProductType::BUNDLE
         ];
 
         return [

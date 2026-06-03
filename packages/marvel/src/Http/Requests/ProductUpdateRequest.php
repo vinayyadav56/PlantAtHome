@@ -39,7 +39,8 @@ class ProductUpdateRequest extends FormRequest
 
         $productType = [
             ProductType::SIMPLE,
-            ProductType::VARIABLE
+            ProductType::VARIABLE,
+            ProductType::BUNDLE
         ];
         return [
             'name'                         => ['string', 'max:255'],

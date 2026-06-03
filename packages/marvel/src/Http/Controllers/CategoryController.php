@@ -65,20 +65,58 @@ class CategoryController extends CoreController
         $parent = $request->parent;
         $selfId = $request->self;
         $limit = $request->limit ?? 15;
+        $page = $request->page ?? 1;
 
-        $categoriesQuery = $this->repository->with(['type', 'parent', 'children'])
-            ->where('language', $language);
-
-        if ($parent === 'null') {
-            $categoriesQuery->whereNull('parent');
+        // The storefront filters per vertical via `search=type.slug:plants`
+        // (or a bare `type` param). Resolve the vertical slug and apply the
+        // filter EXPLICITLY below — don't rely on RequestCriteria firing
+        // inside the cache closure — and make it part of the cache key, else
+        // every vertical collides on one entry and an unfiltered request
+        // poisons the rest (plants would show tool/farmbox categories).
+        $typeSlug = $request->type ?? '';
+        if (!$typeSlug && ($search = $request->search) && preg_match('/type\.slug:([^;]+)/', $search, $m)) {
+            $typeSlug = $m[1];
         }
-        if ($selfId) {
-            $categoriesQuery->where('id', '!=', $selfId);
-        }
 
-        $categories = $categoriesQuery->paginate($limit);
-        $data = CategoryResource::collection($categories)->response()->getData(true);
-        return formatAPIResourcePaginate($data);
+        // Categories rarely change but the storefront filter sidebar requests
+        // them (with the recursive children eager-load) on every load — cache
+        // the formatted payload, busted by a version key on any category write.
+        // `c3` is a static code version — bump it to abandon any old poisoned
+        // cache entries (c2 omitted the type from the key → cross-vertical mix).
+        $ver = \Illuminate\Support\Facades\Cache::get('categories:ver', 1);
+        $key = "categories:c3:v{$ver}:{$language}:{$parent}:{$selfId}:{$limit}:{$page}:{$typeSlug}";
+
+        // Cache the plain data ARRAY (not the JsonResponse — that would
+        // re-serialize to {headers,original,exception} and break the shop).
+        $data = \Illuminate\Support\Facades\Cache::remember($key, 600, function () use ($language, $parent, $selfId, $limit, $typeSlug) {
+            $categoriesQuery = $this->repository->with(['type', 'parent', 'children'])
+                ->where('language', $language);
+
+            if ($typeSlug) {
+                $categoriesQuery->whereHas('type', function ($q) use ($typeSlug) {
+                    $q->where('slug', $typeSlug);
+                });
+            }
+            if ($parent === 'null') {
+                $categoriesQuery->whereNull('parent');
+            }
+            if ($selfId) {
+                $categoriesQuery->where('id', '!=', $selfId);
+            }
+
+            $categories = $categoriesQuery->paginate($limit);
+            return CategoryResource::collection($categories)->response()->getData(true);
+        });
+
+        return formatAPIResourcePaginate($data)
+            ->header('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600');
+    }
+
+    /** Invalidate the categories cache (called on any category write). */
+    protected function bustCategoryCache(): void
+    {
+        $ver = (int) \Illuminate\Support\Facades\Cache::get('categories:ver', 1);
+        \Illuminate\Support\Facades\Cache::forever('categories:ver', $ver + 1);
     }
 
     /**
@@ -91,6 +129,7 @@ class CategoryController extends CoreController
     public function store(CategoryCreateRequest $request)
     {
         try {
+            $this->bustCategoryCache();
             return $this->repository->saveCategory($request);
         } catch (MarvelException $th) {
             throw new MarvelException(COULD_NOT_CREATE_THE_RESOURCE);
@@ -144,6 +183,7 @@ class CategoryController extends CoreController
     public function categoryUpdate(CategoryUpdateRequest $request)
     {
         $category = $this->repository->findOrFail($request->id);
+        $this->bustCategoryCache();
         return $this->repository->updateCategory($request, $category);
     }
 
@@ -156,6 +196,7 @@ class CategoryController extends CoreController
     public function destroy($id)
     {
         try {
+            $this->bustCategoryCache();
             return $this->repository->findOrFail($id)->delete();
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
