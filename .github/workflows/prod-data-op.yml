@@ -32,6 +32,10 @@ on:
           - rollback
           - create-bundle
           - remove-bundle
+          - img-dry-run
+          - img-limit10
+          - img-full
+          - img-rollback
         default: dry-run
 
 jobs:
@@ -63,6 +67,10 @@ jobs:
             rollback)      ARGS="plantathome:size-price-prod --rollback" ;;
             create-bundle) ARGS="plantathome:create-demo-bundle" ;;
             remove-bundle) ARGS="plantathome:create-demo-bundle --remove" ;;
+            img-dry-run)   ARGS="plantathome:repair-plant-images --dry-run" ;;
+            img-limit10)   ARGS="plantathome:repair-plant-images --limit=10" ;;
+            img-full)      ARGS="plantathome:repair-plant-images" ;;
+            img-rollback)  ARGS="plantathome:repair-plant-images --rollback" ;;
             *) echo "Unknown mode"; exit 1 ;;
           esac
           echo "ARTISAN_ARGS=$ARGS" >> $GITHUB_ENV
