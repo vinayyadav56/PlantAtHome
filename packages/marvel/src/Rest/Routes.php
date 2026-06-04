@@ -108,13 +108,18 @@ Route::post('webhooks/flutterwave', [WebHookController::class, 'flutterwave']);
 
 // Voice Search — public: storefront reads the feature flag; the shop's server
 // side posts query usage for cost tracking (guarded by an optional shared secret).
+// The ingest endpoint is rate-limited to blunt cost-data poisoning at scale.
 Route::get('voice-search/settings', [VoiceSearchController::class, 'getSettings']);
-Route::post('voice-search/log', [VoiceSearchController::class, 'storeLog']);
+Route::post('voice-search/log', [VoiceSearchController::class, 'storeLog'])
+    ->middleware('throttle:60,1');
 
 // Garden service — public lead capture + active package templates for the page,
-// and the Razorpay payment-link webhook.
-Route::post('garden-leads', [GardenController::class, 'storeLead']);
-Route::post('corporate-leads', [GardenController::class, 'storeLead']);
+// and the Razorpay payment-link webhook. Lead capture is rate-limited per IP to
+// stop form-spam from flooding the leads table.
+Route::post('garden-leads', [GardenController::class, 'storeLead'])
+    ->middleware('throttle:10,1');
+Route::post('corporate-leads', [GardenController::class, 'storeLead'])
+    ->middleware('throttle:10,1');
 Route::get('garden-package-templates', [GardenController::class, 'templates']);
 Route::post('webhooks/razorpay-garden', [GardenController::class, 'razorpayWebhook']);
 

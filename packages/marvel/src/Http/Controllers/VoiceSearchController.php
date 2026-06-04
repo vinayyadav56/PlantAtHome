@@ -118,8 +118,16 @@ class VoiceSearchController extends CoreController
      */
     public function storeLog(Request $request): JsonResponse
     {
+        // Fail closed outside local/testing: this endpoint records billable usage,
+        // so an unauthenticated public POST would let anyone poison cost data. If
+        // the shared secret isn't configured on a deployed env, refuse rather than
+        // accept anonymous logs. (Search itself is unaffected — only cost logging.)
         $secret = env('VOICE_SEARCH_INGEST_SECRET');
-        if (!empty($secret) && $request->header('X-Ingest-Secret') !== $secret) {
+        if (empty($secret)) {
+            if (!app()->environment(['local', 'testing'])) {
+                return response()->json(['message' => 'Ingest secret not configured'], 503);
+            }
+        } elseif (!hash_equals($secret, (string) $request->header('X-Ingest-Secret'))) {
             return response()->json(['message' => 'Forbidden'], 403);
         }
 
