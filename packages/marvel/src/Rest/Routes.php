@@ -50,6 +50,7 @@ use Marvel\Http\Controllers\RefundPolicyController;
 use Marvel\Http\Controllers\RefundReasonController;
 use Marvel\Http\Controllers\VoiceSearchController;
 use Marvel\Http\Controllers\GardenController;
+use Marvel\Http\Controllers\PlantDoctorController;
 use Marvel\Http\Controllers\SystemController;
 use Marvel\Http\Controllers\StoreNoticeController;
 use Marvel\Http\Controllers\TermsAndConditionsController;
@@ -112,6 +113,13 @@ Route::post('webhooks/flutterwave', [WebHookController::class, 'flutterwave']);
 Route::get('voice-search/settings', [VoiceSearchController::class, 'getSettings']);
 Route::post('voice-search/log', [VoiceSearchController::class, 'storeLog'])
     ->middleware('throttle:60,1');
+
+// Plant Doctor — public: storefront reads the feature flag; the diagnose proxy
+// forwards a photo/symptoms to the microservice. Rate-limited + budget-capped
+// since each call incurs AI cost.
+Route::get('plant-doctor/settings', [PlantDoctorController::class, 'getSettings']);
+Route::post('plant-doctor/diagnose', [PlantDoctorController::class, 'diagnose'])
+    ->middleware('throttle:30,1');
 
 // Garden service — public lead capture + active package templates for the page,
 // and the Razorpay payment-link webhook. Lead capture is rate-limited per IP to
@@ -564,6 +572,12 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('voice-search/settings', [VoiceSearchController::class, 'updateSettings']);
     Route::get('voice-search/stats', [VoiceSearchController::class, 'getStats']);
     Route::get('voice-search/logs', [VoiceSearchController::class, 'getLogs']);
+
+    // Plant Doctor — admin management (settings/stats/logs).
+    Route::get('plant-doctor/admin-settings', [PlantDoctorController::class, 'getAdminSettings']);
+    Route::post('plant-doctor/settings', [PlantDoctorController::class, 'updateSettings']);
+    Route::get('plant-doctor/stats', [PlantDoctorController::class, 'getStats']);
+    Route::get('plant-doctor/logs', [PlantDoctorController::class, 'getLogs']);
 
     // Garden service — admin management
     Route::get('garden-leads', [GardenController::class, 'leads']);
