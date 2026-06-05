@@ -502,10 +502,11 @@ class UserController extends CoreController
                 'original' => $user->getAvatar(),
             ];
 
+            // Match on the relation FK (one profile per user) — matching on the
+            // avatar JSON spawned a new profile row on every social login.
             $userCreated->profile()->updateOrCreate(
-                [
-                    'avatar' => $avatar
-                ]
+                ['customer_id' => $userCreated->id],
+                ['avatar' => $avatar]
             );
 
             if (!$userCreated->hasPermissionTo(Permission::CUSTOMER)) {

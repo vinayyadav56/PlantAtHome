@@ -35,4 +35,13 @@ return [
         'key' => env('PIXABAY_API_KEY'),
     ],
 
+    // PlantAtHome — MSG91 OTP gateway (phone signup). DLT-registered sender + template.
+    'msg91' => [
+        'auth_key' => env('MSG91_AUTH_KEY'),
+        'template_id' => env('MSG91_TEMPLATE_ID'),
+        'sender' => env('MSG91_SENDER'),
+        // optional non-OTP SMS flow id
+        'flow_id' => env('MSG91_FLOW_ID'),
+    ],
+
 ];

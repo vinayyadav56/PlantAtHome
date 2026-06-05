@@ -114,4 +114,14 @@ return [
 
     'password_timeout' => 10800,
 
+    /*
+    |--------------------------------------------------------------------------
+    | Active OTP Gateway
+    |--------------------------------------------------------------------------
+    | Resolved by UserController::getOtpGateway() to
+    | Marvel\Otp\Gateways\{Ucfirst(value)}Gateway — e.g. 'msg91' → Msg91Gateway.
+    */
+
+    'active_otp_gateway' => env('ACTIVE_OTP_GATEWAY', 'msg91'),
+
 ];
