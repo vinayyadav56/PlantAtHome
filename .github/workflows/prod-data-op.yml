@@ -181,19 +181,19 @@ jobs:
 
               lookup-user)
                 DBHOST=$(getenv DB_HOST); DBNAME=$(getenv DB_DATABASE); DBUSER=$(getenv DB_USERNAME); DBPASS=$(getenv DB_PASSWORD)
+                MQ() { mysql -h "$DBHOST" -u "$DBUSER" -p"$DBPASS" "$DBNAME" -e "$1" 2>/dev/null || echo "[query failed: ${2:-}]"; }
                 echo "==> Read-only customer lookup: $LOOKUP_EMAIL"
                 echo "----- USER (signup) -----"
-                mysql -h "$DBHOST" -u "$DBUSER" -p"$DBPASS" "$DBNAME" -e \
-                  "SELECT id,name,email,created_at,updated_at,email_verified_at,is_active FROM users WHERE email='$LOOKUP_EMAIL'\\G" \
-                  || echo "[user query failed — column may differ]"
-                echo "----- PROFILE (phone/contact) -----"
-                mysql -h "$DBHOST" -u "$DBUSER" -p"$DBPASS" "$DBNAME" -e \
-                  "SELECT * FROM profiles WHERE customer_id IN (SELECT id FROM users WHERE email='$LOOKUP_EMAIL')\\G" \
-                  || echo "[profile query failed]"
-                echo "----- ADDRESSES -----"
-                mysql -h "$DBHOST" -u "$DBUSER" -p"$DBPASS" "$DBNAME" -e \
-                  "SELECT * FROM addresses WHERE customer_id IN (SELECT id FROM users WHERE email='$LOOKUP_EMAIL')\\G" \
-                  || echo "[address query failed]"
+                MQ "SELECT * FROM users WHERE email='$LOOKUP_EMAIL'\\G" user | grep -viE "^[[:space:]]*(password|remember_token):"
+                echo "----- USERS COLUMNS -----"
+                MQ "SHOW COLUMNS FROM users;" cols
+                echo "----- CONTACT/ADDRESS-LIKE TABLES -----"
+                MQ "SHOW TABLES LIKE '%profile%'; SHOW TABLES LIKE '%address%'; SHOW TABLES LIKE '%contact%'; SHOW TABLES LIKE '%phone%';" tbls
+                UID=$(mysql -h "$DBHOST" -u "$DBUSER" -p"$DBPASS" "$DBNAME" -N -e "SELECT id FROM users WHERE email='$LOOKUP_EMAIL' LIMIT 1;" 2>/dev/null)
+                echo "----- PROFILE (if table exists) -----"
+                MQ "SELECT * FROM profile WHERE customer_id=$UID\\G" profile
+                echo "----- ADDRESS (if table exists) -----"
+                MQ "SELECT * FROM address WHERE customer_id=$UID\\G" address
                 echo "==> Lookup complete (SELECT-only, no writes)."
                 ;;
 
