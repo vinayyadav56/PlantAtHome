@@ -38,12 +38,7 @@ on:
           - cat-restore
           - cat-seed
           - cat-prune
-          - lookup-user
         default: dry-run
-      email:
-        description: 'For mode=lookup-user: the customer email to look up (read-only)'
-        required: false
-        default: ''
 
 jobs:
   validate:
@@ -80,19 +75,10 @@ jobs:
             img-rollback)  ARGS="plantathome:repair-plant-images --rollback" ;;
             cat-backup|cat-restore|cat-seed) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
-            lookup-user)   ARGS="" ;;
             *) echo "Unknown mode"; exit 1 ;;
           esac
           echo "ARTISAN_ARGS=$ARGS" >> $GITHUB_ENV
           echo "OP_MODE=${{ inputs.mode }}" >> $GITHUB_ENV
-          if [ "${{ inputs.mode }}" = "lookup-user" ]; then
-            EMAIL="${{ inputs.email }}"
-            # strict email regex → rejects quotes/spaces/semicolons (no SQL injection from this input)
-            if ! printf '%s' "$EMAIL" | grep -qE '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'; then
-              echo "ERROR: lookup-user needs a valid 'email' input."; exit 1
-            fi
-            echo "LOOKUP_EMAIL=$EMAIL" >> $GITHUB_ENV
-          fi
 
       - name: Open port 22 for this runner
         env:
@@ -114,7 +100,7 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           command_timeout: 40m
-          envs: ARTISAN_ARGS,OP_MODE,LOOKUP_EMAIL
+          envs: ARTISAN_ARGS,OP_MODE
           script: |
             set -e
             cd /var/www/plantathome/api
@@ -177,24 +163,6 @@ jobs:
                 echo "==> [8/8] Clear caches..."
                 php artisan cache:clear 2>/dev/null || true
                 echo "==> CAT-SEED COMPLETE"
-                ;;
-
-              lookup-user)
-                DBHOST=$(getenv DB_HOST); DBNAME=$(getenv DB_DATABASE); DBUSER=$(getenv DB_USERNAME); DBPASS=$(getenv DB_PASSWORD)
-                MQ() { mysql -h "$DBHOST" -u "$DBUSER" -p"$DBPASS" "$DBNAME" -e "$1" 2>/dev/null || echo "[query failed: ${2:-}]"; }
-                echo "==> Read-only customer lookup: $LOOKUP_EMAIL"
-                echo "----- USER (signup) -----"
-                MQ "SELECT * FROM users WHERE email='$LOOKUP_EMAIL'\\G" user | grep -viE "^[[:space:]]*(password|remember_token):"
-                echo "----- USERS COLUMNS -----"
-                MQ "SHOW COLUMNS FROM users;" cols
-                CUSTID=$(mysql -h "$DBHOST" -u "$DBUSER" -p"$DBPASS" "$DBNAME" -N -e "SELECT id FROM users WHERE email='$LOOKUP_EMAIL' LIMIT 1;" 2>/dev/null)
-                echo "----- USER_PROFILES (phone/contact, filled later) -----"
-                MQ "SELECT * FROM user_profiles WHERE customer_id=$CUSTID\\G" profile
-                echo "----- ADDRESS (filled later) -----"
-                MQ "SELECT * FROM address WHERE customer_id=$CUSTID\\G" address
-                echo "----- ORDERS COUNT -----"
-                MQ "SELECT COUNT(*) AS orders FROM orders WHERE customer_id=$CUSTID;" orders
-                echo "==> Lookup complete (SELECT-only, no writes)."
                 ;;
 
               *)
