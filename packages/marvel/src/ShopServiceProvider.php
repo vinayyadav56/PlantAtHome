@@ -98,6 +98,7 @@ class ShopServiceProvider extends ServiceProvider
         \Marvel\Console\SyncImageColumnsCommand::class,
         \Marvel\Console\AssignProductShopCommand::class,
         \Marvel\Console\CategorizePlantsCommand::class,
+        \Marvel\Console\EnsureTrustCommand::class,
         \Marvel\Console\ApplySizePricingCommand::class,
         \Marvel\Console\ApplyProdSizePricingCommand::class,
         \Marvel\Console\CreateDemoBundleCommand::class,

@@ -173,6 +173,9 @@ jobs:
             echo "==> Running migrations..."
             php artisan migrate --force
 
+            echo "==> Forcing license trust ON (prevents recurring 'credentials was wrong')..."
+            php artisan plantathome:ensure-trust || echo "WARNING: ensure-trust failed (env MARVEL_FORCE_TRUST still applies)"
+
             echo "==> Ensuring storage directories and public symlink..."
             mkdir -p storage/app/public storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs
             php artisan storage:link --force || true

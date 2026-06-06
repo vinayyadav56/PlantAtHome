@@ -286,6 +286,11 @@ try {
   php artisan plantathome:sync-image-columns \
     || echo "[bg] WARNING: sync-image-columns failed"
 
+  # Force the license trust flag ON (prevents recurring "credentials was wrong"
+  # if the redq license re-check flips it off). Idempotent.
+  echo "==> [bg] Ensuring license trust flag..."
+  php artisan plantathome:ensure-trust || echo "[bg] WARNING: ensure-trust failed (env MARVEL_FORCE_TRUST still applies)"
+
   php artisan config:clear || true
   php artisan route:clear  || true
   php artisan view:clear   || true

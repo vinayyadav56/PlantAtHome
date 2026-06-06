@@ -140,6 +140,14 @@ class UserRepository extends BaseRepository
 
     public function checkIfApplicationIsValid(): bool
     {
+        // Self-hosted PlantAtHome deployment: the upstream Pickbazar license gate
+        // (redq.io re-check) was flipping the trust flag off and blocking logins
+        // with "The credentials was wrong". Short-circuit it so login never depends
+        // on the remote license check. Toggleable via env, defaults to trusted.
+        if (filter_var(env('MARVEL_FORCE_TRUST', true), FILTER_VALIDATE_BOOLEAN)) {
+            return true;
+        }
+
         $settings = Settings::getData();
         $useMustVerifyLicense = isset($settings->options['app_settings']['trust']) ? $settings->options['app_settings']['trust'] : false;
         return $useMustVerifyLicense;
