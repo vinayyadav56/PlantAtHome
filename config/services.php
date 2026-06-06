@@ -44,4 +44,17 @@ return [
         'flow_id' => env('MSG91_FLOW_ID'),
     ],
 
+    // PlantAtHome — WhatsApp Business (Meta Cloud API): login OTP + order
+    // notifications. Both flow through WhatsappGateway when ACTIVE_OTP_GATEWAY=whatsapp.
+    'whatsapp' => [
+        'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
+        'access_token' => env('WHATSAPP_ACCESS_TOKEN'),
+        'api_version' => env('WHATSAPP_API_VERSION', 'v21.0'),
+        'otp_template' => env('WHATSAPP_OTP_TEMPLATE'),
+        'otp_lang' => env('WHATSAPP_OTP_LANG', 'en'),
+        'otp_has_button' => env('WHATSAPP_OTP_HAS_BUTTON', false),
+        'notify_template' => env('WHATSAPP_NOTIFY_TEMPLATE'),
+        'notify_lang' => env('WHATSAPP_NOTIFY_LANG', 'en'),
+    ],
+
 ];
