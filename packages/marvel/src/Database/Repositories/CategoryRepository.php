@@ -29,6 +29,7 @@ class CategoryRepository extends BaseRepository
         'type_id',
         'icon',
         'image',
+        'banner_image',
         'details',
         'language',
         'parent',

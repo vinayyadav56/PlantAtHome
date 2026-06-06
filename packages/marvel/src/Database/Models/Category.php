@@ -23,6 +23,7 @@ class Category extends Model
 
     protected $casts = [
         'image' => 'json',
+        'banner_image' => 'json',
     ];
 
     protected $appends = ['parent_id', 'translated_languages'];
