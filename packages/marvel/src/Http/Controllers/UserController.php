@@ -194,7 +194,7 @@ class UserController extends CoreController
     public function show($id)
     {
         try {
-            return $this->repository->with(['profile', 'address', 'shops', 'managed_shop'])->findOrFail($id);
+            return $this->repository->with(['profile', 'address', 'shops', 'managed_shop', 'orders', 'providers', 'wallet'])->findOrFail($id);
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
         }
