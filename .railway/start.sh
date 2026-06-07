@@ -253,6 +253,10 @@ try {
   php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomePlantBulkSeeder" --force \
     || echo "[bg] WARNING: PlantAtHomePlantBulkSeeder failed"
 
+  echo "==> [bg] [4c/7] Tools catalog (gardening tools for the Tools vertical)..."
+  php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeToolsSeeder" --force \
+    || echo "[bg] WARNING: PlantAtHomeToolsSeeder failed"
+
   if [ "$APP_ENV_VAL" = "staging" ]; then
     echo "==> [bg] Staging env — running Tier 3 demo product seed..."
     php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeProductSeeder" --force \

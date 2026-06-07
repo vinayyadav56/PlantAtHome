@@ -39,6 +39,7 @@ on:
           - cat-seed
           - cat-prune
           - trust
+          - tools-seed
         default: dry-run
 
 jobs:
@@ -74,7 +75,7 @@ jobs:
             img-limit10)   ARGS="plantathome:repair-plant-images --limit=10" ;;
             img-full)      ARGS="plantathome:repair-plant-images" ;;
             img-rollback)  ARGS="plantathome:repair-plant-images --rollback" ;;
-            cat-backup|cat-restore|cat-seed) ARGS="" ;;
+            cat-backup|cat-restore|cat-seed|tools-seed) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             *) echo "Unknown mode"; exit 1 ;;
@@ -144,6 +145,15 @@ jobs:
                 gunzip -c "$BK" | mysql -h "$DBHOST" -u "$DBUSER" -p"$DBPASS" "$DBNAME"
                 php artisan cache:clear 2>/dev/null || true
                 echo "==> RESTORE COMPLETE from $BK"
+                ;;
+
+              tools-seed)
+                echo "==> Seeding Tools vertical catalog..."
+                php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeToolsSeeder" --force
+                echo "==> Assigning shop to any shop-less products..."
+                php artisan plantathome:assign-shop || true
+                php artisan cache:clear 2>/dev/null || true
+                echo "==> TOOLS-SEED COMPLETE"
                 ;;
 
               cat-seed)
