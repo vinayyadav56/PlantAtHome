@@ -39,7 +39,7 @@ class Razorpay extends Base implements PaymentInterface
             extract($data);
             $order = $this->api->order->create([
                 'receipt'  => $order_tracking_number,
-                'amount'   => round($amount, 2) * 100,
+                'amount'   => (int) round($amount * 100), // Razorpay needs integer paise (round before cast to avoid float drift)
                 'currency' => $this->currency,
             ]);
 
