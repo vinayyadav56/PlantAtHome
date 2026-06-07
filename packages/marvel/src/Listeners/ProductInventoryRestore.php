@@ -4,6 +4,7 @@ namespace Marvel\Listeners;
 
 use Exception;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Variation;
@@ -13,7 +14,7 @@ class ProductInventoryRestore implements ShouldQueue
     /**
      * Atomically restore stock when an order/suborder is cancelled or refunded.
      * Per-suborder safe: each cancelled suborder restores only its own line items
-     * (sold_quantity clamped at 0). Runs in one UPDATE — race-safe.
+     * (sold_quantity clamped at 0). One UPDATE — race-safe.
      */
     protected function updateProductInventory($eventData)
     {
@@ -41,9 +42,10 @@ class ProductInventoryRestore implements ShouldQueue
 
     public function handle($event)
     {
-        $products = $event->order->products;
-        foreach ($products as $product) {
+        foreach ($event->order->products as $product) {
             $this->updateProductInventory($product);
         }
+        // Refresh storefront stock immediately (mass-updates bypass model events).
+        Cache::forever('products:ver', (int) Cache::get('products:ver', 1) + 1);
     }
 }

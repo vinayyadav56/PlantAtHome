@@ -4,6 +4,7 @@ namespace Marvel\Listeners;
 
 use Exception;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Variation;
@@ -12,7 +13,7 @@ class ProductInventoryDecrement implements ShouldQueue
 {
     /**
      * Atomically (race-safe) decrement stock so concurrent orders can't oversell.
-     * The conditional `where quantity >= qty` + DB-side arithmetic happen in one
+     * The conditional `where quantity >= qty` + DB-side arithmetic run in one
      * UPDATE, so two simultaneous orders can never both deduct the last unit.
      */
     protected function updateProductInventory($eventData)
@@ -23,19 +24,12 @@ class ProductInventoryDecrement implements ShouldQueue
                 return;
             }
 
-            $beforeQty = Product::where('id', $eventData->id)->value('quantity');
-            $affected = Product::where('id', $eventData->id)
+            Product::where('id', $eventData->id)
                 ->where('quantity', '>=', $qty)
                 ->update([
                     'quantity'      => DB::raw("quantity - {$qty}"),
                     'sold_quantity' => DB::raw("sold_quantity + {$qty}"),
                 ]);
-            $afterQty = Product::where('id', $eventData->id)->value('quantity');
-            \Illuminate\Support\Facades\Log::info('INV_DEC_RUN', [
-                'pid' => $eventData->id, 'qty' => $qty, 'affected' => $affected,
-                'before' => $beforeQty, 'after' => $afterQty,
-                'conn' => Product::query()->getConnection()->getName(),
-            ]);
 
             if (!empty($eventData->pivot->variation_option_id)) {
                 Variation::where('id', $eventData->pivot->variation_option_id)
@@ -46,22 +40,18 @@ class ProductInventoryDecrement implements ShouldQueue
                     ]);
             }
         } catch (Exception $th) {
-            \Illuminate\Support\Facades\Log::error('INV_DEC_ERR', ['pid' => $eventData->id ?? null, 'msg' => $th->getMessage()]);
+            //
         }
     }
 
     public function handle($event)
     {
-        $products = $event->order->products;
-        \Illuminate\Support\Facades\Log::info('INV_DEC_FIRED', [
-            'order_id' => $event->order->id ?? null,
-            'parent_id' => $event->order->parent_id ?? null,
-            'count' => is_countable($products) ? count($products) : -1,
-            'first_pid' => optional($products[0] ?? null)->id,
-            'first_qty' => optional(optional($products[0] ?? null)->pivot)->order_quantity,
-        ]);
-        foreach ($products as $product) {
+        foreach ($event->order->products as $product) {
             $this->updateProductInventory($product);
         }
+        // Atomic mass-updates bypass Eloquent events, so bump the products cache
+        // version to refresh storefront stock immediately (otherwise the cached
+        // list/PDP would show stale quantities for up to the cache TTL).
+        Cache::forever('products:ver', (int) Cache::get('products:ver', 1) + 1);
     }
 }
