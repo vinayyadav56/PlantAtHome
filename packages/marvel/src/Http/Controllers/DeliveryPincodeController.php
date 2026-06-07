@@ -19,6 +19,11 @@ class DeliveryPincodeController extends CoreController
         if (strlen($pincode) < 4) {
             return ['serviceable' => false, 'pincode' => $pincode, 'reason' => 'invalid'];
         }
+        // Fail OPEN until the allow-list is configured: if no serviceable pincodes
+        // exist at all, the feature is effectively off — never block checkout.
+        if (!DeliveryPincode::where('is_active', true)->exists()) {
+            return ['serviceable' => true, 'pincode' => $pincode, 'unconfigured' => true];
+        }
         $row = DeliveryPincode::where('pincode', $pincode)
             ->where('is_active', true)
             ->first();
