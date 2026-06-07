@@ -169,6 +169,7 @@ jobs:
 
             echo "==> Installing PHP dependencies..."
             composer install --no-dev --optimize-autoloader --no-interaction
+            composer dump-autoload -o 2>/dev/null || true
 
             echo "==> Running migrations..."
             php artisan migrate --force

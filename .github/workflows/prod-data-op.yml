@@ -148,6 +148,8 @@ jobs:
                 ;;
 
               tools-seed)
+                echo "==> Refreshing autoloader (path-repo marvel — picks up new seeder class)..."
+                composer dump-autoload -o 2>/dev/null || composer dump-autoload || true
                 echo "==> Seeding Tools vertical catalog..."
                 php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeToolsSeeder" --force
                 echo "==> Assigning shop to any shop-less products..."
