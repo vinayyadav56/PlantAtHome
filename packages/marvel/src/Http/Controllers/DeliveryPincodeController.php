@@ -1,0 +1,119 @@
+<?php
+
+namespace Marvel\Http\Controllers;
+
+use Illuminate\Http\Request;
+use Marvel\Database\Models\DeliveryPincode;
+
+/**
+ * Delivery serviceability by pincode (allow-list model).
+ * Public: `check` (storefront serviceability check).
+ * Admin (SUPER_ADMIN group): list / store / update / destroy / bulk import.
+ */
+class DeliveryPincodeController extends CoreController
+{
+    /** Public: is a pincode serviceable? */
+    public function check(Request $request)
+    {
+        $pincode = $this->normalize($request->get('pincode'));
+        if (strlen($pincode) < 4) {
+            return ['serviceable' => false, 'pincode' => $pincode, 'reason' => 'invalid'];
+        }
+        $row = DeliveryPincode::where('pincode', $pincode)
+            ->where('is_active', true)
+            ->first();
+
+        if (!$row) {
+            return ['serviceable' => false, 'pincode' => $pincode];
+        }
+        return [
+            'serviceable' => true,
+            'pincode'     => $row->pincode,
+            'area'        => $row->area,
+            'city'        => $row->city,
+            'state'       => $row->state,
+            'cod_enabled' => $row->cod_enabled,
+            'eta_days'    => $row->eta_days,
+        ];
+    }
+
+    /** Admin: paginated list (searchable by pincode/city/area). */
+    public function index(Request $request)
+    {
+        $limit = (int) ($request->limit ?? 30);
+        $search = $request->search ?? $request->pincode;
+
+        $query = DeliveryPincode::query();
+        if ($search) {
+            $query->where(function ($q) use ($search) {
+                $q->where('pincode', 'like', "%{$search}%")
+                    ->orWhere('city', 'like', "%{$search}%")
+                    ->orWhere('area', 'like', "%{$search}%");
+            });
+        }
+        return $query->orderByDesc('id')->paginate($limit);
+    }
+
+    /** Admin: create (or upsert by pincode). */
+    public function store(Request $request)
+    {
+        $data = $this->payload($request);
+        if (strlen($data['pincode']) < 4) {
+            return response()->json(['message' => 'A valid pincode is required.'], 422);
+        }
+        return DeliveryPincode::updateOrCreate(['pincode' => $data['pincode']], $data);
+    }
+
+    /** Admin: update. */
+    public function update(Request $request, $id)
+    {
+        $row = DeliveryPincode::findOrFail($id);
+        $row->update($this->payload($request));
+        return $row;
+    }
+
+    /** Admin: delete. */
+    public function destroy($id)
+    {
+        $row = DeliveryPincode::findOrFail($id);
+        $row->delete();
+        return $row;
+    }
+
+    /** Admin: bulk import — `pincodes` (array) or `text` (comma/newline list). */
+    public function bulkStore(Request $request)
+    {
+        $raw = $request->input('pincodes', $request->input('text', ''));
+        $list = is_array($raw) ? $raw : preg_split('/[\s,]+/', (string) $raw);
+        $city = $request->input('city');
+        $state = $request->input('state');
+
+        $imported = 0;
+        foreach ((array) $list as $p) {
+            $pincode = $this->normalize($p);
+            if (strlen($pincode) < 4) {
+                continue;
+            }
+            DeliveryPincode::updateOrCreate(
+                ['pincode' => $pincode],
+                ['is_active' => true, 'city' => $city, 'state' => $state]
+            );
+            $imported++;
+        }
+        return ['imported' => $imported];
+    }
+
+    private function payload(Request $request): array
+    {
+        $data = $request->only([
+            'pincode', 'area', 'city', 'state', 'is_active', 'cod_enabled', 'eta_days',
+        ]);
+        $data['pincode'] = $this->normalize($data['pincode'] ?? '');
+        return $data;
+    }
+
+    private function normalize($value): string
+    {
+        return preg_replace('/\D/', '', (string) $value);
+    }
+}

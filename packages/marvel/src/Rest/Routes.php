@@ -51,6 +51,7 @@ use Marvel\Http\Controllers\RefundReasonController;
 use Marvel\Http\Controllers\VoiceSearchController;
 use Marvel\Http\Controllers\GardenController;
 use Marvel\Http\Controllers\PlantDoctorController;
+use Marvel\Http\Controllers\DeliveryPincodeController;
 use Marvel\Http\Controllers\SystemController;
 use Marvel\Http\Controllers\StoreNoticeController;
 use Marvel\Http\Controllers\TermsAndConditionsController;
@@ -130,6 +131,11 @@ Route::post('corporate-leads', [GardenController::class, 'storeLead'])
     ->middleware('throttle:10,1');
 Route::get('garden-package-templates', [GardenController::class, 'templates']);
 Route::post('webhooks/razorpay-garden', [GardenController::class, 'razorpayWebhook']);
+
+// Delivery serviceability — public pincode check (storefront blocks unserviceable
+// pincodes at checkout). Rate-limited.
+Route::get('delivery-pincodes/check', [DeliveryPincodeController::class, 'check'])
+    ->middleware('throttle:60,1');
 
 // Garden service — logged-in customer: their packages + visit tracking + pay.
 Route::middleware('auth:sanctum')->group(function () {
@@ -578,6 +584,13 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('plant-doctor/settings', [PlantDoctorController::class, 'updateSettings']);
     Route::get('plant-doctor/stats', [PlantDoctorController::class, 'getStats']);
     Route::get('plant-doctor/logs', [PlantDoctorController::class, 'getLogs']);
+
+    // Delivery serviceability — admin management (allow-list of pincodes)
+    Route::get('delivery-pincodes', [DeliveryPincodeController::class, 'index']);
+    Route::post('delivery-pincodes/bulk', [DeliveryPincodeController::class, 'bulkStore']);
+    Route::post('delivery-pincodes', [DeliveryPincodeController::class, 'store']);
+    Route::put('delivery-pincodes/{id}', [DeliveryPincodeController::class, 'update']);
+    Route::delete('delivery-pincodes/{id}', [DeliveryPincodeController::class, 'destroy']);
 
     // Garden service — admin management
     Route::get('garden-leads', [GardenController::class, 'leads']);
