@@ -26,13 +26,13 @@ class ProductInventoryRestore implements ShouldQueue
 
             Product::where('id', $eventData->id)->update([
                 'quantity'      => DB::raw("quantity + {$qty}"),
-                'sold_quantity' => DB::raw("GREATEST(sold_quantity - {$qty}, 0)"),
+                'sold_quantity' => DB::raw("GREATEST(COALESCE(sold_quantity, 0) - {$qty}, 0)"),
             ]);
 
             if (!empty($eventData->pivot->variation_option_id)) {
                 Variation::where('id', $eventData->pivot->variation_option_id)->update([
                     'quantity'      => DB::raw("quantity + {$qty}"),
-                    'sold_quantity' => DB::raw("GREATEST(sold_quantity - {$qty}, 0)"),
+                    'sold_quantity' => DB::raw("GREATEST(COALESCE(sold_quantity, 0) - {$qty}, 0)"),
                 ]);
             }
         } catch (Exception $th) {
