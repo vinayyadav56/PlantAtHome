@@ -512,19 +512,40 @@ class OrderRepository extends BaseRepository
     public function createChildOrder($id, $request): void
     {
         $products = $request->products;
-        $productsByShop = [];
         $language = $request->language ?? DEFAULT_LANGUAGE;
 
-        foreach ($products as $key => $cartProduct) {
+        // Group cart items by VERTICAL (product type_id) → one suborder per vertical.
+        // Each group also remembers the product's shop_id (single-shop today; this
+        // composes with multi-vendor later by keying on shop_id + type_id).
+        $groups = [];      // type_id => [cartProduct, ...]
+        $groupShop = [];   // type_id => shop_id
+        foreach ($products as $cartProduct) {
             $product = Product::findOrFail($cartProduct['product_id']);
-            $productsByShop[$product->shop_id][] = $cartProduct;
+            $verticalId = $product->type_id;
+            $groups[$verticalId][] = $cartProduct;
+            $groupShop[$verticalId] = $product->shop_id;
         }
 
-        foreach ($productsByShop as $shop_id => $cartProduct) {
-            $amount = array_sum(array_column($cartProduct, 'subtotal'));
+        // Parent-level charges are spread across suborders by each vertical's
+        // subtotal share, so per-vertical reporting + partial refunds are accurate.
+        $cartSubtotal   = (float) array_sum(array_column($products, 'subtotal'));
+        $cartSubtotal   = $cartSubtotal > 0 ? $cartSubtotal : 0.000001;
+        $parentTax      = (float) ($request->sales_tax ?? 0);
+        $parentDelivery = (float) ($request->delivery_fee ?? 0);
+        $parentDiscount = (float) ($request->discount ?? 0);
+
+        foreach ($groups as $verticalId => $cartProduct) {
+            $amount   = array_sum(array_column($cartProduct, 'subtotal'));
+            $share    = $amount / $cartSubtotal;
+            $tax      = round($parentTax * $share, 2);
+            $delivery = round($parentDelivery * $share, 2);
+            $discount = round($parentDiscount * $share, 2);
+            $paidTotal = round($amount + $tax + $delivery - $discount, 2);
+
             $orderInput = [
                 'tracking_number'  => $this->generateTrackingNumber(),
-                'shop_id'          => $shop_id,
+                'shop_id'          => $groupShop[$verticalId] ?? null,
+                'vertical_type_id' => $verticalId,
                 'order_status'     => $request->order_status,
                 'payment_status'   => $request->payment_status,
                 'customer_id'      => $request->customer_id,
@@ -533,13 +554,13 @@ class OrderRepository extends BaseRepository
                 'customer_contact' => $request->customer_contact,
                 'customer_name'    => $request->customer_name,
                 'delivery_time'    => $request->delivery_time,
-                'delivery_fee'     => 0,
-                'sales_tax'        => 0,
-                'discount'         => 0,
+                'delivery_fee'     => $delivery,
+                'sales_tax'        => $tax,
+                'discount'         => $discount,
                 'parent_id'        => $id,
                 'amount'           => $amount,
-                'total'            => $amount,
-                'paid_total'       => $amount,
+                'total'            => $paidTotal,
+                'paid_total'       => $paidTotal,
                 'language'         => $language,
                 "payment_gateway"  => $request->payment_gateway,
             ];

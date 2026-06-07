@@ -52,6 +52,42 @@ trait OrderManagementTrait
                 $child_order->save();
             }
         }
+
+        // A suborder's status changed → roll the parent order status up from its
+        // siblings (all completed → completed; all cancelled → cancelled; else
+        // processing). Keeps the parent a faithful summary of the per-vertical legs.
+        if (!empty($order->parent_id)) {
+            $this->recomputeParentOrderStatus($order->parent_id);
+        }
+
         return $order;
+    }
+
+    /**
+     * Recompute a parent order's status from its suborders (children).
+     */
+    protected function recomputeParentOrderStatus($parentId): void
+    {
+        $parent = \Marvel\Database\Models\Order::with('children')->find($parentId);
+        if (!$parent) {
+            return;
+        }
+        $statuses = $parent->children->pluck('order_status')->filter()->values();
+        if ($statuses->isEmpty()) {
+            return;
+        }
+
+        if ($statuses->every(fn ($s) => $s === OrderStatusEnum::COMPLETED)) {
+            $new = OrderStatusEnum::COMPLETED;
+        } elseif ($statuses->every(fn ($s) => $s === OrderStatusEnum::CANCELLED)) {
+            $new = OrderStatusEnum::CANCELLED;
+        } else {
+            $new = OrderStatusEnum::PROCESSING;
+        }
+
+        if ($parent->order_status !== $new) {
+            $parent->order_status = $new;
+            $parent->saveQuietly();
+        }
     }
 }
