@@ -23,12 +23,19 @@ class ProductInventoryDecrement implements ShouldQueue
                 return;
             }
 
-            Product::where('id', $eventData->id)
+            $beforeQty = Product::where('id', $eventData->id)->value('quantity');
+            $affected = Product::where('id', $eventData->id)
                 ->where('quantity', '>=', $qty)
                 ->update([
                     'quantity'      => DB::raw("quantity - {$qty}"),
                     'sold_quantity' => DB::raw("sold_quantity + {$qty}"),
                 ]);
+            $afterQty = Product::where('id', $eventData->id)->value('quantity');
+            \Illuminate\Support\Facades\Log::info('INV_DEC_RUN', [
+                'pid' => $eventData->id, 'qty' => $qty, 'affected' => $affected,
+                'before' => $beforeQty, 'after' => $afterQty,
+                'conn' => Product::query()->getConnection()->getName(),
+            ]);
 
             if (!empty($eventData->pivot->variation_option_id)) {
                 Variation::where('id', $eventData->pivot->variation_option_id)
