@@ -157,6 +157,8 @@ jobs:
                 echo "==> Re-syncing marvel path package + autoloader (stale vendor copy fix)..."
                 composer reinstall marvel/shop --no-interaction 2>&1 | tail -3 || true
                 composer dump-autoload -o 2>/dev/null || true
+                echo "==> Ensuring categories exist (idempotent — adds any missing tool categories)..."
+                php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeCategorySeeder" --force
                 echo "==> Seeding Tools vertical catalog..."
                 php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeToolsSeeder" --force
                 echo "==> Assigning shop to any shop-less products..."
