@@ -4,69 +4,40 @@ namespace Marvel\Listeners;
 
 use Exception;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Variation;
 
 class ProductInventoryRestore implements ShouldQueue
 {
+    /**
+     * Atomically restore stock when an order/suborder is cancelled or refunded.
+     * Per-suborder safe: each cancelled suborder restores only its own line items
+     * (sold_quantity clamped at 0). Runs in one UPDATE — race-safe.
+     */
     protected function updateProductInventory($eventData)
     {
         try {
-            $fetchedProduct = Product::findOrFail($eventData->id);
-            $current_quantity = $fetchedProduct->quantity + (int) $eventData->pivot->order_quantity;
-            $sold_quantity = $fetchedProduct->sold_quantity - (int) $eventData->pivot->order_quantity;
+            $qty = (int) $eventData->pivot->order_quantity;
+            if ($qty <= 0) {
+                return;
+            }
 
-            if ($current_quantity > -1) {
+            Product::where('id', $eventData->id)->update([
+                'quantity'      => DB::raw("quantity + {$qty}"),
+                'sold_quantity' => DB::raw("GREATEST(sold_quantity - {$qty}, 0)"),
+            ]);
 
-                $fetchedProduct->update(
-                    [
-                        'quantity' => $current_quantity,
-                        'sold_quantity' => $sold_quantity
-                    ]
-                );
-
-
-                // ****** there was a cause for this condition
-
-                // if (TRANSLATION_ENABLED) {
-                //     $this->updateTranslationsInventory($eventData, $current_quantity);
-                // } else {
-                //     Product::find($eventData->id)->update(['quantity' => $current_quantity]);
-                // }
-
-                if (!empty($eventData->pivot->variation_option_id)) {
-                    $variationOption = Variation::findOrFail($eventData->pivot->variation_option_id);
-                    $currentVariationOptionQuantity = $variationOption->quantity + (int) $eventData->pivot->order_quantity;
-                    $variationOptionSoldQuantity = $variationOption->sold_quantity - (int) $eventData->pivot->order_quantity;
-
-                    $variationOption->update([
-                        'quantity' => $currentVariationOptionQuantity,
-                        'sold_quantity' => $variationOptionSoldQuantity
-                    ]);
-
-                    // ****** there was a cause for this condition
-
-                    // if (TRANSLATION_ENABLED) {
-                    //     $this->updateVariationTranslationsInventory($variationOption, $variationOption->quantity);
-                    // } else {
-                    //     $variationOption->update([['quantity' => $variationOption->quantity]]);
-                    // }
-                }
+            if (!empty($eventData->pivot->variation_option_id)) {
+                Variation::where('id', $eventData->pivot->variation_option_id)->update([
+                    'quantity'      => DB::raw("quantity + {$qty}"),
+                    'sold_quantity' => DB::raw("GREATEST(sold_quantity - {$qty}, 0)"),
+                ]);
             }
         } catch (Exception $th) {
             //
         }
     }
-
-    // public function updateTranslationsInventory($product, $updatedQuantity)
-    // {
-    //     Product::where('sku', $product->sku)->update(['quantity' => $updatedQuantity]);
-    // }
-
-    // public function updateVariationTranslationsInventory($variationOption, $updatedQuantity)
-    // {
-    //     Variation::where('sku', $variationOption->sku)->update(['quantity' => $updatedQuantity]);
-    // }
 
     public function handle($event)
     {

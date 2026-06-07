@@ -4,82 +4,44 @@ namespace Marvel\Listeners;
 
 use Exception;
 use Illuminate\Contracts\Queue\ShouldQueue;
+use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Variation;
 
 class ProductInventoryDecrement implements ShouldQueue
 {
+    /**
+     * Atomically (race-safe) decrement stock so concurrent orders can't oversell.
+     * The conditional `where quantity >= qty` + DB-side arithmetic happen in one
+     * UPDATE, so two simultaneous orders can never both deduct the last unit.
+     */
     protected function updateProductInventory($eventData)
     {
         try {
-            $fetchedProduct = Product::findOrFail($eventData->id);
-            $currentQuantity = $fetchedProduct->quantity - (int) $eventData->pivot->order_quantity;
-            $sold_quantity = $fetchedProduct->sold_quantity + (int) $eventData->pivot->order_quantity;
+            $qty = (int) $eventData->pivot->order_quantity;
+            if ($qty <= 0) {
+                return;
+            }
 
-            if ($currentQuantity > -1) {
+            Product::where('id', $eventData->id)
+                ->where('quantity', '>=', $qty)
+                ->update([
+                    'quantity'      => DB::raw("quantity - {$qty}"),
+                    'sold_quantity' => DB::raw("sold_quantity + {$qty}"),
+                ]);
 
-                $fetchedProduct->update(
-                    [
-                        'quantity' => $currentQuantity,
-                        'sold_quantity' => $sold_quantity
-                    ]
-                );
-
-                // ****** there was a cause for this condition
-
-                // if (TRANSLATION_ENABLED) {
-                //     $this->updateTranslationsInventory($eventData, $currentQuantity, $eventData->sold_quantity);
-                // } else {
-                //     $fetchedProduct->update(
-                //         [
-                //             'quantity' => $currentQuantity,
-                //             'sold_quantity' => $sold_quantity
-                //         ]
-                //     );
-                // }
-
-                if (!empty($eventData->pivot->variation_option_id)) {
-                    $variationOption = Variation::findOrFail($eventData->pivot->variation_option_id);
-                    $currentVariationOptionQuantity = $variationOption->quantity - (int) $eventData->pivot->order_quantity;
-                    $variationOptionSoldQuantity = $variationOption->sold_quantity + (int) $eventData->pivot->order_quantity;
-
-                    $variationOption->update([
-                        'quantity' => $currentVariationOptionQuantity,
-                        'sold_quantity' => $variationOptionSoldQuantity
+            if (!empty($eventData->pivot->variation_option_id)) {
+                Variation::where('id', $eventData->pivot->variation_option_id)
+                    ->where('quantity', '>=', $qty)
+                    ->update([
+                        'quantity'      => DB::raw("quantity - {$qty}"),
+                        'sold_quantity' => DB::raw("sold_quantity + {$qty}"),
                     ]);
-
-                    // ****** there was a cause for this condition
-                    // if (TRANSLATION_ENABLED) {
-                    //     $this->updateVariationTranslationsInventory($variationOption, $variationOption->quantity);
-                    // } else {
-                    //     $variationOption->update([
-                    //         'quantity' => $currentVariationOptionQuantity,
-                    //         'sold_quantity' => $variationOptionSoldQuantity
-                    //     ]);
-                    // }
-                }
             }
         } catch (Exception $th) {
             //
         }
     }
-
-    // public function updateTranslationsInventory($product, $updatedQuantity, $sold_quantity)
-    // {
-    //     Product::where('id', $product->id)->update([
-    //         'quantity' => $updatedQuantity,
-    //         'sold_quantity' => $sold_quantity
-    //     ]);
-    // }
-
-    // public function updateVariationTranslationsInventory($variationOption, $updatedQuantity)
-    // {
-    //     Variation::where('id', $variationOption->id)->update([
-    //         'quantity' => $updatedQuantity,
-    //         'sold_quantity' => $variationOption->sold_quantity
-    //     ]);
-    // }
-
 
     public function handle($event)
     {
