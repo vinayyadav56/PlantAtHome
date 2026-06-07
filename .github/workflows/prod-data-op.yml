@@ -148,8 +148,15 @@ jobs:
                 ;;
 
               tools-seed)
-                echo "==> Refreshing autoloader (path-repo marvel — picks up new seeder class)..."
-                composer dump-autoload -o 2>/dev/null || composer dump-autoload || true
+                echo "==> Ensuring latest code on EC2..."
+                git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || true
+                echo "==> diag: seeder file present in packages/marvel?"
+                ls -la packages/marvel/src/Database/Seeders/PlantAtHomeToolsSeeder.php 2>&1 || true
+                echo "==> diag: vendor/marvel/shop is symlink or copy?"
+                ls -ld vendor/marvel/shop 2>&1 || true
+                echo "==> Re-syncing marvel path package + autoloader (stale vendor copy fix)..."
+                composer reinstall marvel/shop --no-interaction 2>&1 | tail -3 || true
+                composer dump-autoload -o 2>/dev/null || true
                 echo "==> Seeding Tools vertical catalog..."
                 php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeToolsSeeder" --force
                 echo "==> Assigning shop to any shop-less products..."
