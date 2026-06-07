@@ -99,6 +99,7 @@ class ShopServiceProvider extends ServiceProvider
         \Marvel\Console\AssignProductShopCommand::class,
         \Marvel\Console\CategorizePlantsCommand::class,
         \Marvel\Console\EnsureTrustCommand::class,
+        \Marvel\Console\GenerateSkusCommand::class,
         \Marvel\Console\ApplySizePricingCommand::class,
         \Marvel\Console\ApplyProdSizePricingCommand::class,
         \Marvel\Console\CreateDemoBundleCommand::class,

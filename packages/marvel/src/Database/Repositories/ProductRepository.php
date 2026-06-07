@@ -289,6 +289,20 @@ class ProductRepository extends BaseRepository
                 $product->digital_file()->create($digitalFileArray);
             }
 
+            // PlantAtHome: auto-assign a unique SKU when none was supplied (categories
+            // are attached above, so the SKU can include the category code).
+            if (empty($product->sku)) {
+                $product->load(['type', 'categories', 'variation_options']);
+                $skuGen = app(\Marvel\Services\SkuGenerator::class);
+                $product->sku = $skuGen->forProduct($product);
+                foreach ($product->variation_options as $i => $opt) {
+                    if (empty($opt->sku)) {
+                        $opt->sku = $skuGen->forVariation($product, $opt, $i);
+                        $opt->saveQuietly();
+                    }
+                }
+            }
+
             $product->save();
 
             // PlantAtHome: register any uploaded Featured/Gallery photos into the

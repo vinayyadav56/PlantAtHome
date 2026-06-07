@@ -290,6 +290,11 @@ try {
   php artisan plantathome:sync-image-columns \
     || echo "[bg] WARNING: sync-image-columns failed"
 
+  # Backfill unique SKUs ({VERTICAL}-{CATEGORY}-{SEQ}) on any product without one.
+  echo "==> [bg] Generating product SKUs..."
+  php artisan plantathome:generate-skus \
+    || echo "[bg] WARNING: generate-skus failed"
+
   # Force the license trust flag ON (prevents recurring "credentials was wrong"
   # if the redq license re-check flips it off). Idempotent.
   echo "==> [bg] Ensuring license trust flag..."
