@@ -39,13 +39,20 @@ class ProductInventoryDecrement implements ShouldQueue
                     ]);
             }
         } catch (Exception $th) {
-            //
+            \Illuminate\Support\Facades\Log::error('INV_DEC_ERR', ['pid' => $eventData->id ?? null, 'msg' => $th->getMessage()]);
         }
     }
 
     public function handle($event)
     {
         $products = $event->order->products;
+        \Illuminate\Support\Facades\Log::info('INV_DEC_FIRED', [
+            'order_id' => $event->order->id ?? null,
+            'parent_id' => $event->order->parent_id ?? null,
+            'count' => is_countable($products) ? count($products) : -1,
+            'first_pid' => optional($products[0] ?? null)->id,
+            'first_qty' => optional(optional($products[0] ?? null)->pivot)->order_quantity,
+        ]);
         foreach ($products as $product) {
             $this->updateProductInventory($product);
         }
