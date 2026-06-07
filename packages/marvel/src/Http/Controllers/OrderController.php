@@ -175,7 +175,10 @@ class OrderController extends CoreController
             $order = $this->repository->where('language', $language)->with([
                 'products',
                 'shop',
+                'vertical',
                 'children.shop',
+                'children.vertical',
+                'children.products',
                 'wallet_point',
             ])->where('id', $orderParam)->orWhere('tracking_number', $orderParam)->firstOrFail();
         } catch (ModelNotFoundException $e) {

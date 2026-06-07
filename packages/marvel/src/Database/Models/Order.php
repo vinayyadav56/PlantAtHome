@@ -78,6 +78,15 @@ class Order extends Model
     }
 
     /**
+     * The vertical (Type: plants/tools/farmbox) a suborder belongs to.
+     * @return BelongsTo
+     */
+    public function vertical(): BelongsTo
+    {
+        return $this->belongsTo(Type::class, 'vertical_type_id');
+    }
+
+    /**
      * @return HasMany
      */
     public function children()
