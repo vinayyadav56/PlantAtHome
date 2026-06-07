@@ -122,6 +122,8 @@ class AnalyticsController extends CoreController
 
             $newCustomers = User::permission(Permission::CUSTOMER)->whereDate('created_at', '>', Carbon::now()->subDays(30))->count();
 
+            $verticalAnalytics = $this->getVerticalAnalytics($user);
+
             $totalYearSaleByMonth = $this->getTotalYearSaleByMonth($user);
             $todayTotalOrderByStatus = $this->orderCountingByStatus($request, 1);
             $weeklyDaysTotalOrderByStatus = $this->orderCountingByStatus($request, 7);
@@ -137,6 +139,7 @@ class AnalyticsController extends CoreController
                 'todaysRevenue'             => $todaysRevenue,
                 'totalOrders'               => $totalOrders,
                 'newCustomers'              => $newCustomers,
+                'verticalAnalytics'         => $verticalAnalytics,
                 'totalYearSaleByMonth'      => $totalYearSaleByMonth,
                 'todayTotalOrderByStatus'   => $todayTotalOrderByStatus,
                 'weeklyTotalOrderByStatus'  => $weeklyDaysTotalOrderByStatus,
@@ -188,6 +191,66 @@ class AnalyticsController extends CoreController
             ],
             $months
         );
+    }
+
+    /**
+     * Per-vertical analytics (Plants / Tools / FarmBox).
+     * Revenue + order count + AOV from COMPLETED suborders grouped by vertical_type_id,
+     * plus catalog size + low-stock count per vertical. (Architecture P6.)
+     */
+    public function getVerticalAnalytics(?User $user)
+    {
+        $language = DEFAULT_LANGUAGE;
+        $isSuper  = $user && $user->hasPermissionTo(Permission::SUPER_ADMIN);
+        $shops    = $user?->shops->pluck('id') ?? [];
+
+        // verticals = product Types (one row per vertical, even with zero sales)
+        $types = Type::where('language', $language)->get(['id', 'name', 'slug']);
+
+        // revenue + order count per vertical from completed suborders (linked to a completed parent)
+        $salesQuery = DB::table('orders as child')
+            ->join('orders as parent', 'child.parent_id', '=', 'parent.id')
+            ->whereNotNull('child.vertical_type_id')
+            ->where('child.order_status', OrderStatus::COMPLETED)
+            ->where('parent.order_status', OrderStatus::COMPLETED);
+        if (!$isSuper) {
+            $salesQuery->whereIn('child.shop_id', $shops);
+        }
+        $sales = $salesQuery
+            ->select(
+                'child.vertical_type_id as type_id',
+                DB::raw('COUNT(child.id) as orders'),
+                DB::raw('SUM(child.paid_total) as revenue')
+            )
+            ->groupBy('child.vertical_type_id')
+            ->get()
+            ->keyBy('type_id');
+
+        // catalog size + low-stock (< 10) per vertical
+        $productBase = DB::table('products')->where('language', $language)->whereNotNull('type_id');
+        if (!$isSuper) {
+            $productBase->whereIn('shop_id', $shops);
+        }
+        $productCounts = (clone $productBase)
+            ->select('type_id', DB::raw('COUNT(*) as c'))->groupBy('type_id')->pluck('c', 'type_id');
+        $lowStock = (clone $productBase)->where('quantity', '<', 10)
+            ->select('type_id', DB::raw('COUNT(*) as c'))->groupBy('type_id')->pluck('c', 'type_id');
+
+        return $types->map(function ($t) use ($sales, $lowStock, $productCounts) {
+            $row     = $sales[$t->id] ?? null;
+            $orders  = (int) ($row->orders ?? 0);
+            $revenue = (float) ($row->revenue ?? 0);
+            return [
+                'type_id'       => $t->id,
+                'name'          => $t->name,
+                'slug'          => $t->slug,
+                'revenue'       => $revenue,
+                'orders'        => $orders,
+                'aov'           => $orders > 0 ? round($revenue / $orders, 2) : 0,
+                'totalProducts' => (int) ($productCounts[$t->id] ?? 0),
+                'lowStock'      => (int) ($lowStock[$t->id] ?? 0),
+            ];
+        })->values();
     }
 
     public function orderCountingByStatus($request, int $days = 1)
