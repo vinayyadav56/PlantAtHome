@@ -38,6 +38,10 @@ class ProductResource extends Resource
             // PlantAtHome — botanical name + short care chips for the storefront card
             'scientific_name'      => optional($this->plantAttribute)->scientific_name,
             'care'                 => $this->plantCareChips(),
+            // PlantAtHome — structured plant attributes for the listing card's
+            // feature grid (sunlight / water / height / pet-friendly). Already
+            // eager-loaded in fetchProducts(), so no extra query.
+            'plant_attribute'      => $this->plantAttribute,
             // PlantAtHome — bundle support (only meaningful for product_type=bundle)
             'bundle_items'         => $this->whenLoaded('bundleItems', fn () => static::mapInclusions($this->bundleItems)),
             'bundle_total_value'   => $this->relationLoaded('bundleItems') ? $this->bundle_total_value : null,
