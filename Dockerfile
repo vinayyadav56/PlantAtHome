@@ -20,6 +20,16 @@ RUN docker-php-ext-configure gd --with-freetype --with-jpeg \
  && docker-php-ext-configure intl \
  && docker-php-ext-install pdo pdo_mysql mbstring exif gd intl zip opcache bcmath
 
+# Raise PHP upload limits — the defaults (2M upload / 8M post / 128M memory) reject
+# real brand images (logos/banners) and starve the GD thumbnail conversion. Allow
+# ~20MB uploads with headroom for image processing.
+RUN { \
+      echo "upload_max_filesize=20M"; \
+      echo "post_max_size=24M"; \
+      echo "memory_limit=256M"; \
+      echo "max_execution_time=120"; \
+    } > /usr/local/etc/php/conf.d/zz-uploads.ini
+
 # Composer
 COPY --from=composer:2.6 /usr/bin/composer /usr/bin/composer
 
