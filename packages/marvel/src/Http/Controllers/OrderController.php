@@ -59,7 +59,39 @@ class OrderController extends CoreController
     public function index(Request $request)
     {
         $limit = $request->limit ? $request->limit : 10;
-        return $this->fetchOrders($request)->paginate($limit)->withQueryString();
+        $orders = $this->fetchOrders($request)->paginate($limit)->withQueryString();
+
+        // The order LIST only needs a product count + basic child info. The Order
+        // model eager-loads products.variation_options on every order, and each
+        // parent eager-loads its children (which, being Orders, ALSO load their
+        // products.variation_options + customer). After split-orders-by-vertical
+        // (P2) every order has children, so this nested payload grew large enough
+        // to get truncated mid-stream → the admin orders list showed empty.
+        // Slim it here (detail pages use fetchSingleOrder with the full data).
+        $slimProducts = function ($model) {
+            if ($model->relationLoaded('products')) {
+                $model->setRelation('products', $model->products->map(function ($p) {
+                    return [
+                        'id'    => $p->id,
+                        'name'  => $p->name,
+                        'image' => $p->image,
+                        'pivot' => $p->pivot,
+                    ];
+                })->values());
+            }
+        };
+        $orders->getCollection()->transform(function ($order) use ($slimProducts) {
+            $slimProducts($order);
+            if ($order->relationLoaded('children')) {
+                $order->children->each(function ($child) use ($slimProducts) {
+                    $child->unsetRelation('customer');
+                    $slimProducts($child);
+                });
+            }
+            return $order;
+        });
+
+        return $orders;
     }
 
     /**
