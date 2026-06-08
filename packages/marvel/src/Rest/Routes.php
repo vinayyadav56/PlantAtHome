@@ -51,6 +51,7 @@ use Marvel\Http\Controllers\RefundReasonController;
 use Marvel\Http\Controllers\VoiceSearchController;
 use Marvel\Http\Controllers\GardenController;
 use Marvel\Http\Controllers\PlantDoctorController;
+use Marvel\Http\Controllers\AiChatController;
 use Marvel\Http\Controllers\DeliveryPincodeController;
 use Marvel\Http\Controllers\SystemController;
 use Marvel\Http\Controllers\StoreNoticeController;
@@ -121,6 +122,13 @@ Route::post('voice-search/log', [VoiceSearchController::class, 'storeLog'])
 Route::get('plant-doctor/settings', [PlantDoctorController::class, 'getSettings']);
 Route::post('plant-doctor/diagnose', [PlantDoctorController::class, 'diagnose'])
     ->middleware('throttle:30,1');
+
+// Ask AI (per-plant chat) — public reads the feature flag; the chat itself runs
+// on the async microservice (not here). `persist` is an internal callback from
+// that service (X-Api-Key verified in-controller), called once per conversation.
+Route::get('ai-chat/settings', [AiChatController::class, 'getSettings']);
+Route::post('ai-chat/persist', [AiChatController::class, 'persist'])
+    ->middleware('throttle:240,1');
 
 // Garden service — public lead capture + active package templates for the page,
 // and the Razorpay payment-link webhook. Lead capture is rate-limited per IP to
@@ -584,6 +592,13 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('plant-doctor/settings', [PlantDoctorController::class, 'updateSettings']);
     Route::get('plant-doctor/stats', [PlantDoctorController::class, 'getStats']);
     Route::get('plant-doctor/logs', [PlantDoctorController::class, 'getLogs']);
+
+    // Ask AI — admin management (settings/stats) + transcript browsing by user.
+    Route::get('ai-chat/admin-settings', [AiChatController::class, 'getAdminSettings']);
+    Route::post('ai-chat/settings', [AiChatController::class, 'updateSettings']);
+    Route::get('ai-chat/stats', [AiChatController::class, 'getStats']);
+    Route::get('ai-chat/conversations', [AiChatController::class, 'getConversations']);
+    Route::get('ai-chat/conversations/{id}', [AiChatController::class, 'getConversation']);
 
     // Delivery serviceability — admin management (allow-list of pincodes)
     Route::get('delivery-pincodes', [DeliveryPincodeController::class, 'index']);
