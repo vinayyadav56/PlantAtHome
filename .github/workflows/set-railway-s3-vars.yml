@@ -36,4 +36,8 @@ jobs:
           upsert AWS_SECRET_ACCESS_KEY "$AWS_SECRET_ACCESS_KEY"
           upsert AWS_DEFAULT_REGION    "$AWS_REGION"
           upsert AWS_BUCKET            "$AWS_BUCKET"
-          echo "Done. Staging API service now has AWS_* for the S3 disk."
+          # Container env vars take precedence over the .env start.sh writes, so
+          # setting these here flips media to S3 without waiting on an image rebuild.
+          upsert MEDIA_DISK            "s3"
+          upsert FILESYSTEM_DISK       "s3"
+          echo "Done. Staging API service now uses the S3 disk for media."
