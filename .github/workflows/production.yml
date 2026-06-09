@@ -181,12 +181,19 @@ jobs:
             mkdir -p storage/app/public storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs
             php artisan storage:link --force || true
 
-            echo "==> Ensuring MEDIA_DISK=public in .env..."
-            if grep -q "^MEDIA_DISK=" .env 2>/dev/null; then
-              sed -i 's/^MEDIA_DISK=.*/MEDIA_DISK=public/' .env
-            else
-              echo "MEDIA_DISK=public" >> .env
-            fi
+            echo "==> Pointing media at S3 (durable, served from the bucket)..."
+            set_env () {
+              k="$1"; v="$2"
+              grep -v "^${k}=" .env > .env.tmp 2>/dev/null || true
+              mv .env.tmp .env
+              printf '%s=%s\n' "$k" "$v" >> .env
+            }
+            set_env MEDIA_DISK s3
+            set_env FILESYSTEM_DISK s3
+            set_env AWS_ACCESS_KEY_ID "${{ secrets.AWS_ACCESS_KEY_ID }}"
+            set_env AWS_SECRET_ACCESS_KEY "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+            set_env AWS_DEFAULT_REGION "${{ secrets.AWS_REGION }}"
+            set_env AWS_BUCKET plantathome-media-prod
 
             echo "==> Caching config / routes / views..."
             php artisan config:cache || echo "WARNING: config:cache failed — running without config cache"
