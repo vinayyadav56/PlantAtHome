@@ -1,0 +1,53 @@
+name: Set staging S3 vars (Railway)
+
+# One-shot: copies the API repo's AWS secrets onto the STAGING Railway API service
+# so staging media can use the S3 disk (start.sh reads these env vars). Manual only.
+# Requires secrets: RAILWAY_API_TOKEN (account token), AWS_ACCESS_KEY_ID,
+# AWS_SECRET_ACCESS_KEY, AWS_REGION.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  set-vars:
+    runs-on: ubuntu-latest
+    env:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PROJECT_ID: e6fc52de-45a9-4bc0-92fe-5b9840a4d399
+      ENVIRONMENT_ID: 268099e7-b634-4d26-a5ff-a95a0c145f8f
+      SERVICE_ID: da92f9ad-814e-4e0e-a0bb-932268379c6b
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      AWS_BUCKET: plantathome-media-prod
+    steps:
+      - name: Upsert AWS vars onto the staging API service
+        run: |
+          set -e
+          [ -n "$RAILWAY_API_TOKEN" ] || { echo "::error::Missing RAILWAY_API_TOKEN"; exit 1; }
+          upsert () {
+            local name="$1" value="$2"
+            if [ -z "$value" ]; then echo "::warning::$name is empty — skipping"; return; fi
+            local q
+            q=$(python3 - "$name" "$value" <<'PY'
+import json,sys,os
+print(json.dumps({
+  "query":"mutation($i:VariableUpsertInput!){variableUpsert(input:$i)}",
+  "variables":{"i":{
+    "projectId":os.environ["PROJECT_ID"],
+    "environmentId":os.environ["ENVIRONMENT_ID"],
+    "serviceId":os.environ["SERVICE_ID"],
+    "name":sys.argv[1],"value":sys.argv[2]}}
+}))
+PY
+)
+            resp=$(curl -sS -X POST https://backboard.railway.app/graphql/v2 \
+              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+              --data "$q")
+            echo "$resp" | python3 -c "import json,sys;d=json.load(sys.stdin);print('  $name ->',d.get('data'),'errors:',d.get('errors'));sys.exit(1 if d.get('errors') else 0)"
+          }
+          upsert AWS_ACCESS_KEY_ID     "$AWS_ACCESS_KEY_ID"
+          upsert AWS_SECRET_ACCESS_KEY "$AWS_SECRET_ACCESS_KEY"
+          upsert AWS_DEFAULT_REGION    "$AWS_REGION"
+          upsert AWS_BUCKET            "$AWS_BUCKET"
+          echo "Done. Staging API service now has AWS_* for the S3 disk."
