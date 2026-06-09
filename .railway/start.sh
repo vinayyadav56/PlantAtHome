@@ -327,3 +327,5 @@ for i in $(seq 1 40); do
 done
 
 wait $SUPERVISORD_PID
+
+# media on S3 (staging) — rebuild marker
