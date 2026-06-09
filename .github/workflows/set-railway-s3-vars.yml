@@ -26,25 +26,11 @@ jobs:
           set -e
           [ -n "$RAILWAY_API_TOKEN" ] || { echo "::error::Missing RAILWAY_API_TOKEN"; exit 1; }
           upsert () {
-            local name="$1" value="$2"
-            if [ -z "$value" ]; then echo "::warning::$name is empty — skipping"; return; fi
-            local q
-            q=$(python3 - "$name" "$value" <<'PY'
-import json,sys,os
-print(json.dumps({
-  "query":"mutation($i:VariableUpsertInput!){variableUpsert(input:$i)}",
-  "variables":{"i":{
-    "projectId":os.environ["PROJECT_ID"],
-    "environmentId":os.environ["ENVIRONMENT_ID"],
-    "serviceId":os.environ["SERVICE_ID"],
-    "name":sys.argv[1],"value":sys.argv[2]}}
-}))
-PY
-)
-            resp=$(curl -sS -X POST https://backboard.railway.app/graphql/v2 \
-              -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
-              --data "$q")
-            echo "$resp" | python3 -c "import json,sys;d=json.load(sys.stdin);print('  $name ->',d.get('data'),'errors:',d.get('errors'));sys.exit(1 if d.get('errors') else 0)"
+            nm="$1"; val="$2"
+            if [ -z "$val" ]; then echo "::warning::$nm is empty — skipping"; return; fi
+            q=$(NM="$nm" VAL="$val" python3 -c "import json,os; print(json.dumps({'query':'mutation(\$i:VariableUpsertInput!){variableUpsert(input:\$i)}','variables':{'i':{'projectId':os.environ['PROJECT_ID'],'environmentId':os.environ['ENVIRONMENT_ID'],'serviceId':os.environ['SERVICE_ID'],'name':os.environ['NM'],'value':os.environ['VAL']}}}))")
+            resp=$(curl -sS -X POST https://backboard.railway.app/graphql/v2 -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" --data "$q")
+            echo "$resp" | python3 -c "import json,sys;d=json.load(sys.stdin);print('  ${nm} ->',d.get('data'),'errors:',d.get('errors'));sys.exit(1 if d.get('errors') else 0)"
           }
           upsert AWS_ACCESS_KEY_ID     "$AWS_ACCESS_KEY_ID"
           upsert AWS_SECRET_ACCESS_KEY "$AWS_SECRET_ACCESS_KEY"
