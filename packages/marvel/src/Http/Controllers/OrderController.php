@@ -61,35 +61,33 @@ class OrderController extends CoreController
         $limit = $request->limit ? $request->limit : 10;
         $orders = $this->fetchOrders($request)->paginate($limit)->withQueryString();
 
-        // The order LIST only needs a product count + basic child info. The Order
-        // model eager-loads products.variation_options on every order, and each
-        // parent eager-loads its children (which, being Orders, ALSO load their
-        // products.variation_options + customer). After split-orders-by-vertical
-        // (P2) every order has children, so this nested payload grew large enough
-        // to get truncated mid-stream → the admin orders list showed empty.
-        // Slim it here (detail pages use fetchSingleOrder with the full data).
-        $slimProducts = function ($model) {
-            if ($model->relationLoaded('products')) {
-                $model->setRelation('products', $model->products->map(function ($p) {
-                    return [
-                        'id'    => $p->id,
-                        'name'  => $p->name,
-                        'image' => $p->image,
-                        'pivot' => $p->pivot,
-                    ];
-                })->values());
+        // The order LIST grew large enough to get truncated mid-stream (the admin
+        // orders list then showed empty). The Order model eager-loads
+        // products.variation_options + customer on every order AND its children
+        // (each child being an Order). After split-orders-by-vertical every order
+        // has children, so ~3.3 KB/order × 20 blew past the response limit.
+        //
+        // The list table only renders: products.length, customer name/email, and
+        // children.length (the expand icon — child contents are loaded separately
+        // by the order-detail page via fetchSingleOrder). So slim each order hard:
+        //   products  → [{id}]            (only .length is used)
+        //   customer  → {id, name, email} (only name/email are shown)
+        //   children  → [{id}]            (only .length is used)
+        //   heavy JSON (addresses, payment intent, note) → hidden
+        // This drops each order to a few hundred bytes so it can never truncate.
+        $idsOnly = function ($model, string $relation) {
+            if ($model->relationLoaded($relation)) {
+                $model->setRelation($relation, $model->{$relation}->map(fn ($r) => ['id' => $r->id])->values());
             }
         };
-        $orders->getCollection()->transform(function ($order) use ($slimProducts) {
-            $slimProducts($order);
-            if ($order->relationLoaded('children')) {
-                $order->children->each(function ($child) use ($slimProducts) {
-                    // Keep children's slimmed products (the admin suborder card uses
-                    // products.length for its item count) but drop the heavy customer.
-                    $child->unsetRelation('customer');
-                    $slimProducts($child);
-                });
+        $orders->getCollection()->transform(function ($order) use ($idsOnly) {
+            $idsOnly($order, 'products');
+            $idsOnly($order, 'children');
+            if ($order->relationLoaded('customer') && $order->customer) {
+                $c = $order->customer;
+                $order->setRelation('customer', ['id' => $c->id, 'name' => $c->name, 'email' => $c->email]);
             }
+            $order->makeHidden(['shipping_address', 'billing_address', 'payment_intent_info', 'note']);
             return $order;
         });
 
