@@ -69,4 +69,59 @@ class OrderAssignmentController extends CoreController
             ]),
         ];
     }
+
+    /**
+     * Admin: true-profit report. Profit = selling (total) − vendor cost −
+     * DP commission − delivery fee, over parent orders. Returns aggregate totals
+     * + a recent-orders breakdown (paginated).
+     */
+    public function profit(Request $request)
+    {
+        $limit = (int) ($request->limit ?? 20);
+
+        $base = Order::query()->whereNull('parent_id');
+        if ($request->filled('from')) {
+            $base->whereDate('created_at', '>=', $request->input('from'));
+        }
+        if ($request->filled('to')) {
+            $base->whereDate('created_at', '<=', $request->input('to'));
+        }
+
+        $totals = (clone $base)->selectRaw(
+            'COUNT(*) as orders,
+             COALESCE(SUM(total),0) as revenue,
+             COALESCE(SUM(vendor_cost_total),0) as vendor_cost,
+             COALESCE(SUM(dp_commission_amount),0) as dp_commission,
+             COALESCE(SUM(delivery_fee),0) as delivery_fee'
+        )->first();
+
+        $revenue   = (float) $totals->revenue;
+        $cost      = (float) $totals->vendor_cost;
+        $dp        = (float) $totals->dp_commission;
+        $delivery  = (float) $totals->delivery_fee;
+        $profit    = round($revenue - $cost - $dp, 2);
+
+        $orders = (clone $base)->orderByDesc('id')
+            ->paginate($limit, ['id', 'tracking_number', 'total', 'vendor_cost_total', 'dp_commission_amount', 'delivery_fee', 'order_status', 'created_at']);
+
+        $orders->getCollection()->transform(function ($o) {
+            // Reveal the internal cost/commission columns for the profit table.
+            $o->makeVisible(['vendor_cost_total', 'dp_commission_amount']);
+            $o->profit = round((float) $o->total - (float) $o->vendor_cost_total - (float) $o->dp_commission_amount, 2);
+            return $o;
+        });
+
+        return [
+            'summary' => [
+                'orders'        => (int) $totals->orders,
+                'revenue'       => round($revenue, 2),
+                'vendor_cost'   => round($cost, 2),
+                'dp_commission' => round($dp, 2),
+                'delivery_fee'  => round($delivery, 2),
+                'profit'        => $profit,
+            ],
+            'orders' => $orders,
+        ];
+    }
 }
+
