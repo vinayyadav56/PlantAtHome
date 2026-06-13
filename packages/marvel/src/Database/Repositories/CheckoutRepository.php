@@ -86,8 +86,15 @@ class CheckoutRepository
             if (!count($physical_products)) {
                 return 0;
             }
+            // PlantAtHome charges delivery PER PRODUCT: Σ qty × product.delivery_charge.
+            $perProductDelivery = $this->calculatePerProductDelivery($ordered_products);
+            if ($perProductDelivery > 0) {
+                return $perProductDelivery;
+            }
+            // Fallback to the legacy shipping-class charge when no product carries a
+            // per-product delivery_charge yet (gradual rollout safety).
             $settings = Settings::getData();
-            $class_id = $settings['options']['shippingClass'];
+            $class_id = $settings['options']['shippingClass'] ?? null;
             if ($class_id) {
                 $shipping_class = Shipping::find($class_id);
                 return $this->getShippingCharge($shipping_class, $amount);
@@ -97,6 +104,20 @@ class CheckoutRepository
         } catch (\Throwable $th) {
             return 0;
         }
+    }
+
+    /** Σ qty × product.delivery_charge across the cart (one query). */
+    protected function calculatePerProductDelivery($products): float
+    {
+        $ids = Arr::pluck($products, 'product_id');
+        $charges = Product::whereIn('id', $ids)->pluck('delivery_charge', 'id');
+        $total = 0.0;
+        foreach ($products as $product) {
+            $qty    = (int) ($product['order_quantity'] ?? 1);
+            $charge = (float) ($charges[$product['product_id']] ?? 0);
+            $total += $charge * max($qty, 1);
+        }
+        return round($total, 2);
     }
 
     protected function calculateShippingChargeByProduct($products)

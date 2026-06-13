@@ -54,6 +54,8 @@ use Marvel\Http\Controllers\PlantDoctorController;
 use Marvel\Http\Controllers\AiChatController;
 use Marvel\Http\Controllers\DeliveryPincodeController;
 use Marvel\Http\Controllers\DeliveryPartnerController;
+use Marvel\Http\Controllers\PriceSheetController;
+use Marvel\Http\Controllers\LocationPriceController;
 use Marvel\Http\Controllers\SystemController;
 use Marvel\Http\Controllers\StoreNoticeController;
 use Marvel\Http\Controllers\TermsAndConditionsController;
@@ -159,6 +161,10 @@ Route::post('license-key/verify', [UserController::class, 'verifyLicenseKey']);
 Route::get('callback/flutterwave', [WebHookController::class, 'callback'])->name('callback.flutterwave');
 
 Route::get('near-by-shop/{lat}/{lng}', [ShopController::class, 'nearByShop']);
+
+// Public: location-derived selling price + availability (margin over hidden vendor cost)
+Route::get('location-price', [LocationPriceController::class, 'show']);
+Route::post('location-price/batch', [LocationPriceController::class, 'batch']);
 
 Route::get('store-notices', [StoreNoticeController::class, 'index'])->name('store-notices.index');
 
@@ -494,6 +500,11 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
         'only' => ['index', 'show', 'store', 'update', 'destroy'],
     ]);
     Route::post('approve-delivery-partner', [DeliveryPartnerController::class, 'approve']);
+
+    // Vendor price sheets (admin-only Excel cost upload + audit + review)
+    Route::post('import-vendor-price-sheet', [PriceSheetController::class, 'import']);
+    Route::get('price-import-batches', [PriceSheetController::class, 'batches']);
+    Route::get('vendor-product-prices', [PriceSheetController::class, 'prices']);
     Route::apiResource('categories', CategoryController::class, [
         'only' => ['store', 'update', 'destroy'],
     ]);
