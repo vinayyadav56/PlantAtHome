@@ -34,6 +34,14 @@ class CheckoutRepository
         $settings = Settings::getData();
         $minimumOrderAmount = isset($settings['options']['minimumOrderAmount']) ? $settings['options']['minimumOrderAmount'] : 0;
         $unavailable_products = $this->checkStock($request['products']);
+
+        // Server-authoritative pricing: reprice vendor-cost-sheet products to their
+        // margin-over-cost selling price so the previewed total matches what the
+        // order will charge (products without a cost sheet are untouched).
+        $request['products'] = (new \Marvel\Services\PricingService())
+            ->repriceLines((array) $request['products'], $this->customerLatLng($request));
+        $request['amount'] = collect($request['products'])->sum('subtotal');
+
         $amount = $this->getOrderAmount($request, $unavailable_products);
         $shipping_charge = !empty($settings['options']['freeShipping']) && $settings['options']['freeShippingAmount'] <= $amount ? 0 : $this->calculateShippingCharge($request, $amount);
         $tax = $this->calculateTax($request, $shipping_charge, $amount);
@@ -45,9 +53,29 @@ class CheckoutRepository
             'total_tax'            => $tax,
             'shipping_charge'      => $shipping_charge,
             'unavailable_products' => $unavailable_products,
+            // Server-authoritative amount + repriced lines (margin-over-cost for
+            // vendor-cost-sheet products); the storefront uses these for the total.
+            'amount'               => round((float) $amount, 2),
+            'priced_products'      => array_map(fn ($p) => [
+                'product_id'          => $p['product_id'] ?? null,
+                'variation_option_id' => $p['variation_option_id'] ?? null,
+                'unit_price'          => $p['unit_price'] ?? null,
+                'subtotal'            => $p['subtotal'] ?? null,
+            ], (array) $request['products']),
             'wallet_amount' => isset($wallet->available_points) ? $wallet->available_points : 0,
             'wallet_currency' => isset($wallet->available_points) ? $this->walletPointsToCurrency($wallet->available_points) : 0
         ];
+    }
+
+    /** Customer coordinates from shipping_address.location, if shared. */
+    protected function customerLatLng($request): ?array
+    {
+        $addr = $request['shipping_address'] ?? null;
+        $loc  = is_array($addr) ? ($addr['location'] ?? null) : null;
+        if (is_array($loc) && isset($loc['lat'], $loc['lng']) && is_numeric($loc['lat']) && is_numeric($loc['lng'])) {
+            return ['lat' => (float) $loc['lat'], 'lng' => (float) $loc['lng']];
+        }
+        return null;
     }
 
     public function getOrderAmount($request, $unavailable_products)

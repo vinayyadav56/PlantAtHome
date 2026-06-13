@@ -69,6 +69,36 @@ class PricingService
         return $available ?: $query->orderByDesc('id')->first();
     }
 
+    /**
+     * Server-authoritative repricing of cart lines. For products that carry a
+     * vendor cost sheet (and are available), overrides unit_price + subtotal with
+     * the margin-over-cost selling price; products WITHOUT a cost sheet are left
+     * exactly as the client sent them (so nothing changes for them — safe). This
+     * makes the charged price match the displayed location price and is
+     * tamper-proof (the price is computed here, not trusted from the client).
+     */
+    public function repriceLines(array $products, ?array $latLng = null): array
+    {
+        foreach ($products as &$line) {
+            $pid = $line['product_id'] ?? null;
+            if (!$pid) {
+                continue;
+            }
+            $product = Product::find((int) $pid);
+            if (!$product) {
+                continue;
+            }
+            $vo = $line['variation_option_id'] ?? null;
+            $r = $this->sellingPrice($product, $vo !== null ? (int) $vo : null, $latLng);
+            if (!empty($r['has_vendor_cost']) && !empty($r['available'])) {
+                $qty = (int) ($line['order_quantity'] ?? 1);
+                $line['unit_price'] = $r['price'];
+                $line['subtotal']   = round($r['price'] * max($qty, 1), 2);
+            }
+        }
+        return $products;
+    }
+
     /** True vendor cost for the profit snapshot (null if none / unavailable). */
     public function vendorCost(int $productId, ?int $variationOptionId, ?array $latLng = null): ?float
     {
