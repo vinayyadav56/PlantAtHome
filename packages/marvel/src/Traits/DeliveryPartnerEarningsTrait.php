@@ -1,0 +1,72 @@
+<?php
+
+namespace Marvel\Traits;
+
+use Marvel\Database\Models\DeliveryPartner;
+use Marvel\Database\Models\DeliveryPartnerBalance;
+use Marvel\Enums\OrderStatus;
+
+/**
+ * Credits a delivery partner when their assigned order is COMPLETED (and reverses
+ * on a status rollback). Mirrors the vendor flow in
+ * OrderStatusManagerWithPaymentTrait::manageVendorBalance/updateBalanceShop, but
+ * the amount comes from the DP's own commission config (per_order/per_plant,
+ * fixed/percentage; the courier_* variant when delivery_mode = courier_dp).
+ */
+trait DeliveryPartnerEarningsTrait
+{
+    public function manageDeliveryPartnerBalance($order, $new_status, $prev_status): void
+    {
+        if (empty($order->delivery_partner_id)) {
+            return;
+        }
+        if ($new_status === OrderStatus::COMPLETED && $prev_status !== OrderStatus::COMPLETED) {
+            $this->creditDeliveryPartner($order, 'add');
+        } elseif ($prev_status === OrderStatus::COMPLETED && $new_status !== OrderStatus::COMPLETED) {
+            $this->creditDeliveryPartner($order, 'deduct');
+        }
+    }
+
+    protected function creditDeliveryPartner($order, string $action = 'add'): void
+    {
+        $dp = DeliveryPartner::find($order->delivery_partner_id);
+        if (!$dp) {
+            return;
+        }
+        $balance = DeliveryPartnerBalance::firstOrCreate(['delivery_partner_id' => $dp->id]);
+        $amount = $this->computeDpCommission($order, $dp);
+        if ($action === 'deduct') {
+            $amount = -$amount;
+        }
+        $balance->total_earnings  = (float) $balance->total_earnings + $amount;
+        $balance->current_balance = (float) $balance->current_balance + $amount;
+        $balance->save();
+
+        // Snapshot on the order (changeOrderStatus saves the order right after).
+        $order->dp_commission_amount = $action === 'add' ? abs($amount) : 0;
+    }
+
+    /** DP commission for an order, from its commission config (courier variant when courier_dp). */
+    protected function computeDpCommission($order, DeliveryPartner $dp): float
+    {
+        $isCourier = ($order->delivery_mode ?? null) === 'courier_dp';
+        $basis = $isCourier ? $dp->courier_commission_basis : $dp->commission_basis;
+        $type  = $isCourier ? $dp->courier_commission_type  : $dp->commission_type;
+        $value = (float) ($isCourier ? $dp->courier_commission_value : $dp->commission_value);
+
+        if ($type === 'percentage') {
+            return round(((float) $order->total) * $value / 100, 2);
+        }
+        // fixed
+        if ($basis === 'per_plant') {
+            return round($value * max($this->orderQuantity($order), 1), 2);
+        }
+        return round($value, 2); // per_order fixed
+    }
+
+    protected function orderQuantity($order): int
+    {
+        $products = $order->relationLoaded('products') ? $order->products : $order->products()->get();
+        return (int) $products->sum(fn ($p) => (int) (optional($p->pivot)->order_quantity ?? 1));
+    }
+}

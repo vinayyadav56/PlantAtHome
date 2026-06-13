@@ -57,6 +57,7 @@ use Marvel\Http\Controllers\DeliveryPartnerController;
 use Marvel\Http\Controllers\PriceSheetController;
 use Marvel\Http\Controllers\LocationPriceController;
 use Marvel\Http\Controllers\OrderAssignmentController;
+use Marvel\Http\Controllers\DeliveryPartnerWithdrawController;
 use Marvel\Http\Controllers\SystemController;
 use Marvel\Http\Controllers\StoreNoticeController;
 use Marvel\Http\Controllers\TermsAndConditionsController;
@@ -511,6 +512,12 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // Order → vendor + delivery-partner matching/assignment (P3)
     Route::get('orders/{id}/match', [OrderAssignmentController::class, 'match']);
     Route::post('orders/{id}/assign', [OrderAssignmentController::class, 'assign']);
+
+    // Delivery-partner payouts + profit (P4)
+    Route::get('delivery-partner-withdraws', [DeliveryPartnerWithdrawController::class, 'index']);
+    Route::post('delivery-partner-withdraws', [DeliveryPartnerWithdrawController::class, 'store']);
+    Route::post('approve-delivery-partner-withdraw', [DeliveryPartnerWithdrawController::class, 'approve']);
+    Route::get('vendor-dp-profit', [OrderAssignmentController::class, 'profit']);
     Route::apiResource('categories', CategoryController::class, [
         'only' => ['store', 'update', 'destroy'],
     ]);
@@ -661,4 +668,6 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
 // Delivery-partner self routes (their own dashboard).
 Route::group(['middleware' => ['permission:delivery_partner', 'auth:sanctum'], 'prefix' => 'dp'], function () {
     Route::get('me', [DeliveryPartnerController::class, 'me']);
+    Route::get('withdraws', [DeliveryPartnerWithdrawController::class, 'index']);
+    Route::post('withdraws', [DeliveryPartnerWithdrawController::class, 'store']);
 });

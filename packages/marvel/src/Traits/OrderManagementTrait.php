@@ -9,6 +9,7 @@ use Marvel\Enums\OrderStatus as OrderStatusEnum;
 trait OrderManagementTrait
 {
     use OrderStatusManagerWithPaymentTrait;
+    use DeliveryPartnerEarningsTrait;
 
     /**
      * changeOrderStatus
@@ -38,6 +39,8 @@ trait OrderManagementTrait
                 $this->manageVendorBalance($order, $new_order_status, $prev_order_status);
                 $this->orderStatusManagementOnCOD($order, $prev_order_status, $new_order_status);
             }
+            // Credit the assigned delivery partner on completion (reverse on rollback).
+            $this->manageDeliveryPartnerBalance($order, $new_order_status, $prev_order_status);
         }
         $order->save();
 
