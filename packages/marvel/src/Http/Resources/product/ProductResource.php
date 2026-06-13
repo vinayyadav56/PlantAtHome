@@ -29,6 +29,7 @@ class ProductResource extends Resource
             'image'                => $this->image,
             'status'               => $this->status,
             'price'                => $this->price,
+            'delivery_charge'      => $this->delivery_charge,
             'quantity'             => $this->quantity,
             'unit'                 => $this->unit,
             'sku'                  => $this->sku,

@@ -505,6 +505,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('import-vendor-price-sheet', [PriceSheetController::class, 'import']);
     Route::get('price-import-batches', [PriceSheetController::class, 'batches']);
     Route::get('vendor-product-prices', [PriceSheetController::class, 'prices']);
+    Route::delete('vendor-product-prices/{id}', [PriceSheetController::class, 'destroy']);
     Route::apiResource('categories', CategoryController::class, [
         'only' => ['store', 'update', 'destroy'],
     ]);
