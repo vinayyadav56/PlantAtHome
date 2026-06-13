@@ -53,6 +53,7 @@ use Marvel\Http\Controllers\GardenController;
 use Marvel\Http\Controllers\PlantDoctorController;
 use Marvel\Http\Controllers\AiChatController;
 use Marvel\Http\Controllers\DeliveryPincodeController;
+use Marvel\Http\Controllers\DeliveryPartnerController;
 use Marvel\Http\Controllers\SystemController;
 use Marvel\Http\Controllers\StoreNoticeController;
 use Marvel\Http\Controllers\TermsAndConditionsController;
@@ -487,6 +488,12 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::apiResource('withdraws', WithdrawController::class, [
         'only' => ['update', 'destroy'],
     ]);
+
+    // Delivery partners — onboarding + management (KYC, location, commission)
+    Route::apiResource('delivery-partners', DeliveryPartnerController::class, [
+        'only' => ['index', 'show', 'store', 'update', 'destroy'],
+    ]);
+    Route::post('approve-delivery-partner', [DeliveryPartnerController::class, 'approve']);
     Route::apiResource('categories', CategoryController::class, [
         'only' => ['store', 'update', 'destroy'],
     ]);
@@ -631,4 +638,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('request-logs/settings', [SystemController::class, 'logSettings']);
     Route::post('request-logs/settings', [SystemController::class, 'updateLogSettings']);
     Route::post('request-logs/clear', [SystemController::class, 'clearLogs']);
+});
+
+
+// Delivery-partner self routes (their own dashboard).
+Route::group(['middleware' => ['permission:delivery_partner', 'auth:sanctum'], 'prefix' => 'dp'], function () {
+    Route::get('me', [DeliveryPartnerController::class, 'me']);
 });
