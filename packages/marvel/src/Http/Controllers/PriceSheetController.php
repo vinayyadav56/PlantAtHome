@@ -103,4 +103,12 @@ class PriceSheetController extends CoreController
         }
         return $query->paginate($limit);
     }
+
+    /** Admin: remove a vendor cost row (soft delete). */
+    public function destroy($id)
+    {
+        $row = VendorProductPrice::findOrFail($id);
+        $row->delete();
+        return $row;
+    }
 }

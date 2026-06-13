@@ -64,6 +64,7 @@ class GetSingleProductResource extends Resource
             'length'                       => $this->length,
             'width'                        => $this->width,
             'price'                        => $this->price,
+            'delivery_charge'              => $this->delivery_charge,
             'quantity'                     => $this->quantity,
             'unit'                         => $this->unit,
             'in_flash_sale'                => $this->in_flash_sale
