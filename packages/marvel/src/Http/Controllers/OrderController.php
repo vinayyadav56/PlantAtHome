@@ -84,6 +84,8 @@ class OrderController extends CoreController
             $slimProducts($order);
             if ($order->relationLoaded('children')) {
                 $order->children->each(function ($child) use ($slimProducts) {
+                    // Keep children's slimmed products (the admin suborder card uses
+                    // products.length for its item count) but drop the heavy customer.
                     $child->unsetRelation('customer');
                     $slimProducts($child);
                 });

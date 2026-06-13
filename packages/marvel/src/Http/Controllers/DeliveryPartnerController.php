@@ -8,6 +8,10 @@ use Marvel\Database\Models\DeliveryPartner;
 use Marvel\Database\Models\DeliveryPartnerBalance;
 use Marvel\Database\Models\Shop;
 use Marvel\Database\Models\User;
+use Spatie\Permission\Guard;
+use Spatie\Permission\Models\Permission;
+use Spatie\Permission\Models\Role;
+use Spatie\Permission\PermissionRegistrar;
 
 /**
  * Delivery-partner onboarding + management (SUPER_ADMIN). A partner is a KYC
@@ -55,47 +59,99 @@ class DeliveryPartnerController extends CoreController
     {
         $data = $this->payload($request);
 
-        if (!$data['full_name']) {
+        if (empty($data['full_name'])) {
             return response()->json(['message' => 'Full name is required.'], 422);
         }
 
-        // Resolve / create the login user.
-        $userId = null;
+        $isVendorCumDp = !empty($data['is_vendor_cum_dp']);
 
-        if (!empty($data['is_vendor_cum_dp']) && $request->filled('shop_id')) {
-            // Vendor-cum-DP: reuse the shop owner's login; grant it DP permission.
-            $shop = Shop::find($request->input('shop_id'));
-            if ($shop && $shop->owner_id) {
-                $userId = $shop->owner_id;
-                $owner = User::find($shop->owner_id);
-                if ($owner && !$owner->hasPermissionTo(self::PERMISSION)) {
-                    $owner->givePermissionTo(self::PERMISSION);
-                    $owner->assignRole(self::PERMISSION);
-                }
-                // Inherit the shop's geolocation if none supplied.
-                $data['lat'] = $data['lat'] ?? $shop->lat;
-                $data['lng'] = $data['lng'] ?? $shop->lng;
+        // Validate the chosen onboarding path up front (clear 422 over a later 500).
+        if ($isVendorCumDp) {
+            if (!$request->filled('shop_id')) {
+                return response()->json(['message' => 'Select the vendor shop for a vendor-cum-partner.'], 422);
             }
-            $data['shop_id'] = $request->input('shop_id');
-        } elseif ($request->filled('email') && $request->filled('password')) {
-            // Standalone DP: create a fresh login.
-            $user = User::create([
-                'name'     => $data['full_name'],
-                'email'    => $request->input('email'),
-                'password' => Hash::make($request->input('password')),
-            ]);
-            $user->givePermissionTo(self::PERMISSION);
-            $user->assignRole(self::PERMISSION);
-            $userId = $user->id;
+        } elseif (!($request->filled('email') && $request->filled('password'))) {
+            return response()->json(['message' => 'Email and password are required to create the partner login.'], 422);
         }
 
-        $data['user_id'] = $userId;
-        $data['status']  = $data['status'] ?? 'pending';
+        try {
+            // Resolve / create the login user.
+            $userId = null;
 
-        $partner = DeliveryPartner::create($data);
-        DeliveryPartnerBalance::firstOrCreate(['delivery_partner_id' => $partner->id]);
+            if ($isVendorCumDp) {
+                // Vendor-cum-DP: reuse the shop owner's login; grant it the DP role.
+                $shop = Shop::find($request->input('shop_id'));
+                if (!$shop || !$shop->owner_id) {
+                    return response()->json(['message' => 'That vendor shop has no owner login to link.'], 422);
+                }
+                $userId = $shop->owner_id;
+                $owner  = User::find($shop->owner_id);
+                if ($owner) {
+                    $this->ensureDeliveryRole($owner);
+                }
+                // Inherit the shop's geolocation if none supplied.
+                $data['lat']     = $data['lat'] ?? $shop->lat;
+                $data['lng']     = $data['lng'] ?? $shop->lng;
+                $data['shop_id'] = $shop->id;
+            } else {
+                // Standalone DP: create a fresh login.
+                if (User::where('email', $request->input('email'))->exists()) {
+                    return response()->json(['message' => 'A user with this email already exists.'], 422);
+                }
+                $user = User::create([
+                    'name'     => $data['full_name'],
+                    'email'    => $request->input('email'),
+                    'password' => Hash::make($request->input('password')),
+                ]);
+                $this->ensureDeliveryRole($user);
+                $userId = $user->id;
+            }
 
-        return DeliveryPartner::with(['balance', 'shop:id,name,slug'])->find($partner->id);
+            $data['user_id'] = $userId;
+            $data['status']  = $data['status'] ?? 'pending';
+
+            $partner = DeliveryPartner::create($data);
+            DeliveryPartnerBalance::firstOrCreate(['delivery_partner_id' => $partner->id]);
+
+            return DeliveryPartner::with(['balance', 'shop:id,name,slug'])->find($partner->id);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'message' => 'Could not create the delivery partner. Please try again.',
+                'error'   => $e->getMessage(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Self-healing role grant. Ensures the `delivery_partner` permission + role
+     * exist for the user's own guard (the marvel User is `api`-guarded, while
+     * permissions seeded guardless default to `web` — a string assign would then
+     * throw PermissionDoesNotExist). findOrCreate never throws; assigning by
+     * model object shares the guard, so this is safe regardless of seed state.
+     */
+    private function ensureDeliveryRole(User $user): void
+    {
+        // Resolve the user's guard exactly as Spatie does (reflection on the
+        // model's declared $guard_name = 'api'). Using $user->guard_name here
+        // would return null — the property is shadowed by Eloquent's __get —
+        // which would create a `web` permission and then throw GuardDoesNotMatch
+        // on assignment. Guard::getNames() is the source of truth.
+        $guard = Guard::getNames($user)->first() ?? config('auth.defaults.guard');
+
+        $permission = Permission::findOrCreate(self::PERMISSION, $guard);
+        $role       = Role::findOrCreate(self::PERMISSION, $guard);
+        if (!$role->hasPermissionTo($permission)) {
+            $role->givePermissionTo($permission);
+        }
+
+        app(PermissionRegistrar::class)->forgetCachedPermissions();
+
+        if (!$user->hasPermissionTo($permission)) {
+            $user->givePermissionTo($permission);
+        }
+        if (!$user->hasRole($role)) {
+            $user->assignRole($role);
+        }
     }
 
     /** Admin: update partner details / commission / KYC. */
@@ -157,6 +213,14 @@ class DeliveryPartnerController extends CoreController
         if (is_array($loc)) {
             $data['lat'] = $data['lat'] ?? ($loc['lat'] ?? null);
             $data['lng'] = $data['lng'] ?? ($loc['lng'] ?? null);
+        }
+
+        // Coerce numeric/decimal columns: blank strings must become null, not ''
+        // (an empty string into a decimal column is a hard DB error → 500).
+        foreach (['lat', 'lng', 'commission_value', 'courier_commission_value'] as $num) {
+            if (array_key_exists($num, $data)) {
+                $data[$num] = ($data[$num] === '' || $data[$num] === null) ? null : (float) $data[$num];
+            }
         }
 
         if ($withDefaults) {

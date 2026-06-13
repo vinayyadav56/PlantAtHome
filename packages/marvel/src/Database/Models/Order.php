@@ -29,7 +29,16 @@ class Order extends Model
     protected $hidden = [
         //        'created_at',
         'updated_at',
-        'deleted_at'
+        'deleted_at',
+        // Internal fulfilment/assignment columns (populated by the vendor-DP
+        // matching engine). Admin-only; not consumed by the order list/detail
+        // JSON yet — hidden so they never bloat the already-large list payload.
+        'vendor_shop_id',
+        'delivery_partner_id',
+        'delivery_mode',
+        'assignment_status',
+        'vendor_cost_total',
+        'dp_commission_amount',
     ];
 
     protected static function boot()
