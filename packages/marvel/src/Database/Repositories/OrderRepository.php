@@ -22,6 +22,7 @@ use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Settings;
 use Marvel\Database\Models\User;
 use Marvel\Database\Models\Variation;
+use Marvel\Services\PricingService;
 use Marvel\Enums\CouponType;
 use Marvel\Enums\OrderStatus;
 use Marvel\Enums\Permission;
@@ -81,6 +82,7 @@ class OrderRepository extends BaseRepository
         'customer_contact',
         'customer_name',
         'note',
+        'vendor_cost_total',
     ];
 
     public function boot()
@@ -163,6 +165,10 @@ class OrderRepository extends BaseRepository
             }
         }
         $request['amount'] = $this->calculateSubtotal($request['products']);
+
+        // Snapshot the vendor cost for true-profit reporting (selling − cost − dp − fees).
+        // Hidden from customers; persisted on the parent + split across suborders.
+        $request['vendor_cost_total'] = $this->computeVendorCostTotal($request['products']);
 
         if (isset($request->coupon_id)) {
             try {
@@ -530,9 +536,10 @@ class OrderRepository extends BaseRepository
         // subtotal share, so per-vertical reporting + partial refunds are accurate.
         $cartSubtotal   = (float) array_sum(array_column($products, 'subtotal'));
         $cartSubtotal   = $cartSubtotal > 0 ? $cartSubtotal : 0.000001;
-        $parentTax      = (float) ($request->sales_tax ?? 0);
-        $parentDelivery = (float) ($request->delivery_fee ?? 0);
-        $parentDiscount = (float) ($request->discount ?? 0);
+        $parentTax       = (float) ($request->sales_tax ?? 0);
+        $parentDelivery  = (float) ($request->delivery_fee ?? 0);
+        $parentDiscount  = (float) ($request->discount ?? 0);
+        $parentVendorCost = (float) ($request->vendor_cost_total ?? 0);
 
         foreach ($groups as $verticalId => $cartProduct) {
             $amount   = array_sum(array_column($cartProduct, 'subtotal'));
@@ -540,6 +547,7 @@ class OrderRepository extends BaseRepository
             $tax      = round($parentTax * $share, 2);
             $delivery = round($parentDelivery * $share, 2);
             $discount = round($parentDiscount * $share, 2);
+            $vendorCost = round($parentVendorCost * $share, 2);
             $paidTotal = round($amount + $tax + $delivery - $discount, 2);
 
             $orderInput = [
@@ -561,6 +569,7 @@ class OrderRepository extends BaseRepository
                 'amount'           => $amount,
                 'total'            => $paidTotal,
                 'paid_total'       => $paidTotal,
+                'vendor_cost_total' => $vendorCost,
                 'language'         => $language,
                 "payment_gateway"  => $request->payment_gateway,
             ];
@@ -569,6 +578,29 @@ class OrderRepository extends BaseRepository
             $order->products()->attach($this->processProducts($cartProduct,  $request['customer_id'],  $order));
             event(new OrderReceived($order));
         }
+    }
+
+    /**
+     * Σ (nearest vendor cost × qty) across the cart — the hidden cost basis used
+     * for per-order profit. 0 when no vendor cost sheets exist for the products.
+     */
+    protected function computeVendorCostTotal($products): float
+    {
+        $service = new PricingService();
+        $total = 0.0;
+        foreach ($products as $item) {
+            $pid = $item['product_id'] ?? null;
+            if (!$pid) {
+                continue;
+            }
+            $vo   = $item['variation_option_id'] ?? null;
+            $cost = $service->vendorCost((int) $pid, $vo !== null ? (int) $vo : null);
+            if ($cost !== null) {
+                $qty = (int) ($item['order_quantity'] ?? 1);
+                $total += $cost * max($qty, 1);
+            }
+        }
+        return round($total, 2);
     }
 
     /**
