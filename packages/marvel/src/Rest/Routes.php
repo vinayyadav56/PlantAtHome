@@ -56,6 +56,7 @@ use Marvel\Http\Controllers\DeliveryPincodeController;
 use Marvel\Http\Controllers\DeliveryPartnerController;
 use Marvel\Http\Controllers\PriceSheetController;
 use Marvel\Http\Controllers\LocationPriceController;
+use Marvel\Http\Controllers\OrderAssignmentController;
 use Marvel\Http\Controllers\SystemController;
 use Marvel\Http\Controllers\StoreNoticeController;
 use Marvel\Http\Controllers\TermsAndConditionsController;
@@ -506,6 +507,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('price-import-batches', [PriceSheetController::class, 'batches']);
     Route::get('vendor-product-prices', [PriceSheetController::class, 'prices']);
     Route::delete('vendor-product-prices/{id}', [PriceSheetController::class, 'destroy']);
+
+    // Order → vendor + delivery-partner matching/assignment (P3)
+    Route::get('orders/{id}/match', [OrderAssignmentController::class, 'match']);
+    Route::post('orders/{id}/assign', [OrderAssignmentController::class, 'assign']);
     Route::apiResource('categories', CategoryController::class, [
         'only' => ['store', 'update', 'destroy'],
     ]);
