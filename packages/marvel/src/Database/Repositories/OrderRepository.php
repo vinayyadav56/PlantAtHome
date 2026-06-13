@@ -164,11 +164,17 @@ class OrderRepository extends BaseRepository
                 throw new AuthorizationException(NOT_AUTHORIZED);
             }
         }
+        // Server-authoritative pricing: for products with a vendor cost sheet, charge
+        // the margin-over-cost selling price (computed here, not trusted from the
+        // client). Products without a cost sheet are untouched — nothing changes for
+        // them. Uses the customer's shared coordinates when present (coarse for now).
+        $custLatLng = $this->customerLatLngFromRequest($request);
+        $request['products'] = (new PricingService())->repriceLines((array) $request['products'], $custLatLng);
         $request['amount'] = $this->calculateSubtotal($request['products']);
 
         // Snapshot the vendor cost for true-profit reporting (selling − cost − dp − fees).
         // Hidden from customers; persisted on the parent + split across suborders.
-        $request['vendor_cost_total'] = $this->computeVendorCostTotal($request['products']);
+        $request['vendor_cost_total'] = $this->computeVendorCostTotal($request['products'], $custLatLng);
 
         if (isset($request->coupon_id)) {
             try {
@@ -584,7 +590,7 @@ class OrderRepository extends BaseRepository
      * Σ (nearest vendor cost × qty) across the cart — the hidden cost basis used
      * for per-order profit. 0 when no vendor cost sheets exist for the products.
      */
-    protected function computeVendorCostTotal($products): float
+    protected function computeVendorCostTotal($products, ?array $latLng = null): float
     {
         $service = new PricingService();
         $total = 0.0;
@@ -594,13 +600,24 @@ class OrderRepository extends BaseRepository
                 continue;
             }
             $vo   = $item['variation_option_id'] ?? null;
-            $cost = $service->vendorCost((int) $pid, $vo !== null ? (int) $vo : null);
+            $cost = $service->vendorCost((int) $pid, $vo !== null ? (int) $vo : null, $latLng);
             if ($cost !== null) {
                 $qty = (int) ($item['order_quantity'] ?? 1);
                 $total += $cost * max($qty, 1);
             }
         }
         return round($total, 2);
+    }
+
+    /** Customer coordinates from the order's shipping_address.location (if shared). */
+    protected function customerLatLngFromRequest($request): ?array
+    {
+        $addr = $request['shipping_address'] ?? null;
+        $loc  = is_array($addr) ? ($addr['location'] ?? null) : null;
+        if (is_array($loc) && isset($loc['lat'], $loc['lng']) && is_numeric($loc['lat']) && is_numeric($loc['lng'])) {
+            return ['lat' => (float) $loc['lat'], 'lng' => (float) $loc['lng']];
+        }
+        return null;
     }
 
     /**
