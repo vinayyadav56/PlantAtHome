@@ -196,6 +196,46 @@ class DeliveryPartnerController extends CoreController
         return $partner;
     }
 
+    /** DP self: push my current GPS position (while online). */
+    public function postLocation(Request $request)
+    {
+        $request->validate(['lat' => 'required|numeric', 'lng' => 'required|numeric']);
+        $dp = DeliveryPartner::where('user_id', $request->user()->id)->first();
+        if (!$dp) {
+            return response()->json(['message' => 'No delivery-partner profile.'], 404);
+        }
+        $dp->current_lat = (float) $request->input('lat');
+        $dp->current_lng = (float) $request->input('lng');
+        $dp->location_updated_at = now();
+        if ($request->has('is_online')) {
+            $dp->is_online = (bool) $request->boolean('is_online');
+        }
+        $dp->save();
+        return ['ok' => true, 'location_updated_at' => $dp->location_updated_at, 'is_online' => (bool) $dp->is_online];
+    }
+
+    /** Admin: a partner's current live position. */
+    public function partnerLocation($id)
+    {
+        return $this->locationPayload(DeliveryPartner::findOrFail($id));
+    }
+
+    private function locationPayload(DeliveryPartner $dp): array
+    {
+        $updated = $dp->location_updated_at;
+        $stale = !$updated || \Carbon\Carbon::parse($updated)->lt(now()->subMinutes(2));
+        return [
+            'delivery_partner_id' => $dp->id,
+            'full_name'           => $dp->full_name,
+            'mobile'              => $dp->mobile,
+            'is_online'           => (bool) $dp->is_online,
+            'lat'                 => $dp->current_lat,
+            'lng'                 => $dp->current_lng,
+            'location_updated_at' => $updated,
+            'stale'               => $stale,
+        ];
+    }
+
     /** DP self: orders assigned to me, with pickup (vendor) + drop (customer) details. */
     public function myOrders(Request $request)
     {

@@ -71,6 +71,44 @@ class OrderAssignmentController extends CoreController
     }
 
     /**
+     * Public (by tracking number): the assigned courier's live position for an
+     * order, but ONLY while it's out for delivery (privacy). Customer "where's my
+     * plant" tracking.
+     */
+    public function courierLocation($tracking)
+    {
+        $order = Order::where('tracking_number', $tracking)->first();
+        if (!$order || !$order->delivery_partner_id) {
+            return ['available' => false, 'status' => $order->order_status ?? null];
+        }
+        if ($order->order_status !== 'order-out-for-delivery') {
+            return ['available' => false, 'status' => $order->order_status];
+        }
+        $dp = DeliveryPartner::find($order->delivery_partner_id);
+        if (!$dp || $dp->current_lat === null || $dp->current_lng === null) {
+            return ['available' => false, 'status' => $order->order_status];
+        }
+        $updated = $dp->location_updated_at;
+        $vendor = $order->vendor_shop_id ? Shop::find($order->vendor_shop_id) : null;
+        $drop = is_array($order->shipping_address) ? ($order->shipping_address['location'] ?? null) : null;
+
+        return [
+            'available' => true,
+            'status'    => $order->order_status,
+            'courier'   => [
+                'name'       => $dp->full_name,
+                'mobile'     => $dp->mobile,
+                'lat'        => $dp->current_lat,
+                'lng'        => $dp->current_lng,
+                'updated_at' => $updated,
+                'stale'      => !$updated || \Carbon\Carbon::parse($updated)->lt(now()->subMinutes(2)),
+            ],
+            'pickup' => $vendor ? ['name' => $vendor->name, 'location' => is_array($vendor->settings) ? ($vendor->settings['location'] ?? null) : null] : null,
+            'drop'   => $drop,
+        ];
+    }
+
+    /**
      * Admin: true-profit report. Profit = selling (total) − vendor cost −
      * DP commission − delivery fee, over parent orders. Returns aggregate totals
      * + a recent-orders breakdown (paginated).

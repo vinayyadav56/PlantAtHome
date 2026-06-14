@@ -34,6 +34,10 @@ class DeliveryPartner extends Model
         'is_active'        => 'boolean',
         'lat'              => 'float',
         'lng'              => 'float',
+        'current_lat'      => 'float',
+        'current_lng'      => 'float',
+        'is_online'        => 'boolean',
+        'location_updated_at' => 'datetime',
         'commission_value' => 'float',
         'courier_commission_value' => 'float',
     ];
