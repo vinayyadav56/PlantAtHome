@@ -280,6 +280,31 @@ class UserController extends CoreController
         return $request->user()->currentAccessToken()->delete();
     }
 
+    /**
+     * Self-serve account deletion (Google Play / App Store requirement). Revokes
+     * all tokens, removes the profile + addresses (PII), and anonymises +
+     * deactivates the user — order history stays intact but the account is gone
+     * and unusable. The authenticated user can only delete their own account.
+     */
+    public function deleteAccount(Request $request)
+    {
+        $user = $request->user();
+        if (!$user) {
+            throw new AuthorizationException(NOT_AUTHORIZED);
+        }
+        $uid = $user->id;
+        try { $user->tokens()->delete(); } catch (\Throwable $e) { /* ignore */ }
+        try { optional($user->profile)->delete(); } catch (\Throwable $e) { /* ignore */ }
+        try { $user->address()->delete(); } catch (\Throwable $e) { /* ignore */ }
+        $user->forceFill([
+            'name'      => 'Deleted user',
+            'email'     => 'deleted+' . $uid . '@plantathome.invalid',
+            'is_active' => false,
+            'password'  => Hash::make(\Illuminate\Support\Str::random(40)),
+        ])->save();
+        return response()->json(['message' => 'Your account has been deleted.']);
+    }
+
     public function register(UserCreateRequest $request)
     {
         $notAllowedPermissions = [Permission::SUPER_ADMIN];
