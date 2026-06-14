@@ -78,6 +78,7 @@ Route::get('/email/verify/{id}/{hash}', [UserController::class, 'verifyEmail'])-
 Route::post('/register', [UserController::class, 'register']);
 Route::post('/token', [UserController::class, 'token']);
 Route::post('/logout', [UserController::class, 'logout']);
+Route::delete('/account', [UserController::class, 'deleteAccount'])->middleware('auth:sanctum');
 Route::post('/forget-password', [UserController::class, 'forgetPassword']);
 Route::post('/verify-forget-password-token', [UserController::class, 'verifyForgetPasswordToken']);
 Route::post('/reset-password', [UserController::class, 'resetPassword']);
