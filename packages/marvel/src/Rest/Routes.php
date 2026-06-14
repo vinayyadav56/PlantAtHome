@@ -169,6 +169,9 @@ Route::get('near-by-shop/{lat}/{lng}', [ShopController::class, 'nearByShop']);
 Route::get('location-price', [LocationPriceController::class, 'show']);
 Route::post('location-price/batch', [LocationPriceController::class, 'batch']);
 
+// Public: live courier position for an order (only while out for delivery)
+Route::get('orders/{tracking}/courier-location', [OrderAssignmentController::class, 'courierLocation']);
+
 Route::get('store-notices', [StoreNoticeController::class, 'index'])->name('store-notices.index');
 
 Route::apiResource('products', ProductController::class, [
@@ -522,6 +525,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // DP earnings analytics (admin view) + manual incentive
     Route::get('delivery-partner-earnings', [DeliveryPartnerEarningsController::class, 'partnerEarnings']);
     Route::post('delivery-partner-incentive', [DeliveryPartnerEarningsController::class, 'grantIncentive']);
+    Route::get('delivery-partners/{id}/location', [DeliveryPartnerController::class, 'partnerLocation']);
     Route::apiResource('categories', CategoryController::class, [
         'only' => ['store', 'update', 'destroy'],
     ]);
@@ -674,6 +678,7 @@ Route::group(['middleware' => ['permission:delivery_partner', 'auth:sanctum'], '
     Route::get('me', [DeliveryPartnerController::class, 'me']);
     Route::get('orders', [DeliveryPartnerController::class, 'myOrders']);
     Route::post('orders/{id}/status', [DeliveryPartnerController::class, 'updateMyOrderStatus']);
+    Route::post('location', [DeliveryPartnerController::class, 'postLocation']);
     Route::get('earnings', [DeliveryPartnerEarningsController::class, 'myEarnings']);
     Route::get('withdraws', [DeliveryPartnerWithdrawController::class, 'index']);
     Route::post('withdraws', [DeliveryPartnerWithdrawController::class, 'store']);
