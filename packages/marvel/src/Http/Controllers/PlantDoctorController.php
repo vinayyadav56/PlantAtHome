@@ -11,18 +11,22 @@ use Marvel\Enums\Permission;
 
 class PlantDoctorController extends CoreController
 {
-    // OpenAI chat/vision pricing, USD per 1M tokens [prompt, completion].
+    // Claude (Anthropic) pricing, USD per 1M tokens [input, output]. The Plant Doctor
+    // microservice runs on Claude vision; the service returns the exact model + token usage.
     private const MODEL_PRICES = [
-        'gpt-4o-mini'  => [0.15, 0.60],
-        'gpt-4o'       => [2.50, 10.00],
-        'gpt-4.1-mini' => [0.40, 1.60],
-        'gpt-4.1'      => [2.00, 8.00],
+        'claude-opus-4-8'   => [5.00, 25.00],
+        'claude-opus-4-7'   => [5.00, 25.00],
+        'claude-sonnet-4-6' => [3.00, 15.00],
+        'claude-haiku-4-5'  => [1.00, 5.00],
     ];
+    private const DEFAULT_MODEL = 'claude-opus-4-8';
     private const USD_TO_INR = 83.5;
+    // Below this identification confidence we count a diagnosis as "low confidence" for monitoring.
+    private const LOW_CONFIDENCE = 0.5;
 
     private function tokenPrice(?string $model): array
     {
-        return self::MODEL_PRICES[$model] ?? self::MODEL_PRICES['gpt-4o-mini'];
+        return self::MODEL_PRICES[$model] ?? self::MODEL_PRICES[self::DEFAULT_MODEL];
     }
 
     private function setting(): ?PlantDoctorSetting
@@ -66,6 +70,7 @@ class PlantDoctorController extends CoreController
             'symptoms' => 'nullable|string',
             'plant_name' => 'nullable|string',
             'session_id' => 'nullable|string',
+            'language' => 'nullable|string|max:12',
         ]);
 
         if (empty($data['image_base64']) && empty($data['image_url']) && empty($data['symptoms'])) {
@@ -73,13 +78,14 @@ class PlantDoctorController extends CoreController
         }
 
         try {
-            $resp = Http::timeout(60)
+            $resp = Http::timeout(90)
                 ->withHeaders(array_filter(['X-Api-Key' => $serviceKey]))
                 ->post($serviceUrl . '/plant-diagnosis', [
                     'image_base64' => $data['image_base64'] ?? null,
                     'image_url' => $data['image_url'] ?? null,
                     'symptoms' => $data['symptoms'] ?? null,
                     'plant_name' => $data['plant_name'] ?? null,
+                    'language' => $data['language'] ?? 'en',
                 ]);
         } catch (\Throwable $e) {
             return response()->json(['message' => 'Could not reach the Plant Doctor service.'], 502);
@@ -90,13 +96,21 @@ class PlantDoctorController extends CoreController
         }
 
         $body = $resp->json();
+
+        // Trust gate result from the service.
+        $isPlant = (bool) ($body['is_plant'] ?? true);
+        $identification = $body['identification'] ?? [];
+        $idConfidence = isset($identification['confidence']) ? (float) $identification['confidence'] : null;
+        $identifiedSpecies = $identification['scientific_name'] ?? null;
+
+        // Usage (input/output tokens + model). Null on the short-circuit rejection path = no LLM cost.
         $usage = $body['usage'] ?? [];
-        $prompt = (int) ($usage['prompt_tokens'] ?? 0);
-        $completion = (int) ($usage['completion_tokens'] ?? 0);
-        [$pPrice, $cPrice] = $this->tokenPrice($usage['model'] ?? $setting->openai_model);
+        $prompt = (int) ($usage['input_tokens'] ?? 0);
+        $completion = (int) ($usage['output_tokens'] ?? 0);
+        [$pPrice, $cPrice] = $this->tokenPrice($usage['model'] ?? ($setting->openai_model ?: self::DEFAULT_MODEL));
         $costUsd = ($prompt * $pPrice + $completion * $cPrice) / 1000000;
 
-        $diagnoses = $body['diagnosis'] ?? [];
+        $diagnoses = $isPlant ? ($body['diagnosis'] ?? []) : [];
         $conditions = array_filter(array_map(fn ($d) => $d['condition'] ?? null, $diagnoses));
         $severityRank = ['low' => 1, 'medium' => 2, 'high' => 3, 'critical' => 4];
         $topSeverity = null;
@@ -109,11 +123,15 @@ class PlantDoctorController extends CoreController
             }
         }
 
+        $conditionSummary = $isPlant
+            ? ($conditions ? implode(', ', array_slice($conditions, 0, 5)) : null)
+            : 'Rejected: ' . \Illuminate\Support\Str::limit((string) ($body['rejection_reason'] ?? 'not a plant'), 120);
+
         PlantDoctorLog::create([
             'user_id' => optional($request->user())->id,
             'session_id' => $data['session_id'] ?? null,
-            'plant_name' => $body['plant_name'] ?? ($data['plant_name'] ?? null),
-            'condition_summary' => $conditions ? implode(', ', array_slice($conditions, 0, 5)) : null,
+            'plant_name' => $isPlant ? ($body['plant_name'] ?? ($data['plant_name'] ?? null)) : null,
+            'condition_summary' => $conditionSummary,
             'top_severity' => $topSeverity,
             'overall_health_score' => (float) ($body['overall_health_score'] ?? 0),
             'image_url' => $data['image_url'] ?? null,
@@ -122,6 +140,9 @@ class PlantDoctorController extends CoreController
             'total_tokens' => $prompt + $completion,
             'cost_usd' => $costUsd,
             'cost_inr' => $costUsd * self::USD_TO_INR,
+            'is_plant' => $isPlant,
+            'identified_species' => $identifiedSpecies,
+            'id_confidence' => $idConfidence,
             'created_at' => now(),
         ]);
 
@@ -150,7 +171,8 @@ class PlantDoctorController extends CoreController
             'service_url' => $setting->service_url ?? null,
             // Never return the stored key; just whether one is set.
             'has_service_api_key' => !empty($setting->service_api_key),
-            'openai_model' => $setting->openai_model ?? 'gpt-4o-mini',
+            // Stored in the legacy `openai_model` column but it now holds a Claude model id.
+            'openai_model' => $setting->openai_model ?: self::DEFAULT_MODEL,
             'monthly_budget_inr' => (float) ($setting->monthly_budget_inr ?? 0),
             'plant_id_enabled' => $setting ? (bool) $setting->plant_id_enabled : false,
             'current_month_cost_inr' => round($usd * self::USD_TO_INR, 2),
@@ -202,13 +224,25 @@ class PlantDoctorController extends CoreController
         ])->values();
 
         $totalUsd = (float) $rows->sum('usd');
+        $totalCalls = (int) $rows->sum('cnt');
+
+        // Trust monitoring: how many uploads were rejected (not a plant / unusable) and how many
+        // diagnoses came back below our confidence bar.
+        $rejected = (int) PlantDoctorLog::whereBetween('created_at', [$start, $end])
+            ->where('is_plant', false)->count();
+        $lowConfidence = (int) PlantDoctorLog::whereBetween('created_at', [$start, $end])
+            ->where('is_plant', true)->whereNotNull('id_confidence')
+            ->where('id_confidence', '<', self::LOW_CONFIDENCE)->count();
 
         return response()->json(['data' => [
             'month' => $month,
             'total_cost_usd' => round($totalUsd, 6),
             'total_cost_inr' => round($totalUsd * $rate, 4),
-            'total_calls' => (int) $rows->sum('cnt'),
+            'total_calls' => $totalCalls,
             'total_tokens' => (int) $rows->sum('toks'),
+            'rejected_count' => $rejected,
+            'rejection_rate' => $totalCalls > 0 ? round($rejected / $totalCalls, 4) : 0,
+            'low_confidence_count' => $lowConfidence,
             'daily_stats' => $daily,
         ]]);
     }

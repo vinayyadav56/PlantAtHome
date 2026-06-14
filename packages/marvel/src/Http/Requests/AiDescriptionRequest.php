@@ -30,6 +30,7 @@ class AiDescriptionRequest extends FormRequest
     {
         return [
             'prompt'                  => ['string', 'required'],
+            'language'                => ['string', 'nullable'],
         ];
     }
 

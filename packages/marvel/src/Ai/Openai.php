@@ -26,9 +26,15 @@ class Openai extends Base implements AiInterface
     public function generateDescription($request): mixed
     {
         try {
+            $language = $request->language ?? 'en';
             $response = $this->openAiClient->chat()->create([
-                'model' => 'gpt-3.5-turbo',
+                'model' => 'gpt-4o-mini',
                 'messages' => [
+                    [
+                        'role' => 'system',
+                        'content' => "You write concise, compelling e-commerce product descriptions. "
+                            . "Respond in the language with ISO 639 code '{$language}' (use English if you don't know it).",
+                    ],
                     [
                         'role' => 'user', 'content' => $request->prompt
                     ],

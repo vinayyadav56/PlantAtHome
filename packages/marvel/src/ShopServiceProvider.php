@@ -105,6 +105,8 @@ class ShopServiceProvider extends ServiceProvider
         \Marvel\Console\CreateDemoBundleCommand::class,
         \Marvel\Console\ApplyPlantImageRepairCommand::class,
         \Marvel\Console\PruneNonSeedPlantsCommand::class,
+        \Marvel\Console\TranslateLangCommand::class,
+        \Marvel\Console\TranslateCatalogCommand::class,
         InstallCommand::class,
         AdminCreateCommand::class,
         ImportDemoData::class,
