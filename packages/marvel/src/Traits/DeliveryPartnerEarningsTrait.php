@@ -4,7 +4,9 @@ namespace Marvel\Traits;
 
 use Marvel\Database\Models\DeliveryPartner;
 use Marvel\Database\Models\DeliveryPartnerBalance;
+use Marvel\Database\Models\DeliveryPartnerEarning;
 use Marvel\Enums\OrderStatus;
+use Marvel\Services\DeliveryPartnerIncentiveService;
 
 /**
  * Credits a delivery partner when their assigned order is COMPLETED (and reverses
@@ -42,8 +44,29 @@ trait DeliveryPartnerEarningsTrait
         $balance->current_balance = (float) $balance->current_balance + $amount;
         $balance->save();
 
+        // Per-event ledger row (commission; a contra/negative row on reversal) so
+        // earnings can be grouped by period + split commission vs incentive.
+        DeliveryPartnerEarning::create([
+            'delivery_partner_id' => $dp->id,
+            'order_id'            => $order->id,
+            'type'               => 'commission',
+            'source'             => 'delivery',
+            'amount'             => $amount,
+            'note'               => $action === 'deduct' ? 'Reversed (status rolled back)' : 'Delivery commission',
+            'earned_at'          => now(),
+        ]);
+
         // Snapshot on the order (changeOrderStatus saves the order right after).
         $order->dp_commission_amount = $action === 'add' ? abs($amount) : 0;
+
+        // Auto incentive rules fire only on credit (not on reversal).
+        if ($action === 'add') {
+            try {
+                (new DeliveryPartnerIncentiveService())->evaluateOnDelivery($dp, $order, $balance);
+            } catch (\Throwable $e) {
+                // never let incentive evaluation break order completion
+            }
+        }
     }
 
     /** DP commission for an order, from its commission config (courier variant when courier_dp). */
