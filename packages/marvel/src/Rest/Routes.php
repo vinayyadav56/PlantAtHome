@@ -58,6 +58,7 @@ use Marvel\Http\Controllers\PriceSheetController;
 use Marvel\Http\Controllers\LocationPriceController;
 use Marvel\Http\Controllers\OrderAssignmentController;
 use Marvel\Http\Controllers\DeliveryPartnerWithdrawController;
+use Marvel\Http\Controllers\DeliveryPartnerEarningsController;
 use Marvel\Http\Controllers\SystemController;
 use Marvel\Http\Controllers\StoreNoticeController;
 use Marvel\Http\Controllers\TermsAndConditionsController;
@@ -518,6 +519,9 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('delivery-partner-withdraws', [DeliveryPartnerWithdrawController::class, 'store']);
     Route::post('approve-delivery-partner-withdraw', [DeliveryPartnerWithdrawController::class, 'approve']);
     Route::get('vendor-dp-profit', [OrderAssignmentController::class, 'profit']);
+    // DP earnings analytics (admin view) + manual incentive
+    Route::get('delivery-partner-earnings', [DeliveryPartnerEarningsController::class, 'partnerEarnings']);
+    Route::post('delivery-partner-incentive', [DeliveryPartnerEarningsController::class, 'grantIncentive']);
     Route::apiResource('categories', CategoryController::class, [
         'only' => ['store', 'update', 'destroy'],
     ]);
@@ -670,6 +674,7 @@ Route::group(['middleware' => ['permission:delivery_partner', 'auth:sanctum'], '
     Route::get('me', [DeliveryPartnerController::class, 'me']);
     Route::get('orders', [DeliveryPartnerController::class, 'myOrders']);
     Route::post('orders/{id}/status', [DeliveryPartnerController::class, 'updateMyOrderStatus']);
+    Route::get('earnings', [DeliveryPartnerEarningsController::class, 'myEarnings']);
     Route::get('withdraws', [DeliveryPartnerWithdrawController::class, 'index']);
     Route::post('withdraws', [DeliveryPartnerWithdrawController::class, 'store']);
 });
