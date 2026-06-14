@@ -6,8 +6,10 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
 use Marvel\Database\Models\DeliveryPartner;
 use Marvel\Database\Models\DeliveryPartnerBalance;
+use Marvel\Database\Models\Order;
 use Marvel\Database\Models\Shop;
 use Marvel\Database\Models\User;
+use Marvel\Database\Repositories\OrderRepository;
 use Spatie\Permission\Guard;
 use Spatie\Permission\Models\Permission;
 use Spatie\Permission\Models\Role;
@@ -192,6 +194,60 @@ class DeliveryPartnerController extends CoreController
         // The partner sees masked KYC only.
         $partner->makeHidden(['aadhaar_number', 'pan_number']);
         return $partner;
+    }
+
+    /** DP self: orders assigned to me, with pickup (vendor) + drop (customer) details. */
+    public function myOrders(Request $request)
+    {
+        $dp = DeliveryPartner::where('user_id', $request->user()->id)->first();
+        if (!$dp) {
+            return response()->json(['message' => 'No delivery-partner profile linked to this account.'], 404);
+        }
+        $limit = (int) ($request->limit ?? 20);
+        $orders = Order::where('delivery_partner_id', $dp->id)
+            ->orderByDesc('id')
+            ->paginate($limit, [
+                'id', 'tracking_number', 'order_status', 'customer_name', 'customer_contact',
+                'shipping_address', 'vendor_shop_id', 'delivery_mode', 'total',
+                'dp_commission_amount', 'assignment_status', 'created_at',
+            ]);
+
+        $shopIds = $orders->getCollection()->pluck('vendor_shop_id')->filter()->unique();
+        $shops = Shop::whereIn('id', $shopIds)->get()->keyBy('id');
+
+        $orders->getCollection()->transform(function ($o) use ($shops) {
+            $o->makeVisible(['shipping_address', 'vendor_shop_id', 'delivery_mode', 'dp_commission_amount', 'assignment_status']);
+            $vendor = $shops[$o->vendor_shop_id] ?? null;
+            $o->pickup = $vendor ? [
+                'shop_id'  => $vendor->id,
+                'name'     => $vendor->name,
+                'location' => is_array($vendor->settings) ? ($vendor->settings['location'] ?? null) : null,
+                'address'  => $vendor->address ?? null,
+            ] : null;
+            return $o;
+        });
+        return $orders;
+    }
+
+    /** DP self: advance the status of an order assigned to me (pickup → out → delivered). */
+    public function updateMyOrderStatus(Request $request, $id)
+    {
+        $dp = DeliveryPartner::where('user_id', $request->user()->id)->first();
+        if (!$dp) {
+            return response()->json(['message' => 'No delivery-partner profile.'], 404);
+        }
+        $order = Order::find($id);
+        if (!$order || (int) $order->delivery_partner_id !== (int) $dp->id) {
+            return response()->json(['message' => 'This order is not assigned to you.'], 403);
+        }
+        $allowed = ['order-at-local-facility', 'order-out-for-delivery', 'order-completed'];
+        $status = $request->input('order_status');
+        if (!in_array($status, $allowed, true)) {
+            return response()->json(['message' => 'Invalid status for a delivery partner.'], 422);
+        }
+        // changeOrderStatus credits the DP's balance when it reaches completed.
+        app(OrderRepository::class)->changeOrderStatus($order, $status);
+        return $order->fresh()->makeVisible(['delivery_mode', 'dp_commission_amount', 'assignment_status']);
     }
 
     /** Whitelist the writable fields (KYC numbers are encrypted by the cast). */

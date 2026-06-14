@@ -668,6 +668,8 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
 // Delivery-partner self routes (their own dashboard).
 Route::group(['middleware' => ['permission:delivery_partner', 'auth:sanctum'], 'prefix' => 'dp'], function () {
     Route::get('me', [DeliveryPartnerController::class, 'me']);
+    Route::get('orders', [DeliveryPartnerController::class, 'myOrders']);
+    Route::post('orders/{id}/status', [DeliveryPartnerController::class, 'updateMyOrderStatus']);
     Route::get('withdraws', [DeliveryPartnerWithdrawController::class, 'index']);
     Route::post('withdraws', [DeliveryPartnerWithdrawController::class, 'store']);
 });
