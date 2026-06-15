@@ -4,6 +4,8 @@ namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Marvel\Http\Requests\StoreDeliveryPartnerRequest;
+use Marvel\Http\Requests\UpdateDeliveryPartnerRequest;
 use Marvel\Database\Models\DeliveryPartner;
 use Marvel\Database\Models\DeliveryPartnerBalance;
 use Marvel\Database\Models\Order;
@@ -57,12 +59,12 @@ class DeliveryPartnerController extends CoreController
     }
 
     /** Admin: onboard a delivery partner (creates login + role + zeroed balance). */
-    public function store(Request $request)
+    public function store(StoreDeliveryPartnerRequest $request)
     {
         $data = $this->payload($request);
 
         if (empty($data['full_name'])) {
-            return response()->json(['message' => 'Full name is required.'], 422);
+            return response()->json(['message' => 'First name is required.'], 422);
         }
 
         $isVendorCumDp = !empty($data['is_vendor_cum_dp']);
@@ -157,7 +159,7 @@ class DeliveryPartnerController extends CoreController
     }
 
     /** Admin: update partner details / commission / KYC. */
-    public function update(Request $request, $id)
+    public function update(UpdateDeliveryPartnerRequest $request, $id)
     {
         $partner = DeliveryPartner::findOrFail($id);
         $partner->update($this->payload($request, false));
@@ -167,9 +169,13 @@ class DeliveryPartnerController extends CoreController
     /** Admin: approve / suspend a partner. */
     public function approve(Request $request)
     {
+        $status = $request->input('status', 'approved');
+        if (!in_array($status, ['pending', 'approved', 'suspended'], true)) {
+            return response()->json(['message' => 'Invalid status.'], 422);
+        }
         $partner = DeliveryPartner::findOrFail($request->input('id'));
-        $partner->status    = $request->input('status', 'approved');
-        $partner->is_active = $partner->status !== 'suspended';
+        $partner->status    = $status;
+        $partner->is_active = $status !== 'suspended';
         $partner->save();
         return $partner;
     }
@@ -294,8 +300,10 @@ class DeliveryPartnerController extends CoreController
     private function payload(Request $request, bool $withDefaults = true): array
     {
         $fields = [
-            'full_name', 'mobile', 'email', 'aadhaar_number', 'pan_number',
+            'first_name', 'last_name', 'full_name', 'mobile', 'email',
+            'aadhaar_number', 'pan_number',
             'aadhaar_doc', 'pan_doc', 'live_photo', 'vehicle_type',
+            'account_holder_name', 'bank_account_number', 'ifsc_code', 'bank_name', 'branch',
             'address', 'location', 'lat', 'lng', 'status', 'is_active',
             'is_vendor_cum_dp', 'shop_id',
             'commission_basis', 'commission_type', 'commission_value',
@@ -303,6 +311,13 @@ class DeliveryPartnerController extends CoreController
             'payment_info', 'notes',
         ];
         $data = $request->only($fields);
+
+        // Derive full_name from first/last (kept for the list, search + mobile app).
+        $fn = trim((string) ($data['first_name'] ?? ''));
+        $ln = trim((string) ($data['last_name'] ?? ''));
+        if ($fn !== '' || $ln !== '') {
+            $data['full_name'] = trim($fn . ' ' . $ln);
+        }
 
         // Pull lat/lng out of the geocoded location object if present.
         $loc = $request->input('location');

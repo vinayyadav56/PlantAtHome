@@ -24,6 +24,7 @@ class DeliveryPartner extends Model
     protected $casts = [
         'aadhaar_number'   => 'encrypted',
         'pan_number'       => 'encrypted',
+        'bank_account_number' => 'encrypted',
         'aadhaar_doc'      => 'json',
         'pan_doc'          => 'json',
         'live_photo'       => 'json',
@@ -42,8 +43,21 @@ class DeliveryPartner extends Model
         'courier_commission_value' => 'float',
     ];
 
-    /** Masked KYC for non-admin contexts (e.g. the DP's own dashboard). */
-    protected $appends = ['aadhaar_masked', 'pan_masked'];
+    /** Masked KYC + payout for non-admin contexts (e.g. the DP's own dashboard). */
+    protected $appends = ['aadhaar_masked', 'pan_masked', 'bank_account_masked'];
+
+    /** Keep full_name in sync with first/last so existing readers (list, search, app) work. */
+    protected static function booted(): void
+    {
+        static::saving(function (self $dp) {
+            if ($dp->first_name !== null || $dp->last_name !== null) {
+                $full = trim(($dp->first_name ?? '') . ' ' . ($dp->last_name ?? ''));
+                if ($full !== '') {
+                    $dp->full_name = $full;
+                }
+            }
+        });
+    }
 
     public function getAadhaarMaskedAttribute(): ?string
     {
@@ -55,6 +69,16 @@ class DeliveryPartner extends Model
     {
         $v = $this->pan_number;
         return $v ? substr($v, 0, 2) . 'XXXXX' . substr($v, -1) : null;
+    }
+
+    public function getBankAccountMaskedAttribute(): ?string
+    {
+        $v = $this->bank_account_number;
+        if (!$v) {
+            return null;
+        }
+        $digits = preg_replace('/\D/', '', $v);
+        return strlen($digits) > 4 ? str_repeat('X', strlen($digits) - 4) . substr($digits, -4) : $digits;
     }
 
     public function user(): BelongsTo
