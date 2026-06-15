@@ -111,4 +111,20 @@ class PriceSheetController extends CoreController
         $row->delete();
         return $row;
     }
+
+    /**
+     * Admin: every vendor supplying a master product — price, stock, city,
+     * fulfillment mode, availability — for the catalog expand + order assignment.
+     */
+    public function productVendors(Request $request, $productId)
+    {
+        $service = new \Marvel\Services\AvailabilityService();
+        return [
+            'product_id' => (int) $productId,
+            'vendors'    => $service->vendorsForProduct(
+                (int) $productId,
+                $request->filled('variation_option_id') ? (int) $request->input('variation_option_id') : null
+            ),
+        ];
+    }
 }

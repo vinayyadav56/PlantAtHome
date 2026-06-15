@@ -535,6 +535,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('price-import-batches', [PriceSheetController::class, 'batches']);
     Route::get('vendor-product-prices', [PriceSheetController::class, 'prices']);
     Route::delete('vendor-product-prices/{id}', [PriceSheetController::class, 'destroy']);
+    Route::get('catalog-product-vendors/{productId}', [PriceSheetController::class, 'productVendors']);
 
     // Order → vendor + delivery-partner matching/assignment (P3)
     Route::get('orders/{id}/match', [OrderAssignmentController::class, 'match']);

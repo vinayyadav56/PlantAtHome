@@ -106,6 +106,12 @@ class PricingService
         return $row && (float) $row->cost_price > 0 ? (float) $row->cost_price : null;
     }
 
+    /** Customer-facing selling price for a given vendor cost (margin applied). */
+    public function priceFromCost(Product $product, float $cost): float
+    {
+        return round($cost * (1 + $this->marginFor($product) / 100), 2);
+    }
+
     private function marginFor(Product $product): float
     {
         $productMargins = (array) ($this->vp['productMargins'] ?? []);

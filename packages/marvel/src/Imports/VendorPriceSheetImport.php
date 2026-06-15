@@ -8,6 +8,7 @@ use Maatwebsite\Excel\Concerns\WithHeadingRow;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Variation;
 use Marvel\Database\Models\VendorProductPrice;
+use Marvel\Services\AvailabilityService;
 
 /**
  * Parses an admin vendor price-sheet (.xlsx/.csv). The vendor (shop), period and
@@ -29,6 +30,7 @@ class VendorPriceSheetImport implements ToCollection, WithHeadingRow
     public int $rowCount = 0;
     public int $errorCount = 0;
     public array $errors = [];
+    private array $touchedProducts = [];
 
     public function __construct(
         private int $shopId,
@@ -84,6 +86,26 @@ class VendorPriceSheetImport implements ToCollection, WithHeadingRow
             }
 
             $cost = (float) $costRaw;
+
+            // Optional per-vendor stock + fulfillment mode (only set when present, so
+            // a price-only sheet never wipes existing stock).
+            $values = [
+                'cost_price'      => $cost,
+                'is_available'    => $cost > 0,
+                'effective_to'    => $this->effectiveTo,
+                'source'          => 'excel',
+                'import_batch_id' => $this->batchId,
+                'deleted_at'      => null,
+            ];
+            $stockRaw = $row->get('stock_qty', $row->get('stock', null));
+            if (is_numeric($stockRaw)) {
+                $values['stock_qty'] = max(0, (int) $stockRaw);
+            }
+            $modeRaw = strtolower($this->str($row, 'fulfillment_mode') ?: $this->str($row, 'fulfillment'));
+            if (in_array($modeRaw, ['local', 'courier', 'both'], true)) {
+                $values['fulfillment_mode'] = $modeRaw;
+            }
+
             VendorProductPrice::updateOrCreate(
                 [
                     'shop_id'             => $this->shopId,
@@ -92,15 +114,9 @@ class VendorPriceSheetImport implements ToCollection, WithHeadingRow
                     'period_type'         => $this->periodType,
                     'effective_from'      => $this->effectiveFrom,
                 ],
-                [
-                    'cost_price'      => $cost,
-                    'is_available'    => $cost > 0,
-                    'effective_to'   => $this->effectiveTo,
-                    'source'          => 'excel',
-                    'import_batch_id' => $this->batchId,
-                    'deleted_at'      => null,
-                ]
+                $values
             );
+            $this->touchedProducts[$product->id] = true;
 
             // Optional per-product delivery charge on the same sheet.
             $deliveryCharge = $row->get('delivery_charge', null);
@@ -109,6 +125,12 @@ class VendorPriceSheetImport implements ToCollection, WithHeadingRow
             }
 
             $this->rowCount++;
+        }
+
+        // Refresh the city-availability projection for every product this sheet touched.
+        $availability = new AvailabilityService();
+        foreach (array_keys($this->touchedProducts) as $pid) {
+            $availability->recomputeForProduct((int) $pid);
         }
     }
 
