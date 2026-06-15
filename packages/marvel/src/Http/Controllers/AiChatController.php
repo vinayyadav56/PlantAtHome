@@ -55,6 +55,73 @@ class AiChatController extends CoreController
     }
 
     /**
+     * Mobile-app proxy for a single chat turn → the async chatbot microservice.
+     * The web hits the service directly through its own edge proxy; the native app
+     * has no server-side secret, so it routes through here (mirrors PlantDoctor). Sync.
+     */
+    public function ask(Request $request): JsonResponse
+    {
+        $setting = $this->setting();
+        if (!$setting || !$setting->enabled) {
+            return response()->json(['message' => 'Ask AI is currently unavailable.'], 503);
+        }
+        $serviceUrl = rtrim($setting->service_url ?: (string) env('CHATBOT_SERVICE_URL'), '/');
+        $serviceKey = $setting->service_api_key ?: (string) env('AI_CHAT_SERVICE_API_KEY');
+        if (empty($serviceUrl)) {
+            return response()->json(['message' => 'Ask AI service is not configured.'], 503);
+        }
+
+        $data = $request->validate([
+            'message' => 'required|string|max:1000',
+            'conversation_id' => 'nullable|string',
+            'language' => 'nullable|string|max:12',
+            'plant' => 'required|array',
+            'plant.id' => 'nullable|integer',
+            'plant.name' => 'required|string',
+            'plant.scientific_name' => 'nullable|string',
+            'plant.facts' => 'nullable|string',
+        ]);
+
+        try {
+            $resp = \Illuminate\Support\Facades\Http::timeout(60)
+                ->withHeaders(array_filter(['X-Api-Key' => $serviceKey]))
+                ->post($serviceUrl . '/ask', [
+                    'user_id' => optional($request->user())->id,
+                    'conversation_id' => $data['conversation_id'] ?? null,
+                    'plant' => $data['plant'],
+                    'message' => $data['message'],
+                    'language' => $data['language'] ?? 'en',
+                ]);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => 'Could not reach Ask AI right now.'], 502);
+        }
+        if (!$resp->successful()) {
+            return response()->json(['message' => 'Ask AI failed. Please try again.'], 502);
+        }
+
+        return response()->json($resp->json());
+    }
+
+    /** Best-effort: tell the service the chat ended so it flushes the transcript. */
+    public function end(Request $request): JsonResponse
+    {
+        $setting = $this->setting();
+        $serviceUrl = rtrim(($setting->service_url ?? '') ?: (string) env('CHATBOT_SERVICE_URL'), '/');
+        $serviceKey = ($setting->service_api_key ?? '') ?: (string) env('AI_CHAT_SERVICE_API_KEY');
+        $conversationId = $request->input('conversation_id');
+        if ($serviceUrl && $conversationId) {
+            try {
+                \Illuminate\Support\Facades\Http::timeout(8)
+                    ->withHeaders(array_filter(['X-Api-Key' => $serviceKey]))
+                    ->post($serviceUrl . '/end', ['conversation_id' => $conversationId]);
+            } catch (\Throwable $e) {
+                // non-fatal — the service idle-sweep persists anyway
+            }
+        }
+        return response()->json(['ok' => true]);
+    }
+
+    /**
      * Internal — the microservice posts the full transcript once per chat
      * (on /end or its idle-sweep), authenticated by a shared X-Api-Key.
      * Idempotent: upserts on conversation_id so a double-flush is harmless.

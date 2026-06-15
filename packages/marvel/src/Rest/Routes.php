@@ -151,6 +151,13 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::get('ai-chat/settings', [AiChatController::class, 'getSettings']);
 Route::post('ai-chat/persist', [AiChatController::class, 'persist'])
     ->middleware('throttle:240,1');
+// Native-app chat proxy → the async microservice (the web hits the service via its own
+// edge proxy; the app has no server-side secret, so it forwards through Laravel like
+// Plant Doctor). Auth-gated so the per-user daily cap has a real user_id; rate-limited.
+Route::middleware(['auth:sanctum', 'throttle:20,1'])->group(function () {
+    Route::post('ai-chat/ask', [AiChatController::class, 'ask']);
+    Route::post('ai-chat/end', [AiChatController::class, 'end']);
+});
 
 // Garden service — public lead capture + active package templates for the page,
 // and the Razorpay payment-link webhook. Lead capture is rate-limited per IP to
