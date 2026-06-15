@@ -4,6 +4,7 @@ namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Marvel\Database\Models\Product;
+use Marvel\Services\AvailabilityService;
 use Marvel\Services\PricingService;
 
 /**
@@ -60,6 +61,25 @@ class LocationPriceController extends CoreController
             );
         }
         return ['results' => $results];
+    }
+
+    /**
+     * GET city-availability?city=  — does the customer's city have any vendor-fulfilled
+     * products? Lets the storefront decide between the city-first view (+ "Available in
+     * your city" badge) and going straight to the global catalog. No seller info exposed.
+     */
+    public function cityAvailability(Request $request)
+    {
+        $city = (string) $request->input('city', '');
+        $svc  = new AvailabilityService();
+        $all   = $svc->availableProductIdsInCity($city, false);
+        $local = $svc->availableProductIdsInCity($city, true);
+        return [
+            'city'             => $city,
+            'available_count'  => count($all),
+            'local_count'      => count($local),
+            'has_availability' => count($all) > 0,
+        ];
     }
 
     private function latLng(Request $request): ?array

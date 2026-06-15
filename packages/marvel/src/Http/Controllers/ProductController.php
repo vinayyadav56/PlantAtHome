@@ -109,6 +109,21 @@ class ProductController extends CoreController
         }
         $products_query = $products_query->whereNotIn('id', $unavailableProducts);
 
+        // City-first availability: when the customer's city is provided, restrict to
+        // master products a vendor can fulfil there (local and/or courier). If nothing
+        // is mapped to that city yet we fall through to the full catalog, so the
+        // storefront is never empty during rollout (the "Available in your city" badge
+        // simply doesn't show until vendors map inventory there). `availability=local`
+        // narrows to same-city local delivery only.
+        if ($request->filled('city')) {
+            $localOnly = $request->input('availability') === 'local';
+            $cityIds = (new \Marvel\Services\AvailabilityService())
+                ->availableProductIdsInCity((string) $request->city, $localOnly);
+            if (!empty($cityIds)) {
+                $products_query = $products_query->whereIn('id', $cityIds);
+            }
+        }
+
         if ($request->flash_sale_builder) {
             $products_query = $this->repository->processFlashSaleProducts($request, $products_query);
         }

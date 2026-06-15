@@ -191,6 +191,7 @@ Route::get('near-by-shop/{lat}/{lng}', [ShopController::class, 'nearByShop']);
 // Public: location-derived selling price + availability (margin over hidden vendor cost)
 Route::get('location-price', [LocationPriceController::class, 'show']);
 Route::post('location-price/batch', [LocationPriceController::class, 'batch']);
+Route::get('city-availability', [LocationPriceController::class, 'cityAvailability']);
 
 // Public: live courier position for an order (only while out for delivery)
 Route::get('orders/{tracking}/courier-location', [OrderAssignmentController::class, 'courierLocation']);
