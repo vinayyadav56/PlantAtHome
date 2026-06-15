@@ -43,9 +43,11 @@ return [
     'active_payment_gateway' => env('ACTIVE_PAYMENT_GATEWAY', 'stripe'),
 
     'razorpay' => [
-        'key_id'         => env('RAZORPAY_KEY_ID'),
-        'key_secret'     => env('RAZORPAY_KEY_SECRET'),
-        'webhook_secret' => env('RAZORPAY_WEBHOOK_SECRET_KEY')
+        // Accept either env naming — RAZORPAY_KEY_ID/SECRET (canonical, staging) or the
+        // legacy RAZORPAY_KEY/SECRET — so a prod box set up from the old example still works.
+        'key_id'         => env('RAZORPAY_KEY_ID', env('RAZORPAY_KEY')),
+        'key_secret'     => env('RAZORPAY_KEY_SECRET', env('RAZORPAY_SECRET')),
+        'webhook_secret' => env('RAZORPAY_WEBHOOK_SECRET_KEY', env('RAZORPAY_WEBHOOK_SECRET'))
     ],
 
     'mollie' => [

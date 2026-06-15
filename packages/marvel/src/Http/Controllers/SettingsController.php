@@ -56,6 +56,13 @@ class SettingsController extends CoreController
         // Add formatted maintenance data to the existing data
         $data['maintenance'] = $formattedMaintenance;
 
+        // Expose the PUBLIC Razorpay key id so storefront + mobile clients use the exact
+        // key the server creates orders with (the secret stays server-side). Injected from
+        // config on read (not cached/stored) so rotating the key never needs a client rebuild.
+        $options = $data['options'] ?? [];
+        $options['razorpayKeyId'] = config('shop.razorpay.key_id') ?: null;
+        $data['options'] = $options;
+
         // Already server-cached above (rememberForever, busted on store).
         // For anonymous storefront reads also allow the Vercel edge to cache
         // it — every page (SSR) fetches settings. Admin (real Bearer) stays
