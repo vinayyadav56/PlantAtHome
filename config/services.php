@@ -57,4 +57,13 @@ return [
         'notify_lang' => env('WHATSAPP_NOTIFY_LANG', 'en'),
     ],
 
+    // PlantAtHome — LinkedIn ("Sign In with LinkedIn using OpenID Connect").
+    // Web posts the NextAuth access_token to /social-login-token; the native app sends
+    // the auth code to /social-login/linkedin/exchange (secret stays server-side).
+    'linkedin' => [
+        'client_id' => env('LINKEDIN_CLIENT_ID'),
+        'client_secret' => env('LINKEDIN_CLIENT_SECRET'),
+        'redirect' => env('LINKEDIN_REDIRECT_URI'),
+    ],
+
 ];

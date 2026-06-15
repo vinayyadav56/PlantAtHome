@@ -502,67 +502,140 @@ class UserController extends CoreController
         $this->validateProvider($provider);
 
         try {
-            $user = Socialite::driver($provider)->userFromToken($token);
-            $userExist = User::where('email',  $user->email)->exists();
-
-            $userCreated = User::firstOrCreate(
-                [
-                    'email' => $user->getEmail()
-                ],
-                [
-                    'email_verified_at' => now(),
-                    'name' => $user->getName(),
-                ]
-            );
-
-            $userCreated->providers()->updateOrCreate(
-                [
-                    'provider' => $provider,
-                    'provider_user_id' => $user->getId(),
-                ]
-            );
-
-            $avatar = [
-                'thumbnail' => $user->getAvatar(),
-                'original' => $user->getAvatar(),
-            ];
-
-            // Match on the relation FK (one profile per user) — matching on the
-            // avatar JSON spawned a new profile row on every social login.
-            $userCreated->profile()->updateOrCreate(
-                ['customer_id' => $userCreated->id],
-                ['avatar' => $avatar]
-            );
-
-            if (!$userCreated->hasPermissionTo(Permission::CUSTOMER)) {
-                $userCreated->givePermissionTo(Permission::CUSTOMER);
-                $userCreated->assignRole(Role::CUSTOMER);
-            }
-
-            if (empty($userExist)) {
-                $this->giveSignupPointsToCustomer($userCreated->id);
-            }
-            event(new ProcessUserData());
-            return [
-                "token" => $userCreated->createToken('auth_token')->plainTextToken,
-                "permissions" => $userCreated->getPermissionNames(),
-                "role" => $userCreated->getRoleNames()->first()
-            ];
+            $normalized = $this->fetchSocialUser($provider, $token);
+            return $this->issueSocialToken($provider, $normalized);
         } catch (\Exception $e) {
             throw new MarvelException(INVALID_CREDENTIALS);
         }
     }
 
+    /**
+     * App-side LinkedIn login: LinkedIn requires the client secret for the code→token
+     * exchange (no PKCE-only public clients), so the native app sends the auth code here
+     * and the secret stays server-side. Web uses NextAuth and posts the access_token to
+     * socialLogin() directly.
+     */
+    public function linkedinExchange(Request $request)
+    {
+        try {
+            $resp = \Illuminate\Support\Facades\Http::asForm()->post('https://www.linkedin.com/oauth/v2/accessToken', array_filter([
+                'grant_type'    => 'authorization_code',
+                'code'          => $request->code,
+                'redirect_uri'  => $request->redirect_uri ?: config('services.linkedin.redirect'),
+                'client_id'     => config('services.linkedin.client_id'),
+                'client_secret' => config('services.linkedin.client_secret'),
+                'code_verifier' => $request->code_verifier,
+            ]));
+            $accessToken = $resp->json('access_token');
+            if (!$accessToken) {
+                throw new \Exception('LinkedIn token exchange failed');
+            }
+            $normalized = $this->fetchSocialUser('linkedin', $accessToken);
+            return $this->issueSocialToken('linkedin', $normalized);
+        } catch (\Exception $e) {
+            throw new MarvelException(INVALID_CREDENTIALS);
+        }
+    }
+
+    /** Normalize a provider's user into {id, email, name, avatar}. */
+    protected function fetchSocialUser($provider, $token)
+    {
+        if ($provider === 'linkedin') {
+            // OIDC ("Sign In with LinkedIn using OpenID Connect") userinfo claims.
+            $resp = \Illuminate\Support\Facades\Http::withToken($token)->acceptJson()
+                ->get('https://api.linkedin.com/v2/userinfo');
+            if (!$resp->ok()) {
+                throw new \Exception('LinkedIn userinfo failed');
+            }
+            $d = $resp->json();
+            return [
+                'id'     => $d['sub'] ?? null,
+                'email'  => $d['email'] ?? null,
+                'name'   => $d['name'] ?? trim(($d['given_name'] ?? '') . ' ' . ($d['family_name'] ?? '')),
+                'avatar' => $d['picture'] ?? null,
+            ];
+        }
+        $u = Socialite::driver($provider)->userFromToken($token);
+        return [
+            'id'     => $u->getId(),
+            'email'  => $u->getEmail(),
+            'name'   => $u->getName(),
+            'avatar' => $u->getAvatar(),
+        ];
+    }
+
+    /** Find-or-create the customer for a normalized social user and issue an auth token. */
+    protected function issueSocialToken($provider, array $u)
+    {
+        if (empty($u['email'])) {
+            throw new \Exception('Email not provided by ' . $provider);
+        }
+        $userExist = User::where('email', $u['email'])->exists();
+
+        $userCreated = User::firstOrCreate(
+            ['email' => $u['email']],
+            ['email_verified_at' => now(), 'name' => $u['name'] ?? '']
+        );
+
+        $userCreated->providers()->updateOrCreate([
+            'provider' => $provider,
+            'provider_user_id' => $u['id'],
+        ]);
+
+        $avatar = ['thumbnail' => $u['avatar'], 'original' => $u['avatar']];
+        // Match on the relation FK (one profile per user) — matching on the
+        // avatar JSON spawned a new profile row on every social login.
+        $userCreated->profile()->updateOrCreate(
+            ['customer_id' => $userCreated->id],
+            ['avatar' => $avatar]
+        );
+
+        if (!$userCreated->hasPermissionTo(Permission::CUSTOMER)) {
+            $userCreated->givePermissionTo(Permission::CUSTOMER);
+            $userCreated->assignRole(Role::CUSTOMER);
+        }
+
+        if (empty($userExist)) {
+            $this->giveSignupPointsToCustomer($userCreated->id);
+        }
+        event(new ProcessUserData());
+        return [
+            "token" => $userCreated->createToken('auth_token')->plainTextToken,
+            "permissions" => $userCreated->getPermissionNames(),
+            "role" => $userCreated->getRoleNames()->first()
+        ];
+    }
+
     protected function validateProvider($provider)
     {
-        if (!in_array($provider, ['facebook', 'google'])) {
+        if (!in_array($provider, ['facebook', 'google', 'linkedin'])) {
             throw new MarvelException(PLEASE_LOGIN_USING_FACEBOOK_OR_GOOGLE);
         }
     }
 
-    protected function getOtpGateway()
+    /**
+     * Resolve the OTP gateway name for an optional per-request channel. Lets a client offer
+     * both SMS and WhatsApp login regardless of the global ACTIVE_OTP_GATEWAY default.
+     * Accepts 'sms' / 'whatsapp' aliases or an explicit gateway name; falls back to the default.
+     */
+    protected function resolveOtpGatewayName($channel = null)
     {
-        $gateway = config('auth.active_otp_gateway');
+        $allowed = ['twilio', 'msg91', 'messagebird', 'whatsapp'];
+        if ($channel === 'whatsapp') {
+            return 'whatsapp';
+        }
+        if ($channel === 'sms') {
+            return config('auth.sms_otp_gateway') ?: config('auth.active_otp_gateway');
+        }
+        if (is_string($channel) && in_array($channel, $allowed, true)) {
+            return $channel;
+        }
+        return config('auth.active_otp_gateway');
+    }
+
+    protected function getOtpGateway($channel = null)
+    {
+        $gateway = $this->resolveOtpGatewayName($channel);
         $gateWayClass = "Marvel\\Otp\\Gateways\\" . ucfirst($gateway) . 'Gateway';
         return new OtpGateway(new $gateWayClass());
     }
@@ -573,7 +646,8 @@ class UserController extends CoreController
         $code = $request->code;
         $phoneNumber = $request->phone_number;
         try {
-            $otpGateway = $this->getOtpGateway();
+            // Verify with the SAME gateway that sent the code (client echoes the channel back).
+            $otpGateway = $this->getOtpGateway($request->channel);
             $verifyOtpCode = $otpGateway->checkVerification($id, $code, $phoneNumber);
             if ($verifyOtpCode->isValid()) {
                 return true;
@@ -587,8 +661,12 @@ class UserController extends CoreController
     public function sendOtpCode(Request $request)
     {
         $phoneNumber = $request->phone_number;
+        // Optional per-request channel ('sms' | 'whatsapp' | explicit gateway). The resolved
+        // gateway name is echoed back so the client sends it again on verify/login.
+        $channel = $request->channel;
         try {
-            $otpGateway = $this->getOtpGateway();
+            $gatewayName = $this->resolveOtpGatewayName($channel);
+            $otpGateway = $this->getOtpGateway($channel);
             $sendOtpCode = $otpGateway->startVerification($phoneNumber);
             if (!$sendOtpCode->isValid()) {
                 return ['message' => OTP_SEND_FAIL, 'success' => false];
@@ -597,7 +675,8 @@ class UserController extends CoreController
             return [
                 'message' => OTP_SEND_SUCCESSFUL,
                 'success' => true,
-                'provider' => config('auth.active_otp_gateway'),
+                'provider' => $gatewayName,
+                'channel' => $channel,
                 'id' => $sendOtpCode->getId(),
                 'phone_number' => $phoneNumber,
                 'is_contact_exist' => $profile ? true : false

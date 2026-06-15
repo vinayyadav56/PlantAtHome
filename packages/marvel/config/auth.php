@@ -130,4 +130,10 @@ return [
 
     'active_otp_gateway' => env('ACTIVE_OTP_GATEWAY', 'twilio'),
 
+    /*
+    | Gateway used when a client explicitly requests the "sms" channel (so an app can
+    | offer both an SMS button and a WhatsApp button regardless of the global default).
+    */
+    'sms_otp_gateway' => env('SMS_OTP_GATEWAY', 'msg91'),
+
 ];

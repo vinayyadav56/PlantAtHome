@@ -84,6 +84,7 @@ Route::post('/verify-forget-password-token', [UserController::class, 'verifyForg
 Route::post('/reset-password', [UserController::class, 'resetPassword']);
 Route::post('/contact-us', [UserController::class, 'contactAdmin']);
 Route::post('/social-login-token', [UserController::class, 'socialLogin']);
+Route::post('/social-login/linkedin/exchange', [UserController::class, 'linkedinExchange']);
 Route::post('/send-otp-code', [UserController::class, 'sendOtpCode']);
 Route::post('/verify-otp-code', [UserController::class, 'verifyOtpCode']);
 Route::post('/otp-login', [UserController::class, 'otpLogin']);
