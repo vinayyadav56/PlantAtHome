@@ -93,6 +93,7 @@ Route::get('top-authors', [AuthorController::class, 'topAuthor']);
 Route::get('top-manufacturers', [ManufacturerController::class, 'topManufacturer']);
 Route::get('popular-products', [ProductController::class, 'popularProducts']);
 Route::get('best-selling-products', [ProductController::class, 'bestSellingProducts']);
+Route::get('top-rated-products', [ProductController::class, 'topRatedProducts']);
 Route::get('check-availability', [ProductController::class, 'checkAvailability']);
 Route::get("products/calculate-rental-price", [ProductController::class, 'calculateRentalPrice']);
 Route::post('import-products', [ProductController::class, 'importProducts']);

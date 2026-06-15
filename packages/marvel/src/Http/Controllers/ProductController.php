@@ -212,8 +212,8 @@ class ProductController extends CoreController
             $product->setRelation('related_products', $related_products);
 
             // PlantAtHome: eager-load botanical details + ordered gallery images
-            // + bundle items + buy-together add-ons.
-            $product->load(['plantAttribute', 'images', 'bundleItems', 'addons']);
+            // + bundle items + buy-together add-ons + the shop (needed for review shop_id).
+            $product->load(['plantAttribute', 'images', 'bundleItems', 'addons', 'shop']);
 
             return $product;
         } catch (Exception $e) {
@@ -650,6 +650,38 @@ class ProductController extends CoreController
         }
         if ($range) {
             $products_query = $products_query->whereDate('created_at', '>', Carbon::now()->subDays($range));
+        }
+        if ($type_id) {
+            $products_query = $products_query->where('type_id', '=', $type_id);
+        }
+        return $products_query->take($limit)->get();
+    }
+
+    /**
+     * Public top-rated products — highest average review rating first (only products that
+     * have at least one review). Mirrors popularProducts()'s params (type_slug/limit/shop_id).
+     */
+    public function topRatedProducts(Request $request)
+    {
+        $limit = $request->limit ? $request->limit : 10;
+        $language = $request->language ?? DEFAULT_LANGUAGE;
+        $type_id = $request->type_id ? $request->type_id : '';
+        if (isset($request->type_slug) && empty($type_id)) {
+            try {
+                $type = Type::where('slug', $request->type_slug)->where('language', $language)->firstOrFail();
+                $type_id = $type->id;
+            } catch (MarvelException $e) {
+                throw new MarvelException(NOT_FOUND);
+            }
+        }
+        $products_query = $this->repository
+            ->with(['type', 'shop'])
+            ->withAvg('reviews', 'rating')
+            ->whereHas('reviews')
+            ->where('language', $language)
+            ->orderByDesc('reviews_avg_rating');
+        if (isset($request->shop_id)) {
+            $products_query = $products_query->where('shop_id', '=', $request->shop_id);
         }
         if ($type_id) {
             $products_query = $products_query->where('type_id', '=', $type_id);
