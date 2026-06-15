@@ -21,6 +21,9 @@ use Marvel\Database\Models\VendorProductPrice;
  */
 class MatchingService
 {
+    /** A vendor/DP outside the order's city still counts as "same area" within this radius. */
+    private const RADIUS_KM = 25;
+
     public function __construct(private ?GeoMatchService $geo = null)
     {
         $this->geo = $geo ?: new GeoMatchService();
@@ -28,7 +31,11 @@ class MatchingService
 
     public function suggest(Order $order): array
     {
-        $customer = $this->resolveCustomerLatLng($order);
+        $customer  = $this->resolveCustomerLatLng($order);
+        $orderCity = $this->resolveCustomerCity($order);
+        // Only scope to the city/area when we have *something* to scope by — else
+        // show everyone (preserves behavior for orders with no city and no coords).
+        $canFilter = ($orderCity !== null) || ($customer !== null);
 
         $productIds = $order->relationLoaded('products')
             ? $order->products->pluck('id')->all()
@@ -36,19 +43,80 @@ class MatchingService
 
         $stockShopIds = $this->shopsWithStock($productIds);
 
-        $vendors  = $this->rankVendors($customer, $stockShopIds);
-        $partners = $this->rankPartners($customer, $vendors[0] ?? null);
+        [$vendors, $vendorsOther] = $this->partition(
+            $this->rankVendors($customer, $orderCity, $canFilter, $stockShopIds)
+        );
+        $chosenVendor = $vendors[0] ?? $vendorsOther[0] ?? null;
 
-        $suggestion = $this->buildSuggestion($vendors, $partners);
+        [$partners, $partnersOther] = $this->partition(
+            $this->rankPartners($customer, $orderCity, $canFilter, $chosenVendor)
+        );
+
+        $suggestion = $this->buildSuggestion($vendors, $vendorsOther, $partners, $partnersOther);
 
         return [
-            'customer_location'  => $customer,
+            'order_city'          => $orderCity,
+            'customer_location'   => $customer,
             'has_customer_coords' => (bool) $customer,
-            'eta_source'         => $this->geo->hasKey() ? 'google' : 'haversine',
-            'vendors'            => $vendors,
-            'partners'           => $partners,
-            'suggestion'         => $suggestion,
+            'eta_source'          => $this->geo->hasKey() ? 'google' : 'haversine',
+            'vendors'             => $vendors,        // same city / within radius
+            'vendors_other'       => $vendorsOther,   // everyone else, ranked by distance
+            'partners'            => $partners,
+            'partners_other'      => $partnersOther,
+            'suggestion'          => $suggestion,
         ];
+    }
+
+    /** Split a ranked list into same-city (primary) + other, capping each. */
+    private function partition(array $rows, int $limit = 15): array
+    {
+        $same = [];
+        $other = [];
+        foreach ($rows as $r) {
+            if (!empty($r['same_city'])) {
+                $same[] = $r;
+            } else {
+                $other[] = $r;
+            }
+        }
+        return [array_slice($same, 0, $limit), array_slice($other, 0, $limit)];
+    }
+
+    private function normCity(?string $s): string
+    {
+        return strtolower(trim((string) $s));
+    }
+
+    /** Same city by name (case-insensitive) OR within RADIUS_KM. Show-all when nothing to filter by. */
+    private function isSameCity(bool $canFilter, ?string $orderCity, ?string $rowCity, $distanceKm): bool
+    {
+        if (!$canFilter) {
+            return true;
+        }
+        if ($orderCity && $rowCity && $this->normCity($rowCity) === $this->normCity($orderCity)) {
+            return true;
+        }
+        return is_numeric($distanceKm) && (float) $distanceKm <= self::RADIUS_KM;
+    }
+
+    private function resolveCustomerCity(Order $order): ?string
+    {
+        foreach ([$order->shipping_address, $order->billing_address] as $addr) {
+            if (is_array($addr) && isset($addr['city']) && trim((string) $addr['city']) !== '') {
+                return trim((string) $addr['city']);
+            }
+        }
+        return null;
+    }
+
+    private function shopCity(Shop $shop): ?string
+    {
+        $addr = is_array($shop->address) ? $shop->address : [];
+        if (!empty($addr['city'])) {
+            return (string) $addr['city'];
+        }
+        $settings = is_array($shop->settings) ? $shop->settings : [];
+        return !empty($settings['city']) ? (string) $settings['city'] : null;
     }
 
     /** Persist a suggestion (assignment_status=suggested) without overwriting an admin-approved one. */
@@ -92,7 +160,7 @@ class MatchingService
             ->all();
     }
 
-    private function rankVendors(?array $customer, array $stockShopIds): array
+    private function rankVendors(?array $customer, ?string $orderCity, bool $canFilter, array $stockShopIds): array
     {
         $shops = Shop::where('is_active', 1)->get()->filter(fn ($s) => $this->shopLatLng($s) !== null);
 
@@ -103,6 +171,7 @@ class MatchingService
             $rows[] = [
                 'shop_id'   => $s->id,
                 'name'      => $s->name,
+                'city'      => $this->shopCity($s),
                 'lat'       => $ll['lat'],
                 'lng'       => $ll['lng'],
                 'has_stock' => in_array($s->id, $stockShopIds, true),
@@ -118,17 +187,21 @@ class MatchingService
             }
             unset($r);
         }
-        // Prefer in-stock, then nearest.
+        foreach ($rows as &$r) {
+            $r['same_city'] = $this->isSameCity($canFilter, $orderCity, $r['city'] ?? null, $r['distance_km'] ?? null);
+        }
+        unset($r);
+        // Prefer in-stock, then nearest. (suggest() partitions same-city vs other.)
         usort($rows, function ($a, $b) {
             if ($a['has_stock'] !== $b['has_stock']) {
                 return $a['has_stock'] ? -1 : 1;
             }
             return ($a['distance_km'] ?? INF) <=> ($b['distance_km'] ?? INF);
         });
-        return array_slice($rows, 0, 15);
+        return $rows;
     }
 
-    private function rankPartners(?array $customer, ?array $chosenVendor): array
+    private function rankPartners(?array $customer, ?string $orderCity, bool $canFilter, ?array $chosenVendor): array
     {
         $dps = DeliveryPartner::where('status', 'approved')->where('is_active', 1)
             ->whereNotNull('lat')->whereNotNull('lng')->get();
@@ -136,10 +209,12 @@ class MatchingService
         $rows = [];
         $destsC = [];
         foreach ($dps as $dp) {
+            $addr = is_array($dp->address) ? $dp->address : [];
             $rows[] = [
                 'delivery_partner_id' => $dp->id,
                 'full_name'           => $dp->full_name,
                 'mobile'              => $dp->mobile,
+                'city'                => $addr['city'] ?? null,
                 'is_vendor_cum_dp'    => (bool) $dp->is_vendor_cum_dp,
                 'shop_id'             => $dp->shop_id,
                 'lat'                 => (float) $dp->lat,
@@ -165,6 +240,10 @@ class MatchingService
             }
             unset($r);
         }
+        foreach ($rows as &$r) {
+            $r['same_city'] = $this->isSameCity($canFilter, $orderCity, $r['city'] ?? null, $r['distance_from_customer'] ?? null);
+        }
+        unset($r);
         // Prefer the chosen vendor's own vendor-cum-DP, then nearest to the vendor (fast pickup).
         $chosenShopId = $chosenVendor['shop_id'] ?? null;
         usort($rows, function ($a, $b) use ($chosenShopId) {
@@ -176,13 +255,13 @@ class MatchingService
             $key = 'distance_from_vendor';
             return ($a[$key] ?? $a['distance_from_customer'] ?? INF) <=> ($b[$key] ?? $b['distance_from_customer'] ?? INF);
         });
-        return array_slice($rows, 0, 15);
+        return $rows;
     }
 
-    private function buildSuggestion(array $vendors, array $partners): array
+    private function buildSuggestion(array $vendors, array $vendorsOther, array $partners, array $partnersOther): array
     {
-        $vendor = $vendors[0] ?? null;
-        $dp     = $partners[0] ?? null;
+        $vendor = $vendors[0] ?? $vendorsOther[0] ?? null;
+        $dp     = $partners[0] ?? $partnersOther[0] ?? null;
         $mode   = null;
         if ($vendor && $dp) {
             $mode = ($dp['is_vendor_cum_dp'] && $dp['shop_id'] == $vendor['shop_id']) ? 'vendor_dp' : 'separate_dp';
