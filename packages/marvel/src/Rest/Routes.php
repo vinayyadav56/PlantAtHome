@@ -51,6 +51,7 @@ use Marvel\Http\Controllers\RefundReasonController;
 use Marvel\Http\Controllers\VoiceSearchController;
 use Marvel\Http\Controllers\GardenController;
 use Marvel\Http\Controllers\PlantDoctorController;
+use Marvel\Http\Controllers\CarePlanController;
 use Marvel\Http\Controllers\AiChatController;
 use Marvel\Http\Controllers\DeliveryPincodeController;
 use Marvel\Http\Controllers\DeliveryPartnerController;
@@ -130,6 +131,18 @@ Route::post('voice-search/log', [VoiceSearchController::class, 'storeLog'])
 Route::get('plant-doctor/settings', [PlantDoctorController::class, 'getSettings']);
 Route::post('plant-doctor/diagnose', [PlantDoctorController::class, 'diagnose'])
     ->middleware('throttle:30,1');
+
+// Plant care tracker — public reads the feature flag; the customer routes (my plans,
+// start a plan, mark reminders done) are auth-gated below. Plans are auto-created on
+// delivery by the OrderDelivered listener.
+Route::get('care-plans/settings', [CarePlanController::class, 'getSettings']);
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('care-plans', [CarePlanController::class, 'index']);
+    Route::get('care-plans/{id}', [CarePlanController::class, 'show'])->whereNumber('id');
+    Route::post('care-plans/generate', [CarePlanController::class, 'generate']);
+    Route::post('care-plans/{id}/archive', [CarePlanController::class, 'archive'])->whereNumber('id');
+    Route::post('care-plans/{id}/reminders/{reminderId}/done', [CarePlanController::class, 'markReminderDone']);
+});
 
 // Ask AI (per-plant chat) — public reads the feature flag; the chat itself runs
 // on the async microservice (not here). `persist` is an internal callback from
@@ -633,6 +646,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('plant-doctor/settings', [PlantDoctorController::class, 'updateSettings']);
     Route::get('plant-doctor/stats', [PlantDoctorController::class, 'getStats']);
     Route::get('plant-doctor/logs', [PlantDoctorController::class, 'getLogs']);
+
+    // Care plans — admin management (settings + month cost).
+    Route::get('care-plans/admin-settings', [CarePlanController::class, 'getAdminSettings']);
+    Route::post('care-plans/settings', [CarePlanController::class, 'updateSettings']);
 
     // Ask AI — admin management (settings/stats) + transcript browsing by user.
     Route::get('ai-chat/admin-settings', [AiChatController::class, 'getAdminSettings']);

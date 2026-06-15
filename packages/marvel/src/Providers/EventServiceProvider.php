@@ -49,6 +49,7 @@ use Marvel\Listeners\Refund\SendRefundUpdateNotification;
 use Marvel\Listeners\SendOrderCreationNotification;
 use Marvel\Listeners\SendOrderCancelledNotification;
 use Marvel\Listeners\SendOrderDeliveredNotification;
+use Marvel\Listeners\GenerateCarePlanOnDelivery;
 use Marvel\Listeners\SendOrderReceivedNotification;
 use Marvel\Listeners\SendOrderStatusChangedNotification;
 use Marvel\Listeners\SendPaymentFailedNotification;
@@ -97,7 +98,8 @@ class EventServiceProvider extends ServiceProvider
             SendOrderCancelledNotification::class
         ],
         OrderDelivered::class => [
-            SendOrderDeliveredNotification::class
+            SendOrderDeliveredNotification::class,
+            GenerateCarePlanOnDelivery::class
         ],
         OrderStatusChanged::class => [
             SendOrderStatusChangedNotification::class
