@@ -10,6 +10,7 @@ use Marvel\Database\Models\OwnershipTransfer;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Shop;
 use Marvel\Database\Models\User;
+use Marvel\Database\Models\VendorServiceArea;
 use Marvel\Enums\DefaultStatusType;
 use Marvel\Enums\Permission;
 use Marvel\Enums\ProductVisibilityStatus;
@@ -46,7 +47,45 @@ class ShopRepository extends BaseRepository
         'address',
         'settings',
         'notifications',
+        'lat',
+        'lng',
     ];
+
+    /**
+     * Replace a vendor's served cities (vendor_service_areas) from the onboarding
+     * payload. Only runs when `service_areas` is present, so a partial update that
+     * omits it leaves the existing areas intact.
+     */
+    private function syncServiceAreas(Shop $shop, $request): void
+    {
+        $areas = $request['service_areas'] ?? null;
+        if (!is_array($areas)) {
+            return;
+        }
+        VendorServiceArea::where('shop_id', $shop->id)->delete();
+        $seen = [];
+        foreach ($areas as $area) {
+            $city = trim((string) ($area['city'] ?? ''));
+            if ($city === '') {
+                continue;
+            }
+            $pincode = isset($area['pincode']) && trim((string) $area['pincode']) !== '' ? trim((string) $area['pincode']) : null;
+            $key = strtolower($city) . '|' . ($pincode ?? '');
+            if (isset($seen[$key])) {
+                continue;
+            }
+            $seen[$key] = true;
+            $mode = $area['fulfillment_mode'] ?? 'local';
+            VendorServiceArea::create([
+                'shop_id'          => $shop->id,
+                'city'             => $city,
+                'pincode'          => $pincode,
+                'fulfillment_mode' => in_array($mode, ['local', 'courier', 'both'], true) ? $mode : 'local',
+                'eta_days'         => isset($area['eta_days']) && $area['eta_days'] !== '' ? (int) $area['eta_days'] : null,
+                'is_active'        => $area['is_active'] ?? true,
+            ]);
+        }
+    }
 
 
     public function boot()
@@ -79,6 +118,7 @@ class ShopRepository extends BaseRepository
             if (isset($request['balance']['payment_info'])) {
                 $shop->balance()->create($request['balance']);
             }
+            $this->syncServiceAreas($shop, $request);
 
             // TODO : why this code is needed
             // $shop->categories = $shop->categories;
@@ -110,6 +150,7 @@ class ShopRepository extends BaseRepository
                 $data['slug'] = $this->makeSlug($request);
             }
             $shop->update($data);
+            $this->syncServiceAreas($shop, $request);
 
             // TODO : why this code is needed
             // $shop->categories = $shop->categories;

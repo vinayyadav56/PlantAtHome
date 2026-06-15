@@ -77,7 +77,7 @@ class ShopController extends CoreController
     public function show($slug, Request $request)
     {
         $shop = $this->repository
-            ->with(['categories', 'owner', 'ownership_history'])
+            ->with(['categories', 'owner', 'ownership_history', 'serviceAreas'])
             ->withCount(['orders', 'products']);
         if ($request->user() && ($request->user()->hasPermissionTo(Permission::SUPER_ADMIN) || $request->user()->shops->contains('slug', $slug))) {
             $shop = $shop->with('balance');

@@ -35,6 +35,13 @@ class ShopUpdateRequest extends FormRequest
             'cover_image'            => ['nullable', 'array'],
             'settings'               => ['array'],
             'address'                => ['array'],
+            'lat'                    => ['nullable', 'numeric', 'between:-90,90'],
+            'lng'                    => ['nullable', 'numeric', 'between:-180,180'],
+            'service_areas'                    => ['nullable', 'array'],
+            'service_areas.*.city'             => ['required_with:service_areas', 'string', 'max:100'],
+            'service_areas.*.pincode'          => ['nullable', 'string', 'max:12'],
+            'service_areas.*.fulfillment_mode' => ['nullable', 'in:local,courier,both'],
+            'service_areas.*.eta_days'         => ['nullable', 'integer', 'min:0', 'max:60'],
         ];
     }
 
