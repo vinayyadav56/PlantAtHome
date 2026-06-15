@@ -78,6 +78,18 @@ class Shop extends Model
         return $this->hasMany(Product::class, 'shop_id');
     }
 
+    /** Cities this vendor serves + how (local/courier). Marketplace city-availability. */
+    public function serviceAreas(): HasMany
+    {
+        return $this->hasMany(VendorServiceArea::class, 'shop_id');
+    }
+
+    /** This vendor's inventory mapping onto master products (cost/stock/availability). */
+    public function vendorProductPrices(): HasMany
+    {
+        return $this->hasMany(VendorProductPrice::class, 'shop_id');
+    }
+
     /**
      * @return HasMany
      */

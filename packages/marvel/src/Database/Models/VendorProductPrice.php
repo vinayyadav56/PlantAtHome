@@ -20,11 +20,21 @@ class VendorProductPrice extends Model
     public $guarded = [];
 
     protected $casts = [
-        'cost_price'    => 'float',
-        'is_available'  => 'boolean',
+        'cost_price'     => 'float',
+        'is_available'   => 'boolean',
         'effective_from' => 'date',
-        'effective_to'  => 'date',
+        'effective_to'   => 'date',
+        'stock_qty'      => 'integer',
+        'reserved_qty'   => 'integer',
+        'moq'            => 'integer',
+        'lead_time_days' => 'integer',
     ];
+
+    /** Stock a vendor can still commit (stock minus what's already reserved). */
+    public function getAvailableQtyAttribute(): int
+    {
+        return max(0, (int) ($this->stock_qty ?? 0) - (int) ($this->reserved_qty ?? 0));
+    }
 
     public function shop(): BelongsTo
     {
