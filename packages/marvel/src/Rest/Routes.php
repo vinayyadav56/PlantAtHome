@@ -540,6 +540,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
 
     // Order → vendor + delivery-partner matching/assignment (P3)
     Route::get('orders/{id}/match', [OrderAssignmentController::class, 'match']);
+    Route::get('orders/{id}/fulfillment-plan', [OrderAssignmentController::class, 'fulfillmentPlan']);
     Route::post('orders/{id}/assign', [OrderAssignmentController::class, 'assign']);
 
     // Delivery-partner payouts + profit (P4)

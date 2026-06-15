@@ -6,6 +6,7 @@ use Illuminate\Http\Request;
 use Marvel\Database\Models\DeliveryPartner;
 use Marvel\Database\Models\Order;
 use Marvel\Database\Models\Shop;
+use Marvel\Services\FulfillmentService;
 use Marvel\Services\MatchingService;
 
 /**
@@ -31,6 +32,16 @@ class OrderAssignmentController extends CoreController
                 'assignment_status'   => $order->assignment_status,
             ],
         ]);
+    }
+
+    /**
+     * Admin: per-line fulfillment plan for an order — for each product the best vendor
+     * (local-in-city first, else courier), the fulfillment mode, and the ETA. Read-only.
+     */
+    public function fulfillmentPlan($id)
+    {
+        $order = Order::with('products')->findOrFail($id);
+        return (new FulfillmentService())->planForOrder($order);
     }
 
     /**
