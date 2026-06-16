@@ -41,6 +41,7 @@ on:
           - trust
           - tools-seed
           - sku-gen
+          - recompute-availability
         default: dry-run
 
 jobs:
@@ -76,7 +77,7 @@ jobs:
             img-limit10)   ARGS="plantathome:repair-plant-images --limit=10" ;;
             img-full)      ARGS="plantathome:repair-plant-images" ;;
             img-rollback)  ARGS="plantathome:repair-plant-images --rollback" ;;
-            cat-backup|cat-restore|cat-seed|tools-seed|sku-gen) ARGS="" ;;
+            cat-backup|cat-restore|cat-seed|tools-seed|sku-gen|recompute-availability) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             *) echo "Unknown mode"; exit 1 ;;
@@ -158,6 +159,18 @@ jobs:
                 php artisan plantathome:generate-skus
                 php artisan cache:clear 2>/dev/null || true
                 echo "==> SKU-GEN COMPLETE"
+                ;;
+
+              recompute-availability)
+                echo "==> Ensuring latest code on EC2..."
+                git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || true
+                echo "==> Re-syncing marvel path package + autoloader (new command class)..."
+                composer reinstall marvel/shop --no-interaction 2>&1 | tail -3 || true
+                composer dump-autoload -o 2>/dev/null || true
+                echo "==> Backfilling product_city_availability from vendor inventory + service areas..."
+                php artisan marvel:recompute-city-availability
+                php artisan cache:clear 2>/dev/null || true
+                echo "==> RECOMPUTE-AVAILABILITY COMPLETE"
                 ;;
 
               tools-seed)
