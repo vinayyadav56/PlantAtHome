@@ -41,6 +41,23 @@ trait OrderStatusManagerWithPaymentTrait
                 // ledger is non-authoritative in P2 — swallow
             }
         }
+
+        // P5 stock reservation: commit (deliver) or release (cancel/rollback) the single-
+        // customer-order's per-item reservations. Driven off the PARENT order (which owns
+        // order_items). Flag-gated + idempotent; never throws into the live order flow.
+        if (!$order->parent_id) {
+            try {
+                $reserve = new \Marvel\Services\OrderItemService();
+                if ($order_status === OrderStatus::COMPLETED) {
+                    $reserve->commitForOrder($order);
+                } elseif ($order_status === OrderStatus::CANCELLED
+                    || ($prev_order_status === OrderStatus::COMPLETED && $order_status !== OrderStatus::COMPLETED)) {
+                    $reserve->releaseForOrder($order);
+                }
+            } catch (\Throwable $e) {
+                // reservation is flag-gated + non-authoritative — swallow
+            }
+        }
     }
 
     /**

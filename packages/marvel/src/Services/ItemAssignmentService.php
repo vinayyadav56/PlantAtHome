@@ -26,6 +26,11 @@ class ItemAssignmentService
     private array $weights;
     private int $targetSla;
 
+    // Per-request memoization (keyed by shop_id) so a multi-line cart loads each vendor once.
+    private array $shopCache = [];
+    private array $areaCache = [];
+    private array $rateCache = [];
+
     public function __construct(private ?AvailabilityService $availability = null)
     {
         $this->availability = $availability ?: new AvailabilityService();
@@ -56,10 +61,12 @@ class ItemAssignmentService
             return [];
         }
 
+        // Memoized across lines of one request: a handful of vendors recur over a whole
+        // cart, so we load each shop's rating / service areas / shipping rates ONCE.
         $shopIds = array_values(array_unique(array_map(fn ($v) => (int) $v['shop_id'], $vendors)));
-        $shops = Shop::whereIn('id', $shopIds)->get()->keyBy('id');
-        $areas = VendorServiceArea::whereIn('shop_id', $shopIds)->where('is_active', true)->get()->groupBy('shop_id');
-        $rates = VendorShippingRate::whereIn('shop_id', $shopIds)->where('is_active', true)->get()->groupBy('shop_id');
+        $shops = $this->loadShops($shopIds);
+        $areas = $this->loadAreas($shopIds);
+        $rates = $this->loadRates($shopIds);
 
         $candidates = [];
         foreach ($vendors as $v) {
@@ -217,6 +224,47 @@ class ItemAssignmentService
             ?: $rates->first(fn ($r) => $r->fulfillment_mode === $mode)
             ?: $rates->first();
         return $row ? (float) $row->base_cost : 0.0;
+    }
+
+    /** @return \Illuminate\Support\Collection keyed by shop id (cached). */
+    private function loadShops(array $shopIds)
+    {
+        $missing = array_values(array_diff($shopIds, array_keys($this->shopCache)));
+        if (!empty($missing)) {
+            foreach (Shop::whereIn('id', $missing)->get() as $shop) {
+                $this->shopCache[(int) $shop->id] = $shop;
+            }
+            foreach ($missing as $id) { // remember misses so we don't re-query them
+                $this->shopCache[$id] = $this->shopCache[$id] ?? null;
+            }
+        }
+        return collect($this->shopCache)->only($shopIds);
+    }
+
+    /** @return \Illuminate\Support\Collection of service areas grouped by shop id (cached). */
+    private function loadAreas(array $shopIds)
+    {
+        $missing = array_values(array_diff($shopIds, array_keys($this->areaCache)));
+        if (!empty($missing)) {
+            $grouped = VendorServiceArea::whereIn('shop_id', $missing)->where('is_active', true)->get()->groupBy('shop_id');
+            foreach ($missing as $id) {
+                $this->areaCache[$id] = $grouped[$id] ?? collect();
+            }
+        }
+        return collect($this->areaCache)->only($shopIds);
+    }
+
+    /** @return \Illuminate\Support\Collection of shipping rates grouped by shop id (cached). */
+    private function loadRates(array $shopIds)
+    {
+        $missing = array_values(array_diff($shopIds, array_keys($this->rateCache)));
+        if (!empty($missing)) {
+            $grouped = VendorShippingRate::whereIn('shop_id', $missing)->where('is_active', true)->get()->groupBy('shop_id');
+            foreach ($missing as $id) {
+                $this->rateCache[$id] = $grouped[$id] ?? collect();
+            }
+        }
+        return collect($this->rateCache)->only($shopIds);
     }
 
     private function clamp(float $v, float $min, float $max): float

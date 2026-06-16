@@ -59,32 +59,36 @@ class VendorProductPrice extends Model
             ->update(['reserved_qty' => \Illuminate\Support\Facades\DB::raw("reserved_qty + {$qty}")]) > 0;
     }
 
-    /** Release a prior reservation (order cancelled). */
-    public static function releaseStock(int $id, int $qty): void
+    /** Release a prior reservation (order cancelled). Returns true if a row was updated. */
+    public static function releaseStock(int $id, int $qty): bool
     {
         $qty = max(0, $qty);
         if ($qty === 0) {
-            return;
+            return true;
         }
-        static::where('id', $id)
+        return static::where('id', $id)
             ->where('reserved_qty', '>=', $qty)
-            ->update(['reserved_qty' => \Illuminate\Support\Facades\DB::raw("reserved_qty - {$qty}")]);
+            ->update(['reserved_qty' => \Illuminate\Support\Facades\DB::raw("reserved_qty - {$qty}")]) > 0;
     }
 
-    /** Commit a reservation on fulfilment: decrement both stock and reservation. */
-    public static function commitStock(int $id, int $qty): void
+    /**
+     * Commit a reservation on fulfilment: decrement both stock and reservation. Returns
+     * true only if the guarded UPDATE actually applied — the caller must keep its handle
+     * (order_items.reserved_qty) when this is false, so the held stock isn't orphaned.
+     */
+    public static function commitStock(int $id, int $qty): bool
     {
         $qty = max(0, $qty);
         if ($qty === 0) {
-            return;
+            return true;
         }
-        static::where('id', $id)
+        return static::where('id', $id)
             ->where('reserved_qty', '>=', $qty)
             ->where('stock_qty', '>=', $qty)
             ->update([
                 'reserved_qty' => \Illuminate\Support\Facades\DB::raw("reserved_qty - {$qty}"),
                 'stock_qty'    => \Illuminate\Support\Facades\DB::raw("stock_qty - {$qty}"),
-            ]);
+            ]) > 0;
     }
 
     public function shop(): BelongsTo

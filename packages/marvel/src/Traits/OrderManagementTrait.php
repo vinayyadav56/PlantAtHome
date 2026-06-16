@@ -89,8 +89,24 @@ trait OrderManagementTrait
         }
 
         if ($parent->order_status !== $new) {
+            $old = $parent->order_status;
             $parent->order_status = $new;
             $parent->saveQuietly();
+
+            // P5 stock reservation: the real fulfilment flow flips the parent status HERE
+            // (rolled up from its suborders via saveQuietly, which bypasses changeOrderStatus/
+            // manageVendorBalance). Commit when the whole order is delivered, release when it
+            // is cancelled or rolled back. Flag-gated + idempotent; never breaks the flow.
+            try {
+                $reserve = new \Marvel\Services\OrderItemService();
+                if ($new === OrderStatusEnum::COMPLETED) {
+                    $reserve->commitForOrder($parent);
+                } elseif ($new === OrderStatusEnum::CANCELLED || $old === OrderStatusEnum::COMPLETED) {
+                    $reserve->releaseForOrder($parent);
+                }
+            } catch (\Throwable $e) {
+                // reservation is flag-gated + non-authoritative — swallow
+            }
         }
     }
 }

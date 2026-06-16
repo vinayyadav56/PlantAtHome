@@ -6,7 +6,9 @@ use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\Order;
 use Marvel\Database\Models\OrderItem;
+use Marvel\Database\Models\Settings;
 use Marvel\Database\Models\Shipment;
+use Marvel\Database\Models\VendorProductPrice;
 
 /**
  * The single-customer-order line model (P4). Writes order_items in PARALLEL with the
@@ -20,6 +22,60 @@ class OrderItemService
     public function __construct(private ?ItemAssignmentService $engine = null)
     {
         $this->engine = $engine ?: new ItemAssignmentService();
+    }
+
+    /**
+     * Stock reservation is gated (env MARKETPLACE_RESERVE_STOCK or
+     * settings.options.marketplace.reserve_stock; default OFF) so wiring it into the
+     * live order lifecycle is opt-in and instantly reversible.
+     */
+    public static function reserveEnabled(): bool
+    {
+        $env = env('MARKETPLACE_RESERVE_STOCK');
+        if ($env !== null) {
+            return filter_var($env, FILTER_VALIDATE_BOOLEAN);
+        }
+        $settings = Settings::getData();
+        return (bool) ($settings?->options['marketplace']['reserve_stock'] ?? false);
+    }
+
+    /** Release every still-held reservation on this order (cancel / re-plan). Idempotent. */
+    public function releaseForOrder(Order $order): void
+    {
+        if (!self::reserveEnabled()) {
+            return;
+        }
+        $items = OrderItem::where('order_id', $order->id)
+            ->where('reserved_qty', '>', 0)->whereNotNull('vendor_product_price_id')->get();
+        foreach ($items as $item) {
+            try {
+                VendorProductPrice::releaseStock((int) $item->vendor_product_price_id, (int) $item->reserved_qty);
+            } catch (\Throwable $e) {
+                // reservation is non-authoritative while flag-gated — swallow
+            }
+            $item->update(['reserved_qty' => 0]);
+        }
+    }
+
+    /** Commit every reservation on this order (delivered): decrement real stock. Idempotent. */
+    public function commitForOrder(Order $order): void
+    {
+        if (!self::reserveEnabled()) {
+            return;
+        }
+        $items = OrderItem::where('order_id', $order->id)
+            ->where('reserved_qty', '>', 0)->whereNotNull('vendor_product_price_id')->get();
+        foreach ($items as $item) {
+            $committed = false;
+            try {
+                $committed = VendorProductPrice::commitStock((int) $item->vendor_product_price_id, (int) $item->reserved_qty);
+            } catch (\Throwable $e) {
+                // swallow
+            }
+            // Only drop our handle when the commit actually applied; otherwise keep
+            // reserved_qty so a reconcile/release can still recover the held vendor stock.
+            $item->update($committed ? ['reserved_qty' => 0, 'item_status' => 'delivered'] : ['item_status' => 'delivered']);
+        }
     }
 
     /**
@@ -74,6 +130,9 @@ class OrderItemService
     {
         [$city, $pincode] = $this->location($order);
         $order->loadMissing('items');
+
+        // Release any stock held by a prior plan before re-planning (avoids leaking reservations).
+        $this->releaseForOrder($order);
 
         // Reset prior auto grouping (keep any admin overrides? auto pass re-plans all).
         Shipment::where('order_id', $order->id)->delete();
@@ -183,9 +242,29 @@ class OrderItemService
         }
         $shipment = $shipments[$key];
 
+        // Atomically reserve stock against the chosen vendor row (oversell protection).
+        // Release any prior reservation first (reassignment). reserveStock returns false
+        // when there isn't enough free stock — we still assign, with reserved_qty=0 flagged.
+        $vppId = $pick['vendor_product_price_id'] ?? null;
+        $reservedQty = 0;
+        if (self::reserveEnabled() && $vppId) {
+            try {
+                if ((int) $item->reserved_qty > 0 && $item->vendor_product_price_id) {
+                    VendorProductPrice::releaseStock((int) $item->vendor_product_price_id, (int) $item->reserved_qty);
+                }
+                $qty = (int) $item->order_quantity;
+                if (VendorProductPrice::reserveStock((int) $vppId, $qty)) {
+                    $reservedQty = $qty;
+                }
+            } catch (\Throwable $e) {
+                $reservedQty = 0;
+            }
+        }
+
         $item->update([
             'assigned_shop_id'        => $shopId,
-            'vendor_product_price_id' => $pick['vendor_product_price_id'] ?? null,
+            'vendor_product_price_id' => $vppId,
+            'reserved_qty'            => $reservedQty,
             'fulfillment_mode'        => $mode,
             'eta_days'                => $pick['eta_days'] ?? null,
             'shipment_id'             => $shipment->id,
