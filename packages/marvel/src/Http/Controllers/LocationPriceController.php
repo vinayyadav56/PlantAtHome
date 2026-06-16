@@ -3,9 +3,11 @@
 namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Carbon\Carbon;
 use Marvel\Database\Models\Product;
 use Marvel\Services\AvailabilityService;
 use Marvel\Services\FulfillmentService;
+use Marvel\Services\ItemAssignmentService;
 use Marvel\Services\PricingService;
 
 /**
@@ -87,6 +89,99 @@ class LocationPriceController extends CoreController
             'available_count'  => count($all),
             'local_count'      => count($local),
             'has_availability' => count($all) > 0,
+        ];
+    }
+
+    /**
+     * POST checkout/estimate { city, pincode?, items: [{product_id, variation_option_id?, quantity?}] }
+     * → per-item { unit_price, shipping_charge, expected_delivery_date, fulfillment_mode }
+     * + totals. The vendor is chosen by the assignment engine but NEVER named — the
+     * customer only ever sees PlantAtHome.
+     */
+    public function checkoutEstimate(Request $request)
+    {
+        $city    = $request->filled('city') ? (string) $request->input('city') : null;
+        $pincode = $request->filled('pincode') ? (string) $request->input('pincode') : null;
+        $items   = array_slice((array) $request->input('items', []), 0, 50); // bound a public endpoint
+
+        $pricing = new PricingService();
+        $engine  = new ItemAssignmentService();
+
+        $ids = collect($items)->pluck('product_id')->filter()->unique()->values();
+        $products = Product::whereIn('id', $ids)->get()->keyBy('id');
+
+        $out = [];
+        $subtotal = 0.0;
+        $shippingTotal = 0.0;
+        $maxEtaDays = null;
+
+        foreach ($items as $item) {
+            $pid = $item['product_id'] ?? null;
+            if (!$pid || !isset($products[$pid])) {
+                continue;
+            }
+            $product = $products[$pid];
+            $voId = isset($item['variation_option_id']) ? (int) $item['variation_option_id'] : null;
+            $qty  = max(1, (int) ($item['quantity'] ?? 1));
+
+            // Price, shipping AND eta all come from the SAME fulfillable candidate set, so the
+            // quote is internally consistent. unit_price = lowest price among vendors that can
+            // actually deliver here; shipping/eta from the recommended (top-scored) one.
+            $candidates = $engine->candidatesFor((int) $pid, $voId, $qty, $city, $pincode);
+
+            if (empty($candidates)) {
+                // Nobody can fulfil this line at the customer's city/pincode/qty — show the
+                // catalog reference price but flag it unfulfillable (NOT free, NOT instant) and
+                // keep it out of the payable totals.
+                $ref = $pricing->sellingPrice($product, $voId, $this->latLng($request));
+                $out[] = [
+                    'product_id'            => (int) $pid,
+                    'variation_option_id'   => $voId,
+                    'quantity'              => $qty,
+                    'unit_price'            => (float) $ref['price'],
+                    'available'             => false,
+                    'fulfillable'           => false,
+                    'shipping_charge'       => 0.0,
+                    'fulfillment_mode'      => null,
+                    'expected_delivery_date' => null,
+                ];
+                continue;
+            }
+
+            $best = $candidates[0]; // recommended (top score)
+            $prices = array_filter(array_map(fn ($c) => $c['selling_price'], $candidates), fn ($p) => $p !== null);
+            $unit = !empty($prices) ? (float) min($prices) : (float) ($best['selling_price'] ?? 0);
+            $shipping = (float) ($best['shipping_cost'] ?? 0);
+            $eta = $best['eta_days'] ?? null;
+
+            $subtotal += $unit * $qty;
+            $shippingTotal += $shipping;
+            if ($eta !== null) {
+                $maxEtaDays = max($maxEtaDays ?? 0, (int) $eta);
+            }
+
+            $out[] = [
+                'product_id'            => (int) $pid,
+                'variation_option_id'   => $voId,
+                'quantity'              => $qty,
+                'unit_price'            => $unit,
+                'available'             => true,
+                'fulfillable'           => true,
+                'shipping_charge'       => round($shipping, 2),
+                'fulfillment_mode'      => $best['fulfillment_mode'] ?? null,
+                'expected_delivery_date' => $eta !== null ? Carbon::now()->addDays((int) $eta)->toDateString() : null,
+            ];
+        }
+
+        return [
+            'items'  => $out,
+            'totals' => [
+                'subtotal'                => round($subtotal, 2),
+                'shipping_total'          => round($shippingTotal, 2),
+                'grand_total'             => round($subtotal + $shippingTotal, 2),
+                'max_eta_days'            => $maxEtaDays,
+                'expected_delivery_date'  => $maxEtaDays !== null ? Carbon::now()->addDays($maxEtaDays)->toDateString() : null,
+            ],
         ];
     }
 

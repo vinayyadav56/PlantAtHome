@@ -7,6 +7,7 @@ use Marvel\Database\Models\DeliveryPartner;
 use Marvel\Database\Models\Order;
 use Marvel\Database\Models\Shop;
 use Marvel\Services\FulfillmentService;
+use Marvel\Services\ItemAssignmentService;
 use Marvel\Services\MatchingService;
 
 /**
@@ -42,6 +43,41 @@ class OrderAssignmentController extends CoreController
     {
         $order = Order::with('products')->findOrFail($id);
         return (new FulfillmentService())->planForOrder($order);
+    }
+
+    /**
+     * Admin (P3): per-LINE scored vendor candidates for an order — inventory > pincode >
+     * SLA > rating > priority > shipping cost. The admin picks/overrides per item; the
+     * top candidate is flagged `recommended`. Read-only (assignment persists in P4).
+     */
+    public function itemAssignmentPlan($id)
+    {
+        $order = Order::with('products')->findOrFail($id);
+        $addr = is_array($order->shipping_address) ? $order->shipping_address : (array) $order->shipping_address;
+        $city = $addr['city'] ?? null;
+        $pincode = $addr['zip'] ?? ($addr['pincode'] ?? null);
+
+        $engine = new ItemAssignmentService();
+        $lines = [];
+        foreach ($order->products as $product) {
+            $qty = (int) ($product->pivot->order_quantity ?? 1);
+            $voId = $product->pivot->variation_option_id ? (int) $product->pivot->variation_option_id : null;
+            $candidates = $engine->candidatesFor((int) $product->id, $voId, $qty, $city, $pincode);
+            $lines[] = [
+                'product_id'          => (int) $product->id,
+                'name'                => $product->name,
+                'variation_option_id' => $voId,
+                'quantity'            => $qty,
+                'candidates'          => $candidates,
+                'unfilled'            => empty($candidates),
+            ];
+        }
+        return [
+            'order_id'   => $order->id,
+            'order_city' => $city,
+            'pincode'    => $pincode,
+            'lines'      => $lines,
+        ];
     }
 
     /**

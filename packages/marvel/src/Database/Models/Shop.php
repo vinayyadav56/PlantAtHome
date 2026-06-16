@@ -22,6 +22,10 @@ class Shop extends Model
         'cover_image' => 'json',
         'address' => 'json',
         'settings' => 'json',
+        'vendor_rating' => 'float',
+        'vendor_rating_count' => 'integer',
+        'vendor_priority_score' => 'integer',
+        'sla_default_days' => 'integer',
     ];
 
     /**
@@ -88,6 +92,12 @@ class Shop extends Model
     public function vendorProductPrices(): HasMany
     {
         return $this->hasMany(VendorProductPrice::class, 'shop_id');
+    }
+
+    /** This vendor's shipping cost + SLA by zone (assignment score + checkout estimate). */
+    public function shippingRates(): HasMany
+    {
+        return $this->hasMany(VendorShippingRate::class, 'shop_id');
     }
 
     /**

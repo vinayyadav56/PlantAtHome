@@ -194,6 +194,7 @@ Route::get('near-by-shop/{lat}/{lng}', [ShopController::class, 'nearByShop']);
 Route::get('location-price', [LocationPriceController::class, 'show']);
 Route::post('location-price/batch', [LocationPriceController::class, 'batch']);
 Route::get('city-availability', [LocationPriceController::class, 'cityAvailability']);
+Route::post('checkout/estimate', [LocationPriceController::class, 'checkoutEstimate']);
 
 // Public: live courier position for an order (only while out for delivery)
 Route::get('orders/{tracking}/courier-location', [OrderAssignmentController::class, 'courierLocation']);
@@ -568,6 +569,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // Order → vendor + delivery-partner matching/assignment (P3)
     Route::get('orders/{id}/match', [OrderAssignmentController::class, 'match']);
     Route::get('orders/{id}/fulfillment-plan', [OrderAssignmentController::class, 'fulfillmentPlan']);
+    Route::get('orders/{id}/item-assignment-plan', [OrderAssignmentController::class, 'itemAssignmentPlan']);
     Route::post('orders/{id}/assign', [OrderAssignmentController::class, 'assign']);
 
     // Delivery-partner payouts + profit (P4)
