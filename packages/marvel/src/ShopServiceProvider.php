@@ -109,6 +109,7 @@ class ShopServiceProvider extends ServiceProvider
         \Marvel\Console\TranslateCatalogCommand::class,
         \Marvel\Console\RecomputeCityAvailabilityCommand::class,
         \Marvel\Console\RunSettlementsCommand::class,
+        \Marvel\Console\BackfillOrderItemsCommand::class,
         InstallCommand::class,
         AdminCreateCommand::class,
         ImportDemoData::class,

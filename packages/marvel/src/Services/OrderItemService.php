@@ -1,0 +1,247 @@
+<?php
+
+namespace Marvel\Services;
+
+use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
+use Marvel\Database\Models\Order;
+use Marvel\Database\Models\OrderItem;
+use Marvel\Database\Models\Shipment;
+
+/**
+ * The single-customer-order line model (P4). Writes order_items in PARALLEL with the
+ * legacy per-vertical child orders (dual-write, never breaks the live order flow), and
+ * resolves each line's vendor via the per-item scorer, grouping items into shipments
+ * (one per vendor + mode). Nothing customer-facing reads this yet — the cutover (hide
+ * sub-orders / stop creating children) flips later behind a flag after reconciliation.
+ */
+class OrderItemService
+{
+    public function __construct(private ?ItemAssignmentService $engine = null)
+    {
+        $this->engine = $engine ?: new ItemAssignmentService();
+    }
+
+    /**
+     * Dual-write the parent order's lines into order_items. Atomic (a single bulk insert
+     * inside a transaction/savepoint) and COMPLETENESS-idempotent: it only skips when the
+     * stored count already matches, and repairs a previously-partial write — so the
+     * backfill's "safe to re-run" contract holds even if an earlier write half-failed.
+     */
+    public function writeForOrder(Order $order, array $products): void
+    {
+        $expected = count($products);
+        if ($expected === 0) {
+            return;
+        }
+        $existing = OrderItem::where('order_id', $order->id)->count();
+        if ($existing === $expected) {
+            return; // already complete
+        }
+
+        $now = Carbon::now();
+        $rows = [];
+        foreach ($products as $p) {
+            $rows[] = [
+                'order_id'            => $order->id,
+                'product_id'          => (int) ($p['product_id'] ?? 0),
+                'variation_option_id' => isset($p['variation_option_id']) ? ($p['variation_option_id'] ?: null) : null,
+                'order_quantity'      => (int) ($p['order_quantity'] ?? 1),
+                'unit_price'          => (float) ($p['unit_price'] ?? 0),
+                'subtotal'            => (float) ($p['subtotal'] ?? 0),
+                'reserved_qty'        => 0,
+                'item_status'         => 'pending',
+                'assignment_status'   => 'unassigned',
+                'created_at'          => $now,
+                'updated_at'          => $now,
+            ];
+        }
+
+        DB::transaction(function () use ($order, $existing, $rows) {
+            if ($existing > 0) {
+                OrderItem::where('order_id', $order->id)->delete(); // clear a partial write
+            }
+            OrderItem::insert($rows); // one atomic statement
+        });
+    }
+
+    /**
+     * Auto-assign every line to its recommended vendor (per-item scorer) and group the
+     * lines into shipments (one per shop + mode). Re-runnable: clears prior shipments +
+     * resets assignments first. Returns a summary.
+     */
+    public function assignAndGroup(Order $order): array
+    {
+        [$city, $pincode] = $this->location($order);
+        $order->loadMissing('items');
+
+        // Reset prior auto grouping (keep any admin overrides? auto pass re-plans all).
+        Shipment::where('order_id', $order->id)->delete();
+        OrderItem::where('order_id', $order->id)->update([
+            'shipment_id' => null,
+            'assigned_shop_id' => null,
+            'fulfillment_mode' => null,
+            'assignment_status' => 'unassigned',
+            'item_status' => 'pending',
+        ]);
+        $order->load('items');
+
+        $shipments = [];   // "shopId:mode" => Shipment
+        $assigned = 0;
+        $unfilled = 0;
+
+        foreach ($order->items as $item) {
+            $best = $this->engine->bestFor(
+                (int) $item->product_id,
+                $item->variation_option_id ? (int) $item->variation_option_id : null,
+                (int) $item->order_quantity,
+                $city,
+                $pincode
+            );
+            if (!$best) {
+                $unfilled++;
+                continue;
+            }
+            $this->applyAssignment($order, $item, $best, $shipments, 'suggested');
+            $assigned++;
+        }
+
+        return [
+            'order_id'  => $order->id,
+            'assigned'  => $assigned,
+            'unfilled'  => $unfilled,
+            'shipments' => count($shipments),
+        ];
+    }
+
+    /**
+     * Admin override: assign specific lines to specific vendors, then regroup. Each entry
+     * is { order_item_id, shop_id }. Items left out keep their current assignment.
+     */
+    public function assignItems(Order $order, array $assignments): array
+    {
+        [$city, $pincode] = $this->location($order);
+        $byItem = [];
+        foreach ($assignments as $a) {
+            if (isset($a['order_item_id'], $a['shop_id'])) {
+                $byItem[(int) $a['order_item_id']] = (int) $a['shop_id'];
+            }
+        }
+
+        $applied = [];
+        $rejected = []; // {order_item_id, reason} — surfaced so the admin UI never shows a false success
+
+        foreach ($byItem as $itemId => $shopId) {
+            $item = OrderItem::where('order_id', $order->id)->find($itemId);
+            if (!$item) {
+                $rejected[] = ['order_item_id' => $itemId, 'reason' => 'item not found on this order'];
+                continue;
+            }
+            $candidates = $this->engine->candidatesFor(
+                (int) $item->product_id,
+                $item->variation_option_id ? (int) $item->variation_option_id : null,
+                (int) $item->order_quantity,
+                $city,
+                $pincode
+            );
+            $pick = collect($candidates)->firstWhere('shop_id', $shopId);
+            if (!$pick) {
+                // The chosen vendor can no longer fulfil this line (stock/service-area changed) —
+                // reject explicitly; leave the prior assignment untouched.
+                $rejected[] = ['order_item_id' => $itemId, 'reason' => 'chosen vendor cannot fulfil this line'];
+                continue;
+            }
+            $item->update(['shipment_id' => null]);
+            $shipments = [];
+            $this->applyAssignment($order, $item, $pick, $shipments, 'overridden');
+            $applied[] = $itemId;
+        }
+
+        // Rebuild shipment groupings cleanly from the items' current assignments.
+        $this->regroup($order);
+        return ['order_id' => $order->id, 'applied' => count($applied), 'rejected' => $rejected];
+    }
+
+    /** Set an item's assignment + attach it to the matching shipment (create if needed). */
+    private function applyAssignment(Order $order, OrderItem $item, array $pick, array &$shipments, string $status): void
+    {
+        $shopId = (int) $pick['shop_id'];
+        $mode = $pick['fulfillment_mode'] ?? 'courier';
+        $key = $shopId . ':' . $mode;
+
+        if (!isset($shipments[$key])) {
+            $eta = $pick['eta_days'] ?? null;
+            $shipments[$key] = Shipment::create([
+                'order_id'             => $order->id,
+                'shop_id'              => $shopId,
+                'fulfillment_mode'     => $mode,
+                'status'               => 'pending',
+                'eta_days'             => $eta,
+                'expected_delivery_at' => $eta !== null ? Carbon::now()->addDays((int) $eta)->toDateString() : null,
+                'shipping_cost'        => $pick['shipping_cost'] ?? null,
+            ]);
+        }
+        $shipment = $shipments[$key];
+
+        $item->update([
+            'assigned_shop_id'        => $shopId,
+            'vendor_product_price_id' => $pick['vendor_product_price_id'] ?? null,
+            'fulfillment_mode'        => $mode,
+            'eta_days'                => $pick['eta_days'] ?? null,
+            'shipment_id'             => $shipment->id,
+            'vendor_price_snapshot'   => $pick['selling_price'] ?? null,
+            'assignment_status'       => $status,
+            'item_status'             => 'assigned',
+        ]);
+    }
+
+    /** Rebuild shipments from the items' current (assigned_shop_id, mode), dropping empties. */
+    private function regroup(Order $order): void
+    {
+        $order->load('items');
+
+        // Preserve per-(shop:mode) shipping_cost (+ delivery date) across the rebuild — it
+        // lives only on the shipment, so a naive delete+recreate would silently null it.
+        $prior = [];
+        foreach (Shipment::where('order_id', $order->id)->get() as $s) {
+            $prior[$s->shop_id . ':' . ($s->fulfillment_mode ?: 'courier')] = [
+                'shipping_cost'        => $s->shipping_cost,
+                'expected_delivery_at' => $s->expected_delivery_at,
+            ];
+        }
+
+        Shipment::where('order_id', $order->id)->delete();
+        $shipments = [];
+        foreach ($order->items as $item) {
+            if (!$item->assigned_shop_id) {
+                $item->update(['shipment_id' => null]);
+                continue;
+            }
+            $mode = $item->fulfillment_mode ?: 'courier';
+            $key = $item->assigned_shop_id . ':' . $mode;
+            if (!isset($shipments[$key])) {
+                $carried = $prior[$key] ?? [];
+                $shipments[$key] = Shipment::create([
+                    'order_id'             => $order->id,
+                    'shop_id'              => (int) $item->assigned_shop_id,
+                    'fulfillment_mode'     => $mode,
+                    'status'               => 'pending',
+                    'eta_days'             => $item->eta_days,
+                    'shipping_cost'        => $carried['shipping_cost'] ?? null,
+                    'expected_delivery_at' => $carried['expected_delivery_at']
+                        ?? ($item->eta_days !== null ? Carbon::now()->addDays((int) $item->eta_days)->toDateString() : null),
+                ]);
+            }
+            $item->update(['shipment_id' => $shipments[$key]->id]);
+        }
+    }
+
+    /** @return array{0: ?string, 1: ?string} [city, pincode] from the order's shipping address. */
+    private function location(Order $order): array
+    {
+        $addr = is_array($order->shipping_address) ? $order->shipping_address : (array) $order->shipping_address;
+        $city = $addr['city'] ?? null;
+        $pincode = $addr['zip'] ?? ($addr['pincode'] ?? null);
+        return [$city ? (string) $city : null, $pincode ? (string) $pincode : null];
+    }
+}

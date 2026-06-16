@@ -55,9 +55,10 @@ class AvailabilityService
                 ->values()->all();
             $hasPrice = (float) ($r->vendor_selling_price ?? 0) > 0 || (float) $r->cost_price > 0;
             return [
-                'shop_id'              => $r->shop_id,
-                'vendor_name'          => optional($r->shop)->name,
-                'variation_option_id'  => $r->variation_option_id,
+                'shop_id'                 => $r->shop_id,
+                'vendor_product_price_id' => $r->id,
+                'vendor_name'             => optional($r->shop)->name,
+                'variation_option_id'     => $r->variation_option_id,
                 'cost_price'           => (float) $r->cost_price,
                 'vendor_selling_price' => $r->vendor_selling_price !== null ? (float) $r->vendor_selling_price : null,
                 'selling_price'        => ($product && $hasPrice) ? $this->pricing->effectivePrice($product, $r) : null,

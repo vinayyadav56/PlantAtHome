@@ -93,9 +93,10 @@ class ItemAssignmentService
             $shippingCost = $this->shippingCost($rates[$shopId] ?? collect(), $mode, $area['pincode_covered']);
 
             $candidates[] = [
-                'shop_id'          => $shopId,
-                'vendor_name'      => $v['vendor_name'] ?? null,
-                'selling_price'    => $v['selling_price'] ?? null,
+                'shop_id'                 => $shopId,
+                'vendor_product_price_id' => $v['vendor_product_price_id'] ?? null,
+                'vendor_name'             => $v['vendor_name'] ?? null,
+                'selling_price'           => $v['selling_price'] ?? null,
                 'available_qty'    => $availQty,
                 'stock_tracked'    => $stockQty > 0,
                 'fulfillment_mode' => $mode,

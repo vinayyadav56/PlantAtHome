@@ -103,6 +103,18 @@ class Order extends Model
         return $this->hasMany('Marvel\Database\Models\Order', 'parent_id', 'id');
     }
 
+    /** P4: per-line items of this (single customer) order, with per-item vendor assignment. */
+    public function items()
+    {
+        return $this->hasMany(OrderItem::class, 'order_id', 'id');
+    }
+
+    /** P4: fulfilment units (one per vendor) grouping this order's items. */
+    public function shipments()
+    {
+        return $this->hasMany(Shipment::class, 'order_id', 'id');
+    }
+
     /**
      * @return HasOne
      */

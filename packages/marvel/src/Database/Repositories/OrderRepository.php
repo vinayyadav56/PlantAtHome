@@ -317,6 +317,14 @@ class OrderRepository extends BaseRepository
             $order = $this->create($orderInput);
             $products = $this->processProducts($request['products'], $request['customer_id'], $order);
             $order->products()->attach($products);
+            // P4 dual-write: mirror the cart lines into order_items (the single-customer-order
+            // model) alongside the legacy per-vertical child orders. Wrapped so a failure here
+            // can never break order creation — order_items is additive shadow data for now.
+            try {
+                (new \Marvel\Services\OrderItemService())->writeForOrder($order, $products);
+            } catch (\Throwable $e) {
+                // additive shadow — swallow
+            }
             $this->createChildOrder($order->id, $request);
             //  $this->calculateShopIncome($order);
             $invoiceData = $this->createInvoiceDataForEmail($request, $order);

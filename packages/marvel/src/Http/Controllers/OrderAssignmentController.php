@@ -9,6 +9,7 @@ use Marvel\Database\Models\Shop;
 use Marvel\Services\FulfillmentService;
 use Marvel\Services\ItemAssignmentService;
 use Marvel\Services\MatchingService;
+use Marvel\Services\OrderItemService;
 
 /**
  * Admin order → vendor + delivery-partner assignment (P3). `match` returns the
@@ -78,6 +79,41 @@ class OrderAssignmentController extends CoreController
             'pincode'    => $pincode,
             'lines'      => $lines,
         ];
+    }
+
+    /** Admin (P4): the order's persisted per-item assignment + shipment groupings. */
+    public function items($id)
+    {
+        $order = Order::with([
+            'items.product:id,name,slug,sku',
+            'items.assignedShop:id,name',
+            'shipments.shop:id,name',
+        ])->findOrFail($id);
+        return [
+            'order_id'  => $order->id,
+            'items'     => $order->items,
+            'shipments' => $order->shipments,
+        ];
+    }
+
+    /** Admin (P4): auto-assign every line to its recommended vendor + group into shipments. */
+    public function autoAssignItems($id)
+    {
+        $order = Order::findOrFail($id);
+        return (new OrderItemService())->assignAndGroup($order);
+    }
+
+    /** Admin (P4): override specific lines. Body: { assignments: [{order_item_id, shop_id}] }. */
+    public function assignItems($id, Request $request)
+    {
+        $request->validate([
+            'assignments'                 => 'required|array|min:1',
+            'assignments.*.order_item_id' => 'required|integer',
+            'assignments.*.shop_id'       => 'required|integer',
+        ]);
+        $order = Order::findOrFail($id);
+        $result = (new OrderItemService())->assignItems($order, $request->input('assignments'));
+        return response()->json($result);
     }
 
     /**

@@ -570,6 +570,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('orders/{id}/match', [OrderAssignmentController::class, 'match']);
     Route::get('orders/{id}/fulfillment-plan', [OrderAssignmentController::class, 'fulfillmentPlan']);
     Route::get('orders/{id}/item-assignment-plan', [OrderAssignmentController::class, 'itemAssignmentPlan']);
+    // P4: persisted per-item assignment + shipments (single customer order)
+    Route::get('orders/{id}/items', [OrderAssignmentController::class, 'items']);
+    Route::post('orders/{id}/auto-assign-items', [OrderAssignmentController::class, 'autoAssignItems']);
+    Route::post('orders/{id}/assign-items', [OrderAssignmentController::class, 'assignItems']);
     Route::post('orders/{id}/assign', [OrderAssignmentController::class, 'assign']);
 
     // Delivery-partner payouts + profit (P4)
