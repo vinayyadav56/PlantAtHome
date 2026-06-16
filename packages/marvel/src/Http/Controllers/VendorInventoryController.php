@@ -8,6 +8,7 @@ use Marvel\Database\Models\PriceImportBatch;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\VendorProductPrice;
 use Marvel\Database\Models\VendorServiceArea;
+use Marvel\Enums\Permission;
 use Marvel\Enums\ProductStatus;
 use Marvel\Imports\VendorPriceSheetImport;
 use Marvel\Services\AvailabilityService;
@@ -27,10 +28,13 @@ class VendorInventoryController extends CoreController
     {
         $user = $request->user();
         $shops = $user ? $user->shops : collect();
+        $isAdmin = $user && $user->hasPermissionTo(Permission::SUPER_ADMIN);
 
         if ($request->filled('shop_id')) {
             $requested = (int) $request->input('shop_id');
-            if (!$shops->contains('id', $requested)) {
+            // A vendor may only act on a shop they own; a super-admin may act on any shop
+            // (managing a vendor's catalogue on their behalf).
+            if (!$isAdmin && !$shops->contains('id', $requested)) {
                 abort(403, 'You do not own this vendor shop.');
             }
             return $requested;
