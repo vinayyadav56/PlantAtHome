@@ -10,7 +10,9 @@ use Marvel\Database\Models\OwnershipTransfer;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Shop;
 use Marvel\Database\Models\User;
+use Marvel\Database\Models\VendorProductPrice;
 use Marvel\Database\Models\VendorServiceArea;
+use Marvel\Services\AvailabilityService;
 use Marvel\Enums\DefaultStatusType;
 use Marvel\Enums\Permission;
 use Marvel\Enums\ProductVisibilityStatus;
@@ -84,6 +86,12 @@ class ShopRepository extends BaseRepository
                 'eta_days'         => isset($area['eta_days']) && $area['eta_days'] !== '' ? (int) $area['eta_days'] : null,
                 'is_active'        => $area['is_active'] ?? true,
             ]);
+        }
+
+        // The cities a vendor serves feed the city-availability projection — refresh
+        // every product this vendor supplies so the storefront reflects the change.
+        if (VendorProductPrice::where('shop_id', $shop->id)->exists()) {
+            (new AvailabilityService())->recomputeForShop((int) $shop->id);
         }
     }
 

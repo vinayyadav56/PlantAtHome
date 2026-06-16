@@ -132,6 +132,9 @@ class VendorPriceSheetImport implements ToCollection, WithHeadingRow
         foreach (array_keys($this->touchedProducts) as $pid) {
             $availability->recomputeForProduct((int) $pid);
         }
+        if (!empty($this->touchedProducts)) {
+            AvailabilityService::bustCatalogCache();
+        }
     }
 
     private function fail(int $line, string $msg): void

@@ -117,10 +117,12 @@ class ProductController extends CoreController
         // narrows to same-city local delivery only.
         if ($request->filled('city')) {
             $localOnly = $request->input('availability') === 'local';
-            $cityIds = (new \Marvel\Services\AvailabilityService())
-                ->availableProductIdsInCity((string) $request->city, $localOnly);
-            if (!empty($cityIds)) {
-                $products_query = $products_query->whereIn('id', $cityIds);
+            $svc = new \Marvel\Services\AvailabilityService();
+            $sub = $svc->availabilityProductIdQuery((string) $request->city, $localOnly);
+            // Filter with a SQL subquery (never pluck the whole projection). Only scope
+            // when the city actually has availability, else show the full catalog.
+            if ((clone $sub)->exists()) {
+                $products_query = $products_query->whereIn('id', $sub);
             }
         }
 

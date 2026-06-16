@@ -96,9 +96,12 @@ class FulfillmentService
     /** Pick the best vendor for one line: local-in-city first, then courier, cheapest within tier. */
     private function chooseVendor(array $vendors, string $cityN, int $qty): ?array
     {
+        // In stock = available + (stock untracked OR enough free units). stock_qty <= 0
+        // means the vendor didn't declare stock (price-only sheet) → treat as available.
         $inStock = array_values(array_filter(
             $vendors,
-            fn ($v) => !empty($v['is_available']) && (int) ($v['available_qty'] ?? 0) >= $qty
+            fn ($v) => !empty($v['is_available'])
+                && ((int) ($v['stock_qty'] ?? 0) <= 0 || (int) ($v['available_qty'] ?? 0) >= $qty)
         ));
         if (empty($inStock)) {
             return null;
@@ -127,9 +130,28 @@ class FulfillmentService
             [$v, $area] = $this->cheapest($courier);
             return $this->decision($v, 'courier', $area['eta_days'] ?? self::DEFAULT_COURIER_ETA);
         }
-        // Tier 3: in stock but doesn't list this city → ship by courier (global fallback).
-        $fallback = $this->cheapest(array_map(fn ($v) => [$v, null], $inStock));
+        // Tier 3: in stock but doesn't list this city → ship by courier ONLY from a
+        // vendor that can actually courier (a local-only vendor cannot fulfil here).
+        $courierCapable = array_values(array_filter($inStock, fn ($v) => $this->canCourier($v)));
+        if (empty($courierCapable)) {
+            return null;
+        }
+        $fallback = $this->cheapest(array_map(fn ($v) => [$v, null], $courierCapable));
         return $this->decision($fallback[0], 'courier', self::DEFAULT_COURIER_ETA);
+    }
+
+    /** Can this vendor ship by courier (per-row mode or any courier service area)? */
+    private function canCourier(array $vendor): bool
+    {
+        if (in_array($vendor['fulfillment_mode'] ?? '', ['courier', 'both'], true)) {
+            return true;
+        }
+        foreach (($vendor['cities'] ?? []) as $c) {
+            if (in_array($c['fulfillment_mode'] ?? '', ['courier', 'both'], true)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** The vendor's service-area entry matching the city + an allowed mode (or null). */

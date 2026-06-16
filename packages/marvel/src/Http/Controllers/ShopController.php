@@ -47,7 +47,20 @@ class ShopController extends CoreController
 
     public function fetchShops(Request $request)
     {
-        return $this->repository->withCount(['orders', 'products'])->with(['owner.profile', 'ownership_history'])->where('id', '!=', null);
+        $query = $this->repository->withCount(['orders', 'products'])->with(['owner.profile', 'ownership_history'])->where('id', '!=', null);
+        // Seller anonymity: hide marketplace fulfilment vendors (they declare service
+        // areas) from non-admins. Customers must never see vendor shops; admins manage
+        // them through the Vendors screens (super-admin token bypasses this filter).
+        if (!$this->isShopAdmin($request)) {
+            $query->whereDoesntHave('serviceAreas');
+        }
+        return $query;
+    }
+
+    /** True when the requester may see marketplace vendor shops (super admin). */
+    private function isShopAdmin(Request $request): bool
+    {
+        return $request->user() && $request->user()->hasPermissionTo(Permission::SUPER_ADMIN);
     }
 
     /**
@@ -79,8 +92,12 @@ class ShopController extends CoreController
         $shop = $this->repository
             ->with(['categories', 'owner', 'ownership_history', 'serviceAreas'])
             ->withCount(['orders', 'products']);
-        if ($request->user() && ($request->user()->hasPermissionTo(Permission::SUPER_ADMIN) || $request->user()->shops->contains('slug', $slug))) {
+        $privileged = $request->user() && ($request->user()->hasPermissionTo(Permission::SUPER_ADMIN) || $request->user()->shops->contains('slug', $slug));
+        if ($privileged) {
             $shop = $shop->with('balance');
+        } else {
+            // Customers cannot open a marketplace vendor's shop page → 404 on firstOrFail.
+            $shop = $shop->whereDoesntHave('serviceAreas');
         }
         try {
             return match (true) {
@@ -408,6 +425,7 @@ class ShopController extends CoreController
                 )
                 ->orderBy('distance', 'ASC')
                 ->where('is_active', 1)
+                ->whereDoesntHave('serviceAreas')   // never surface marketplace vendors to customers
                 ->get()
                 ->where('distance', '<', $maxShopDistance);
 

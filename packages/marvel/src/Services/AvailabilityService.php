@@ -3,6 +3,7 @@
 namespace Marvel\Services;
 
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\ProductCityAvailability;
 use Marvel\Database\Models\VendorProductPrice;
@@ -74,11 +75,14 @@ class AvailabilityService
      */
     public function recomputeForProduct(int $productId): void
     {
+        // Available in a city = a vendor has a current, priced, in-stock-OR-untracked row.
+        // stock_qty <= 0 means "stock not tracked" (the common price-only sheet) → still
+        // sellable; real stock is enforced at order time, not here.
         $rows = $this->effective(
             VendorProductPrice::where('product_id', $productId)
                 ->where('is_available', true)
                 ->where('cost_price', '>', 0)
-                ->where('stock_qty', '>', 0)
+                ->where(fn ($q) => $q->where('stock_qty', '<=', 0)->orWhereRaw('(stock_qty - reserved_qty) > 0'))
         )->get();
 
         $product = Product::find($productId);
@@ -131,19 +135,41 @@ class AvailabilityService
         }
     }
 
-    /** Master product ids available in a city (city-first storefront). */
-    public function availableProductIdsInCity(string $city, bool $localOnly = false): array
+    /** Recompute every product a vendor supplies (after a service-area / inventory change). */
+    public function recomputeForShop(int $shopId): void
+    {
+        $pids = VendorProductPrice::where('shop_id', $shopId)->distinct()->pluck('product_id');
+        foreach ($pids as $pid) {
+            $this->recomputeForProduct((int) $pid);
+        }
+        self::bustCatalogCache();
+    }
+
+    /** Bump the products response-cache version so city-scoped lists refresh immediately. */
+    public static function bustCatalogCache(): void
+    {
+        Cache::forever('products:ver', ((int) Cache::get('products:ver', 1)) + 1);
+    }
+
+    /** A query builder of product ids available in a city — used as a whereIn subquery (no pluck). */
+    public function availabilityProductIdQuery(string $city, bool $localOnly = false)
     {
         $key = strtolower(trim($city));
-        if ($key === '') {
-            return [];
-        }
-        $q = ProductCityAvailability::where('city', $key);
+        $q = ProductCityAvailability::query()->select('product_id')->where('city', $key);
         if ($localOnly) {
             $q->where('has_local', true);
         } else {
             $q->where(fn ($qq) => $qq->where('has_local', true)->orWhere('has_courier', true));
         }
-        return $q->pluck('product_id')->all();
+        return $q;
+    }
+
+    /** Master product ids available in a city (city-first storefront / has-availability checks). */
+    public function availableProductIdsInCity(string $city, bool $localOnly = false): array
+    {
+        if (trim($city) === '') {
+            return [];
+        }
+        return $this->availabilityProductIdQuery($city, $localOnly)->pluck('product_id')->all();
     }
 }

@@ -25,6 +25,9 @@ class Kernel extends ConsoleKernel
     protected function schedule(Schedule $schedule)
     {
         // $schedule->command('inspire')->hourly();
+
+        // Flush lapsed vendor price-sheet windows from the city-availability projection.
+        $schedule->command('marvel:recompute-city-availability')->dailyAt('03:30')->withoutOverlapping();
     }
 
     /**
