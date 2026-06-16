@@ -6,6 +6,7 @@ use Carbon\Carbon;
 use Illuminate\Http\Request;
 use Marvel\Database\Models\VendorLedgerEntry;
 use Marvel\Database\Models\VendorSettlement;
+use Marvel\Services\ReconciliationService;
 use Marvel\Services\SettlementService;
 
 /**
@@ -115,6 +116,12 @@ class SettlementController extends CoreController
         $settlement = VendorSettlement::findOrFail($id);
         $paid = (new SettlementService())->pay($settlement);
         return response()->json(['message' => 'Marked paid.', 'settlement' => $paid]);
+    }
+
+    /** Admin: money-parity reconciliation (legacy commission vs vendor ledger) — cutover gate. */
+    public function reconciliation(Request $request)
+    {
+        return (new ReconciliationService())->report($request->input('from'), $request->input('to'));
     }
 
     // ── Vendor (self) ──────────────────────────────────────────────

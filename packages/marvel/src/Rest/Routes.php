@@ -562,6 +562,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // Vendor ledger + T+N settlement (admin: every vendor; run + pay)
     Route::get('vendor-ledger', [SettlementController::class, 'ledger']);
     Route::get('settlements', [SettlementController::class, 'settlements']);
+    Route::get('settlements/reconciliation', [SettlementController::class, 'reconciliation']);
     Route::get('settlements/{id}', [SettlementController::class, 'showSettlement']);
     Route::post('settlements/run', [SettlementController::class, 'runSettlements']);
     Route::post('settlements/{id}/pay', [SettlementController::class, 'paySettlement']);
