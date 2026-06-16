@@ -57,6 +57,7 @@ use Marvel\Http\Controllers\DeliveryPincodeController;
 use Marvel\Http\Controllers\DeliveryPartnerController;
 use Marvel\Http\Controllers\PriceSheetController;
 use Marvel\Http\Controllers\VendorInventoryController;
+use Marvel\Http\Controllers\SettlementController;
 use Marvel\Http\Controllers\LocationPriceController;
 use Marvel\Http\Controllers\OrderAssignmentController;
 use Marvel\Http\Controllers\DeliveryPartnerWithdrawController;
@@ -485,6 +486,11 @@ Route::group(
         Route::post('vendor/service-areas', [VendorInventoryController::class, 'addServiceArea']);
         Route::delete('vendor/service-areas/{id}', [VendorInventoryController::class, 'deleteServiceArea']);
 
+        // Vendor ledger + settlements (own shop only; read-only earnings breakdown).
+        Route::get('vendor/ledger', [SettlementController::class, 'myLedger']);
+        Route::get('vendor/settlements', [SettlementController::class, 'mySettlements']);
+        Route::get('vendor/balance', [SettlementController::class, 'myBalance']);
+
         // Route::get('/admin/list', [UserController::class, 'admins']);
         // Route::apiResource('notify-logs', NotifyLogsController::class, [
         //     'only' => ['index'],
@@ -551,6 +557,13 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('vendor-product-prices', [PriceSheetController::class, 'prices']);
     Route::delete('vendor-product-prices/{id}', [PriceSheetController::class, 'destroy']);
     Route::get('catalog-product-vendors/{productId}', [PriceSheetController::class, 'productVendors']);
+
+    // Vendor ledger + T+N settlement (admin: every vendor; run + pay)
+    Route::get('vendor-ledger', [SettlementController::class, 'ledger']);
+    Route::get('settlements', [SettlementController::class, 'settlements']);
+    Route::get('settlements/{id}', [SettlementController::class, 'showSettlement']);
+    Route::post('settlements/run', [SettlementController::class, 'runSettlements']);
+    Route::post('settlements/{id}/pay', [SettlementController::class, 'paySettlement']);
 
     // Order → vendor + delivery-partner matching/assignment (P3)
     Route::get('orders/{id}/match', [OrderAssignmentController::class, 'match']);

@@ -28,6 +28,9 @@ class Kernel extends ConsoleKernel
 
         // Flush lapsed vendor price-sheet windows from the city-availability projection.
         $schedule->command('marvel:recompute-city-availability')->dailyAt('03:30')->withoutOverlapping();
+
+        // Settle vendor earnings past their T+N hold into per-vendor settlements.
+        $schedule->command('marvel:run-settlements')->dailyAt('04:00')->withoutOverlapping();
     }
 
     /**

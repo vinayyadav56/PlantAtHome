@@ -29,6 +29,18 @@ trait OrderStatusManagerWithPaymentTrait
         if ($order_status === OrderStatus::COMPLETED) $this->checkIfChildOrder($order, 'add');
         //check if previous status was completed then we need to deduct the amount from vendor balance
         elseif ($prev_order_status === OrderStatus::COMPLETED) $this->checkIfChildOrder($order, 'deduct');
+
+        // Robust ledger reversal: if THIS vendor order just left COMPLETED, always reverse
+        // its ledger sale — even when checkIfChildOrder's parent-status gate missed it (a
+        // sibling already de-completed the parent). Idempotent + flag-gated; never throws
+        // into the live order flow. recordSale stays driven by the credit path above.
+        if ($prev_order_status === OrderStatus::COMPLETED && $order_status !== OrderStatus::COMPLETED && $order->shop_id) {
+            try {
+                (new \Marvel\Services\VendorLedgerService())->reverseSale($order);
+            } catch (\Throwable $e) {
+                // ledger is non-authoritative in P2 — swallow
+            }
+        }
     }
 
     /**
@@ -74,6 +86,20 @@ trait OrderStatusManagerWithPaymentTrait
         $balance->total_earnings = $balance->total_earnings + $shop_earnings;
         $balance->current_balance = $balance->current_balance + $shop_earnings;
         $balance->save();
+
+        // P2 vendor ledger (parallel-run, flag-gated, never mutates $balance). Records the
+        // per-order money breakdown for the T+N settlement layer; wrapped so a ledger
+        // error can never break the live order/balance flow.
+        try {
+            $ledger = new \Marvel\Services\VendorLedgerService();
+            if ($action_type === 'deduct') {
+                $ledger->reverseSale($order);
+            } else {
+                $ledger->recordSale($order);
+            }
+        } catch (\Throwable $e) {
+            // ledger is non-authoritative in P2 — swallow
+        }
     }
 
 
