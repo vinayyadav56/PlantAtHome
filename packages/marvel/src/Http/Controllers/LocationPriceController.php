@@ -5,6 +5,7 @@ namespace Marvel\Http\Controllers;
 use Illuminate\Http\Request;
 use Marvel\Database\Models\Product;
 use Marvel\Services\AvailabilityService;
+use Marvel\Services\FulfillmentService;
 use Marvel\Services\PricingService;
 
 /**
@@ -26,13 +27,20 @@ class LocationPriceController extends CoreController
             return response()->json(['message' => 'Product not found.'], 404);
         }
 
+        $variationOptionId = $request->filled('variation_option_id') ? (int) $request->input('variation_option_id') : null;
         $service = new PricingService();
-        $result  = $service->sellingPrice(
-            $product,
-            $request->filled('variation_option_id') ? (int) $request->input('variation_option_id') : null,
-            $this->latLng($request)
-        );
-        return array_merge(['product_id' => $product->id], $result);
+        $result  = $service->sellingPrice($product, $variationOptionId, $this->latLng($request));
+
+        // Delivery timing for the customer's city: local (same-city) vs courier ETA.
+        $fulfillment = null;
+        if ($request->filled('city')) {
+            $fulfillment = (new FulfillmentService())->fulfillmentFor(
+                (int) $product->id,
+                $variationOptionId,
+                (string) $request->input('city')
+            );
+        }
+        return array_merge(['product_id' => $product->id], $result, ['fulfillment' => $fulfillment]);
     }
 
     /**

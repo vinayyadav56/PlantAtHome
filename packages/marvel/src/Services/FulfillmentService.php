@@ -75,6 +75,24 @@ class FulfillmentService
         ];
     }
 
+    /**
+     * Customer-facing: the best fulfillment for ONE product in a city — { mode, eta_days }
+     * (local-in-city first, else courier), or null when no vendor can fulfil it. Used to
+     * show delivery timing on the PDP. No vendor/seller identity is returned.
+     */
+    public function fulfillmentFor(int $productId, ?int $variationOptionId, ?string $city, int $qty = 1): ?array
+    {
+        $vendors = $this->availability->vendorsForProduct($productId, $variationOptionId);
+        $pick = $this->chooseVendor($vendors, $this->norm($city), max(1, $qty));
+        if ($pick === null) {
+            return null;
+        }
+        return [
+            'fulfillment_mode' => $pick['fulfillment_mode'],
+            'eta_days'         => $pick['eta_days'],
+        ];
+    }
+
     /** Pick the best vendor for one line: local-in-city first, then courier, cheapest within tier. */
     private function chooseVendor(array $vendors, string $cityN, int $qty): ?array
     {
