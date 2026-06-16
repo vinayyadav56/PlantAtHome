@@ -32,21 +32,65 @@ class PricingService
     public function sellingPrice(Product $product, ?int $variationOptionId = null, ?array $latLng = null): array
     {
         $basePrice = (float) ($product->sale_price ?: $product->price ?: $product->min_price ?: 0);
-        $row = $this->nearestCost($product->id, $variationOptionId, $latLng);
 
-        if (!$row) {
-            // No vendor cost sheet → sell at the catalog price (still available).
+        // Customer price = the LOWEST displayed price among available vendor rows. The
+        // displayed price per row is the vendor's own selling price, or — for legacy
+        // cost-only rows — margin-over-cost. The vendor is never named to the customer.
+        $cheapest = $this->cheapestAvailableRow($product, $variationOptionId, $latLng);
+        if ($cheapest) {
+            return $this->result($this->effectivePrice($product, $cheapest), true, null, $basePrice, true);
+        }
+
+        // Nothing available. Is there any effective row at all (priced but unavailable)?
+        $any = $this->nearestCost($product->id, $variationOptionId, $latLng);
+        if (!$any) {
+            // No vendor mapping → sell at the catalog price (still available).
             return $this->result($basePrice, true, null, $basePrice, false);
         }
+        // Mapped but unavailable → orderable, shown with the "available within 6h" message.
+        return $this->result($basePrice, false, $this->unavailableMessage(), $basePrice, true);
+    }
 
-        if (!$row->is_available || (float) $row->cost_price <= 0) {
-            // Cost present but zero → unavailable but still orderable.
-            return $this->result($basePrice, false, $this->unavailableMessage(), $basePrice, true);
+    /**
+     * The customer-facing price for a single vendor row: the vendor's own selling price
+     * when set, else margin-over-cost (legacy cost-only rows). Never exposes the cost.
+     */
+    public function effectivePrice(Product $product, VendorProductPrice $row): float
+    {
+        $sell = (float) ($row->vendor_selling_price ?? 0);
+        if ($sell > 0) {
+            return round($sell, 2);
         }
+        return $this->priceFromCost($product, (float) $row->cost_price);
+    }
 
-        $margin = $this->marginFor($product);
-        $price  = round((float) $row->cost_price * (1 + $margin / 100), 2);
-        return $this->result($price, true, null, $basePrice, true);
+    /** Cheapest currently-available vendor row by DISPLAYED price (vendor-set or margin). */
+    public function cheapestAvailableRow(Product $product, ?int $variationOptionId, ?array $latLng = null): ?VendorProductPrice
+    {
+        $rows = $this->availableRowsQuery($product->id, $variationOptionId)->get();
+        if ($rows->isEmpty()) {
+            return null;
+        }
+        // P3 will narrow by $latLng (nearest in-stock vendor). For now: lowest price wins.
+        return $rows->sortBy(fn ($r) => $this->effectivePrice($product, $r))->first();
+    }
+
+    /** Effective, available, priced vendor rows for a product/size (vendor-set OR cost). */
+    private function availableRowsQuery(int $productId, ?int $variationOptionId)
+    {
+        $today = Carbon::today()->toDateString();
+        $query = VendorProductPrice::where('product_id', $productId)
+            ->where(fn ($q) => $q->whereNull('effective_from')->orWhere('effective_from', '<=', $today))
+            ->where(fn ($q) => $q->whereNull('effective_to')->orWhere('effective_to', '>=', $today))
+            ->where('is_available', true)
+            ->where(fn ($q) => $q->where('vendor_selling_price', '>', 0)->orWhere('cost_price', '>', 0));
+
+        if (is_null($variationOptionId)) {
+            $query->whereNull('variation_option_id');
+        } else {
+            $query->where('variation_option_id', $variationOptionId);
+        }
+        return $query;
     }
 
     /** The currently-effective representative cost row for a product/size (P2 coarse). */

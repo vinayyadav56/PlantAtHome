@@ -20,15 +20,22 @@ class VendorProductPrice extends Model
     public $guarded = [];
 
     protected $casts = [
-        'cost_price'     => 'float',
-        'is_available'   => 'boolean',
-        'effective_from' => 'date',
-        'effective_to'   => 'date',
-        'stock_qty'      => 'integer',
-        'reserved_qty'   => 'integer',
-        'moq'            => 'integer',
-        'lead_time_days' => 'integer',
+        'cost_price'           => 'float',
+        'vendor_selling_price' => 'float',
+        'is_available'         => 'boolean',
+        'effective_from'       => 'date',
+        'effective_to'         => 'date',
+        'stock_qty'            => 'integer',
+        'reserved_qty'         => 'integer',
+        'moq'                  => 'integer',
+        'lead_time_days'       => 'integer',
     ];
+
+    /** True when this row carries a price the customer can be charged (vendor-set OR cost). */
+    public function getHasPriceAttribute(): bool
+    {
+        return (float) ($this->vendor_selling_price ?? 0) > 0 || (float) ($this->cost_price ?? 0) > 0;
+    }
 
     /** Stock a vendor can still commit (stock minus what's already reserved). */
     public function getAvailableQtyAttribute(): int

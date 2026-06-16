@@ -47,23 +47,25 @@ class AvailabilityService
 
         $shopIds = $rows->pluck('shop_id')->unique()->values()->all();
         $areas = VendorServiceArea::whereIn('shop_id', $shopIds)->where('is_active', true)->get()->groupBy('shop_id');
-        $product = Product::find($productId);
+        $product = Product::with('categories:id')->find($productId);
 
         return $rows->map(function (VendorProductPrice $r) use ($areas, $product) {
             $cities = ($areas[$r->shop_id] ?? collect())
                 ->map(fn ($a) => ['city' => $a->city, 'fulfillment_mode' => $a->fulfillment_mode, 'eta_days' => $a->eta_days])
                 ->values()->all();
+            $hasPrice = (float) ($r->vendor_selling_price ?? 0) > 0 || (float) $r->cost_price > 0;
             return [
-                'shop_id'             => $r->shop_id,
-                'vendor_name'         => optional($r->shop)->name,
-                'variation_option_id' => $r->variation_option_id,
-                'cost_price'          => (float) $r->cost_price,
-                'selling_price'       => ($product && (float) $r->cost_price > 0) ? $this->pricing->priceFromCost($product, (float) $r->cost_price) : null,
-                'stock_qty'           => (int) ($r->stock_qty ?? 0),
-                'available_qty'       => (int) $r->available_qty,
-                'is_available'        => (bool) $r->is_available && (float) $r->cost_price > 0,
-                'fulfillment_mode'    => $r->fulfillment_mode,
-                'cities'              => $cities,
+                'shop_id'              => $r->shop_id,
+                'vendor_name'          => optional($r->shop)->name,
+                'variation_option_id'  => $r->variation_option_id,
+                'cost_price'           => (float) $r->cost_price,
+                'vendor_selling_price' => $r->vendor_selling_price !== null ? (float) $r->vendor_selling_price : null,
+                'selling_price'        => ($product && $hasPrice) ? $this->pricing->effectivePrice($product, $r) : null,
+                'stock_qty'            => (int) ($r->stock_qty ?? 0),
+                'available_qty'        => (int) $r->available_qty,
+                'is_available'         => (bool) $r->is_available && $hasPrice,
+                'fulfillment_mode'     => $r->fulfillment_mode,
+                'cities'               => $cities,
             ];
         })->all();
     }
@@ -81,11 +83,11 @@ class AvailabilityService
         $rows = $this->effective(
             VendorProductPrice::where('product_id', $productId)
                 ->where('is_available', true)
-                ->where('cost_price', '>', 0)
+                ->where(fn ($q) => $q->where('vendor_selling_price', '>', 0)->orWhere('cost_price', '>', 0))
                 ->where(fn ($q) => $q->where('stock_qty', '<=', 0)->orWhereRaw('(stock_qty - reserved_qty) > 0'))
         )->get();
 
-        $product = Product::find($productId);
+        $product = Product::with('categories:id')->find($productId);
         $cities = [];
         if ($rows->isNotEmpty() && $product) {
             $shopIds = $rows->pluck('shop_id')->unique()->values()->all();
@@ -100,7 +102,7 @@ class AvailabilityService
                     continue;
                 }
                 if (!isset($cities[$key])) {
-                    $cities[$key] = ['has_local' => false, 'has_courier' => false, 'vendors' => [], 'min_cost' => null];
+                    $cities[$key] = ['has_local' => false, 'has_courier' => false, 'vendors' => [], 'min_price' => null];
                 }
                 $mode = $area->fulfillment_mode;
                 if ($mode === 'local' || $mode === 'both') {
@@ -110,8 +112,10 @@ class AvailabilityService
                     $cities[$key]['has_courier'] = true;
                 }
                 $cities[$key]['vendors'][$area->shop_id] = true;
-                $minCost = (float) $vendorRows->min('cost_price');
-                $cities[$key]['min_cost'] = is_null($cities[$key]['min_cost']) ? $minCost : min($cities[$key]['min_cost'], $minCost);
+                // Customer-facing price = lowest displayed price among this city's vendors
+                // (vendor-set selling price, or margin-over-cost for legacy cost-only rows).
+                $minPrice = (float) $vendorRows->min(fn ($r) => $this->pricing->effectivePrice($product, $r));
+                $cities[$key]['min_price'] = is_null($cities[$key]['min_price']) ? $minPrice : min($cities[$key]['min_price'], $minPrice);
             }
         }
 
@@ -127,7 +131,7 @@ class AvailabilityService
                 [
                     'has_local'    => $info['has_local'],
                     'has_courier'  => $info['has_courier'],
-                    'min_price'    => ($product && !is_null($info['min_cost'])) ? $this->pricing->priceFromCost($product, $info['min_cost']) : null,
+                    'min_price'    => $info['min_price'],
                     'vendor_count' => count($info['vendors']),
                     'updated_at'   => $now,
                 ]

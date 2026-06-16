@@ -16,12 +16,16 @@ use Marvel\Services\AvailabilityService;
  * size + cost (+ optional per-product delivery charge).
  *
  * Expected headings (case/space-insensitive via WithHeadingRow):
- *   sku | product_id   (one required — identifies the product)
- *   size                (optional — variation_option title or sku)
- *   cost_price          (₹ cost for this vendor/period; 0 ⇒ unavailable)
- *   delivery_charge     (optional — sets products.delivery_charge)
+ *   sku | product_id        (one required — identifies the master product)
+ *   size | variant          (optional — variation_option title or sku)
+ *   price | selling_price    (vendor's ₹ selling price — the customer-facing price)
+ *   cost_price | cost        (optional — admin cost-sheet / vendor margin reference)
+ *   inventory | stock | stock_qty (optional — per-vendor stock)
+ *   fulfillment_mode         (optional — local | courier | both)
+ *   delivery_charge          (optional — sets products.delivery_charge)
  *
- * cost_price = 0 marks the row available=false (orderable, "available in 6h").
+ * At least one of price / cost_price must be a positive number. A row with neither a
+ * positive price nor cost is flagged available=false (orderable, "available in 6h").
  * Rows upsert into vendor_product_prices keyed by
  * (shop_id, product_id, variation_option_id, period_type, effective_from).
  */
@@ -37,7 +41,8 @@ class VendorPriceSheetImport implements ToCollection, WithHeadingRow
         private string $periodType,
         private ?string $effectiveFrom,
         private ?string $effectiveTo,
-        private int $batchId
+        private int $batchId,
+        private ?int $userId = null
     ) {
     }
 
@@ -47,19 +52,36 @@ class VendorPriceSheetImport implements ToCollection, WithHeadingRow
             $line = $i + 2; // +1 heading, +1 to 1-index
             $sku       = $this->str($row, 'sku');
             $productId = $this->str($row, 'product_id') ?: $this->str($row, 'id');
-            $size      = $this->str($row, 'size');
+            $size      = $this->str($row, 'size') ?: $this->str($row, 'variant');
+            // Admin cost sheets carry cost_price; vendor sheets carry a selling `price`
+            // (+ `inventory`). Either is accepted; at least one must be a positive number.
             $costRaw   = $row->get('cost_price', $row->get('cost', null));
+            $sellRaw   = $row->get('selling_price', $row->get('price', null));
 
             if (!$sku && !$productId) {
                 $this->fail($line, 'Missing sku / product_id.');
                 continue;
             }
-            if ($costRaw === null || $costRaw === '') {
-                $this->fail($line, 'Missing cost_price.');
+            $cost = is_numeric($costRaw) ? (float) $costRaw : null;
+            $sell = is_numeric($sellRaw) ? (float) $sellRaw : null;
+            if ($costRaw !== null && $costRaw !== '' && $cost === null) {
+                $this->fail($line, "Invalid cost_price '{$costRaw}'.");
                 continue;
             }
-            if (!is_numeric($costRaw) || (float) $costRaw < 0) {
+            if ($sellRaw !== null && $sellRaw !== '' && $sell === null) {
+                $this->fail($line, "Invalid price '{$sellRaw}'.");
+                continue;
+            }
+            if ($cost !== null && $cost < 0) {
                 $this->fail($line, "Invalid cost_price '{$costRaw}'.");
+                continue;
+            }
+            if ($sell !== null && $sell < 0) {
+                $this->fail($line, "Invalid price '{$sellRaw}'.");
+                continue;
+            }
+            if ($cost === null && $sell === null) {
+                $this->fail($line, 'Provide a price (or cost_price).');
                 continue;
             }
 
@@ -85,19 +107,22 @@ class VendorPriceSheetImport implements ToCollection, WithHeadingRow
                 $variationOptionId = $vo->id;
             }
 
-            $cost = (float) $costRaw;
-
-            // Optional per-vendor stock + fulfillment mode (only set when present, so
-            // a price-only sheet never wipes existing stock).
+            // Only set columns that are present, so a price-only sheet never wipes an
+            // existing cost (and vice-versa).
             $values = [
-                'cost_price'      => $cost,
-                'is_available'    => $cost > 0,
-                'effective_to'    => $this->effectiveTo,
-                'source'          => 'excel',
-                'import_batch_id' => $this->batchId,
-                'deleted_at'      => null,
+                'effective_to'       => $this->effectiveTo,
+                'source'             => 'excel',
+                'import_batch_id'    => $this->batchId,
+                'updated_by_user_id' => $this->userId,
+                'deleted_at'         => null, // re-uploading restores a previously-removed mapping
             ];
-            $stockRaw = $row->get('stock_qty', $row->get('stock', null));
+            if ($cost !== null) {
+                $values['cost_price'] = $cost;
+            }
+            if ($sell !== null) {
+                $values['vendor_selling_price'] = $sell;
+            }
+            $stockRaw = $row->get('stock_qty', $row->get('stock', $row->get('inventory', null)));
             if (is_numeric($stockRaw)) {
                 $values['stock_qty'] = max(0, (int) $stockRaw);
             }
@@ -106,16 +131,24 @@ class VendorPriceSheetImport implements ToCollection, WithHeadingRow
                 $values['fulfillment_mode'] = $modeRaw;
             }
 
-            VendorProductPrice::updateOrCreate(
-                [
-                    'shop_id'             => $this->shopId,
-                    'product_id'          => $product->id,
-                    'variation_option_id' => $variationOptionId,
-                    'period_type'         => $this->periodType,
-                    'effective_from'      => $this->effectiveFrom,
-                ],
-                $values
-            );
+            // firstOrNew(withTrashed) so a re-upload RESTORES a soft-deleted row in place
+            // (matches VendorInventoryWriter — no orphaned duplicates), and is_available is
+            // derived from the MERGED row state so a partial sheet can't hide a still-priced
+            // row (e.g. a cost-only correction must not unset a row that still has a price).
+            $vpp = VendorProductPrice::withTrashed()->firstOrNew([
+                'shop_id'             => $this->shopId,
+                'product_id'          => $product->id,
+                'variation_option_id' => $variationOptionId,
+                'period_type'         => $this->periodType,
+                'effective_from'      => $this->effectiveFrom,
+            ]);
+            $isNew = !$vpp->exists;
+            $vpp->fill($values);
+            $vpp->is_available = (float) ($vpp->vendor_selling_price ?? 0) > 0 || (float) ($vpp->cost_price ?? 0) > 0;
+            if ($isNew) {
+                $vpp->created_by_user_id = $this->userId;
+            }
+            $vpp->save();
             $this->touchedProducts[$product->id] = true;
 
             // Optional per-product delivery charge on the same sheet.

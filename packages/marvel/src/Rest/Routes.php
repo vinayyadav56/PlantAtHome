@@ -56,6 +56,7 @@ use Marvel\Http\Controllers\AiChatController;
 use Marvel\Http\Controllers\DeliveryPincodeController;
 use Marvel\Http\Controllers\DeliveryPartnerController;
 use Marvel\Http\Controllers\PriceSheetController;
+use Marvel\Http\Controllers\VendorInventoryController;
 use Marvel\Http\Controllers\LocationPriceController;
 use Marvel\Http\Controllers\OrderAssignmentController;
 use Marvel\Http\Controllers\DeliveryPartnerWithdrawController;
@@ -470,6 +471,19 @@ Route::group(
         Route::get('staffs', [UserController::class, 'staffs']);
         Route::get('my-shops', [ShopController::class, 'myShops']);
         Route::post('transfer-shop-ownership', [ShopController::class, 'transferShopOwnership']);
+
+        // Vendor self-serve inventory (attach selling price + stock to MASTER products;
+        // vendors never create products). Every write is forced to the caller's own shop.
+        Route::get('vendor/catalog-search', [VendorInventoryController::class, 'catalogSearch']);
+        Route::post('vendor/inventory/bulk-attach', [VendorInventoryController::class, 'bulkAttach']);
+        Route::post('vendor/inventory/bulk-upload', [VendorInventoryController::class, 'bulkUpload']);
+        Route::get('vendor/inventory/bulk-upload/{batch}/errors.csv', [VendorInventoryController::class, 'uploadErrors']);
+        Route::get('vendor/inventory', [VendorInventoryController::class, 'inventory']);
+        Route::patch('vendor/inventory/{id}', [VendorInventoryController::class, 'updateInventory']);
+        Route::delete('vendor/inventory/{id}', [VendorInventoryController::class, 'deleteInventory']);
+        Route::get('vendor/service-areas', [VendorInventoryController::class, 'serviceAreas']);
+        Route::post('vendor/service-areas', [VendorInventoryController::class, 'addServiceArea']);
+        Route::delete('vendor/service-areas/{id}', [VendorInventoryController::class, 'deleteServiceArea']);
 
         // Route::get('/admin/list', [UserController::class, 'admins']);
         // Route::apiResource('notify-logs', NotifyLogsController::class, [

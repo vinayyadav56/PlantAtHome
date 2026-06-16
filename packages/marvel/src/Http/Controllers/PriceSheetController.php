@@ -29,17 +29,24 @@ class PriceSheetController extends CoreController
         }
         $uploaded = $files['file'] ?? ($files['csv'] ?? current($files));
 
+        // Only a spreadsheet, and store it on the PRIVATE disk (audit/re-parse only —
+        // never publicly served), so an uploaded file can't become an executable/script
+        // artifact at a public URL.
+        $ext = strtolower($uploaded->getClientOriginalExtension() ?: 'xlsx');
+        if (!in_array($ext, ['xlsx', 'xls', 'csv'], true)) {
+            return response()->json(['message' => 'Only .xlsx, .xls or .csv files are allowed.'], 422);
+        }
+
         $shopId     = (int) $request->input('shop_id');
         $periodType = $request->input('period_type', 'weekly');
         $from       = $request->input('effective_from');
         $to         = $request->input('effective_to');
 
-        // Store the original file for audit.
-        $ext  = $uploaded->getClientOriginalExtension() ?: 'xlsx';
-        $path = $uploaded->storePubliclyAs(
+        // Store the original file for audit (private disk).
+        $path = $uploaded->storeAs(
             'price-sheets',
             'vendor-' . $shopId . '-' . $periodType . '-' . time() . '.' . $ext,
-            'public'
+            'local'
         );
 
         $batch = PriceImportBatch::create([
@@ -53,7 +60,7 @@ class PriceSheetController extends CoreController
         ]);
 
         try {
-            $import = new VendorPriceSheetImport($shopId, $periodType, $from, $to, $batch->id);
+            $import = new VendorPriceSheetImport($shopId, $periodType, $from, $to, $batch->id, optional($request->user())->id);
             Excel::import($import, $uploaded);
         } catch (\Throwable $e) {
             $batch->update(['status' => 'failed', 'errors' => [['line' => 0, 'error' => $e->getMessage()]]]);
