@@ -173,7 +173,11 @@ class VendorInventoryController extends CoreController
         // Validate before touching the file: a spreadsheet only, capped size. The file
         // is stored on the PRIVATE disk (audit/re-parse only) — never publicly served —
         // so a vendor can't drop an HTML/SVG/PHP payload at a guessable public URL.
-        $request->validate(['file' => 'required|file|mimes:xlsx,xls,csv|max:5120']);
+        // NOTE: a plain CSV is frequently content-sniffed as text/plain (guessed ext "txt"),
+        // so `mimes:csv` alone wrongly rejects genuine .csv uploads — accept "txt" too. The
+        // real format gate is the strict client-extension check below + content parsing by
+        // the importer, so this stays spreadsheet-only.
+        $request->validate(['file' => 'required|file|mimes:xlsx,xls,csv,txt|max:5120']);
         $shopId = $this->resolveShopId($request);
         $uploaded = $request->file('file');
         $periodType = 'monthly';
