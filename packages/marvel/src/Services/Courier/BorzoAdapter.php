@@ -77,15 +77,22 @@ class BorzoAdapter implements ShippingPartnerAdapter
         }
         unset($payload['_error']);
 
-        // Atomic claim: flip a still-unbooked, non-cancelled row to 'booking' in ONE UPDATE. Only
-        // the request whose UPDATE affected a row may call Borzo, so a concurrent dispatch / double
-        // click (or dispatch racing the reconcile sweep) can never place two real deliveries.
+        // Atomic compare-and-set claim. The WHERE tests last_status (the very column we SET to
+        // 'booking'), so two concurrent UPDATEs serialize on the row lock: the winner flips it to
+        // 'booking', the loser then sees last_status='booking' (fresh) and matches 0 rows → bails.
+        // A stale claim (crashed mid-create > 5 min ago) is re-claimable, so a booking can't wedge.
+        $now = Carbon::now();
         $claimed = Shipment::whereKey($shipment->id)
             ->whereNull('provider_order_id')
             ->whereNotIn('status', ['cancelled'])
-            ->update(['last_status' => 'booking']);
+            ->where(function ($q) use ($now) {
+                $q->whereNull('last_status')
+                    ->orWhere('last_status', '!=', 'booking')
+                    ->orWhere('last_status_at', '<', $now->copy()->subMinutes(5));
+            })
+            ->update(['last_status' => 'booking', 'last_status_at' => $now]);
         if ($claimed === 0) {
-            return ['ok' => false, 'error' => 'Shipment is already being booked or has been cancelled.'];
+            return ['ok' => false, 'error' => 'This shipment is already being booked (or is cancelled); retry in a moment.'];
         }
 
         $res = $this->client->createOrder($payload);
@@ -105,34 +112,33 @@ class BorzoAdapter implements ShippingPartnerAdapter
             'tracking_ref'      => $orderId,
         ]);
 
-        // If the shipment was cancelled DURING the create window, roll the Borzo order back so we
-        // never have a live delivery the operator believes was cancelled.
-        $fresh = Shipment::find($shipment->id);
-        if ($fresh && $fresh->status === 'cancelled') {
-            $this->client->cancelOrder($orderId);
-            return ['ok' => false, 'error' => 'Shipment was cancelled during booking; the Borzo order was rolled back.'];
-        }
-
         $points = (array) data_get($res, 'data.order.points', []);
         $drop = end($points) ?: [];
         $cost = round((float) data_get($res, 'data.order.payment_amount', 0), 2);
 
-        $shipment->forceFill([
-            'provider'          => 'borzo',
-            'mode'              => $shipment->mode ?: 'same_city',
-            'provider_order_id' => $orderId,
-            'tracking_ref'      => $orderId,
-            'tracking_url'      => (string) ($drop['tracking_url'] ?? ''),
-            'courier_name'      => 'Borzo',
-            'payment_method'    => $isCod ? 'cod' : 'prepaid',
-            'cod_amount'        => $isCod ? $this->codAmount($shipment, $order) : $shipment->cod_amount,
-            'booked_cost'       => $cost,
-            'booked_revenue'    => $shipment->shipping_revenue,
-            'shipping_cost'     => $cost,
-            'status'            => 'assigned',
-            'last_status'       => 'booked',
-            'last_status_at'    => Carbon::now(),
-        ])->save();
+        // Rich update, atomically guarded against a concurrent cancel: if the row was cancelled
+        // during the create window, this matches 0 rows → we roll the Borzo order back instead of
+        // clobbering the cancel back to 'assigned'.
+        $applied = Shipment::whereKey($shipment->id)
+            ->whereNotIn('status', ['cancelled'])
+            ->update([
+                'provider'        => 'borzo',
+                'mode'            => $shipment->mode ?: 'same_city',
+                'tracking_url'    => (string) ($drop['tracking_url'] ?? ''),
+                'courier_name'    => 'Borzo',
+                'payment_method'  => $isCod ? 'cod' : 'prepaid',
+                'cod_amount'      => $isCod ? $this->codAmount($shipment, $order) : $shipment->cod_amount,
+                'booked_cost'     => $cost,
+                'booked_revenue'  => $shipment->shipping_revenue,
+                'shipping_cost'   => $cost,
+                'status'          => 'assigned',
+                'last_status'     => 'booked',
+                'last_status_at'  => Carbon::now(),
+            ]);
+        if ($applied === 0) {
+            $this->client->cancelOrder($orderId);
+            return ['ok' => false, 'error' => 'Shipment was cancelled during booking; the Borzo order was rolled back.'];
+        }
 
         return ['ok' => true, 'shipment' => $shipment->fresh()];
     }
@@ -412,9 +418,11 @@ class BorzoAdapter implements ShippingPartnerAdapter
 
     /**
      * Cash to collect at THIS shipment's drop. A shipment is one vendor's slice of a possibly
-     * multi-vendor order, so we must NEVER fall back to the whole-order total (that would collect
-     * the full amount at EVERY drop). Use an explicit per-shipment cod_amount when set, else sum
-     * this shipment's OWN line subtotals + its delivery share — which can never exceed the order.
+     * multi-vendor order, so we apportion the order's REAL customer payable (paid_total = goods +
+     * tax + delivery − discount) by this leg's share of the goods subtotal. This (a) never replicates
+     * the whole-order total onto every drop, (b) reflects discounts/tax/delivery the customer
+     * actually owes, and (c) sums across legs back to paid_total. A single-shipment order collects
+     * the full payable. An explicit per-shipment cod_amount, if ever set upstream, wins.
      */
     private function codAmount(Shipment $shipment, $order): float
     {
@@ -422,10 +430,20 @@ class BorzoAdapter implements ShippingPartnerAdapter
         if ($explicit > 0) {
             return round($explicit, 2);
         }
-        $goods = (float) $shipment->items->sum(function ($i) {
+        $payable = (float) ($order->paid_total ?? $order->amount ?? 0);
+        if ($payable <= 0) {
+            return 0.0;
+        }
+        $legGoods = (float) $shipment->items->sum(function ($i) {
             $sub = $i->subtotal ?? null;
             return $sub !== null ? (float) $sub : (float) ($i->unit_price ?? 0) * max(1, (int) ($i->order_quantity ?? 1));
         });
-        return round($goods + (float) ($shipment->shipping_cost ?? 0), 2);
+        $orderGoods = (float) ($order->amount ?? 0);
+        // Degenerate (no goods basis) → split evenly across the order's shipments.
+        if ($orderGoods <= 0 || $legGoods <= 0) {
+            $count = max(1, Shipment::where('order_id', $order->id)->count());
+            return round($payable / $count, 2);
+        }
+        return round($payable * min(1.0, $legGoods / $orderGoods), 2);
     }
 }
