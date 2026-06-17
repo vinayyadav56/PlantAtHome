@@ -726,4 +726,132 @@ class AnalyticsController extends CoreController
 
         return $topRatedProducts;
     }
+
+    // ──────────────────────────────────────────────────────────────
+    // Marketplace analytics (D1) — SUPER_ADMIN dashboard widgets. Registered under the
+    // admin route group, so these are platform-wide (no per-shop scoping). All bounded by
+    // an optional from/to date range + a LIMIT so they stay cheap at 500k+ orders.
+    // ──────────────────────────────────────────────────────────────
+
+    private function applyDateRange($query, Request $request, string $col): void
+    {
+        if ($request->filled('from')) {
+            $query->where($col, '>=', $request->from);
+        }
+        if ($request->filled('to')) {
+            $query->where($col, '<=', $request->to);
+        }
+    }
+
+    /** Sales grouped by the customer's city (from the parent order's shipping_address JSON). */
+    public function cityWiseSales(Request $request)
+    {
+        $limit = (int) ($request->limit ?? 15);
+        $q = DB::table('orders as child')
+            ->join('orders as parent', 'child.parent_id', '=', 'parent.id')
+            ->where('child.order_status', OrderStatus::COMPLETED)
+            ->where('parent.order_status', OrderStatus::COMPLETED);
+        $this->applyDateRange($q, $request, 'child.created_at');
+
+        return $q->select(
+            DB::raw("COALESCE(NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(parent.shipping_address, '$.city'))), ''), NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(parent.shipping_address, '$.address.city'))), ''), 'Unknown') as city"),
+            DB::raw('SUM(child.paid_total) as revenue'),
+            DB::raw('COUNT(child.id) as orders')
+        )->groupBy('city')->orderByDesc('revenue')->limit($limit)->get();
+    }
+
+    /** Vendors ranked by completed-order revenue. */
+    public function topVendors(Request $request)
+    {
+        $limit = (int) ($request->limit ?? 10);
+        $q = DB::table('orders as child')
+            ->join('shops', 'shops.id', '=', 'child.shop_id')
+            ->whereNotNull('child.parent_id')
+            ->where('child.order_status', OrderStatus::COMPLETED);
+        $this->applyDateRange($q, $request, 'child.created_at');
+
+        return $q->select(
+            'shops.id as shop_id',
+            'shops.name as shop_name',
+            DB::raw('SUM(child.paid_total) as revenue'),
+            DB::raw('COUNT(child.id) as orders')
+        )->groupBy('shops.id', 'shops.name')->orderByDesc('revenue')->limit($limit)->get();
+    }
+
+    /** Per-vendor revenue / cost / profit from the ledger (empty when the ledger is off). */
+    public function vendorProfitability(Request $request)
+    {
+        $limit = (int) ($request->limit ?? 10);
+        $q = DB::table('vendor_ledger_entries as v')->leftJoin('shops', 'shops.id', '=', 'v.shop_id');
+        $this->applyDateRange($q, $request, 'v.earned_at');
+
+        return $q->select(
+            'v.shop_id',
+            DB::raw('MAX(shops.name) as shop_name'),
+            DB::raw('SUM(v.product_value) as revenue'),
+            DB::raw('SUM(v.cost_value) as cost'),
+            DB::raw('SUM(v.vendor_profit) as profit'),
+            DB::raw('SUM(v.amount) as net_earning')
+        )->groupBy('v.shop_id')->orderByDesc('profit')->limit($limit)->get();
+    }
+
+    /** Suborders awaiting vendor assignment (count + a recent list). */
+    public function pendingFulfillments(Request $request)
+    {
+        $limit = (int) ($request->limit ?? 20);
+        $base = DB::table('orders')
+            ->whereNotNull('parent_id')
+            ->whereIn('order_status', [OrderStatus::PENDING, OrderStatus::PROCESSING])
+            ->where(fn ($w) => $w->whereNull('vendor_shop_id')->orWhere('assignment_status', 'unassigned'));
+
+        return [
+            'count'  => (clone $base)->count(),
+            'orders' => (clone $base)->select('id', 'tracking_number', 'shop_id', 'order_status', 'assignment_status', 'created_at')
+                ->orderByDesc('id')->limit($limit)->get(),
+        ];
+    }
+
+    /** Courier-fulfilled orders (count + a recent list). */
+    public function courierOrders(Request $request)
+    {
+        $limit = (int) ($request->limit ?? 20);
+        $base = DB::table('orders')->whereNotNull('parent_id')->whereIn('delivery_mode', ['courier_admin', 'courier_dp']);
+        $this->applyDateRange($base, $request, 'created_at');
+
+        return [
+            'count'  => (clone $base)->count(),
+            'orders' => (clone $base)->select('id', 'tracking_number', 'shop_id', 'order_status', 'delivery_mode', 'created_at')
+                ->orderByDesc('id')->limit($limit)->get(),
+        ];
+    }
+
+    /** Products ranked by units sold (complements the top-RATED widget). */
+    public function topSellingProducts(Request $request)
+    {
+        $limit = (int) ($request->limit ?? 10);
+        $language = $request->language ?? DEFAULT_LANGUAGE;
+        $q = DB::table('order_product')
+            ->join('orders', 'order_product.order_id', '=', 'orders.id')
+            ->join('products', 'order_product.product_id', '=', 'products.id')
+            ->whereNull('orders.parent_id')
+            ->where('orders.order_status', OrderStatus::COMPLETED)
+            ->where('products.language', $language);
+        $this->applyDateRange($q, $request, 'orders.created_at');
+
+        $rows = $q->select(
+            'products.id as id',
+            'products.name as name',
+            'products.slug as slug',
+            'products.price as regular_price',
+            DB::raw('JSON_UNQUOTE(products.image) AS image_json'),
+            DB::raw('SUM(order_product.order_quantity) as total_sold')
+        )->groupBy('products.id', 'products.name', 'products.slug', 'products.price', 'products.image')
+            ->orderByDesc('total_sold')->limit($limit)->get();
+
+        foreach ($rows as $row) {
+            $row->image = json_decode($row->image_json, true);
+            unset($row->image_json);
+        }
+        return $rows;
+    }
 }

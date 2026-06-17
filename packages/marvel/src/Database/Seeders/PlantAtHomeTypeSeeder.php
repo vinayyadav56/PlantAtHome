@@ -7,16 +7,19 @@ use Marvel\Database\Models\Type;
 
 /**
  * Tier 2 — safe for all environments (updateOrCreate).
- * Seeds the three PlantAtHome verticals (types): Plants (home), Tools, FarmBox.
- * Each shares the single premium storefront layout (the shop renders every
- * brand type with the PlantAtHome immersive layout).
+ * Seeds the PlantAtHome verticals (types): Plants (home), Tools, FarmBox, plus the
+ * marketplace catalogs Fertilizers, Pots & Planters and Seeds. Each shares the single
+ * premium storefront layout (the shop renders every brand type with the immersive layout).
  */
 class PlantAtHomeTypeSeeder extends Seeder
 {
     private array $types = [
-        ['slug' => 'plants',  'name' => 'Plants',  'icon' => 'Leaf',   'isHome' => true],
-        ['slug' => 'tools',   'name' => 'Tools',   'icon' => 'Tool',   'isHome' => false],
-        ['slug' => 'farmbox', 'name' => 'FarmBox', 'icon' => 'Basket', 'isHome' => false],
+        ['slug' => 'plants',         'name' => 'Plants',           'icon' => 'Leaf',   'isHome' => true],
+        ['slug' => 'tools',          'name' => 'Tools',            'icon' => 'Tool',   'isHome' => false],
+        ['slug' => 'farmbox',        'name' => 'FarmBox',          'icon' => 'Basket', 'isHome' => false],
+        ['slug' => 'fertilizers',    'name' => 'Fertilizers',      'icon' => 'Leaf',   'isHome' => false],
+        ['slug' => 'pots-planters',  'name' => 'Pots & Planters',  'icon' => 'Basket', 'isHome' => false],
+        ['slug' => 'seeds',          'name' => 'Seeds',            'icon' => 'Leaf',   'isHome' => false],
     ];
 
     public function run(): void
@@ -37,6 +40,6 @@ class PlantAtHomeTypeSeeder extends Seeder
             );
         }
 
-        $this->command->info('[Tier 2] PlantAtHome types seeded: plants (home), tools, farmbox');
+        $this->command->info('[Tier 2] PlantAtHome types seeded: plants (home), tools, farmbox, fertilizers, pots-planters, seeds');
     }
 }

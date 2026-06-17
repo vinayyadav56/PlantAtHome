@@ -55,6 +55,8 @@ class OrderRepository extends BaseRepository
         'tracking_number' => 'like',
         'shop_id',
         'language',
+        'order_status',   // enables vendor "rejected orders" (cancelled/refunded) filtering
+        'delivery_mode',  // enables vendor/admin "courier orders" filtering
     ];
     /**
      * @var string[]

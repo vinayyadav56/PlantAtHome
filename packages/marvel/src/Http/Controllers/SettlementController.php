@@ -67,6 +67,9 @@ class SettlementController extends CoreController
             ->whereNotNull('available_at')->where('available_at', '<=', $now)->sum('amount');
         $settledUnpaid = (float) VendorSettlement::where('shop_id', $shopId)->where('status', 'pending')->sum('net_payable');
         $paid = (float) VendorSettlement::where('shop_id', $shopId)->where('status', 'paid')->sum('net_payable');
+        // Lifetime cost of goods + resulting profit (only over sales whose cost is known).
+        $cost = (float) VendorLedgerEntry::where('shop_id', $shopId)->whereNotNull('cost_value')->sum('cost_value');
+        $profit = (float) VendorLedgerEntry::where('shop_id', $shopId)->whereNotNull('vendor_profit')->sum('vendor_profit');
 
         return [
             'on_hold'        => round(max(0, $pending), 2), // earned, inside the T+N window
@@ -74,6 +77,8 @@ class SettlementController extends CoreController
             'awaiting_payout' => round($settledUnpaid, 2),  // settled, not yet paid
             'paid'           => round($paid, 2),
             'lifetime'       => round($pending + $eligible + $settledUnpaid + $paid, 2),
+            'cost'           => round($cost, 2),            // lifetime cost of goods (known-cost sales)
+            'profit'         => round($profit, 2),          // lifetime profit (net earning − cost)
         ];
     }
 

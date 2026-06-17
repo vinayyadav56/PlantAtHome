@@ -7,6 +7,7 @@ use Marvel\Database\Models\Balance;
 use Marvel\Database\Models\Order;
 use Marvel\Database\Models\Settings;
 use Marvel\Database\Models\VendorLedgerEntry;
+use Marvel\Database\Models\VendorProductPrice;
 
 /**
  * Writes the vendor money ledger. On a child order reaching COMPLETED we record ONE
@@ -66,6 +67,14 @@ class VendorLedgerService
         $pgFee        = $this->pgFee($productValue);
         $vendorEarning = round($productValue - $commission - $platformFee - $pgFee, 2);
 
+        // F1: the vendor's own cost of goods + resulting profit (null when any line's cost
+        // is unknown, so an incomplete cost sheet never produces a misleading profit).
+        $costValue    = $this->costValue($order, $shopId);
+        $vendorProfit = $costValue === null ? null : round($vendorEarning - $costValue, 2);
+        // F2: the order's tax, pro-rated to this vendor's lines (informational; the vendor
+        // never receives tax, so it does not change `amount`).
+        $taxAmount    = $this->taxAmount($order);
+
         $now = Carbon::now();
         VendorLedgerEntry::create([
             'shop_id'           => $shopId,
@@ -77,6 +86,9 @@ class VendorLedgerService
             'platform_fee'      => $platformFee,
             'pg_fee'            => $pgFee,
             'shipping_revenue'  => 0,
+            'cost_value'        => $costValue,
+            'vendor_profit'     => $vendorProfit,
+            'tax_amount'        => $taxAmount,
             'source'            => 'delivery',
             'status'            => 'pending',
             'available_at'      => $now->copy()->addDays($this->holdDays),
@@ -117,6 +129,9 @@ class VendorLedgerService
             'platform_fee'      => -1 * (float) $sale->platform_fee,
             'pg_fee'            => -1 * (float) $sale->pg_fee,
             'shipping_revenue'  => -1 * (float) $sale->shipping_revenue,
+            'cost_value'        => $sale->cost_value === null ? null : -1 * (float) $sale->cost_value,
+            'vendor_profit'     => $sale->vendor_profit === null ? null : -1 * (float) $sale->vendor_profit,
+            'tax_amount'        => $sale->tax_amount === null ? null : -1 * (float) $sale->tax_amount,
             'source'            => 'refund',
             'earned_at'         => $now,
             'note'              => 'Reversal of ledger entry #' . $sale->id,
@@ -133,6 +148,57 @@ class VendorLedgerService
             $entry['available_at'] = null;
             VendorLedgerEntry::create($entry);
             $sale->update(['status' => 'reversed']);
+        }
+    }
+
+    /**
+     * The vendor's own cost of goods for this child order: Σ (their cost_price × qty) over
+     * the order lines. Returns null if the order has no lines or ANY line lacks a positive
+     * cost (so profit is reported as "unknown" rather than overstated). Never throws.
+     */
+    private function costValue(Order $order, int $shopId): ?float
+    {
+        try {
+            $lines = $order->products; // pivot: order_quantity, variation_option_id
+            if ($lines->isEmpty()) {
+                return null;
+            }
+            $total = 0.0;
+            foreach ($lines as $line) {
+                $voId = $line->pivot->variation_option_id ?? null;
+                $q = VendorProductPrice::where('shop_id', $shopId)->where('product_id', $line->id);
+                is_null($voId) ? $q->whereNull('variation_option_id') : $q->where('variation_option_id', $voId);
+                $cost = $q->value('cost_price');
+                if ($cost === null || (float) $cost <= 0) {
+                    return null; // unknown cost on a line → can't compute an honest profit
+                }
+                $total += (float) $cost * max(1, (int) ($line->pivot->order_quantity ?? 1));
+            }
+            return round($total, 2);
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /**
+     * The parent order's sales_tax pro-rated to this child by its share of the product
+     * total across siblings. Informational only (the vendor never receives tax). Never throws.
+     */
+    private function taxAmount(Order $order): float
+    {
+        try {
+            $parent = $order->parent_order;
+            $tax = (float) ($parent->sales_tax ?? 0);
+            if (!$parent || $tax <= 0) {
+                return 0.0;
+            }
+            $siblingTotal = (float) Order::where('parent_id', $parent->id)->sum('amount');
+            if ($siblingTotal <= 0) {
+                return 0.0;
+            }
+            return round($tax * ((float) ($order->amount ?? 0) / $siblingTotal), 2);
+        } catch (\Throwable $e) {
+            return 0.0;
         }
     }
 

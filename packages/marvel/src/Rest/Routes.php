@@ -58,6 +58,7 @@ use Marvel\Http\Controllers\DeliveryPartnerController;
 use Marvel\Http\Controllers\PriceSheetController;
 use Marvel\Http\Controllers\VendorInventoryController;
 use Marvel\Http\Controllers\SettlementController;
+use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\LocationPriceController;
 use Marvel\Http\Controllers\OrderAssignmentController;
 use Marvel\Http\Controllers\DeliveryPartnerWithdrawController;
@@ -491,6 +492,13 @@ Route::group(
         Route::get('vendor/ledger', [SettlementController::class, 'myLedger']);
         Route::get('vendor/settlements', [SettlementController::class, 'mySettlements']);
         Route::get('vendor/balance', [SettlementController::class, 'myBalance']);
+        Route::get('vendor/ledger.csv', [ReportController::class, 'myLedgerCsv']);
+        Route::get('vendor/settlements.csv', [ReportController::class, 'mySettlementsCsv']);
+
+        // Vendor dashboard widget (D2): low-stock alerts (own shop). Rejected/courier
+        // orders reuse the standard `orders` endpoint (order_status / delivery_mode filter);
+        // profit is folded into the `vendor/balance` summary.
+        Route::get('vendor/low-stock', [VendorInventoryController::class, 'lowStock']);
 
         // Route::get('/admin/list', [UserController::class, 'admins']);
         // Route::apiResource('notify-logs', NotifyLogsController::class, [
@@ -566,6 +574,21 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('settlements/{id}', [SettlementController::class, 'showSettlement']);
     Route::post('settlements/run', [SettlementController::class, 'runSettlements']);
     Route::post('settlements/{id}/pay', [SettlementController::class, 'paySettlement']);
+
+    // Financial reports + exports (F4): CSV primary, PDF statement optional.
+    Route::get('reports/ledger.csv', [ReportController::class, 'exportLedger']);
+    Route::get('reports/settlements.csv', [ReportController::class, 'exportSettlements']);
+    Route::get('reports/commission.csv', [ReportController::class, 'exportCommission']);
+    Route::get('reports/gst.csv', [ReportController::class, 'exportGst']);
+    Route::get('settlements/{id}/statement.pdf', [ReportController::class, 'settlementStatementPdf']);
+
+    // Marketplace analytics widgets (admin dashboard, D1).
+    Route::get('analytics/city-sales', [AnalyticsController::class, 'cityWiseSales']);
+    Route::get('analytics/top-vendors', [AnalyticsController::class, 'topVendors']);
+    Route::get('analytics/vendor-profitability', [AnalyticsController::class, 'vendorProfitability']);
+    Route::get('analytics/pending-fulfillments', [AnalyticsController::class, 'pendingFulfillments']);
+    Route::get('analytics/courier-orders', [AnalyticsController::class, 'courierOrders']);
+    Route::get('top-selling-product', [AnalyticsController::class, 'topSellingProducts']);
 
     // Order → vendor + delivery-partner matching/assignment (P3)
     Route::get('orders/{id}/match', [OrderAssignmentController::class, 'match']);

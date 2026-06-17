@@ -122,6 +122,23 @@ class VendorInventoryController extends CoreController
         return $query->paginate($limit);
     }
 
+    /**
+     * GET /vendor/low-stock — the caller's TRACKED rows at/under the low-stock threshold
+     * (D2 vendor dashboard alert). stock_qty <= 0 means "untracked" and is excluded.
+     */
+    public function lowStock(Request $request)
+    {
+        $shopId = $this->resolveShopId($request);
+        $threshold = max(0, (int) ($request->threshold ?? 5));
+        $limit = min(100, max(1, (int) ($request->limit ?? 50)));
+        return VendorProductPrice::with(['product:id,name,slug,sku,image'])
+            ->where('shop_id', $shopId)
+            ->where('stock_qty', '>', 0)
+            ->whereRaw('(stock_qty - reserved_qty) <= ?', [$threshold])
+            ->orderByRaw('(stock_qty - reserved_qty) asc')
+            ->paginate($limit);
+    }
+
     /** PATCH /vendor/inventory/{id} — edit price / stock / mode on the caller's row. */
     public function updateInventory(Request $request, $id)
     {
