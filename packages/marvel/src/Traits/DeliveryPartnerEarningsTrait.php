@@ -2,6 +2,7 @@
 
 namespace Marvel\Traits;
 
+use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\DeliveryPartner;
 use Marvel\Database\Models\DeliveryPartnerBalance;
 use Marvel\Database\Models\DeliveryPartnerEarning;
@@ -35,14 +36,33 @@ trait DeliveryPartnerEarningsTrait
         if (!$dp) {
             return;
         }
-        $balance = DeliveryPartnerBalance::firstOrCreate(['delivery_partner_id' => $dp->id]);
-        $amount = $this->computeDpCommission($order, $dp);
-        if ($action === 'deduct') {
-            $amount = -$amount;
+
+        // Idempotency on (order, commission): a COMPLETED→PROCESSING→COMPLETED toggle, a
+        // replayed webhook, or two reversal paths racing must not credit/reverse twice.
+        // $net = the commission currently outstanding for this order (credits − reversals).
+        $net = (float) DeliveryPartnerEarning::where('order_id', $order->id)
+            ->where('type', 'commission')
+            ->sum('amount');
+
+        if ($action === 'add') {
+            if ($net > 0) {
+                return; // already credited and not since reversed
+            }
+            $amount = $this->computeDpCommission($order, $dp);
+        } else { // deduct / reverse
+            if ($net <= 0) {
+                return; // nothing outstanding to reverse
+            }
+            $amount = -$net; // reverse EXACTLY what stands, regardless of config drift
         }
-        $balance->total_earnings  = (float) $balance->total_earnings + $amount;
-        $balance->current_balance = (float) $balance->current_balance + $amount;
-        $balance->save();
+
+        $balance = DeliveryPartnerBalance::firstOrCreate(['delivery_partner_id' => $dp->id]);
+        // Atomic in-DB increment (not a read-modify-write save) so concurrent credits for the
+        // same DP can't lose an update.
+        DeliveryPartnerBalance::where('delivery_partner_id', $dp->id)->update([
+            'total_earnings'  => DB::raw('total_earnings + (' . $amount . ')'),
+            'current_balance' => DB::raw('current_balance + (' . $amount . ')'),
+        ]);
 
         // Per-event ledger row (commission; a contra/negative row on reversal) so
         // earnings can be grouped by period + split commission vs incentive.
@@ -62,6 +82,7 @@ trait DeliveryPartnerEarningsTrait
         // Auto incentive rules fire only on credit (not on reversal).
         if ($action === 'add') {
             try {
+                $balance->refresh(); // reflect the atomic increment above before evaluating incentives
                 (new DeliveryPartnerIncentiveService())->evaluateOnDelivery($dp, $order, $balance);
             } catch (\Throwable $e) {
                 // never let incentive evaluation break order completion

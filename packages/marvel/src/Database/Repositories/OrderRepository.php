@@ -293,7 +293,13 @@ class OrderRepository extends BaseRepository
     {
         try {
             $total = $this->currencyToWalletPoints($total);
-            $wallet = Wallet::where('customer_id', $customer_id)->first();
+            // Lock the wallet row for the life of the enclosing order transaction so two
+            // concurrent orders for the same customer can't both read the same balance and
+            // each spend it (lost-update double-spend). The debit is re-read under the lock.
+            $wallet = Wallet::where('customer_id', $customer_id)->lockForUpdate()->first();
+            if (!$wallet) {
+                return;
+            }
             $available_points = $wallet->available_points - $total >= 0 ? $wallet->available_points - $total : 0;
             if ($available_points === 0) {
                 $spend = $wallet->points_used + $wallet->available_points;
