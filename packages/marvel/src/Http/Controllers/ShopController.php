@@ -141,7 +141,9 @@ class ShopController extends CoreController
             // SECURITY: this route is public — without this gate an anonymous attacker could POST
             // any shop_id and force that shop's entire catalog private (denial-of-business) or
             // public (overriding a real maintenance window). Require super-admin or the owner.
-            $user = $request->user();
+            // Resolve via the sanctum guard explicitly: the route has no auth:sanctum middleware,
+            // so the default (session) guard's user() is always null for Bearer-token callers.
+            $user = $request->user('sanctum');
             if (!$user || !(
                 $user->hasPermissionTo(Permission::SUPER_ADMIN)
                 || ($user->hasPermissionTo(Permission::STORE_OWNER) && $user->shops->contains('id', $id))
