@@ -83,7 +83,12 @@ class PricingService
             ->where(fn ($q) => $q->whereNull('effective_from')->orWhere('effective_from', '<=', $today))
             ->where(fn ($q) => $q->whereNull('effective_to')->orWhere('effective_to', '>=', $today))
             ->where('is_available', true)
-            ->where(fn ($q) => $q->where('vendor_selling_price', '>', 0)->orWhere('cost_price', '>', 0));
+            ->where(fn ($q) => $q->where('vendor_selling_price', '>', 0)->orWhere('cost_price', '>', 0))
+            // Exclude TRACKED sold-out vendors so the charged/displayed price can never come
+            // from a vendor the browse listing already dropped. Mirrors AvailabilityService
+            // exactly: stock_qty <= 0 means "stock not tracked" (price-only sheet) → still
+            // sellable; a tracked row is sellable only while (stock_qty - reserved_qty) > 0.
+            ->where(fn ($q) => $q->where('stock_qty', '<=', 0)->orWhereRaw('(stock_qty - reserved_qty) > 0'));
 
         if (is_null($variationOptionId)) {
             $query->whereNull('variation_option_id');
