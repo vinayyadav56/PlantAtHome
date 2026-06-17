@@ -146,6 +146,11 @@ Route::get('shipping/_diag', function () {
         'config_cached'    => file_exists(base_path('bootstrap/cache/config.php')),
         'services_keys'    => array_keys((array) config('services')),
         'svc_file_has_block' => is_readable(config_path('services.php')) ? str_contains((string) @file_get_contents(config_path('services.php')), 'shipping_service') : null,
+        'config_path'      => config_path('services.php'),
+        'fresh_require_keys' => (function () {
+            try { $a = require config_path('services.php'); return is_array($a) ? array_keys($a) : ['NOT_ARRAY']; }
+            catch (\Throwable $e) { return ['ERR:' . $e->getMessage()]; }
+        })(),
     ]);
 })->middleware('throttle:30,1');
 
