@@ -226,6 +226,13 @@ class OrderController extends CoreController
         }
 
         if (!$order->customer_id) {
+            // Guest order, looked up by an enumerable tracking_number. Strip the heaviest PII so
+            // an enumerating attacker can't harvest the buyer's billing address / contact / linked
+            // account; shipping_address + items + status remain for the buyer's order-received page.
+            // (Group-wide throttle:api now also rate-limits enumeration; a per-order secret token
+            //  is the complete fix and is tracked as a follow-up.)
+            $order->makeHidden(['billing_address', 'customer_contact']);
+            $order->unsetRelation('customer');
             return $order;
         }
         if ($user && $user->hasPermissionTo(Permission::SUPER_ADMIN)) {

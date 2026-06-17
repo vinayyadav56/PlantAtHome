@@ -55,7 +55,10 @@ class ProductController extends CoreController
      */
     public function index(Request $request)
     {
-        $limit = $request->limit ?   $request->limit : 15;
+        // SECURITY/perf: clamp the client-supplied page size on this PUBLIC endpoint so
+        // ?limit=<huge> can't dump the full catalog (× eager relations) and bypass the
+        // per-limit response cache.
+        $limit = min(max((int) ($request->limit ?: 15), 1), 100);
         $language = $request->language ?: DEFAULT_LANGUAGE;
 
         // The storefront grids + filter sidebar hammer this endpoint. For

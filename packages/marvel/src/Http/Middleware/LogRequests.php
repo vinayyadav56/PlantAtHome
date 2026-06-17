@@ -21,6 +21,8 @@ class LogRequests
         'password', 'password_confirmation', 'current_password', 'new_password',
         'token', 'secret', 'authorization', 'api_key', 'key_secret', 'client_secret',
         'cvv', 'otp', 'card', 'card_number', 'razorpay_signature',
+        // response-side bearer secrets (auth/register/social/otp login mint these)
+        'plaintexttoken', 'access_token', 'refresh_token', 'auth_token',
     ];
     private const SKIP_CONTAINS = ['request-logs', 'admin-tasks', '/health'];
 
@@ -59,8 +61,11 @@ class LogRequests
                 'user_id' => optional($request->user())->id,
                 'ip' => $request->ip(),
                 'payload' => $this->trunc($this->redact($request->all())),
-                'response' => $this->trunc($content),
-                'error' => $status >= 400 ? $this->trunc($content) : null,
+                // SECURITY: scrub the RESPONSE body too — /token, /register, social + OTP login
+                // return a live Sanctum bearer as a top-level `token`, which was previously
+                // persisted in plaintext (working credentials at rest).
+                'response' => $this->trunc($this->redactBody($content)),
+                'error' => $status >= 400 ? $this->trunc($this->redactBody($content)) : null,
                 'duration_ms' => (int) round((microtime(true) - $start) * 1000),
                 'created_at' => now(),
             ]);
@@ -101,6 +106,19 @@ class LogRequests
             }
         }
         return $data;
+    }
+
+    /** Redact secret keys inside a JSON response body before it is persisted to request_logs. */
+    private function redactBody($content)
+    {
+        if (!is_string($content) || $content === '') {
+            return $content;
+        }
+        $decoded = json_decode($content, true);
+        if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+            return json_encode($this->redact($decoded), JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
+        return $content;
     }
 
     private function trunc($value): ?string
