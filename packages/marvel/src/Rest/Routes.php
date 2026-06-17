@@ -144,6 +144,8 @@ Route::get('shipping/_diag', function () {
         'env_apikey_len'   => strlen((string) env('SHIPPING_SERVICE_API_KEY')),
         'dotenv_has_line'  => is_readable($envPath) ? str_contains((string) @file_get_contents($envPath), 'SHIPPING_SERVICE_CALLBACK_KEY') : null,
         'config_cached'    => file_exists(base_path('bootstrap/cache/config.php')),
+        'services_keys'    => array_keys((array) config('services')),
+        'svc_file_has_block' => is_readable(config_path('services.php')) ? str_contains((string) @file_get_contents(config_path('services.php')), 'shipping_service') : null,
     ]);
 })->middleware('throttle:30,1');
 
