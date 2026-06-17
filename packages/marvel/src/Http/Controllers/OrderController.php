@@ -110,44 +110,44 @@ class OrderController extends CoreController
 
         switch ($user) {
             case $user->hasPermissionTo(Permission::SUPER_ADMIN):
-                return $this->repository->with('children')->where('id', '!=', null)->where('parent_id', '=', null);
+                return $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('id', '!=', null)->where('parent_id', '=', null);
                 break;
 
             case $user->hasPermissionTo(Permission::STORE_OWNER):
                 if ($this->repository->hasPermission($user, $request->shop_id)) {
-                    return $this->repository->with('children')->where('shop_id', '=', $request->shop_id)->where('parent_id', '!=', null);
+                    return $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('shop_id', '=', $request->shop_id)->where('parent_id', '!=', null);
                 } else {
-                    $orders = $this->repository->with('children')->where('parent_id', '!=', null)->whereIn('shop_id', $user->shops->pluck('id'));
+                    $orders = $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('parent_id', '!=', null)->whereIn('shop_id', $user->shops->pluck('id'));
                     return $orders;
                 }
                 break;
 
             case $user->hasPermissionTo(Permission::STAFF):
                 if ($this->repository->hasPermission($user, $request->shop_id)) {
-                    return $this->repository->with('children')->where('shop_id', '=', $request->shop_id)->where('parent_id', '!=', null);
+                    return $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('shop_id', '=', $request->shop_id)->where('parent_id', '!=', null);
                 } else {
-                    $orders = $this->repository->with('children')->where('parent_id', '!=', null)->where('shop_id', '=', $user->shop_id);
+                    $orders = $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('parent_id', '!=', null)->where('shop_id', '=', $user->shop_id);
                     return $orders;
                 }
                 break;
 
             default:
-                return $this->repository->with('children')->where('customer_id', '=', $user->id)->where('parent_id', '=', null);
+                return $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('customer_id', '=', $user->id)->where('parent_id', '=', null);
                 break;
         }
 
         // ********************* Old code *********************
 
         // if ($user && $user->hasPermissionTo(Permission::SUPER_ADMIN) && (!isset($request->shop_id) || $request->shop_id === 'undefined')) {
-        //     return $this->repository->with('children')->where('id', '!=', null)->where('parent_id', '=', null); //->paginate($limit);
+        //     return $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('id', '!=', null)->where('parent_id', '=', null); //->paginate($limit);
         // } else if ($this->repository->hasPermission($user, $request->shop_id)) {
         //     // if ($user && $user->hasPermissionTo(Permission::STORE_OWNER)) {
-        //     return $this->repository->with('children')->where('shop_id', '=', $request->shop_id)->where('parent_id', '!=', null); //->paginate($limit);
+        //     return $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('shop_id', '=', $request->shop_id)->where('parent_id', '!=', null); //->paginate($limit);
         //     // } elseif ($user && $user->hasPermissionTo(Permission::STAFF)) {
-        //     //     return $this->repository->with('children')->where('shop_id', '=', $request->shop_id)->where('parent_id', '!=', null); //->paginate($limit);
+        //     //     return $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('shop_id', '=', $request->shop_id)->where('parent_id', '!=', null); //->paginate($limit);
         //     // }
         // } else {
-        //     return $this->repository->with('children')->where('customer_id', '=', $user->id)->where('parent_id', '=', null); //->paginate($limit);
+        //     return $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('customer_id', '=', $user->id)->where('parent_id', '=', null); //->paginate($limit);
         // }
     }
 

@@ -71,11 +71,15 @@ trait OrderManagementTrait
      */
     protected function recomputeParentOrderStatus($parentId): void
     {
-        $parent = \Marvel\Database\Models\Order::with('children')->find($parentId);
+        // Load the parent without its heavy default eager-loads (customer +
+        // products.variation_options) and read the child statuses with a single light
+        // pluck — avoids reloading the whole parent subtree on every suborder transition.
+        $parent = \Marvel\Database\Models\Order::without('customer', 'products')->find($parentId);
         if (!$parent) {
             return;
         }
-        $statuses = $parent->children->pluck('order_status')->filter()->values();
+        $statuses = \Marvel\Database\Models\Order::where('parent_id', $parentId)
+            ->pluck('order_status')->filter()->values();
         if ($statuses->isEmpty()) {
             return;
         }
