@@ -108,9 +108,12 @@ trait OrderStatusManagerWithPaymentTrait
         if ($action_type == 'deduct') $shop_earnings = $shop_earnings * -1;
         // Atomic in-DB increment (not a read-modify-write save) so two completions for the
         // SAME vendor running concurrently can't lose an update / clobber each other.
+        // number_format → a plain fixed-decimal literal (never scientific notation for tiny
+        // values), locale-independent with a '.' separator.
+        $inc = number_format($shop_earnings, 4, '.', '');
         Balance::where('shop_id', '=', $order->shop_id)->update([
-            'total_earnings'  => DB::raw('total_earnings + (' . $shop_earnings . ')'),
-            'current_balance' => DB::raw('current_balance + (' . $shop_earnings . ')'),
+            'total_earnings'  => DB::raw('total_earnings + (' . $inc . ')'),
+            'current_balance' => DB::raw('current_balance + (' . $inc . ')'),
         ]);
 
         // P2 vendor ledger (parallel-run, flag-gated, never mutates $balance). Records the

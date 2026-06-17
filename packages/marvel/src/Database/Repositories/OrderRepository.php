@@ -193,11 +193,13 @@ class OrderRepository extends BaseRepository
         // checkout `verify` preview uses, so an honest client sees no change and a tampered
         // one is corrected.
         $checkout = new CheckoutRepository();
-        $settings = Settings::getData();
+        // NB: use a DISTINCT local ($cfg) — do NOT reuse the $settings parameter, which is the
+        // controller-injected Settings model that processPaymentIntent($request, $settings) needs.
+        $cfg = Settings::getData();
         $freeShipByCoupon    = isset($coupon) && $coupon->type === CouponType::FREE_SHIPPING_COUPON;
-        $freeShipByThreshold = !empty($settings['options']['freeShipping'])
-            && isset($settings['options']['freeShippingAmount'])
-            && (float) $settings['options']['freeShippingAmount'] <= (float) $request['amount'];
+        $freeShipByThreshold = !empty($cfg['options']['freeShipping'])
+            && isset($cfg['options']['freeShippingAmount'])
+            && (float) $cfg['options']['freeShippingAmount'] <= (float) $request['amount'];
 
         $request['delivery_fee'] = ($freeShipByCoupon || $freeShipByThreshold)
             ? 0

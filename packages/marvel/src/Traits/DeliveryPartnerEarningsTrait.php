@@ -58,10 +58,11 @@ trait DeliveryPartnerEarningsTrait
 
         $balance = DeliveryPartnerBalance::firstOrCreate(['delivery_partner_id' => $dp->id]);
         // Atomic in-DB increment (not a read-modify-write save) so concurrent credits for the
-        // same DP can't lose an update.
+        // same DP can't lose an update. number_format → plain fixed-decimal literal.
+        $inc = number_format($amount, 4, '.', '');
         DeliveryPartnerBalance::where('delivery_partner_id', $dp->id)->update([
-            'total_earnings'  => DB::raw('total_earnings + (' . $amount . ')'),
-            'current_balance' => DB::raw('current_balance + (' . $amount . ')'),
+            'total_earnings'  => DB::raw('total_earnings + (' . $inc . ')'),
+            'current_balance' => DB::raw('current_balance + (' . $inc . ')'),
         ]);
 
         // Per-event ledger row (commission; a contra/negative row on reversal) so
