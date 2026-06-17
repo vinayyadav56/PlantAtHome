@@ -21,6 +21,7 @@ class CourierService
 {
     private ?CourierProviderInterface $provider = null; // Shiprocket (intercity courier lane)
     private ?BorzoAdapter $borzo = null;                // Borzo (instant / same-city lane)
+    private ?ShippingServiceClient $shippingClient = null; // dedicated Go service (when enabled)
     private array $opts;
 
     public function __construct()
@@ -64,6 +65,76 @@ class CourierService
     }
 
     /**
+     * When the dedicated shipping microservice is enabled (+ configured), book/quote/cancel/track
+     * delegate to it; status flows back via the callback. OFF → the in-process adapters run (this
+     * is the dual-run cutover seam). Still gated by the admin master switch.
+     */
+    public function shippingServiceEnabled(): bool
+    {
+        if (!$this->master() || !config('services.shipping_service.enabled')) {
+            return false;
+        }
+        return $this->shippingClient()->configured();
+    }
+
+    private function shippingClient(): ShippingServiceClient
+    {
+        return $this->shippingClient ??= new ShippingServiceClient();
+    }
+
+    /**
+     * Per-shipment COD to collect = the order's real customer payable (paid_total) apportioned by
+     * this shipment's share of the goods subtotal. Single-shipment collects the full payable;
+     * degenerate splits evenly. Mirrors BorzoAdapter::codAmount so the service collects the same.
+     */
+    public function shipmentCodAmount(Shipment $shipment, $order): float
+    {
+        $explicit = (float) ($shipment->cod_amount ?? 0);
+        if ($explicit > 0) {
+            return round($explicit, 2);
+        }
+        if (!$order) {
+            return 0.0;
+        }
+        $payable = (float) ($order->paid_total ?? $order->amount ?? 0);
+        if ($payable <= 0) {
+            return 0.0;
+        }
+        $legGoods = (float) $shipment->items->sum(function ($i) {
+            $sub = $i->subtotal ?? null;
+            return $sub !== null ? (float) $sub : (float) ($i->unit_price ?? 0) * max(1, (int) ($i->order_quantity ?? 1));
+        });
+        $orderGoods = (float) ($order->amount ?? 0);
+        if ($orderGoods <= 0 || $legGoods <= 0) {
+            $count = max(1, Shipment::where('order_id', $order->id)->count());
+            return round($payable / $count, 2);
+        }
+        return round($payable * min(1.0, $legGoods / $orderGoods), 2);
+    }
+
+    /**
+     * Map a service-normalized SHIPMENT status to our {shipment_status, order_status} pair for the
+     * shared applyNormalizedStatus seam (the callback receiver uses this).
+     */
+    public function mapServiceStatus(string $shipmentStatus): array
+    {
+        switch ($shipmentStatus) {
+            case 'delivered':
+                return ['shipment_status' => 'delivered', 'order_status' => 'order-completed'];
+            case 'out_for_delivery':
+                return ['shipment_status' => 'out_for_delivery', 'order_status' => 'order-out-for-delivery'];
+            case 'shipped':
+                return ['shipment_status' => 'shipped', 'order_status' => 'order-at-local-facility'];
+            case 'cancelled':
+                return ['shipment_status' => 'cancelled', 'order_status' => null];
+            case 'assigned':
+                return ['shipment_status' => 'assigned', 'order_status' => null];
+            default:
+                return ['shipment_status' => null, 'order_status' => null];
+        }
+    }
+
+    /**
      * Which lane this shipment ships on: an explicit shipment.mode wins, else derive from
      * fulfillment_mode (courier → Shiprocket; local → Borzo same-city instant).
      */
@@ -82,6 +153,11 @@ class CourierService
      */
     public function book(Shipment $shipment): array
     {
+        if ($this->shippingServiceEnabled()) {
+            $order = $shipment->order;
+            $cod = $order && $order->payment_gateway === PaymentGatewayType::CASH_ON_DELIVERY;
+            return $this->shippingClient()->book($shipment, $this->modeOf($shipment), (bool) $cod, $this->shipmentCodAmount($shipment, $order));
+        }
         $mode = $this->modeOf($shipment);
         if ($mode === 'courier') {
             return $this->enabled()
@@ -97,6 +173,9 @@ class CourierService
     /** Cancel a booked shipment via whichever partner placed it. */
     public function cancel(Shipment $shipment, ?string $reason = null): array
     {
+        if ($this->shippingServiceEnabled()) {
+            return $this->shippingClient()->cancel($shipment, $reason);
+        }
         if (($shipment->provider ?? '') === 'borzo') {
             return $this->borzoEnabled()
                 ? $this->borzo->cancel($shipment, $reason)
@@ -111,12 +190,16 @@ class CourierService
      */
     public function quoteShipment(Shipment $shipment, ?bool $cod = null): array
     {
-        if (!$this->anyEnabled()) {
-            return ['ok' => false, 'error' => 'Courier integration is not enabled.'];
-        }
         $order = $shipment->order;
         $cod = $cod ?? ($order && $order->payment_gateway === PaymentGatewayType::CASH_ON_DELIVERY);
         $mode = $this->modeOf($shipment);
+
+        if ($this->shippingServiceEnabled()) {
+            return $this->shippingClient()->quoteShipment($shipment, $mode, (bool) $cod, $this->shipmentCodAmount($shipment, $order));
+        }
+        if (!$this->anyEnabled()) {
+            return ['ok' => false, 'error' => 'Courier integration is not enabled.'];
+        }
 
         $quotes = [];
         foreach (AdapterRegistry::candidatesForMode($mode, (bool) $cod) as $code => $adapter) {
@@ -208,6 +291,11 @@ class CourierService
      */
     public function bookShipment(Shipment $shipment): array
     {
+        // When the dedicated service owns shipping, the raw Shiprocket lane must NOT also create a
+        // provider order (that would double-book). Route operators to the service via dispatch.
+        if ($this->shippingServiceEnabled()) {
+            return ['ok' => false, 'error' => 'Booking is handled by the shipping service; use the dispatch endpoint.'];
+        }
         if (!$this->enabled()) {
             return ['ok' => false, 'error' => 'Courier integration is not enabled.'];
         }
@@ -299,6 +387,9 @@ class CourierService
 
     public function track(Shipment $shipment): array
     {
+        if ($this->shippingServiceEnabled()) {
+            return $this->shippingClient()->track($shipment);
+        }
         if (!$this->enabled() || !$shipment->awb_number) {
             return ['ok' => false, 'error' => 'No AWB to track.'];
         }
@@ -418,6 +509,11 @@ class CourierService
 
         if (!empty($map['order_status'])) {
             $order = $shipment->order;
+            // A terminal/cancelled order is a FLOOR: a late or replayed shipment event must never
+            // resurrect it (cancelled→completed) and fire vendor settlement on a cancelled order.
+            if ($order && in_array($order->order_status, ['order-cancelled', 'order-refunded', 'order-failed'], true)) {
+                return $map;
+            }
             if ($order) {
                 $dest = $map['order_status'];
                 if ($dest === 'order-completed') {

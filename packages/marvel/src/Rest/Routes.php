@@ -128,6 +128,9 @@ Route::post('webhooks/shiprocket', [WebHookController::class, 'shiprocket'])->mi
 // Borzo order/delivery callback — anti-spoof (only a signature-verified callback triggers the
 // authenticated re-fetch), idempotent, never-5xx; tightly throttled. Public; verified in-controller.
 Route::post('webhooks/borzo', [WebHookController::class, 'borzo'])->middleware('throttle:60,1');
+// Dedicated shipping microservice → monolith callback (status/COD). Token-verified (x-api-key)
+// in-controller, idempotent, never-5xx. Public route; throttled.
+Route::post('shipping/callback', [WebHookController::class, 'shippingCallback'])->middleware('throttle:120,1');
 
 // Voice Search — public: storefront reads the feature flag; the shop's server
 // side posts query usage for cost tracking (guarded by an optional shared secret).

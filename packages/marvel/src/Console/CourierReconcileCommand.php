@@ -33,7 +33,9 @@ class CourierReconcileCommand extends Command
         $applied = 0;
 
         // ── Shiprocket courier lane (track by AWB → mapStatus). ──
-        if ($svc->enabled()) {
+        // When the dedicated service owns shipping, IT reconciles + drives status via its callback;
+        // the monolith must not re-track service-booked AWBs against its own Shiprocket account.
+        if ($svc->enabled() && !$svc->shippingServiceEnabled()) {
             $shipments = Shipment::where('fulfillment_mode', 'courier')
                 ->where(fn ($q) => $q->whereNull('provider')->orWhere('provider', '!=', 'borzo'))
                 ->whereNotNull('awb_number')
@@ -61,7 +63,7 @@ class CourierReconcileCommand extends Command
         }
 
         // ── Borzo instant/same-city lane (re-fetch order → mapBorzoStatus via the adapter). ──
-        if ($svc->borzoEnabled()) {
+        if ($svc->borzoEnabled() && !$svc->shippingServiceEnabled()) {
             $adapter = new BorzoAdapter();
             $borzoShipments = Shipment::where('provider', 'borzo')
                 ->whereNotNull('provider_order_id')

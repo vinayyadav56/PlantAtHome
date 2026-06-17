@@ -99,4 +99,15 @@ return [
         'matter'          => env('BORZO_MATTER', 'Plants & garden supplies'),
     ],
 
+    // Dedicated Go shipping microservice. When enabled, CourierService delegates quote/book/cancel/
+    // track to it (X-Api-Key); status/COD flow back via the POST /api/shipping/callback receiver.
+    // OFF by default → the monolith uses its in-process Borzo/Shiprocket adapters (dual-run cutover).
+    'shipping_service' => [
+        'enabled'      => (bool) env('SHIPPING_SERVICE_ENABLED', false),
+        'url'          => env('SHIPPING_SERVICE_URL'),                                   // e.g. https://shipping-staging.up.railway.app
+        'api_key'      => env('SHIPPING_SERVICE_API_KEY'),                               // sent as X-Api-Key when calling the service
+        'callback_key' => env('SHIPPING_SERVICE_CALLBACK_KEY', env('SHIPPING_SERVICE_API_KEY')), // expected X-Api-Key on inbound callbacks
+        'timeout'      => (int) env('SHIPPING_SERVICE_TIMEOUT', 25),
+    ],
+
 ];
