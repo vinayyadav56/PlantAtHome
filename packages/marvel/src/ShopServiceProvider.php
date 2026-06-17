@@ -238,7 +238,15 @@ class ShopServiceProvider extends ServiceProvider
             'media-library'      => File::getRequire(__DIR__ . '/../config/media-library.php'),
             'permission'         => File::getRequire(__DIR__ . '/../config/permission.php'),
             'sanctum'            => File::getRequire(__DIR__ . '/../config/sanctum.php'),
-            'services'           => File::getRequire(__DIR__ . '/../config/services.php'),
+            // Preserve the APP's config/services.php (custom integration blocks like
+            // shipping_service / borzo / shiprocket / msg91 / whatsapp / pixabay) instead of
+            // REPLACING the whole 'services' config with the package's stock file (which only
+            // ships google/twilio/messagebird/… defaults). Package = base, APP config wins —
+            // otherwise every app-level services.* block is silently wiped at boot.
+            'services'           => array_merge(
+                File::getRequire(__DIR__ . '/../config/services.php'),
+                is_array(config('services')) ? config('services') : []
+            ),
             'scout'              => File::getRequire(__DIR__ . '/../config/scout.php'),
             'sluggable'          => File::getRequire(__DIR__ . '/../config/sluggable.php'),
             'constants'          => File::getRequire(__DIR__ . '/../config/constants.php'),

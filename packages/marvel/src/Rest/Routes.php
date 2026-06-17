@@ -131,34 +131,6 @@ Route::post('webhooks/borzo', [WebHookController::class, 'borzo'])->middleware('
 // Dedicated shipping microservice → monolith callback (status/COD). Token-verified (x-api-key)
 // in-controller, idempotent, never-5xx. Public route; throttled.
 Route::post('shipping/callback', [WebHookController::class, 'shippingCallback'])->middleware('throttle:120,1');
-// TEMP diagnostic (no secrets — lengths + booleans only) to pinpoint why the callback
-// auth resolves empty at runtime. REMOVE after the shipping cutover is confirmed.
-Route::get('shipping/_diag', function () {
-    $envPath = base_path('.env');
-    return response()->json([
-        'cfg_enabled'      => config('services.shipping_service.enabled'),
-        'cfg_callback_len' => strlen((string) config('services.shipping_service.callback_key')),
-        'cfg_apikey_len'   => strlen((string) config('services.shipping_service.api_key')),
-        'cfg_url_set'      => !empty(config('services.shipping_service.url')),
-        'env_callback_len' => strlen((string) env('SHIPPING_SERVICE_CALLBACK_KEY')),
-        'env_apikey_len'   => strlen((string) env('SHIPPING_SERVICE_API_KEY')),
-        'dotenv_has_line'  => is_readable($envPath) ? str_contains((string) @file_get_contents($envPath), 'SHIPPING_SERVICE_CALLBACK_KEY') : null,
-        'config_cached'    => file_exists(base_path('bootstrap/cache/config.php')),
-        'services_keys'    => array_keys((array) config('services')),
-        'svc_file_has_block' => is_readable(config_path('services.php')) ? str_contains((string) @file_get_contents(config_path('services.php')), 'shipping_service') : null,
-        'config_path'      => config_path('services.php'),
-        'fresh_require_keys' => (function () {
-            try { $a = require config_path('services.php'); return is_array($a) ? array_keys($a) : ['NOT_ARRAY']; }
-            catch (\Throwable $e) { return ['ERR:' . $e->getMessage()]; }
-        })(),
-        'config_is_cached' => app()->configurationIsCached(),
-        'cached_config_path' => app()->getCachedConfigPath(),
-        'bootstrap_cache' => (function () {
-            try { return array_values(array_diff((array) @scandir(base_path('bootstrap/cache')), ['.', '..'])); }
-            catch (\Throwable $e) { return ['ERR']; }
-        })(),
-    ]);
-})->middleware('throttle:30,1');
 
 // Voice Search — public: storefront reads the feature flag; the shop's server
 // side posts query usage for cost tracking (guarded by an optional shared secret).
