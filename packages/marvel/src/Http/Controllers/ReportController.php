@@ -31,17 +31,35 @@ class ReportController extends CoreController
         ];
         $callback = function () use ($header, $rows) {
             $fh = fopen('php://output', 'w');
-            fputcsv($fh, $header);
+            fputcsv($fh, array_map([$this, 'csvSafe'], $header));
             foreach ($rows as $row) {
-                fputcsv($fh, $row);
+                fputcsv($fh, array_map([$this, 'csvSafe'], (array) $row));
             }
             fclose($fh);
         };
         return response()->stream($callback, 200, $headers);
     }
 
-    /** The caller's owned shop id (vendor self-service exports). */
-    private function resolveShopId(Request $request): int
+    /**
+     * Neutralise CSV formula injection: a vendor-controlled string (shop name, GSTIN)
+     * beginning with = + - @ tab or CR could execute a formula/DDE when the admin opens
+     * the export in Excel/Sheets. Prefix such STRING (non-numeric) cells with a quote so
+     * negative numbers and amounts are left untouched.
+     */
+    public function csvSafe($v)
+    {
+        if (is_string($v) && $v !== '' && !is_numeric($v) && in_array($v[0], ['=', '+', '-', '@', "\t", "\r"], true)) {
+            return "'" . $v;
+        }
+        return $v;
+    }
+
+    /**
+     * The caller's owned shop ids for self-service exports: [requested] when an owned
+     * shop_id is passed (403 otherwise), else ALL owned shops (so a multi-shop vendor's
+     * export is complete, not silently scoped to one arbitrary shop).
+     */
+    private function ownedShopIds(Request $request): array
     {
         $user = $request->user();
         $shops = $user ? $user->shops : collect();
@@ -50,22 +68,23 @@ class ReportController extends CoreController
             if (!$shops->contains('id', $requested)) {
                 abort(403, 'You do not own this vendor shop.');
             }
-            return $requested;
+            return [$requested];
         }
-        $first = $shops->first();
-        if (!$first) {
+        $ids = $shops->pluck('id')->map(fn ($i) => (int) $i)->all();
+        if (empty($ids)) {
             abort(422, 'No vendor shop is associated with your account.');
         }
-        return (int) $first->id;
+        return $ids;
     }
 
     /** Apply shop/status/type/date filters shared by the ledger exports. */
-    private function ledgerQuery(Request $request, ?int $shopId = null)
+    private function ledgerQuery(Request $request, ?array $shopIds = null)
     {
         $query = VendorLedgerEntry::query()->orderByDesc('id');
-        $shopId = $shopId ?: ($request->filled('shop_id') ? (int) $request->shop_id : null);
-        if ($shopId) {
-            $query->where('shop_id', $shopId);
+        if ($shopIds !== null) {
+            $query->whereIn('shop_id', $shopIds);
+        } elseif ($request->filled('shop_id')) {
+            $query->where('shop_id', (int) $request->shop_id);
         }
         if ($request->filled('status')) {
             $query->where('status', $request->status);
@@ -82,11 +101,11 @@ class ReportController extends CoreController
         return $query;
     }
 
-    private function ledgerCsv(Request $request, ?int $shopId = null)
+    private function ledgerCsv(Request $request, ?array $shopIds = null)
     {
         $shopNames = Shop::pluck('name', 'id');
         $header = ['id', 'shop_id', 'shop', 'order_id', 'entry_type', 'amount', 'product_value', 'commission', 'platform_fee', 'pg_fee', 'cost_value', 'vendor_profit', 'tax_amount', 'status', 'earned_at', 'available_at'];
-        $rows = $this->ledgerQuery($request, $shopId)->cursor()->map(fn ($e) => [
+        $rows = $this->ledgerQuery($request, $shopIds)->cursor()->map(fn ($e) => [
             $e->id, $e->shop_id, $shopNames[$e->shop_id] ?? '', $e->order_id, $e->entry_type,
             $e->amount, $e->product_value, $e->commission_amount, $e->platform_fee, $e->pg_fee,
             $e->cost_value, $e->vendor_profit, $e->tax_amount, $e->status,
@@ -101,11 +120,13 @@ class ReportController extends CoreController
         return $this->ledgerCsv($request);
     }
 
-    public function exportSettlements(Request $request)
+    public function exportSettlements(Request $request, ?array $shopIds = null)
     {
         $shopNames = Shop::pluck('name', 'id');
         $query = VendorSettlement::with('run:id,run_date')->orderByDesc('id');
-        if ($request->filled('shop_id')) {
+        if ($shopIds !== null) {
+            $query->whereIn('shop_id', $shopIds);
+        } elseif ($request->filled('shop_id')) {
             $query->where('shop_id', (int) $request->shop_id);
         }
         if ($request->filled('status')) {
@@ -225,13 +246,11 @@ class ReportController extends CoreController
     // ── Vendor self exports (STORE_OWNER) ─────────────────────────
     public function myLedgerCsv(Request $request)
     {
-        return $this->ledgerCsv($request, $this->resolveShopId($request));
+        return $this->ledgerCsv($request, $this->ownedShopIds($request));
     }
 
     public function mySettlementsCsv(Request $request)
     {
-        $shopId = $this->resolveShopId($request);
-        $request->merge(['shop_id' => $shopId]);
-        return $this->exportSettlements($request);
+        return $this->exportSettlements($request, $this->ownedShopIds($request));
     }
 }

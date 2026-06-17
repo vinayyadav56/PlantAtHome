@@ -163,12 +163,22 @@ class VendorLedgerService
             if ($lines->isEmpty()) {
                 return null;
             }
+            $today = Carbon::today()->toDateString();
             $total = 0.0;
             foreach ($lines as $line) {
                 $voId = $line->pivot->variation_option_id ?? null;
-                $q = VendorProductPrice::where('shop_id', $shopId)->where('product_id', $line->id);
+                // Mirror PricingService::nearestCost so the profit cost matches the basis the
+                // sale was priced on: this vendor's currently-effective, available, cheapest
+                // cost row (vendor_product_prices is time-versioned, so filter the window and
+                // order deterministically — never a stale/arbitrary period row).
+                $q = VendorProductPrice::where('shop_id', $shopId)
+                    ->where('product_id', $line->id)
+                    ->where('is_available', true)
+                    ->where('cost_price', '>', 0)
+                    ->where(fn ($w) => $w->whereNull('effective_from')->orWhere('effective_from', '<=', $today))
+                    ->where(fn ($w) => $w->whereNull('effective_to')->orWhere('effective_to', '>=', $today));
                 is_null($voId) ? $q->whereNull('variation_option_id') : $q->where('variation_option_id', $voId);
-                $cost = $q->value('cost_price');
+                $cost = $q->orderBy('cost_price')->value('cost_price');
                 if ($cost === null || (float) $cost <= 0) {
                     return null; // unknown cost on a line → can't compute an honest profit
                 }
