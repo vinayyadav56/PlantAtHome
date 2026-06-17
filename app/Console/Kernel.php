@@ -31,6 +31,10 @@ class Kernel extends ConsoleKernel
 
         // Settle vendor earnings past their T+N hold into per-vendor settlements.
         $schedule->command('marvel:run-settlements')->dailyAt('04:00')->withoutOverlapping();
+
+        // Re-track open courier shipments + re-apply status (recovers missed/failed webhooks).
+        // No-op unless courier is enabled, so it's safe to always schedule.
+        $schedule->command('marvel:courier-reconcile')->hourly()->withoutOverlapping();
     }
 
     /**

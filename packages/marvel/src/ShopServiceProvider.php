@@ -111,6 +111,7 @@ class ShopServiceProvider extends ServiceProvider
         \Marvel\Console\RunSettlementsCommand::class,
         \Marvel\Console\BackfillOrderItemsCommand::class,
         \Marvel\Console\ReconcileSettlementsCommand::class,
+        \Marvel\Console\CourierReconcileCommand::class,
         InstallCommand::class,
         AdminCreateCommand::class,
         ImportDemoData::class,

@@ -6,6 +6,7 @@ use Carbon\Carbon;
 use Marvel\Database\Models\Settings;
 use Marvel\Database\Models\Shipment;
 use Marvel\Database\Models\Shop;
+use Marvel\Database\Repositories\OrderRepository;
 use Marvel\Enums\PaymentGatewayType;
 
 /**
@@ -96,21 +97,32 @@ class CourierService
             return ['ok' => false, 'error' => 'Vendor has no registered pickup location — run sync-pickup first.'];
         }
 
-        // Create the provider order once.
-        if (!$shipment->provider_order_id) {
+        // Create the provider order ONCE. Guard on blank() (not falsy) and require BOTH ids
+        // back before persisting, so a 2xx-without-ids response never (a) saves an empty
+        // provider_order_id that a retry would treat as "not created" → DUPLICATE order, nor
+        // (b) wedges the shipment with an empty provider_shipment_id the AWB step can't use.
+        if (blank($shipment->provider_order_id)) {
             $payload = $this->buildOrderPayload($shipment, $order, $shop);
             $created = $this->provider->createOrder($payload);
-            if (empty($created['ok'])) {
+            $newOrderId    = (string) data_get($created, 'data.order_id');
+            $newShipmentId = (string) data_get($created, 'data.shipment_id');
+            if (empty($created['ok']) || $newOrderId === '' || $newShipmentId === '') {
                 $shipment->forceFill(['last_status' => 'book_failed'])->save();
-                return ['ok' => false, 'error' => $created['error'] ?? 'Could not create courier order.'];
+                return ['ok' => false, 'error' => $created['error'] ?? 'Courier order was not created (provider returned no order/shipment id).'];
             }
             $shipment->forceFill([
                 'provider'            => 'shiprocket',
-                'provider_order_id'   => (string) data_get($created, 'data.order_id'),
-                'provider_shipment_id' => (string) data_get($created, 'data.shipment_id'),
+                'provider_order_id'   => $newOrderId,
+                'provider_shipment_id' => $newShipmentId,
                 'last_status'         => 'booked',
                 'last_status_at'      => Carbon::now(),
             ])->save();
+        }
+
+        // Belt-and-suspenders for any legacy row with an order id but no shipment id.
+        if (blank($shipment->provider_shipment_id)) {
+            $shipment->forceFill(['last_status' => 'book_failed'])->save();
+            return ['ok' => false, 'error' => 'Courier order is missing its shipment id — clear provider_order_id and re-book.'];
         }
 
         // Allocate the AWB (idempotent — safe to re-run).
@@ -219,6 +231,55 @@ class CourierService
             return ['shipment_status' => 'cancelled', 'order_status' => null];
         }
         return ['shipment_status' => null, 'order_status' => null];
+    }
+
+    /**
+     * Apply a provider status to a shipment + advance the customer order through the canonical
+     * seam (OrderRepository::changeOrderStatus → ledger/settlement/DP fan-out). Shared by the
+     * webhook AND the courier-reconcile command. Idempotent (no-op if already in that state).
+     * The order completes ONLY when no shipment is still in-flight — delivered AND cancelled
+     * (RTO/return) both count as terminal, so an RTO leg never freezes the order forever.
+     */
+    public function applyStatus(Shipment $shipment, string $providerStatus): array
+    {
+        $map = $this->mapStatus($providerStatus);
+        $now = Carbon::now();
+
+        if ($map['shipment_status'] === null) {
+            $shipment->forceFill(['last_status_at' => $now])->save();
+            return $map;
+        }
+        if ($shipment->status === $map['shipment_status']) {
+            return $map; // already in this state → idempotent no-op
+        }
+
+        $fill = ['status' => $map['shipment_status'], 'last_status' => $map['shipment_status'], 'last_status_at' => $now];
+        if ($map['shipment_status'] === 'shipped' && !$shipment->shipped_at) {
+            $fill['shipped_at'] = $now;
+        }
+        if ($map['shipment_status'] === 'delivered') {
+            $fill['delivered_at'] = $now;
+        }
+        $shipment->forceFill($fill)->save();
+
+        if ($map['order_status']) {
+            $order = $shipment->order;
+            if ($order) {
+                $target = $map['order_status'];
+                if ($target === 'order-completed') {
+                    // Terminal = delivered OR cancelled; an in-flight leg keeps the order open.
+                    $inFlight = Shipment::where('order_id', $order->id)
+                        ->whereNotIn('status', ['delivered', 'cancelled'])->exists();
+                    if ($inFlight) {
+                        $target = 'order-out-for-delivery';
+                    }
+                }
+                if ($order->order_status !== $target) {
+                    app(OrderRepository::class)->changeOrderStatus($order, $target);
+                }
+            }
+        }
+        return $map;
     }
 
     // ── payload helpers ───────────────────────────────────────────
