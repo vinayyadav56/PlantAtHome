@@ -59,6 +59,7 @@ use Marvel\Http\Controllers\PriceSheetController;
 use Marvel\Http\Controllers\VendorInventoryController;
 use Marvel\Http\Controllers\SettlementController;
 use Marvel\Http\Controllers\ReportController;
+use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\LocationPriceController;
 use Marvel\Http\Controllers\OrderAssignmentController;
 use Marvel\Http\Controllers\DeliveryPartnerWithdrawController;
@@ -121,6 +122,9 @@ Route::post('webhooks/xendit', [WebHookController::class, 'xendit']);
 Route::post('webhooks/iyzico', [WebHookController::class, 'iyzico']);
 Route::post('webhooks/bkash', [WebHookController::class, 'bkash']);
 Route::post('webhooks/flutterwave', [WebHookController::class, 'flutterwave']);
+// Courier (Shiprocket) shipment-status webhook — token-verified inside the controller
+// (x-api-key), public (no auth:sanctum), throttled to blunt spoofing/retry storms.
+Route::post('webhooks/shiprocket', [WebHookController::class, 'shiprocket'])->middleware('throttle:120,1');
 
 // Voice Search — public: storefront reads the feature flag; the shop's server
 // side posts query usage for cost tracking (guarded by an optional shared secret).
@@ -581,6 +585,14 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('reports/commission.csv', [ReportController::class, 'exportCommission']);
     Route::get('reports/gst.csv', [ReportController::class, 'exportGst']);
     Route::get('settlements/{id}/statement.pdf', [ReportController::class, 'settlementStatementPdf']);
+
+    // Courier (Shiprocket) operations on a shipment (C3): book / label / pickup / track,
+    // and register a vendor pickup location. Inert until courier is configured + enabled.
+    Route::post('shipments/{id}/book-courier', [CourierShipmentController::class, 'book']);
+    Route::post('shipments/{id}/generate-label', [CourierShipmentController::class, 'label']);
+    Route::post('shipments/{id}/schedule-pickup', [CourierShipmentController::class, 'pickup']);
+    Route::get('shipments/{id}/courier-track', [CourierShipmentController::class, 'track']);
+    Route::post('shops/{id}/sync-pickup', [CourierShipmentController::class, 'syncPickup']);
 
     // Marketplace analytics widgets (admin dashboard, D1).
     Route::get('analytics/city-sales', [AnalyticsController::class, 'cityWiseSales']);

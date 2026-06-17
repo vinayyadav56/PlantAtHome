@@ -18,6 +18,10 @@ class Shipment extends Model
         'shipping_revenue'     => 'float',
         'eta_days'             => 'integer',
         'expected_delivery_at' => 'date',
+        'cod_amount'           => 'float',
+        'shipped_at'           => 'datetime',
+        'delivered_at'         => 'datetime',
+        'last_status_at'       => 'datetime',
     ];
 
     public function order(): BelongsTo

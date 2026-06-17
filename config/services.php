@@ -66,4 +66,15 @@ return [
         'redirect' => env('LINKEDIN_REDIRECT_URI'),
     ],
 
+    // PlantAtHome — Shiprocket courier aggregator (cross-city fulfilment + COD).
+    // Provider-agnostic: CourierService resolves the active provider from COURIER_PROVIDER.
+    // Inert until enabled + credentials set; secrets are env-only (never committed).
+    'shiprocket' => [
+        'enabled'       => env('COURIER_PROVIDER') === 'shiprocket',
+        'email'         => env('SHIPROCKET_EMAIL'),
+        'password'      => env('SHIPROCKET_PASSWORD'),
+        'base_url'      => env('SHIPROCKET_BASE_URL', 'https://apiv2.shiprocket.in'),
+        'webhook_token' => env('SHIPROCKET_WEBHOOK_TOKEN'),
+    ],
+
 ];
