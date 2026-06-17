@@ -4,6 +4,7 @@ namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Marvel\Database\Models\Shipment;
 use Marvel\Database\Models\Shop;
 use Marvel\Database\Models\VendorLedgerEntry;
 use Marvel\Database\Models\VendorSettlement;
@@ -241,6 +242,36 @@ class ReportController extends CoreController
             . '<tbody>' . $rows . '</tbody></table>'
             . '<p style="margin-top:12px;text-align:right;font-size:14px"><strong>Net payable: ' . $inr($s->net_payable) . '</strong></p>'
             . '</body></html>';
+    }
+
+    /**
+     * COD reconciliation (C6): courier COD shipments — collected (delivered) vs pending vs
+     * remitted. `remitted` is populated once the Shiprocket COD-remittance feed is imported
+     * (a user-provided blocker); until then it shows collected vs pending so finance can see
+     * cash owed by the courier. Optional date range on shipment creation.
+     */
+    public function codReconciliation(Request $request)
+    {
+        $q = Shipment::query()->where('payment_method', 'cod');
+        if ($request->filled('from')) {
+            $q->where('created_at', '>=', $request->from);
+        }
+        if ($request->filled('to')) {
+            $q->where('created_at', '<=', $request->to);
+        }
+        $all = $q->get(['id', 'order_id', 'shop_id', 'status', 'cod_amount', 'awb_number', 'delivered_at']);
+        $delivered = $all->where('status', 'delivered');
+        $pending = $all->where('status', '!=', 'delivered');
+
+        return response()->json([
+            'orders'           => $all->count(),
+            'cod_total'        => round((float) $all->sum('cod_amount'), 2),
+            'delivered_orders' => $delivered->count(),
+            'collected'        => round((float) $delivered->sum('cod_amount'), 2),
+            'pending'          => round((float) $pending->sum('cod_amount'), 2),
+            'remitted'         => 0.0,
+            'note'             => 'Remittance reconciliation requires importing the Shiprocket COD remittance feed (user-provided). Until then this shows COD collected (delivered) vs pending.',
+        ]);
     }
 
     // ── Vendor self exports (STORE_OWNER) ─────────────────────────

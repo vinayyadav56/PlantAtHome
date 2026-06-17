@@ -203,6 +203,7 @@ Route::post('checkout/estimate', [LocationPriceController::class, 'checkoutEstim
 
 // Public: live courier position for an order (only while out for delivery)
 Route::get('orders/{tracking}/courier-location', [OrderAssignmentController::class, 'courierLocation']);
+Route::get('orders/{tracking}/shipments', [OrderAssignmentController::class, 'trackingShipments']);
 
 Route::get('store-notices', [StoreNoticeController::class, 'index'])->name('store-notices.index');
 
@@ -584,6 +585,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('reports/settlements.csv', [ReportController::class, 'exportSettlements']);
     Route::get('reports/commission.csv', [ReportController::class, 'exportCommission']);
     Route::get('reports/gst.csv', [ReportController::class, 'exportGst']);
+    Route::get('reports/cod-reconciliation', [ReportController::class, 'codReconciliation']);
     Route::get('settlements/{id}/statement.pdf', [ReportController::class, 'settlementStatementPdf']);
 
     // Courier (Shiprocket) operations on a shipment (C3): book / label / pickup / track,

@@ -5,6 +5,7 @@ namespace Marvel\Http\Controllers;
 use Illuminate\Http\Request;
 use Marvel\Database\Models\DeliveryPartner;
 use Marvel\Database\Models\Order;
+use Marvel\Database\Models\Shipment;
 use Marvel\Database\Models\Shop;
 use Marvel\Services\FulfillmentService;
 use Marvel\Services\ItemAssignmentService;
@@ -188,6 +189,35 @@ class OrderAssignmentController extends CoreController
             ],
             'pickup' => $vendor ? ['name' => $vendor->name, 'location' => is_array($vendor->settings) ? ($vendor->settings['location'] ?? null) : null] : null,
             'drop'   => $drop,
+        ];
+    }
+
+    /**
+     * Public (by tracking number): per-shipment courier status for the customer timeline
+     * (C5). Courier shipments expose courier name + AWB + tracking link + status; local
+     * shipments fall back to the live DP map (courierLocation). No vendor identity is leaked.
+     */
+    public function trackingShipments($tracking)
+    {
+        $order = Order::where('tracking_number', $tracking)->first();
+        if (!$order) {
+            return ['shipments' => []];
+        }
+        $rows = Shipment::where('order_id', $order->id)->get();
+        return [
+            'shipments' => $rows->map(fn ($s) => [
+                'fulfillment_mode'     => $s->fulfillment_mode,
+                'courier_name'         => $s->courier_name,
+                'awb_number'           => $s->awb_number,
+                'tracking_url'         => $s->tracking_url,
+                'status'               => $s->status,
+                'last_status'          => $s->last_status,
+                'payment_method'       => $s->payment_method,
+                'shipped_at'           => optional($s->shipped_at)->toDateString(),
+                'delivered_at'         => optional($s->delivered_at)->toDateString(),
+                'eta_days'             => $s->eta_days,
+                'expected_delivery_at' => optional($s->expected_delivery_at)->toDateString(),
+            ])->values(),
         ];
     }
 
