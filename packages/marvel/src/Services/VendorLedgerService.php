@@ -3,6 +3,7 @@
 namespace Marvel\Services;
 
 use Carbon\Carbon;
+use Illuminate\Database\QueryException;
 use Marvel\Database\Models\Balance;
 use Marvel\Database\Models\Order;
 use Marvel\Database\Models\Settings;
@@ -76,24 +77,32 @@ class VendorLedgerService
         $taxAmount    = $this->taxAmount($order);
 
         $now = Carbon::now();
-        VendorLedgerEntry::create([
-            'shop_id'           => $shopId,
-            'order_id'          => $order->id,
-            'entry_type'        => 'sale',
-            'amount'            => $vendorEarning,
-            'product_value'     => $productValue,
-            'commission_amount' => $commission,
-            'platform_fee'      => $platformFee,
-            'pg_fee'            => $pgFee,
-            'shipping_revenue'  => 0,
-            'cost_value'        => $costValue,
-            'vendor_profit'     => $vendorProfit,
-            'tax_amount'        => $taxAmount,
-            'source'            => 'delivery',
-            'status'            => 'pending',
-            'available_at'      => $now->copy()->addDays($this->holdDays),
-            'earned_at'         => $now,
-        ]);
+        try {
+            VendorLedgerEntry::create([
+                'shop_id'           => $shopId,
+                'order_id'          => $order->id,
+                'entry_type'        => 'sale',
+                'amount'            => $vendorEarning,
+                'product_value'     => $productValue,
+                'commission_amount' => $commission,
+                'platform_fee'      => $platformFee,
+                'pg_fee'            => $pgFee,
+                'shipping_revenue'  => 0,
+                'cost_value'        => $costValue,
+                'vendor_profit'     => $vendorProfit,
+                'tax_amount'        => $taxAmount,
+                'source'            => 'delivery',
+                'status'            => 'pending',
+                'available_at'      => $now->copy()->addDays($this->holdDays),
+                'earned_at'         => $now,
+            ]);
+        } catch (QueryException $e) {
+            // A concurrent order-completed event won the race (uq_vle_order_entry). Treat the
+            // unique-violation as already-recorded; re-throw anything else (real DB error).
+            if (!$this->isUniqueViolation($e)) {
+                throw $e;
+            }
+        }
     }
 
     /**
@@ -141,14 +150,30 @@ class VendorLedgerService
             // Clawback: nets against the vendor's future settlements.
             $entry['status'] = 'pending';
             $entry['available_at'] = $now;
-            VendorLedgerEntry::create($entry);
         } else {
             // Sale not yet paid → cancel it outright; neither row is ever settled.
             $entry['status'] = 'reversed';
             $entry['available_at'] = null;
-            VendorLedgerEntry::create($entry);
-            $sale->update(['status' => 'reversed']);
         }
+        try {
+            VendorLedgerEntry::create($entry);
+            if (!$alreadySettled) {
+                $sale->update(['status' => 'reversed']);
+            }
+        } catch (QueryException $e) {
+            // Concurrent reversal won the race (uq_vle_order_entry) → idempotent no-op.
+            if (!$this->isUniqueViolation($e)) {
+                throw $e;
+            }
+        }
+    }
+
+    /** True when a QueryException is a unique/duplicate-key violation (SQLSTATE 23000 / MySQL 1062). */
+    private function isUniqueViolation(QueryException $e): bool
+    {
+        return $e->getCode() === '23000'
+            || (int) ($e->errorInfo[1] ?? 0) === 1062
+            || str_contains(strtolower($e->getMessage()), 'duplicate');
     }
 
     /**
