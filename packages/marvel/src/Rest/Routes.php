@@ -80,19 +80,21 @@ Broadcast::routes(['middleware' => ['auth:sanctum']]);
 
 Route::get('/email/verify/{id}/{hash}', [UserController::class, 'verifyEmail'])->name('verification.verify');
 
-Route::post('/register', [UserController::class, 'register']);
-Route::post('/token', [UserController::class, 'token']);
+// Auth/OTP/password endpoints carry TIGHT per-route throttles (on top of the group-wide
+// throttle:api) to blunt credential stuffing, OTP/SMS bombing, brute force and email flooding.
+Route::post('/register', [UserController::class, 'register'])->middleware('throttle:5,1');
+Route::post('/token', [UserController::class, 'token'])->middleware('throttle:10,1');
 Route::post('/logout', [UserController::class, 'logout']);
 Route::delete('/account', [UserController::class, 'deleteAccount'])->middleware('auth:sanctum');
-Route::post('/forget-password', [UserController::class, 'forgetPassword']);
-Route::post('/verify-forget-password-token', [UserController::class, 'verifyForgetPasswordToken']);
-Route::post('/reset-password', [UserController::class, 'resetPassword']);
-Route::post('/contact-us', [UserController::class, 'contactAdmin']);
-Route::post('/social-login-token', [UserController::class, 'socialLogin']);
-Route::post('/social-login/linkedin/exchange', [UserController::class, 'linkedinExchange']);
-Route::post('/send-otp-code', [UserController::class, 'sendOtpCode']);
-Route::post('/verify-otp-code', [UserController::class, 'verifyOtpCode']);
-Route::post('/otp-login', [UserController::class, 'otpLogin']);
+Route::post('/forget-password', [UserController::class, 'forgetPassword'])->middleware('throttle:5,1');
+Route::post('/verify-forget-password-token', [UserController::class, 'verifyForgetPasswordToken'])->middleware('throttle:10,1');
+Route::post('/reset-password', [UserController::class, 'resetPassword'])->middleware('throttle:5,1');
+Route::post('/contact-us', [UserController::class, 'contactAdmin'])->middleware('throttle:5,1');
+Route::post('/social-login-token', [UserController::class, 'socialLogin'])->middleware('throttle:15,1');
+Route::post('/social-login/linkedin/exchange', [UserController::class, 'linkedinExchange'])->middleware('throttle:15,1');
+Route::post('/send-otp-code', [UserController::class, 'sendOtpCode'])->middleware('throttle:5,1');
+Route::post('/verify-otp-code', [UserController::class, 'verifyOtpCode'])->middleware('throttle:10,1');
+Route::post('/otp-login', [UserController::class, 'otpLogin'])->middleware('throttle:10,1');
 Route::get('top-authors', [AuthorController::class, 'topAuthor']);
 Route::get('top-manufacturers', [ManufacturerController::class, 'topManufacturer']);
 Route::get('popular-products', [ProductController::class, 'popularProducts']);
@@ -203,7 +205,7 @@ Route::get('near-by-shop/{lat}/{lng}', [ShopController::class, 'nearByShop']);
 
 // Public: location-derived selling price + availability (margin over hidden vendor cost)
 Route::get('location-price', [LocationPriceController::class, 'show']);
-Route::post('location-price/batch', [LocationPriceController::class, 'batch']);
+Route::post('location-price/batch', [LocationPriceController::class, 'batch'])->middleware('throttle:60,1');
 Route::get('city-availability', [LocationPriceController::class, 'cityAvailability']);
 Route::post('checkout/estimate', [LocationPriceController::class, 'checkoutEstimate']);
 
@@ -278,7 +280,7 @@ Route::post('/email/verification-notification', [UserController::class, 'sendVer
     ->name('verification.send');
 
 Route::post('orders/payment', [OrderController::class, 'submitPayment']);
-Route::post('generate-descriptions', [AiController::class, 'generateDescription']);
+Route::post('generate-descriptions', [AiController::class, 'generateDescription'])->middleware('throttle:10,1');
 Route::get('/payment-intent', [PaymentIntentController::class, 'getPaymentIntent']);
 
 Route::apiResource('faqs', FaqsController::class, [
