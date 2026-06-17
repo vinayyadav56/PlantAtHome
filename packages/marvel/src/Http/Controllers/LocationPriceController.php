@@ -53,7 +53,9 @@ class LocationPriceController extends CoreController
      */
     public function batch(Request $request)
     {
-        $items  = (array) $request->input('items', []);
+        // SECURITY: cap items — each runs a DB-touching price computation; uncapped this is a
+        // CPU/DB amplification DoS (mirrors checkoutEstimate's existing 50-item cap).
+        $items  = array_slice((array) $request->input('items', []), 0, 50);
         $latLng = $this->latLng($request);
         $service = new PricingService();
 

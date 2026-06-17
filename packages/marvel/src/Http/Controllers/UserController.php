@@ -464,8 +464,12 @@ class UserController extends CoreController
                 }
             }
             $details = $request->only('subject', 'name', 'email', 'description');
-            // config('shop.admin_email')
-            $emailTo = isset($request['emailTo']) ? $request['emailTo'] : $listedAdmin;
+            // SECURITY: ALWAYS send to the server-resolved admin list — never a client-supplied
+            // emailTo (that turned this public endpoint into an open mail relay to any recipient).
+            $emailTo = $listedAdmin;
+            if (empty($emailTo)) {
+                return ['message' => EMAIL_SENT_SUCCESSFUL, 'success' => true];
+            }
             Mail::to($emailTo)->send(new ContactAdmin($details));
             return ['message' => EMAIL_SENT_SUCCESSFUL, 'success' => true];
         } catch (\Exception $e) {

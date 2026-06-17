@@ -28,7 +28,11 @@ class AttachmentRequest extends FormRequest
     public function rules()
     {
         return [
-            'attachment'        => ['required'],
+            // SECURITY: bound the upload (was just 'required' → unlimited files of any type/size:
+            // disk/CPU DoS + SVG/HTML stored-XSS). Cap count, restrict to safe image/pdf mimes
+            // (no SVG/HTML), cap per-file size at 5MB.
+            'attachment'        => ['required', 'array', 'max:10'],
+            'attachment.*'      => ['file', 'mimes:jpg,jpeg,png,webp,gif,pdf', 'max:5120'],
         ];
     }
 
