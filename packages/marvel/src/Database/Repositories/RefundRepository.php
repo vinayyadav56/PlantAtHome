@@ -65,12 +65,17 @@ class RefundRepository extends BaseRepository
         } catch (Exception $th) {
             throw new MarvelException(NOT_FOUND);
         }
-        if ($user->id !== $order->customer_id || $user->hasPermissionTo(Permission::SUPER_ADMIN)) {
+        // Allow the owning customer OR a super-admin; reject everyone else. (The previous
+        // `!== || hasPermission` form wrongly blocked super-admins who own the order and
+        // read as an inverted check.)
+        if (!($user->id === $order->customer_id || $user->hasPermissionTo(Permission::SUPER_ADMIN))) {
             throw new MarvelException(NOT_AUTHORIZED);
         }
         $data = $request->only($this->dataArray);
         $data['customer_id'] = $order->customer_id;
-        $data['amount'] = $order->amount;
+        // Snapshot what the customer actually PAID (paid_total = subtotal + tax + delivery −
+        // discount), not the bare product subtotal — otherwise refunds under-pay by tax+delivery.
+        $data['amount'] = $order->paid_total;
         $refund = $this->create($data);
         $this->createChildOrderRefund($order->children, $data);
         return $this->find($refund->id);
@@ -83,7 +88,7 @@ class RefundRepository extends BaseRepository
                 $data['order_id'] = $order->id;
                 $data['customer_id'] = $order->customer_id;
                 $data['shop_id'] = $order->shop_id;
-                $data['amount'] = $order->amount;
+                $data['amount'] = $order->paid_total; // what was paid for this suborder, not bare subtotal
                 $this->create($data);
             }
         } catch (Exception $th) {

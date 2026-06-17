@@ -2,6 +2,7 @@
 
 namespace Marvel\Traits;
 
+use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\Balance;
 use Marvel\Database\Models\Order;
 use Marvel\Enums\OrderStatus;
@@ -97,12 +98,20 @@ trait OrderStatusManagerWithPaymentTrait
     protected function updateBalanceShop($order, $action_type = 'add')
     {
         $balance = Balance::where('shop_id', '=', $order->shop_id)->first();
+        if (!$balance) {
+            // No vendor balance row for this shop — nothing to credit/deduct. (Guards the
+            // refund-reversal path against a fatal null dereference mid-loop.)
+            return;
+        }
         $adminCommissionRate = $balance->admin_commission_rate;
         $shop_earnings = ($order->total * (100 - $adminCommissionRate)) / 100;
         if ($action_type == 'deduct') $shop_earnings = $shop_earnings * -1;
-        $balance->total_earnings = $balance->total_earnings + $shop_earnings;
-        $balance->current_balance = $balance->current_balance + $shop_earnings;
-        $balance->save();
+        // Atomic in-DB increment (not a read-modify-write save) so two completions for the
+        // SAME vendor running concurrently can't lose an update / clobber each other.
+        Balance::where('shop_id', '=', $order->shop_id)->update([
+            'total_earnings'  => DB::raw('total_earnings + (' . $shop_earnings . ')'),
+            'current_balance' => DB::raw('current_balance + (' . $shop_earnings . ')'),
+        ]);
 
         // P2 vendor ledger (parallel-run, flag-gated, never mutates $balance). Records the
         // per-order money breakdown for the T+N settlement layer; wrapped so a ledger
