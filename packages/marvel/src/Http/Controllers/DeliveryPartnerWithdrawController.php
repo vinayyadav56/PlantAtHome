@@ -3,6 +3,7 @@
 namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\DeliveryPartner;
 use Marvel\Database\Models\DeliveryPartnerBalance;
 use Marvel\Database\Models\DeliveryPartnerWithdraw;
@@ -54,46 +55,56 @@ class DeliveryPartnerWithdrawController extends CoreController
             return response()->json(['message' => 'No delivery-partner profile for this account.'], 422);
         }
 
-        $balance = DeliveryPartnerBalance::firstOrCreate(['delivery_partner_id' => $dpId]);
-        $amount  = (float) $request->input('amount');
-        if ((float) $balance->current_balance < $amount) {
-            return response()->json(['message' => 'Insufficient balance.'], 422);
-        }
+        $amount = (float) $request->input('amount');
 
-        $withdraw = DeliveryPartnerWithdraw::create([
-            'delivery_partner_id' => $dpId,
-            'amount'              => $amount,
-            'payment_method'      => $request->input('payment_method'),
-            'details'             => $request->input('details'),
-            'note'                => $request->input('note'),
-            'status'              => 'pending',
-        ]);
+        // Lock the balance row and re-check inside the transaction so two concurrent
+        // requests can't both pass the balance check and overdraw the DP balance.
+        return DB::transaction(function () use ($dpId, $amount, $request) {
+            $balance = DeliveryPartnerBalance::where('delivery_partner_id', $dpId)->lockForUpdate()->first()
+                ?? DeliveryPartnerBalance::create(['delivery_partner_id' => $dpId]);
+            if ((float) $balance->current_balance < $amount) {
+                abort(422, 'Insufficient balance.');
+            }
 
-        $balance->withdrawn_amount = (float) $balance->withdrawn_amount + $amount;
-        $balance->current_balance  = (float) $balance->current_balance - $amount;
-        $balance->save();
+            $withdraw = DeliveryPartnerWithdraw::create([
+                'delivery_partner_id' => $dpId,
+                'amount'              => $amount,
+                'payment_method'      => $request->input('payment_method'),
+                'details'             => $request->input('details'),
+                'note'                => $request->input('note'),
+                'status'              => 'pending',
+            ]);
 
-        return $withdraw;
+            $balance->withdrawn_amount = (float) $balance->withdrawn_amount + $amount;
+            $balance->current_balance  = (float) $balance->current_balance - $amount;
+            $balance->save();
+
+            return $withdraw;
+        });
     }
 
     /** Admin: update a withdrawal status (approved | processing | on_hold | rejected). */
     public function approve(Request $request)
     {
-        $withdraw = DeliveryPartnerWithdraw::findOrFail($request->input('id'));
-        $status = $request->input('status', 'approved');
+        // Lock the withdraw row and re-read its status inside the transaction so a
+        // double-submitted "reject" can only refund the DP balance once (compare-and-swap).
+        return DB::transaction(function () use ($request) {
+            $withdraw = DeliveryPartnerWithdraw::whereKey($request->input('id'))->lockForUpdate()->firstOrFail();
+            $status = $request->input('status', 'approved');
 
-        // Refund the balance if a pending/approved request is rejected.
-        if ($status === 'rejected' && $withdraw->status !== 'rejected') {
-            $balance = DeliveryPartnerBalance::where('delivery_partner_id', $withdraw->delivery_partner_id)->first();
-            if ($balance) {
-                $balance->withdrawn_amount = max(0, (float) $balance->withdrawn_amount - (float) $withdraw->amount);
-                $balance->current_balance  = (float) $balance->current_balance + (float) $withdraw->amount;
-                $balance->save();
+            // Refund the balance if a pending/approved request is rejected.
+            if ($status === 'rejected' && $withdraw->status !== 'rejected') {
+                $balance = DeliveryPartnerBalance::where('delivery_partner_id', $withdraw->delivery_partner_id)->lockForUpdate()->first();
+                if ($balance) {
+                    $balance->withdrawn_amount = max(0, (float) $balance->withdrawn_amount - (float) $withdraw->amount);
+                    $balance->current_balance  = (float) $balance->current_balance + (float) $withdraw->amount;
+                    $balance->save();
+                }
             }
-        }
 
-        $withdraw->status = $status;
-        $withdraw->save();
-        return $withdraw;
+            $withdraw->status = $status;
+            $withdraw->save();
+            return $withdraw;
+        });
     }
 }

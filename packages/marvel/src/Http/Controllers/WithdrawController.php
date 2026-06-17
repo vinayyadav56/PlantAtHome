@@ -7,12 +7,14 @@ use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\Balance;
 use Marvel\Database\Models\Withdraw;
 use Marvel\Database\Repositories\WithdrawRepository;
 use Marvel\Enums\Permission;
 use Marvel\Enums\WithdrawStatus;
 use Marvel\Exceptions\MarvelException;
+use Marvel\Services\VendorLedgerService;
 use Marvel\Http\Requests\UpdateWithdrawRequest;
 use Marvel\Http\Requests\WithdrawRequest;
 use Prettus\Validator\Exceptions\ValidatorException;
@@ -81,16 +83,29 @@ class WithdrawController extends CoreController
                 if (!isset($validatedData['shop_id'])) {
                     throw new BadRequestHttpException(WITHDRAW_MUST_BE_ATTACHED_TO_SHOP);
                 }
-                $balance = Balance::where('shop_id', '=', $validatedData['shop_id'])->first();
-                if (isset($balance->current_balance) && $balance->current_balance < $validatedData['amount']) {
+                if ((float) ($validatedData['amount'] ?? 0) <= 0) {
                     throw new BadRequestHttpException(INSUFFICIENT_BALANCE);
                 }
-                $withdraw = $this->repository->create($validatedData);
-                $balance->withdrawn_amount = $balance->withdrawn_amount + $validatedData['amount'];
-                $balance->current_balance = $balance->current_balance - $validatedData['amount'];
-                $balance->save();
-                $withdraw->status = WithdrawStatus::PENDING;
-                return $withdraw;
+                // When automated settlement is the system of record, vendors are paid via admin
+                // settlement runs (which draw from the ledger), not the legacy self-serve balance.
+                // Allowing both instruments would pay the same earnings twice.
+                if ((new VendorLedgerService())->enabled()) {
+                    throw new BadRequestHttpException('Manual withdrawals are disabled while automated settlement is active.');
+                }
+                // Lock the balance row and re-check inside the transaction so two concurrent
+                // requests serialize instead of both passing the check and overdrawing.
+                return DB::transaction(function () use ($validatedData) {
+                    $balance = Balance::where('shop_id', '=', $validatedData['shop_id'])->lockForUpdate()->first();
+                    if (!$balance || $balance->current_balance < $validatedData['amount']) {
+                        throw new BadRequestHttpException(INSUFFICIENT_BALANCE);
+                    }
+                    $withdraw = $this->repository->create($validatedData);
+                    $balance->withdrawn_amount = $balance->withdrawn_amount + $validatedData['amount'];
+                    $balance->current_balance = $balance->current_balance - $validatedData['amount'];
+                    $balance->save();
+                    $withdraw->status = WithdrawStatus::PENDING;
+                    return $withdraw;
+                });
             }
             throw new AuthorizationException(NOT_AUTHORIZED);
         } catch (MarvelException $e) {
