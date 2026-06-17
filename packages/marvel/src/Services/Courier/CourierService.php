@@ -3,6 +3,7 @@
 namespace Marvel\Services\Courier;
 
 use Carbon\Carbon;
+use Marvel\Database\Models\DeliveryQuote;
 use Marvel\Database\Models\Settings;
 use Marvel\Database\Models\Shipment;
 use Marvel\Database\Models\Shop;
@@ -18,22 +19,144 @@ use Marvel\Enums\PaymentGatewayType;
  */
 class CourierService
 {
-    private ?CourierProviderInterface $provider = null;
+    private ?CourierProviderInterface $provider = null; // Shiprocket (intercity courier lane)
+    private ?BorzoAdapter $borzo = null;                // Borzo (instant / same-city lane)
     private array $opts;
 
     public function __construct()
     {
         $options = (array) (Settings::getData()->options ?? []);
         $this->opts = (array) ($options['courier'] ?? []);
-        if (config('services.shiprocket.enabled')) {
+        // A partner enters service only when wired AND credentialed (so quote and book share one
+        // eligibility rule — a half-configured partner is uniformly inert, never quotes-empty-but-books).
+        if (config('services.shiprocket.enabled')
+            && (!empty(config('services.shiprocket.api_token'))
+                || (!empty(config('services.shiprocket.email')) && !empty(config('services.shiprocket.password'))))) {
             $this->provider = new ShiprocketClient();
+        }
+        if (config('services.borzo.enabled') && !empty(config('services.borzo.token'))) {
+            $this->borzo = new BorzoAdapter();
         }
     }
 
-    /** Master gate: a provider is configured AND the admin courier flag is on. */
+    /** The admin master switch (settings.options.courier.enabled) gates EVERY partner lane. */
+    private function master(): bool
+    {
+        return (bool) ($this->opts['enabled'] ?? false);
+    }
+
+    /** Shiprocket lane: provider configured AND master on. (Existing callers rely on this.) */
     public function enabled(): bool
     {
-        return $this->provider !== null && (bool) ($this->opts['enabled'] ?? false);
+        return $this->provider !== null && $this->master();
+    }
+
+    /** Borzo lane: Borzo configured AND master on. */
+    public function borzoEnabled(): bool
+    {
+        return $this->borzo !== null && $this->master();
+    }
+
+    /** Any partner lane usable (gates quote fan-out / dispatch). */
+    public function anyEnabled(): bool
+    {
+        return $this->master() && ($this->provider !== null || $this->borzo !== null);
+    }
+
+    /**
+     * Which lane this shipment ships on: an explicit shipment.mode wins, else derive from
+     * fulfillment_mode (courier → Shiprocket; local → Borzo same-city instant).
+     */
+    public function modeOf(Shipment $shipment): string
+    {
+        if (in_array($shipment->mode, ['instant', 'same_city', 'courier'], true)) {
+            return (string) $shipment->mode;
+        }
+        return $shipment->fulfillment_mode === 'courier' ? 'courier' : 'same_city';
+    }
+
+    /**
+     * Dispatch a shipment to the correct partner for its mode: courier → Shiprocket (the proven
+     * create+AWB sequence), instant/same-city → Borzo. Each lane is idempotent on
+     * provider_order_id, so a retry never double-books. Safe no-op when the lane is disabled.
+     */
+    public function book(Shipment $shipment): array
+    {
+        $mode = $this->modeOf($shipment);
+        if ($mode === 'courier') {
+            return $this->enabled()
+                ? $this->bookShipment($shipment)
+                : ['ok' => false, 'error' => 'Courier (Shiprocket) lane is not enabled.'];
+        }
+        if (!$this->borzoEnabled()) {
+            return ['ok' => false, 'error' => 'Instant (Borzo) lane is not enabled.'];
+        }
+        return $this->borzo->book($shipment);
+    }
+
+    /** Cancel a booked shipment via whichever partner placed it. */
+    public function cancel(Shipment $shipment, ?string $reason = null): array
+    {
+        if (($shipment->provider ?? '') === 'borzo') {
+            return $this->borzoEnabled()
+                ? $this->borzo->cancel($shipment, $reason)
+                : ['ok' => false, 'error' => 'Borzo lane is not enabled.'];
+        }
+        return (new ShiprocketAdapter())->cancel($shipment, $reason);
+    }
+
+    /**
+     * Ranked delivery quotes across every partner that can serve this shipment's mode (+ COD).
+     * Each partner's quote() is isolated; a partner that errors/times out is simply dropped.
+     */
+    public function quoteShipment(Shipment $shipment, ?bool $cod = null): array
+    {
+        if (!$this->anyEnabled()) {
+            return ['ok' => false, 'error' => 'Courier integration is not enabled.'];
+        }
+        $order = $shipment->order;
+        $cod = $cod ?? ($order && $order->payment_gateway === PaymentGatewayType::CASH_ON_DELIVERY);
+        $mode = $this->modeOf($shipment);
+
+        $quotes = [];
+        foreach (AdapterRegistry::candidatesForMode($mode, (bool) $cod) as $code => $adapter) {
+            $q = $adapter->quote($shipment, (bool) $cod);
+            if (!empty($q['ok'])) {
+                $quotes[] = [
+                    'partner'       => $code,
+                    'cost'          => $q['cost'] ?? null,
+                    'eta_days'      => $q['eta_days'] ?? null,
+                    'cod_available' => $q['cod_available'] ?? null,
+                ];
+                // Audit row (book-against-quote + analytics). Never let a persistence hiccup break
+                // the quote response.
+                try {
+                    DeliveryQuote::create([
+                        'shipment_id'     => $shipment->id,
+                        'order_id'        => $shipment->order_id,
+                        'partner'         => $code,
+                        'mode'            => $mode,
+                        'cod'             => (bool) $cod,
+                        'cod_amount'      => $shipment->cod_amount,
+                        'quoted_cost'     => $q['cost'] ?? null,
+                        'quoted_eta_days' => $q['eta_days'] ?? null,
+                        'raw'             => $q['raw'] ?? null,
+                        'expires_at'      => Carbon::now()->addMinutes(15),
+                    ]);
+                } catch (\Throwable $e) {
+                    // audit-only; ignore
+                }
+            }
+        }
+        usort($quotes, fn ($a, $b) => ($a['cost'] ?? INF) <=> ($b['cost'] ?? INF));
+        return ['ok' => !empty($quotes), 'mode' => $mode, 'cod' => (bool) $cod, 'quotes' => $quotes, 'cheapest' => $quotes[0] ?? null];
+    }
+
+    /** Apply a Borzo order/delivery status through the SHARED order-advance seam (idempotent). */
+    public function applyBorzoStatus(Shipment $shipment, string $orderStatus, string $deliveryStatus = ''): array
+    {
+        $adapter = $this->borzo ?? new BorzoAdapter();
+        return $this->applyNormalizedStatus($shipment, $adapter->mapBorzoStatus($orderStatus, $deliveryStatus));
     }
 
     /** Normalized serviceability {couriers:[{courier_id,name,rate,eta_days,cod_available}], cheapest, recommended}. */
@@ -88,6 +211,12 @@ class CourierService
         if (!$this->enabled()) {
             return ['ok' => false, 'error' => 'Courier integration is not enabled.'];
         }
+        // This is the Shiprocket (courier) lane only. A Borzo shipment's normal booked state (order
+        // id, no provider_shipment_id) would otherwise be mis-read as a broken Shiprocket row and
+        // corrupted to book_failed — refuse it and point at the dispatch endpoint.
+        if (($shipment->provider ?? '') === 'borzo') {
+            return ['ok' => false, 'error' => 'This shipment is on the Borzo instant lane; use POST shipments/{id}/dispatch.'];
+        }
         $order = $shipment->order;
         $shop = $shipment->shop;
         if (!$order || !$shop) {
@@ -112,8 +241,10 @@ class CourierService
             }
             $shipment->forceFill([
                 'provider'            => 'shiprocket',
+                'mode'                => $shipment->mode ?: 'courier',
                 'provider_order_id'   => $newOrderId,
                 'provider_shipment_id' => $newShipmentId,
+                'booked_revenue'      => $shipment->shipping_revenue,
                 'last_status'         => 'booked',
                 'last_status_at'      => Carbon::now(),
             ])->save();
@@ -242,40 +373,67 @@ class CourierService
      */
     public function applyStatus(Shipment $shipment, string $providerStatus): array
     {
-        $map = $this->mapStatus($providerStatus);
-        $now = Carbon::now();
+        return $this->applyNormalizedStatus($shipment, $this->mapStatus($providerStatus));
+    }
 
-        if ($map['shipment_status'] === null) {
+    /**
+     * Apply an ALREADY-normalized {shipment_status, order_status} to a shipment + advance the
+     * customer order. Shared by every partner (Shiprocket via mapStatus, Borzo via mapBorzoStatus)
+     * so the order-advance seam + in-flight completion guard live in exactly one place. Idempotent.
+     */
+    public function applyNormalizedStatus(Shipment $shipment, array $map): array
+    {
+        $now = Carbon::now();
+        $target = $map['shipment_status'] ?? null;
+
+        if ($target === null) {
             $shipment->forceFill(['last_status_at' => $now])->save();
             return $map;
         }
-        if ($shipment->status === $map['shipment_status']) {
-            return $map; // already in this state → idempotent no-op
+
+        // Monotonic + terminal-sticky. Once delivered/cancelled, ignore later events; otherwise only
+        // move FORWARD (cancelled may interrupt any pre-terminal state). This makes out-of-order or
+        // duplicate webhooks (common across multi-leg orders, esp. Borzo jumping straight to
+        // out_for_delivery) a true no-op instead of regressing the shipment — and never reverses
+        // delivered_at or fires settlement-reversing order downgrades.
+        $rank = ['pending' => 0, 'assigned' => 1, 'packed' => 1, 'shipped' => 2, 'out_for_delivery' => 3, 'delivered' => 4];
+        $cur = (string) $shipment->status;
+        if (in_array($cur, ['delivered', 'cancelled'], true)) {
+            $shipment->forceFill(['last_status_at' => $now])->save();
+            return $map; // terminal → sticky
+        }
+        if ($target !== 'cancelled' && ($rank[$target] ?? 0) <= ($rank[$cur] ?? 0)) {
+            $shipment->forceFill(['last_status_at' => $now])->save();
+            return $map; // same or backward → no-op
         }
 
-        $fill = ['status' => $map['shipment_status'], 'last_status' => $map['shipment_status'], 'last_status_at' => $now];
-        if ($map['shipment_status'] === 'shipped' && !$shipment->shipped_at) {
+        $fill = ['status' => $target, 'last_status' => $target, 'last_status_at' => $now];
+        if ($target === 'shipped' && !$shipment->shipped_at) {
             $fill['shipped_at'] = $now;
         }
-        if ($map['shipment_status'] === 'delivered') {
+        if ($target === 'delivered') {
             $fill['delivered_at'] = $now;
         }
         $shipment->forceFill($fill)->save();
 
-        if ($map['order_status']) {
+        if (!empty($map['order_status'])) {
             $order = $shipment->order;
             if ($order) {
-                $target = $map['order_status'];
-                if ($target === 'order-completed') {
+                $dest = $map['order_status'];
+                if ($dest === 'order-completed') {
                     // Terminal = delivered OR cancelled; an in-flight leg keeps the order open.
                     $inFlight = Shipment::where('order_id', $order->id)
                         ->whereNotIn('status', ['delivered', 'cancelled'])->exists();
                     if ($inFlight) {
-                        $target = 'order-out-for-delivery';
+                        $dest = 'order-out-for-delivery';
                     }
                 }
-                if ($order->order_status !== $target) {
-                    app(OrderRepository::class)->changeOrderStatus($order, $target);
+                // Don't regress the customer order timeline across multi-leg orders (a slower leg's
+                // "shipped" must not pull an order already out-for-delivery back to at-local-facility).
+                $orank = ['order-pending' => 0, 'order-processing' => 1, 'order-at-local-facility' => 2, 'order-out-for-delivery' => 3, 'order-completed' => 4];
+                $advance = !isset($orank[$dest], $orank[$order->order_status]) || $orank[$dest] > $orank[$order->order_status];
+                if ($order->order_status !== $dest && $advance) {
+                    app(OrderRepository::class)->changeOrderStatus($order, $dest);
                 }
             }
         }

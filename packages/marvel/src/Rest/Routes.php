@@ -125,6 +125,9 @@ Route::post('webhooks/flutterwave', [WebHookController::class, 'flutterwave']);
 // Courier (Shiprocket) shipment-status webhook — token-verified inside the controller
 // (x-api-key), public (no auth:sanctum), throttled to blunt spoofing/retry storms.
 Route::post('webhooks/shiprocket', [WebHookController::class, 'shiprocket'])->middleware('throttle:120,1');
+// Borzo order/delivery callback — anti-spoof (only a signature-verified callback triggers the
+// authenticated re-fetch), idempotent, never-5xx; tightly throttled. Public; verified in-controller.
+Route::post('webhooks/borzo', [WebHookController::class, 'borzo'])->middleware('throttle:60,1');
 
 // Voice Search — public: storefront reads the feature flag; the shop's server
 // side posts query usage for cost tracking (guarded by an optional shared secret).
@@ -595,6 +598,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('shipments/{id}/schedule-pickup', [CourierShipmentController::class, 'pickup']);
     Route::get('shipments/{id}/courier-track', [CourierShipmentController::class, 'track']);
     Route::post('shops/{id}/sync-pickup', [CourierShipmentController::class, 'syncPickup']);
+    // Multi-partner shipping (Shiprocket + Borzo): ranked quotes, mode-routed dispatch, cancel.
+    Route::get('shipments/{id}/shipping-quotes', [CourierShipmentController::class, 'quotes']);
+    Route::post('shipments/{id}/dispatch', [CourierShipmentController::class, 'dispatch']);
+    Route::post('shipments/{id}/cancel-shipment', [CourierShipmentController::class, 'cancelShipment']);
 
     // Marketplace analytics widgets (admin dashboard, D1).
     Route::get('analytics/city-sales', [AnalyticsController::class, 'cityWiseSales']);

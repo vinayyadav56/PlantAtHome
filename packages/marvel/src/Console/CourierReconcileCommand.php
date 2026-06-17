@@ -5,6 +5,7 @@ namespace Marvel\Console;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Arr;
 use Marvel\Database\Models\Shipment;
+use Marvel\Services\Courier\BorzoAdapter;
 use Marvel\Services\Courier\CourierService;
 
 /**
@@ -23,37 +24,65 @@ class CourierReconcileCommand extends Command
     public function handle(): int
     {
         $svc = new CourierService();
-        if (!$svc->enabled()) {
+        if (!$svc->enabled() && !$svc->borzoEnabled()) {
             $this->info('Courier integration is not enabled; nothing to reconcile.');
             return self::SUCCESS;
         }
-
-        $shipments = Shipment::where('fulfillment_mode', 'courier')
-            ->whereNotNull('awb_number')
-            ->whereNotIn('status', ['delivered', 'cancelled'])
-            ->limit((int) $this->option('limit'))
-            ->get();
-
+        $limit = (int) $this->option('limit');
+        $checked = 0;
         $applied = 0;
-        foreach ($shipments as $shipment) {
-            try {
-                $res = $svc->track($shipment);
-                if (empty($res['ok'])) {
-                    continue;
+
+        // ── Shiprocket courier lane (track by AWB → mapStatus). ──
+        if ($svc->enabled()) {
+            $shipments = Shipment::where('fulfillment_mode', 'courier')
+                ->where(fn ($q) => $q->whereNull('provider')->orWhere('provider', '!=', 'borzo'))
+                ->whereNotNull('awb_number')
+                ->whereNotIn('status', ['delivered', 'cancelled'])
+                ->limit($limit)
+                ->get();
+            foreach ($shipments as $shipment) {
+                $checked++;
+                try {
+                    $res = $svc->track($shipment);
+                    if (empty($res['ok'])) {
+                        continue;
+                    }
+                    // Shiprocket track shape: data.tracking_data.shipment_track[0].current_status
+                    $status = (string) (Arr::get($res, 'data.tracking_data.shipment_track.0.current_status')
+                        ?? Arr::get($res, 'data.current_status') ?? '');
+                    if ($status !== '') {
+                        $svc->applyStatus($shipment, $status);
+                        $applied++;
+                    }
+                } catch (\Throwable $e) {
+                    $this->warn("Shipment #{$shipment->id}: {$e->getMessage()}");
                 }
-                // Shiprocket track shape: data.tracking_data.shipment_track[0].current_status
-                $status = (string) (Arr::get($res, 'data.tracking_data.shipment_track.0.current_status')
-                    ?? Arr::get($res, 'data.current_status') ?? '');
-                if ($status !== '') {
-                    $svc->applyStatus($shipment, $status);
-                    $applied++;
-                }
-            } catch (\Throwable $e) {
-                $this->warn("Shipment #{$shipment->id}: {$e->getMessage()}");
             }
         }
 
-        $this->info("Courier reconcile: checked {$shipments->count()} shipment(s), applied {$applied} status update(s).");
+        // ── Borzo instant/same-city lane (re-fetch order → mapBorzoStatus via the adapter). ──
+        if ($svc->borzoEnabled()) {
+            $adapter = new BorzoAdapter();
+            $borzoShipments = Shipment::where('provider', 'borzo')
+                ->whereNotNull('provider_order_id')
+                ->whereNotIn('status', ['delivered', 'cancelled'])
+                ->limit($limit)
+                ->get();
+            foreach ($borzoShipments as $shipment) {
+                $checked++;
+                try {
+                    $res = $adapter->track($shipment);
+                    if (!empty($res['ok']) && !empty($res['normalized'])) {
+                        $svc->applyNormalizedStatus($shipment, $res['normalized']);
+                        $applied++;
+                    }
+                } catch (\Throwable $e) {
+                    $this->warn("Shipment #{$shipment->id} (borzo): {$e->getMessage()}");
+                }
+            }
+        }
+
+        $this->info("Courier reconcile: checked {$checked} shipment(s), applied {$applied} status update(s).");
         return self::SUCCESS;
     }
 }

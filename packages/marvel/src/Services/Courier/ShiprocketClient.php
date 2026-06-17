@@ -19,12 +19,20 @@ class ShiprocketClient implements CourierProviderInterface
     private string $baseUrl;
     private ?string $email;
     private ?string $password;
+    private ?string $apiToken;
 
     public function __construct()
     {
         $this->baseUrl = rtrim((string) config('services.shiprocket.base_url', 'https://apiv2.shiprocket.in'), '/');
         $this->email = config('services.shiprocket.email');
         $this->password = config('services.shiprocket.password');
+        $this->apiToken = config('services.shiprocket.api_token');
+    }
+
+    /** Cancel one or more provider orders (POST /orders/cancel). Used by the cancel lane. */
+    public function cancelOrder(array $providerOrderIds): array
+    {
+        return $this->request('post', '/v1/external/orders/cancel', ['ids' => array_values($providerOrderIds)]);
     }
 
     public function serviceability(string $pickupPin, string $dropPin, int $weightGrams, bool $cod): array
@@ -110,6 +118,10 @@ class ShiprocketClient implements CourierProviderInterface
     /** Cached bearer token (forced refresh handled by the caller forgetting the key). */
     private function token(): ?string
     {
+        // A permanent API token (if configured) is used directly — no login round-trip.
+        if (!empty($this->apiToken)) {
+            return $this->apiToken;
+        }
         if (!$this->email || !$this->password) {
             return null;
         }

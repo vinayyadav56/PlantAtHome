@@ -25,10 +25,34 @@ class CourierShipmentController extends CoreController
         return Shipment::with(['order.customer', 'shop', 'items.product'])->findOrFail($id);
     }
 
-    /** POST shipments/{id}/book-courier — create provider order + allocate AWB. */
+    /** POST shipments/{id}/book-courier — create Shiprocket provider order + allocate AWB. */
     public function book(Request $request, $id)
     {
         $res = $this->courier()->bookShipment($this->shipment($id));
+        return response()->json($res, !empty($res['ok']) ? 200 : 409);
+    }
+
+    /** GET shipments/{id}/shipping-quotes — ranked quotes across every eligible partner. */
+    public function quotes(Request $request, $id)
+    {
+        $cod = $request->has('cod') ? $request->boolean('cod') : null;
+        return response()->json($this->courier()->quoteShipment($this->shipment($id), $cod));
+    }
+
+    /**
+     * POST shipments/{id}/dispatch — book the shipment via the partner for its mode
+     * (courier → Shiprocket, instant/same-city → Borzo). Idempotent on provider_order_id.
+     */
+    public function dispatch(Request $request, $id)
+    {
+        $res = $this->courier()->book($this->shipment($id));
+        return response()->json($res, !empty($res['ok']) ? 200 : 409);
+    }
+
+    /** POST shipments/{id}/cancel-shipment — cancel via whichever partner placed it. */
+    public function cancelShipment(Request $request, $id)
+    {
+        $res = $this->courier()->cancel($this->shipment($id), $request->input('reason'));
         return response()->json($res, !empty($res['ok']) ? 200 : 409);
     }
 

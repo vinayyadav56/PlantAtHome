@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\Shipment;
 use Marvel\Facades\Payment;
 use Marvel\Payments\Flutterwave;
+use Marvel\Services\Courier\BorzoAdapter;
 use Marvel\Services\Courier\CourierService;
 
 class WebHookController extends CoreController
@@ -80,12 +81,18 @@ class WebHookController extends CoreController
         }
 
         try {
-            $awb = (string) ($request->input('awb') ?? '');
-            $providerShipmentId = (string) ($request->input('shipment_id') ?? '');
+            $awb = trim((string) ($request->input('awb') ?? ''));
+            $providerShipmentId = trim((string) ($request->input('shipment_id') ?? ''));
             $providerStatus = (string) ($request->input('current_status') ?? $request->input('status') ?? '');
 
-            $shipment = Shipment::when($providerShipmentId, fn ($q) => $q->where('provider_shipment_id', $providerShipmentId))
-                ->when(!$providerShipmentId && $awb, fn ($q) => $q->where('awb_number', $awb))
+            // Require a real identifier — never let an empty payload degrade to a bare ->first()
+            // that would match an arbitrary (possibly Borzo) row. Also scope to provider=shiprocket.
+            if ($providerShipmentId === '' && $awb === '') {
+                return response()->json(['ok' => true, 'note' => 'no shipment identifier']);
+            }
+            $shipment = Shipment::where('provider', 'shiprocket')
+                ->when($providerShipmentId !== '', fn ($q) => $q->where('provider_shipment_id', $providerShipmentId))
+                ->when($providerShipmentId === '' && $awb !== '', fn ($q) => $q->where('awb_number', $awb))
                 ->first();
             if (!$shipment || $providerStatus === '') {
                 return response()->json(['ok' => true, 'note' => 'no matching shipment']); // ack; don't retry-storm
@@ -100,6 +107,57 @@ class WebHookController extends CoreController
         } catch (\Throwable $e) {
             Log::error('Shiprocket webhook error', ['error' => $e->getMessage()]);
             return response()->json(['ok' => false], 200); // never 5xx to the courier
+        }
+    }
+
+    /**
+     * Borzo order/delivery callback. Idempotent + never-5xx (a 4xx/5xx makes Borzo retry for 24h).
+     * ANTI-SPOOF: the callback body is treated as an untrusted *trigger* only — we re-fetch the
+     * order from Borzo's authenticated API (track) and apply THAT status, so a forged callback can
+     * never move money/state. We fall back to the callback's own status ONLY when its HMAC
+     * signature verified (verifyWebhook) AND the re-fetch was unavailable. Shared apply path
+     * (applyNormalizedStatus → OrderRepository::changeOrderStatus) + reconcile sweep as backstop.
+     */
+    public function borzo(Request $request)
+    {
+        try {
+            $svc = new CourierService();
+            if (!$svc->borzoEnabled()) {
+                return response()->json(['ok' => true, 'note' => 'borzo lane disabled']); // ack; don't retry-storm
+            }
+
+            $adapter = new BorzoAdapter();
+            $norm = $adapter->normalizeWebhook($request);
+            $signatureValid = !empty($norm['signature_valid']);
+
+            // Only a SIGNATURE-VERIFIED callback triggers the (authenticated, possibly slow) outbound
+            // re-fetch — an unverified/forged POST can't be used to amplify calls into Borzo or move
+            // any state. When the callback token isn't configured (so we can't verify), we ack and
+            // let the hourly reconcile sweep advance status. Either way: never 5xx.
+            if ($signatureValid) {
+                foreach (($norm['events'] ?? []) as $ev) {
+                    $orderId = (string) ($ev['provider_order_id'] ?? '');
+                    if ($orderId === '') {
+                        continue;
+                    }
+                    $shipment = Shipment::where('provider', 'borzo')->where('provider_order_id', $orderId)->first();
+                    if (!$shipment) {
+                        continue;
+                    }
+                    // Authoritative status from the authenticated API (not the callback body).
+                    $track = $adapter->track($shipment);
+                    if (!empty($track['ok']) && !empty($track['normalized'])) {
+                        $svc->applyNormalizedStatus($shipment, $track['normalized']);
+                    } elseif (!empty($ev['normalized'])) {
+                        $svc->applyNormalizedStatus($shipment, $ev['normalized']); // verified callback fallback
+                    }
+                }
+            }
+
+            return response()->json(['ok' => true]);
+        } catch (\Throwable $e) {
+            Log::error('Borzo webhook error', ['error' => $e->getMessage()]);
+            return response()->json(['ok' => false], 200); // never 5xx to the partner
         }
     }
 }
