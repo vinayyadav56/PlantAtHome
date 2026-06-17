@@ -101,7 +101,7 @@ class Stripe extends Base implements PaymentInterface
       extract($data);
       $intent_array = [];
       $intent_array = [
-        'amount' => round($amount, 2) * 100,
+        'amount' => (int) round($amount * 100), // Stripe needs integer minor units (round before cast to avoid float drift)
         'currency' => $this->currency,
         'description' => 'Marvel Payment',
 

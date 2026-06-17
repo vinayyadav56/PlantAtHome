@@ -354,6 +354,14 @@ trait PaymentTrait
         $isFinal = $this->checkOrderStatusIsFinal($order);
         if ($isFinal) return;
 
+        // Idempotency: payment gateways legitimately replay webhooks. If the order is already
+        // in the target payment + order state, this is a duplicate delivery — return without
+        // re-saving or re-firing PaymentSuccess (which re-sends payment emails + billable SMS
+        // on every replay).
+        if ($order->payment_status === $payment_status && $order->order_status === $order_status) {
+            return;
+        }
+
         $order->order_status = $order_status;
         $order->payment_status = $payment_status;
         $order->save();

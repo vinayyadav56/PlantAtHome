@@ -56,8 +56,11 @@ class SettlementService
                     'total_platform_fee' => round((float) $rows->sum('platform_fee'), 2),
                     'total_pg_fee'       => round((float) $rows->sum('pg_fee'), 2),
                     'shipping_revenue'   => round((float) $rows->sum('shipping_revenue'), 2),
-                    'total_cost'         => round((float) $rows->sum('cost_value'), 2),
-                    'total_profit'       => round((float) $rows->sum('vendor_profit'), 2),
+                    // Null cost/profit means "unknown" (incomplete cost sheet) — exclude those
+                    // rows from the aggregate instead of summing them as 0, which would understate
+                    // cost and OVERSTATE profit. Mirrors SettlementController::balanceSummary.
+                    'total_cost'         => round((float) $rows->whereNotNull('cost_value')->sum('cost_value'), 2),
+                    'total_profit'       => round((float) $rows->whereNotNull('vendor_profit')->sum('vendor_profit'), 2),
                     'total_tax'          => round((float) $rows->sum('tax_amount'), 2),
                     'refund_adjustments' => round((float) $rows->where('entry_type', 'refund_reversal')->sum('amount'), 2),
                     'net_payable'        => $net,

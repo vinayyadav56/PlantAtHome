@@ -6,6 +6,7 @@ use Exception;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Variation;
 
@@ -36,7 +37,10 @@ class ProductInventoryRestore implements ShouldQueue
                 ]);
             }
         } catch (Exception $th) {
-            //
+            Log::error('Inventory restore failed', [
+                'product_id' => $eventData->id ?? null,
+                'error'      => $th->getMessage(),
+            ]);
         }
     }
 
