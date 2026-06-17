@@ -755,13 +755,19 @@ class UserController extends CoreController
     public function updateContact(Request $request)
     {
         $phoneNumber = $request->phone_number;
-        $user_id = $request->user_id;
+        // SECURITY: always bind to the AUTHENTICATED user — never a client-supplied user_id.
+        // Trusting $request->user_id let any logged-in customer verify their own phone OTP and
+        // then write that contact onto an arbitrary victim's Profile, enabling phone-OTP login
+        // takeover of that account.
+        $user = $request->user();
+        if (!$user) {
+            return ['message' => CONTACT_UPDATE_FAILED, 'success' => false];
+        }
 
         try {
             if ($this->verifyOtp($request)) {
-                $user = User::find($user_id);
                 $user->profile()->updateOrCreate(
-                    ['customer_id' => $user_id],
+                    ['customer_id' => $user->id],
                     [
                         'contact' => $phoneNumber
                     ]

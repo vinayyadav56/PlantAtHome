@@ -272,7 +272,16 @@ class ShopController extends CoreController
         } catch (\Exception $e) {
             throw new ModelNotFoundException(NOT_FOUND);
         }
-        if ($request->user()->hasPermissionTo(Permission::STORE_OWNER) || ($request->user()->hasPermissionTo(Permission::STORE_OWNER) && ($request->user()->shops->contains('id', $staff->shop_id)))) {
+        // SECURITY: the previous guard short-circuited to true for ANY store owner (the first OR
+        // operand made the ownership half dead code), letting a store owner delete ANY user by id —
+        // other shops' staff, competing owners, even super-admins. Require: super-admin, OR a store
+        // owner deleting an actual STAFF member of a shop they own.
+        $user = $request->user();
+        $authorized = $user->hasPermissionTo(Permission::SUPER_ADMIN)
+            || ($user->hasPermissionTo(Permission::STORE_OWNER)
+                && $staff->hasPermissionTo(Permission::STAFF)
+                && $user->shops->contains('id', $staff->shop_id));
+        if ($authorized) {
             $staff->delete();
             return $staff;
         }

@@ -13,6 +13,7 @@ use Prettus\Repository\Criteria\RequestCriteria;
 use Prettus\Repository\Exceptions\RepositoryException;
 use Marvel\Mail\ForgetPassword;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Arr;
 use Marvel\Database\Models\Address;
 use Marvel\Database\Models\Profile;
 use Marvel\Database\Models\Settings;
@@ -35,7 +36,9 @@ class UserRepository extends BaseRepository
     protected $dataArray = [
         'name',
         'email',
-        'shop_id'
+        // 'shop_id' intentionally NOT self-assignable: a customer could PUT their own id with a
+        // victim shop's id and then read/post that shop's private conversations (chat authz
+        // trusts user->shop_id). Staff↔shop linkage is set via the admin staff endpoints only.
     ];
 
     /**
@@ -82,24 +85,38 @@ class UserRepository extends BaseRepository
     public function updateUser($request, $user)
     {
         try {
+            // SECURITY: scope every address row to the user being updated and never accept a
+            // client-supplied id/customer_id (prevents overwriting/reparenting another user's
+            // Address via a guessed id — an IDOR + mass-assignment hole).
             if (isset($request['address']) && count($request['address'])) {
                 foreach ($request['address'] as $address) {
+                    $fields = Arr::except((array) $address, ['id', 'customer_id', 'created_at', 'updated_at']);
                     if (isset($address['id'])) {
-                        Address::findOrFail($address['id'])->update($address);
+                        $owned = Address::where('customer_id', $user->id)->find($address['id']);
+                        if ($owned) {
+                            $owned->update($fields);
+                        }
                     } else {
-                        $address['customer_id'] = $user->id;
-                        Address::create($address);
+                        $fields['customer_id'] = $user->id;
+                        Address::create($fields);
                     }
                 }
             }
 
+            // SECURITY: same ownership scope + strip id/customer_id for the profile row.
             if (isset($request['profile'])) {
+                $profileFields = Arr::except((array) $request['profile'], ['id', 'customer_id', 'created_at', 'updated_at']);
                 if (isset($request['profile']['id'])) {
-                    Profile::findOrFail($request['profile']['id'])->update($request['profile']);
+                    $ownedProfile = Profile::where('customer_id', $user->id)->find($request['profile']['id']);
+                    if ($ownedProfile) {
+                        $ownedProfile->update($profileFields);
+                    } else {
+                        $profileFields['customer_id'] = $user->id;
+                        Profile::updateOrCreate(['customer_id' => $user->id], $profileFields);
+                    }
                 } else {
-                    $profile = $request['profile'];
-                    $profile['customer_id'] = $user->id;
-                    Profile::create($profile);
+                    $profileFields['customer_id'] = $user->id;
+                    Profile::updateOrCreate(['customer_id' => $user->id], $profileFields);
                 }
             }
             $user->update($request->only($this->dataArray));

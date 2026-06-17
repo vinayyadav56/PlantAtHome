@@ -5,6 +5,7 @@ namespace Marvel\Database\Repositories;
 
 use Exception;
 use Illuminate\Auth\Access\AuthorizationException;
+use Illuminate\Support\Arr;
 use Marvel\Database\Models\Balance;
 use Marvel\Database\Models\OwnershipTransfer;
 use Marvel\Database\Models\Product;
@@ -119,12 +120,19 @@ class ShopRepository extends BaseRepository
             $data = $request->only($this->dataArray);
             $data['slug'] = $this->makeSlug($request);
             $data['owner_id'] = $request->user()->id;
+            // SECURITY: a newly-created shop is inactive until a super-admin approves it; a store
+            // owner cannot self-activate by passing is_active=true.
+            if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
+                unset($data['is_active']);
+            }
             $shop = $this->create($data);
             if (isset($request['categories'])) {
                 $shop->categories()->attach($request['categories']);
             }
+            // SECURITY: only the operator-editable payment_info is mass-assignable on the balance;
+            // never current_balance/total_earnings/withdrawn_amount from client input.
             if (isset($request['balance']['payment_info'])) {
-                $shop->balance()->create($request['balance']);
+                $shop->balance()->create(Arr::only($request['balance'], ['payment_info']));
             }
             $this->syncServiceAreas($shop, $request);
 
@@ -145,15 +153,14 @@ class ShopRepository extends BaseRepository
                 $shop->categories()->sync($request['categories']);
             }
             if (isset($request['balance'])) {
-                if (isset($request['balance']['admin_commission_rate']) && $shop->balance->admin_commission_rate !== $request['balance']['admin_commission_rate']) {
-                    if ($request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
-                        $this->updateBalance($request['balance'], $id);
-                    }
-                } else {
-                    $this->updateBalance($request['balance'], $id);
-                }
+                $this->updateBalance($request['balance'], $id, $request->user()->hasPermissionTo(Permission::SUPER_ADMIN));
             }
             $data = $request->only($this->dataArray);
+            // SECURITY: only a super-admin (via the approve/disApprove flow) may set is_active —
+            // a store owner must not self-activate their shop and bypass admin approval.
+            if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
+                unset($data['is_active']);
+            }
             if (!empty($request->slug) &&  $request->slug != $shop['slug']) {
                 $data['slug'] = $this->makeSlug($request);
             }
@@ -197,13 +204,28 @@ class ShopRepository extends BaseRepository
         }
     }
 
-    public function updateBalance($balance, $shop_id)
+    /**
+     * Update a shop's balance row. SECURITY: resolve the row by the AUTHORIZED $shop_id (never a
+     * client-supplied balance['id'], which allowed cross-tenant writes) and only ever write the
+     * operator-editable payment_info — current_balance / total_earnings / withdrawn_amount are
+     * strictly server-derived from orders/settlements/withdrawals and must never be mass-assigned.
+     * admin_commission_rate is writable only by a super-admin.
+     */
+    public function updateBalance($balance, $shop_id, $isSuperAdmin = false)
     {
-        if (isset($balance['id'])) {
-            Balance::findOrFail($balance['id'])->update($balance);
+        $editable = Arr::only((array) $balance, ['payment_info']);
+        if ($isSuperAdmin && array_key_exists('admin_commission_rate', (array) $balance)) {
+            $editable['admin_commission_rate'] = $balance['admin_commission_rate'];
+        }
+
+        $row = Balance::where('shop_id', $shop_id)->first();
+        if ($row) {
+            if (!empty($editable)) {
+                $row->update($editable);
+            }
         } else {
-            $balance['shop_id'] = $shop_id;
-            Balance::create($balance);
+            $editable['shop_id'] = $shop_id;
+            Balance::create($editable);
         }
     }
 
