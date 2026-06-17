@@ -89,14 +89,20 @@ class PaymentMethodController extends CoreController
     public function deletePaymentMethod(Request $request)
     {
         try {
-            try {
-                $retrieved_payment_method = PaymentMethod::where('id', '=', $request->id)->first();
-                Payment::detachPaymentMethodToCustomer($retrieved_payment_method->method_key);
-                return $this->repository->findOrFail($request->id)->forceDelete();
-            } catch (\Exception $e) {
+            // SECURITY: scope the card to the authenticated owner via the payment_gateways(user_id)
+            // relation. Previously the raw id let any customer force-delete (and Stripe-detach)
+            // another user's saved card by guessing the id.
+            $retrieved_payment_method = PaymentMethod::where('id', '=', $request->id)
+                ->whereRelation('payment_gateways', 'user_id', $request->user()->id)
+                ->first();
+            if (!$retrieved_payment_method) {
                 throw new HttpException(409, COULD_NOT_DELETE_THE_RESOURCE);
             }
-        } catch (MarvelException $e) {
+            Payment::detachPaymentMethodToCustomer($retrieved_payment_method->method_key);
+            return $retrieved_payment_method->forceDelete();
+        } catch (HttpException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
             throw new MarvelException(COULD_NOT_DELETE_THE_RESOURCE, $e->getMessage());
         }
     }

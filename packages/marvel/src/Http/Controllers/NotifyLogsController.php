@@ -85,7 +85,11 @@ class NotifyLogsController extends CoreController
     {
         try {
             $id = $request['id'];
-            return $this->repository->where('id', '=', $id)->firstOrFail();
+            // SECURITY: scope to the caller's own notifications (receiver = user id) — previously
+            // any customer could read another user's notification content by guessing the id.
+            return $this->repository->where('id', '=', $id)
+                ->where('receiver', '=', optional($request->user())->id)
+                ->firstOrFail();
         } catch (Exception $th) {
             throw new HttpException(404, NOT_FOUND);
         }
@@ -129,7 +133,10 @@ class NotifyLogsController extends CoreController
     public function readNotifyLogs(Request $request)
     {
         try {
-            $notify_log = $this->repository->findOrFail($request->id);
+            // SECURITY: only let a user mark THEIR OWN notification read (scope by receiver).
+            $notify_log = $this->repository->where('id', '=', $request->id)
+                ->where('receiver', '=', optional($request->user())->id)
+                ->firstOrFail();
             $notify_log->is_read = true;
             $notify_log->save();
             return $notify_log;
@@ -149,7 +156,9 @@ class NotifyLogsController extends CoreController
     {
         try {
             if (isset($request->set_all_read)) {
-                $notify_logs = $this->repository->where("notify_type", "=", $request->notify_type)->where('receiver', '=', $request->receiver)->get();
+                // SECURITY: ignore any client-supplied receiver — only mark the CALLER's own
+                // notifications read (previously $request->receiver let a user mass-mark others').
+                $notify_logs = $this->repository->where("notify_type", "=", $request->notify_type)->where('receiver', '=', optional($request->user())->id)->get();
 
                 foreach ($notify_logs as $key => $notify_log) {
                     $notify_log->is_read = true;

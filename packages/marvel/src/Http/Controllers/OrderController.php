@@ -296,13 +296,25 @@ class OrderController extends CoreController
      * @param int $id
      * @return JsonResponse
      */
-    public function destroy($id)
+    public function destroy(Request $request, $id)
     {
         try {
-            return $this->repository->findOrFail($id)->delete();
-        } catch (MarvelException $e) {
+            $order = $this->repository->findOrFail($id);
+        } catch (\Exception $e) {
             throw new MarvelException(NOT_FOUND);
         }
+        // SECURITY: the destroy route is role-gated (staff|store_owner) but had NO per-order
+        // ownership check, so any store owner/staff could delete ANY shop's orders by id.
+        // Require super-admin OR ownership of the order's shop (mirrors updateOrder's gate).
+        $user = $request->user();
+        $authorized = $user && (
+            $user->hasPermissionTo(Permission::SUPER_ADMIN)
+            || (isset($order->shop_id) && $this->repository->hasPermission($user, $order->shop_id))
+        );
+        if (!$authorized) {
+            throw new AuthorizationException(NOT_AUTHORIZED);
+        }
+        return $order->delete();
     }
 
     /**

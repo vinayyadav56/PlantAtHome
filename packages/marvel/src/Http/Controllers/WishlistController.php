@@ -36,8 +36,11 @@ class WishlistController extends CoreController
      */
     public function index(Request $request)
     {
-        $limit = $request->limit ? $request->limit : 15;
-        $wishlist = $this->repository->pluck('product_id');
+        $limit = min(max((int) ($request->limit ?: 15), 1), 100);
+        // SECURITY: scope to the caller — previously this plucked EVERY user's wishlisted
+        // product ids and returned them to any authenticated customer.
+        $userId = optional($request->user())->id;
+        $wishlist = $this->repository->where('user_id', $userId)->pluck('product_id');
         return Product::whereIn('id', $wishlist)->paginate($limit);
     }
 

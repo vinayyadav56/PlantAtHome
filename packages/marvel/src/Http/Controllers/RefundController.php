@@ -121,14 +121,25 @@ class RefundController extends CoreController
      * @param $id
      * @return JsonResponse
      */
-    public function show($id)
+    public function show(Request $request, $id)
     {
         try {
             $refund = $this->repository->with(['shop', 'order', 'customer', 'refund_policy','refund_reason'])->findOrFail($id);
-            return new GetSingleRefundResource($refund);
-        } catch (MarvelException $e) {
+        } catch (\Exception $e) {
             throw new MarvelException(NOT_FOUND);
         }
+        // SECURITY: this route is only role-gated (can:customer) and had NO per-refund ownership
+        // check, so any customer could read any refund (and the buyer's PII) by guessing the id.
+        $user = $request->user();
+        $authorized = $user && (
+            $refund->customer_id === $user->id
+            || $user->hasPermissionTo(Permission::SUPER_ADMIN)
+            || (isset($refund->shop_id) && $this->repository->hasPermission($user, $refund->shop_id))
+        );
+        if (!$authorized) {
+            throw new AuthorizationException(NOT_AUTHORIZED);
+        }
+        return new GetSingleRefundResource($refund);
     }
 
     /**

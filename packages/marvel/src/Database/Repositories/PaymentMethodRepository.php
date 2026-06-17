@@ -129,9 +129,16 @@ class PaymentMethodRepository extends BaseRepository
      */
     public function setDefaultPaymentMethod($request)
     {
-        $payment_method = PaymentMethod::where('id', '=', $request['method_id'])->firstOrFail();
-        /* Updating the default card to false if the payment gateway is stripe. */
-        PaymentMethod::where('id', '!=', $request['method_id'])->where([
+        // SECURITY: scope to the caller's OWN card (via payment_gateways.user_id) so a customer
+        // can't flip another user's default-card flag by guessing method_id.
+        $userId = $request->user()->id;
+        $payment_method = PaymentMethod::where('id', '=', $request['method_id'])
+            ->whereRelation('payment_gateways', 'user_id', $userId)
+            ->firstOrFail();
+        /* Unset other defaults only among THIS user's cards on the same gateway. */
+        PaymentMethod::where('id', '!=', $payment_method->id)
+            ->whereRelation('payment_gateways', 'user_id', $userId)
+            ->where([
             'default_card'       => true,
             "payment_gateway_id" =>  $payment_method?->payment_gateway_id,
         ])->update(['default_card' => false]);

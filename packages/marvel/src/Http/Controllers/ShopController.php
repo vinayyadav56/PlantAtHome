@@ -138,6 +138,16 @@ class ShopController extends CoreController
     public function shopMaintenanceEvent(Request $request) {
         try {
             $id = $request->shop_id;
+            // SECURITY: this route is public — without this gate an anonymous attacker could POST
+            // any shop_id and force that shop's entire catalog private (denial-of-business) or
+            // public (overriding a real maintenance window). Require super-admin or the owner.
+            $user = $request->user();
+            if (!$user || !(
+                $user->hasPermissionTo(Permission::SUPER_ADMIN)
+                || ($user->hasPermissionTo(Permission::STORE_OWNER) && $user->shops->contains('id', $id))
+            )) {
+                throw new AuthorizationException(NOT_AUTHORIZED);
+            }
             return $this->repository->maintenanceShopEvent($request, $id);
         } catch (MarvelException $th) {
             throw new MarvelException(COULD_NOT_UPDATE_THE_RESOURCE);

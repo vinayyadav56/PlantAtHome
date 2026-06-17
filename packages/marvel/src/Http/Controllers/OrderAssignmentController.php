@@ -181,7 +181,10 @@ class OrderAssignmentController extends CoreController
             'status'    => $order->order_status,
             'courier'   => [
                 'name'       => $dp->full_name,
-                'mobile'     => $dp->mobile,
+                // SECURITY: this endpoint is public + the tracking_number is enumerable, so do NOT
+                // return the courier's full personal number (harvestable at scale). Mask to the
+                // last 4 digits — enough for the storefront to show a "contact courier" hint.
+                'mobile'     => $dp->mobile ? ('xxxxxx' . substr(preg_replace('/\D/', '', (string) $dp->mobile), -4)) : null,
                 'lat'        => $dp->current_lat,
                 'lng'        => $dp->current_lng,
                 'updated_at' => $updated,
