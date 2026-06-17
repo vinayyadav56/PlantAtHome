@@ -131,6 +131,21 @@ Route::post('webhooks/borzo', [WebHookController::class, 'borzo'])->middleware('
 // Dedicated shipping microservice → monolith callback (status/COD). Token-verified (x-api-key)
 // in-controller, idempotent, never-5xx. Public route; throttled.
 Route::post('shipping/callback', [WebHookController::class, 'shippingCallback'])->middleware('throttle:120,1');
+// TEMP diagnostic (no secrets — lengths + booleans only) to pinpoint why the callback
+// auth resolves empty at runtime. REMOVE after the shipping cutover is confirmed.
+Route::get('shipping/_diag', function () {
+    $envPath = base_path('.env');
+    return response()->json([
+        'cfg_enabled'      => config('services.shipping_service.enabled'),
+        'cfg_callback_len' => strlen((string) config('services.shipping_service.callback_key')),
+        'cfg_apikey_len'   => strlen((string) config('services.shipping_service.api_key')),
+        'cfg_url_set'      => !empty(config('services.shipping_service.url')),
+        'env_callback_len' => strlen((string) env('SHIPPING_SERVICE_CALLBACK_KEY')),
+        'env_apikey_len'   => strlen((string) env('SHIPPING_SERVICE_API_KEY')),
+        'dotenv_has_line'  => is_readable($envPath) ? str_contains((string) @file_get_contents($envPath), 'SHIPPING_SERVICE_CALLBACK_KEY') : null,
+        'config_cached'    => file_exists(base_path('bootstrap/cache/config.php')),
+    ]);
+})->middleware('throttle:30,1');
 
 // Voice Search — public: storefront reads the feature flag; the shop's server
 // side posts query usage for cost tracking (guarded by an optional shared secret).
