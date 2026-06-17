@@ -187,11 +187,22 @@ class OrderRepository extends BaseRepository
             }
         }
 
-        if (isset($coupon) && $coupon->type === CouponType::FREE_SHIPPING_COUPON) {
-            $request['delivery_fee'] = 0;
-        } else {
-            $request['delivery_fee'] = $request['delivery_fee'];
-        }
+        // Server-authoritative delivery_fee + sales_tax — NEVER trust the client's figures
+        // (a crafted request could send sales_tax=0/delivery_fee=0 and be charged only the
+        // product subtotal, evading tax + shipping). Recompute with the EXACT same logic the
+        // checkout `verify` preview uses, so an honest client sees no change and a tampered
+        // one is corrected.
+        $checkout = new CheckoutRepository();
+        $settings = Settings::getData();
+        $freeShipByCoupon    = isset($coupon) && $coupon->type === CouponType::FREE_SHIPPING_COUPON;
+        $freeShipByThreshold = !empty($settings['options']['freeShipping'])
+            && isset($settings['options']['freeShippingAmount'])
+            && (float) $settings['options']['freeShippingAmount'] <= (float) $request['amount'];
+
+        $request['delivery_fee'] = ($freeShipByCoupon || $freeShipByThreshold)
+            ? 0
+            : (float) $checkout->calculateShippingCharge($request, $request['amount']);
+        $request['sales_tax'] = (float) $checkout->calculateTax($request, $request['delivery_fee'], $request['amount']);
 
         $request['paid_total'] = $request['amount'] + $request['sales_tax'] + $request['delivery_fee'] -  $request['discount'];
         $request['total'] = $request['paid_total'];
