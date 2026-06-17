@@ -151,6 +151,12 @@ Route::get('shipping/_diag', function () {
             try { $a = require config_path('services.php'); return is_array($a) ? array_keys($a) : ['NOT_ARRAY']; }
             catch (\Throwable $e) { return ['ERR:' . $e->getMessage()]; }
         })(),
+        'config_is_cached' => app()->configurationIsCached(),
+        'cached_config_path' => app()->getCachedConfigPath(),
+        'bootstrap_cache' => (function () {
+            try { return array_values(array_diff((array) @scandir(base_path('bootstrap/cache')), ['.', '..'])); }
+            catch (\Throwable $e) { return ['ERR']; }
+        })(),
     ]);
 })->middleware('throttle:30,1');
 
