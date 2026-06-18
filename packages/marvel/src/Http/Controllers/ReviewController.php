@@ -44,9 +44,9 @@ class ReviewController extends CoreController
             if (null !== $request->user()) {
                 $request->user()->id; // need another way to force login
             }
-            return $this->repository->where('product_id', $request['product_id'])->paginate($limit);
+            return $this->repository->with('feedbacks')->where('product_id', $request['product_id'])->paginate($limit);
         }
-        return $this->repository->paginate($limit);
+        return $this->repository->with('feedbacks')->paginate($limit);
     }
 
     /**

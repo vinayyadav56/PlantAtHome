@@ -22,6 +22,10 @@ class Question extends Model
         'abusive_reports_count'
     ];
 
+    // `feedbacks` is eager-loaded on list endpoints purely to feed the count accessors above —
+    // hide it so the response shape stays identical (it was never serialized before).
+    protected $hidden = ['feedbacks'];
+
     /**
      * @return BelongsTo
      */
@@ -60,7 +64,11 @@ class Question extends Model
      */
     public function getPositiveFeedbacksCountAttribute()
     {
-        return $this->feedbacks()->wherePositive(1)->count();
+        // N+1 fix: read the eager-loaded feedbacks collection on list endpoints, else query.
+        // (`wherePositive(1)` = `positive = 1`; the loose Collection where matches 0/1 columns.)
+        return $this->relationLoaded('feedbacks')
+            ? $this->feedbacks->where('positive', 1)->count()
+            : $this->feedbacks()->wherePositive(1)->count();
     }
 
     /**
@@ -69,7 +77,9 @@ class Question extends Model
      */
     public function getNegativeFeedbacksCountAttribute()
     {
-        return $this->feedbacks()->whereNegative(1)->count();
+        return $this->relationLoaded('feedbacks')
+            ? $this->feedbacks->where('negative', 1)->count()
+            : $this->feedbacks()->whereNegative(1)->count();
     }
 
     /**
@@ -78,10 +88,13 @@ class Question extends Model
      */
     public function getMyFeedbackAttribute()
     {
-        if (auth()->user()) {
-            return $this->feedbacks()->where('user_id', auth()->user()->id)->first();
+        $userId = optional(auth()->user())->id;
+        if (!$userId) {
+            return null;
         }
-        return null;
+        return $this->relationLoaded('feedbacks')
+            ? $this->feedbacks->firstWhere('user_id', $userId)
+            : $this->feedbacks()->where('user_id', $userId)->first();
     }
 
     /**

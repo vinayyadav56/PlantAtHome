@@ -41,15 +41,15 @@ class QuestionController extends CoreController
             if (null !== $request->user()) {
                 $request->user()->id;
             }
-            return $this->repository->where([
+            return $this->repository->with('feedbacks')->where([
                 ['product_id', '=', $productId],
                 ['answer', '!=', null]
             ])->paginate($limit);
         }
         if (isset($request['answer']) && $request['answer'] === 'null') {
-            return $this->repository->paginate($limit);
+            return $this->repository->with('feedbacks')->paginate($limit);
         }
-        return $this->repository->where('answer', '!=', null)->paginate($limit);
+        return $this->repository->with('feedbacks')->where('answer', '!=', null)->paginate($limit);
     }
 
     /**
