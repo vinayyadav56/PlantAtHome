@@ -89,7 +89,10 @@ class CategoryController extends CoreController
         // Cache the plain data ARRAY (not the JsonResponse — that would
         // re-serialize to {headers,original,exception} and break the shop).
         $data = \Illuminate\Support\Facades\Cache::remember($key, 600, function () use ($language, $parent, $selfId, $limit, $typeSlug) {
-            $categoriesQuery = $this->repository->with(['type', 'parent', 'children'])
+            // N+1 fix: CategoryResource reads $this->parentCategory (the show() path at :155/:158
+            // already eager-loads 'parentCategory'); 'parent' was loaded-but-unused while
+            // parentCategory lazy-loaded per row.
+            $categoriesQuery = $this->repository->with(['type', 'parentCategory', 'children'])
                 ->where('language', $language);
 
             if ($typeSlug) {

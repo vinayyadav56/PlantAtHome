@@ -45,17 +45,19 @@ class OwnershipTransferController extends CoreController
     {
         $user = $request->user();
 
+        // N+1 fix: eager-load the two owner relations (each a belongsTo→with('profile')) so the
+        // resource's previous_owner/current_owner don't lazy-load per row. Output-identical.
         switch ($user) {
             case $user->hasPermissionTo(Permission::SUPER_ADMIN):
-                $query = $this->repository->whereNotNull('id');
+                $query = $this->repository->with(['previous_owner', 'current_owner'])->whereNotNull('id');
                 break;
 
             case $user->hasPermissionTo(Permission::STORE_OWNER):
 
                 if ($request->type === 'from') {
-                    $query = $this->repository->where('from', '=', $user->id);
+                    $query = $this->repository->with(['previous_owner', 'current_owner'])->where('from', '=', $user->id);
                 } else {
-                    $query = $this->repository->where('to', '=', $user->id);
+                    $query = $this->repository->with(['previous_owner', 'current_owner'])->where('to', '=', $user->id);
                 }
                 break;
         }
