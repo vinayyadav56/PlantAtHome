@@ -62,7 +62,7 @@ class ConversationController extends CoreController
             $query->orWhereIn('shop_id', $user->shops->pluck('id'));
             $query->orWhere('shop_id', $user->shop_id);
             $query->orderBy('updated_at', 'desc');
-        })->with(['user.profile', 'shop']);
+        })->with(['user.profile', 'shop', 'latestMessage']); // latestMessage eager-loaded (was a per-row query)
     }
 
     /**
