@@ -39,7 +39,13 @@ class CourierConfigController extends CoreController
 
         $options = (array) (Settings::getData()->options ?? []);
         $courier = (array) ($options['courier'] ?? []);
-        $rows    = CourierPartnerConfig::all()->keyBy('partner_code');
+        // Tolerate the table not existing yet (API env where the migration hasn't run) — treat as
+        // no partner rows so the page still loads (env config shows through).
+        try {
+            $rows = CourierPartnerConfig::all()->keyBy('partner_code');
+        } catch (\Throwable $e) {
+            $rows = collect();
+        }
 
         $partners = [];
         foreach (array_keys($this->secretFields) as $code) {
