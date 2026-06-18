@@ -75,6 +75,7 @@ class WebHookController extends CoreController
      */
     public function shiprocket(Request $request)
     {
+        CourierService::applyAdminPartnerConfig(); // resolve admin-managed (DB) creds before reading config
         $expected = (string) config('services.shiprocket.webhook_token');
         if (empty($expected) || $request->header('x-api-key') !== $expected) {
             return response()->json(['message' => 'Unauthorized.'], 401);
@@ -170,6 +171,7 @@ class WebHookController extends CoreController
      */
     public function shippingCallback(Request $request)
     {
+        CourierService::applyAdminPartnerConfig(); // resolve admin-managed (DB) creds before reading config
         $expected = (string) config('services.shipping_service.callback_key');
         if (empty($expected) || !hash_equals($expected, (string) $request->header('x-api-key'))) {
             return response()->json(['message' => 'Unauthorized.'], 401);

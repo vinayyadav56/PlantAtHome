@@ -3,6 +3,7 @@
 namespace Marvel\Services\Courier;
 
 use Carbon\Carbon;
+use Marvel\Database\Models\CourierPartnerConfig;
 use Marvel\Database\Models\DeliveryQuote;
 use Marvel\Database\Models\Settings;
 use Marvel\Database\Models\Shipment;
@@ -28,6 +29,10 @@ class CourierService
     {
         $options = (array) (Settings::getData()->options ?? []);
         $this->opts = (array) ($options['courier'] ?? []);
+        // Admin-managed partner config (encrypted creds in DB) overrides config('services.*') so the
+        // existing adapters/clients transparently use the admin-entered values; env is the fallback.
+        // Runs BEFORE the adapters below (they read config at construction).
+        self::applyAdminPartnerConfig();
         // A partner enters service only when wired AND credentialed (so quote and book share one
         // eligibility rule — a half-configured partner is uniformly inert, never quotes-empty-but-books).
         if (config('services.shiprocket.enabled')
@@ -37,6 +42,63 @@ class CourierService
         }
         if (config('services.borzo.enabled') && !empty(config('services.borzo.token'))) {
             $this->borzo = new BorzoAdapter();
+        }
+    }
+
+    /**
+     * Merge admin-managed partner config (courier_partner_configs) over the env-backed
+     * config('services.*'). For each partner that has a DB row we set its `enabled` flag and any
+     * NON-EMPTY credential/setting field from the DB; empty DB fields fall back to env. Secrets are
+     * decrypted by the model's `encrypted:array` cast. Never throws into the courier flow (the
+     * table may not exist yet on a fresh deploy before migrate runs).
+     */
+    public static function applyAdminPartnerConfig(): void
+    {
+        try {
+            $rows = CourierPartnerConfig::all();
+        } catch (\Throwable $e) {
+            return; // table missing (pre-migration) or DB error — pure-env behavior
+        }
+
+        foreach ($rows as $row) {
+            $creds    = (array) ($row->credentials ?? []);
+            $settings = (array) ($row->settings ?? []);
+            $pick = function (array $src, string $key, string $cfg) {
+                $v = $src[$key] ?? null;
+                return ($v === null || $v === '') ? config($cfg) : $v;
+            };
+
+            switch ($row->partner_code) {
+                case 'shiprocket':
+                    config([
+                        'services.shiprocket.enabled'       => (bool) $row->enabled,
+                        'services.shiprocket.email'         => $pick($creds, 'email', 'services.shiprocket.email'),
+                        'services.shiprocket.password'      => $pick($creds, 'password', 'services.shiprocket.password'),
+                        'services.shiprocket.api_token'     => $pick($creds, 'api_token', 'services.shiprocket.api_token'),
+                        'services.shiprocket.webhook_token' => $pick($creds, 'webhook_token', 'services.shiprocket.webhook_token'),
+                        'services.shiprocket.base_url'      => $pick($settings, 'base_url', 'services.shiprocket.base_url'),
+                    ]);
+                    break;
+                case 'borzo':
+                    config([
+                        'services.borzo.enabled'         => (bool) $row->enabled,
+                        'services.borzo.token'           => $pick($creds, 'token', 'services.borzo.token'),
+                        'services.borzo.callback_token'  => $pick($creds, 'callback_token', 'services.borzo.callback_token'),
+                        'services.borzo.base_url'        => $pick($settings, 'base_url', 'services.borzo.base_url'),
+                        'services.borzo.vehicle_type_id' => $pick($settings, 'vehicle_type_id', 'services.borzo.vehicle_type_id'),
+                        'services.borzo.matter'          => $pick($settings, 'matter', 'services.borzo.matter'),
+                    ]);
+                    break;
+                case 'shipping_service':
+                    config([
+                        'services.shipping_service.enabled'      => (bool) $row->enabled,
+                        'services.shipping_service.url'          => $pick($creds, 'url', 'services.shipping_service.url'),
+                        'services.shipping_service.api_key'      => $pick($creds, 'api_key', 'services.shipping_service.api_key'),
+                        'services.shipping_service.callback_key' => $pick($creds, 'callback_key', 'services.shipping_service.callback_key'),
+                        'services.shipping_service.timeout'      => $pick($settings, 'timeout', 'services.shipping_service.timeout'),
+                    ]);
+                    break;
+            }
         }
     }
 

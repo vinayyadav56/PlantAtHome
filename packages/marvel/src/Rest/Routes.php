@@ -60,6 +60,7 @@ use Marvel\Http\Controllers\VendorInventoryController;
 use Marvel\Http\Controllers\SettlementController;
 use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\CourierShipmentController;
+use Marvel\Http\Controllers\CourierConfigController;
 use Marvel\Http\Controllers\LocationPriceController;
 use Marvel\Http\Controllers\OrderAssignmentController;
 use Marvel\Http\Controllers\DeliveryPartnerWithdrawController;
@@ -558,6 +559,11 @@ Route::group(
  */
 
 Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sanctum']], function () {
+    // Courier / shipping-microservice config: master switch + default package + per-partner
+    // (Borzo / Shiprocket / Go shipping-service) enable + non-secret settings + ENCRYPTED
+    // credentials. GET returns masked status (never secret values); POST encrypt-saves.
+    Route::get('courier-settings', [CourierConfigController::class, 'index']);
+    Route::post('courier-settings', [CourierConfigController::class, 'update']);
     // Route::get('messages/get-conversations/{shop_id}', [ConversationController::class, 'getConversationByShopId']);
     // Route::get('analytics', [AnalyticsController::class, 'analytics']);
     Route::apiResource('types', TypeController::class, [
