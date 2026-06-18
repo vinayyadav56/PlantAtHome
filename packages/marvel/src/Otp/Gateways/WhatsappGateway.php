@@ -67,6 +67,7 @@ class WhatsappGateway implements OtpInterface
     private function sendTemplate(string $to, string $template, string $lang, array $components): string
     {
         $resp = Http::withToken($this->token)
+            ->timeout(8) // fail fast — a hung WhatsApp Cloud API must not pin a php-fpm worker
             ->acceptJson()
             ->post($this->endpoint(), [
                 'messaging_product' => 'whatsapp',

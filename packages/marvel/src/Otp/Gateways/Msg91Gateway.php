@@ -49,6 +49,7 @@ class Msg91Gateway implements OtpInterface
         $mobile = $this->normalize($phone_number);
         try {
             $resp = Http::withHeaders(['authkey' => $this->authKey])
+                ->timeout(8) // fail fast — a hung MSG91 must not pin a php-fpm worker on the auth path
                 ->asForm()
                 ->post(self::BASE . '/otp', array_filter([
                     'template_id' => $this->templateId,
@@ -75,6 +76,7 @@ class Msg91Gateway implements OtpInterface
         $mobile = $this->normalize($phone_number);
         try {
             $resp = Http::withHeaders(['authkey' => $this->authKey])
+                ->timeout(8) // fail fast — a hung MSG91 must not pin a php-fpm worker on the auth path
                 ->get(self::BASE . '/otp/verify', [
                     'mobile' => $mobile,
                     'otp' => $code,
@@ -98,6 +100,7 @@ class Msg91Gateway implements OtpInterface
         $mobile = $this->normalize($phone_number);
         try {
             $resp = Http::withHeaders(['authkey' => $this->authKey])
+                ->timeout(8) // fail fast — a hung MSG91 must not pin a php-fpm worker on the auth path
                 ->post(self::BASE . '/flow/', array_filter([
                     'template_id' => $this->flowId,
                     'sender' => $this->sender,

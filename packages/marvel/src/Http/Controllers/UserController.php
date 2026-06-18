@@ -522,7 +522,7 @@ class UserController extends CoreController
     public function linkedinExchange(Request $request)
     {
         try {
-            $resp = \Illuminate\Support\Facades\Http::asForm()->post('https://www.linkedin.com/oauth/v2/accessToken', array_filter([
+            $resp = \Illuminate\Support\Facades\Http::asForm()->timeout(8)->connectTimeout(3)->post('https://www.linkedin.com/oauth/v2/accessToken', array_filter([
                 'grant_type'    => 'authorization_code',
                 'code'          => $request->code,
                 'redirect_uri'  => $request->redirect_uri ?: config('services.linkedin.redirect'),
@@ -547,6 +547,7 @@ class UserController extends CoreController
         if ($provider === 'linkedin') {
             // OIDC ("Sign In with LinkedIn using OpenID Connect") userinfo claims.
             $resp = \Illuminate\Support\Facades\Http::withToken($token)->acceptJson()
+                ->timeout(8)->connectTimeout(3)
                 ->get('https://api.linkedin.com/v2/userinfo');
             if (!$resp->ok()) {
                 throw new \Exception('LinkedIn userinfo failed');
