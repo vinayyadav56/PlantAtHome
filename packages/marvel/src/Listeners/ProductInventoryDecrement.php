@@ -10,9 +10,11 @@ use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Variation;
 
-// Intentionally NOT ShouldQueue: stock must decrement synchronously within the order request
-// (and its transaction) so a queue-worker outage can never let orders be placed without
-// decrementing inventory (mass oversell). The decrement is a fast atomic UPDATE.
+// Intentionally NOT ShouldQueue: stock must decrement synchronously within the order request so a
+// queue-worker outage can never let orders be placed without decrementing inventory (mass
+// oversell). The decrement is a fast atomic conditional UPDATE (`where quantity >= qty`). NB the
+// order-create path is NOT wrapped in a DB transaction, so this is inline-but-not-atomic with the
+// order write; a 0-row match (oversell) is logged and the order still proceeds (pre-existing).
 class ProductInventoryDecrement
 {
     /**

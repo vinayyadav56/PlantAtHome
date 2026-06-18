@@ -7,7 +7,10 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Marvel\Database\Models\PaymentMethod;
 use Marvel\Events\PaymentMethods;
 
-class CheckAndSetDefaultCard implements ShouldQueue
+// Intentionally NOT ShouldQueue: clearing the previous default_card must happen in the same
+// request that sets the new default, otherwise there is a window with two (or zero) default cards.
+// It's a tiny state mutation on a low-frequency action — run it synchronously.
+class CheckAndSetDefaultCard
 {
 
     protected function fetchAllPaymentMethods()

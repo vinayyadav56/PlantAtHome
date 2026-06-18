@@ -12,7 +12,11 @@ use Marvel\Enums\ProductType;
 use Marvel\Events\FlashSaleProcessed;
 
 
-class FlashSaleProductProcess implements ShouldQueue
+// Intentionally NOT ShouldQueue: this mutates MONEY/catalog state — it writes Product/Variation
+// sale_price, sets/clears in_flash_sale, and expires flash sales, and is fired from the flash-sale
+// LISTING read to lazily apply/expire prices. It must run synchronously so a queue-worker outage
+// can never leave a product at a stale/expired sale_price (wrong amount charged). Low frequency.
+class FlashSaleProductProcess
 {
     public function handle(FlashSaleProcessed $event)
     {

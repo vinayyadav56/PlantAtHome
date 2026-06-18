@@ -13,7 +13,11 @@ use Marvel\Notifications\TransferredShopOwnershipStatus;
 use Marvel\Traits\UsersTrait;
 
 
-class OwnershipTransferStatusControlListener implements ShouldQueue
+// Intentionally NOT ShouldQueue: this mutates authoritative state — it reassigns shop->owner_id,
+// toggles shop->is_active, and drafts all of a shop's products. Run synchronously so an admin's
+// approve/reject is committed within the request and a worker outage can't leave a shop in a
+// half-transferred state (wrong owner / still-active / undrafted). Low frequency (admin action).
+class OwnershipTransferStatusControlListener
 {
     use UsersTrait;
 
