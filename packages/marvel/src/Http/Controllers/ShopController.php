@@ -18,6 +18,7 @@ use Marvel\Http\Requests\TransferShopOwnerShipRequest;
 use Marvel\Http\Requests\UserCreateRequest;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\Settings;
 use Marvel\Database\Repositories\ShopRepository;
@@ -434,7 +435,13 @@ class ShopController extends CoreController
                 throw new HttpException(400, 'invalid argument');
             }
 
-            $near_shop = Shop::where('settings->location->lat', '!=', null)
+            // This haversine runs json_extract over the full active-shop set (no index) then
+            // filters distance in PHP — heavy on a public storefront lookup. Cache by a coarse
+            // lat/lng grid for 120s; "nearby shops" tolerates that staleness and a newly
+            // activated shop appears within the window.
+            $cacheKey = 'shops:near:' . round((float) $lat, 2) . ':' . round((float) $lng, 2) . ':' . $maxShopDistance;
+            return Cache::remember($cacheKey, 120, function () use ($lat, $lng, $maxShopDistance) {
+                return Shop::where('settings->location->lat', '!=', null)
                 ->where('settings->location->lng', '!=', null)
                 ->select(
                     "shops.*",
@@ -447,10 +454,10 @@ class ShopController extends CoreController
                 ->orderBy('distance', 'ASC')
                 ->where('is_active', 1)
                 ->whereDoesntHave('serviceAreas')   // never surface marketplace vendors to customers
-                ->get()
-                ->where('distance', '<', $maxShopDistance);
-
-            return $near_shop;
+                    ->get()
+                    ->where('distance', '<', $maxShopDistance)
+                    ->values();
+            });
         } catch (MarvelException $e) {
             throw new MarvelException(SOMETHING_WENT_WRONG);
         }
