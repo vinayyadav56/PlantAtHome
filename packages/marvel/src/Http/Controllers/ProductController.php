@@ -76,7 +76,27 @@ class ProductController extends CoreController
             return formatAPIResourcePaginate($data);
         }
 
-        $key = 'products:v' . $this->cacheVersion('products') . ':' . $language . ':' . md5($request->getRequestUri());
+        // Normalize the cache key: strip volatile analytics/cache-bust params and sort, so
+        // UTM-tagged entry links and param reordering all hit ONE entry. Keep every
+        // result-affecting param (search/searchFields/searchJoin/filter/orderBy/sortedBy/with/
+        // price/city/availability) so functionally-different requests can't collide.
+        $params = $request->query();
+        foreach (['utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content', 'fbclid', 'gclid', '_'] as $junk) {
+            unset($params[$junk]);
+        }
+        $recursiveKsort = function (&$arr) use (&$recursiveKsort) {
+            if (!is_array($arr)) {
+                return;
+            }
+            ksort($arr);
+            foreach ($arr as &$v) {
+                if (is_array($v)) {
+                    $recursiveKsort($v);
+                }
+            }
+        };
+        $recursiveKsort($params);
+        $key = 'products:v' . $this->cacheVersion('products') . ':' . $language . ':' . md5(json_encode($params));
         $data = Cache::remember($key, 300, function () use ($request, $limit) {
             $products = $this->fetchProducts($request)->paginate($limit)->withQueryString();
             return ProductResource::collection($products)->response()->getData(true);
@@ -186,20 +206,27 @@ class ProductController extends CoreController
     {
         $request->merge(['slug' => $slug]);
         try {
-            // Anonymous PDP reads that don't request gated digital files are
-            // edge-cacheable (the storefront PDP is ISR, so this also speeds
-            // repeat client-side navigations). Keep the exact resource shape —
-            // only attach a Cache-Control header, never re-serialize.
+            // Anonymous PDP reads that don't request gated digital files are edge-cacheable AND
+            // now SERVER-cached: fetchSingleProduct otherwise looks the slug up twice + loads 5
+            // relations on every origin/ISR-revalidate hit. The per-user fields (in_wishlist,
+            // my_review) are null when anonymous, so the serialized payload is invariant —
+            // language+slug+limit is a complete key. Reuses the 'products' invalidation namespace.
             $withDigital = in_array('variation_options.digital_file', explode(';', (string) $request->with))
                 || in_array('digital_file', explode(';', (string) $request->with));
             $cacheable = $this->isPublicCacheable($request) && !$withDigital;
 
-            $product = $this->fetchSingleProduct($request);
-            $response = (new GetSingleProductResource($product))->response();
-            if ($cacheable) {
-                $response->header('Cache-Control', $this->cacheControl());
+            if (!$cacheable) {
+                $product = $this->fetchSingleProduct($request);
+                return (new GetSingleProductResource($product))->response();
             }
-            return $response;
+
+            $language = $request->language ?? DEFAULT_LANGUAGE;
+            $limit = isset($request->limit) ? $request->limit : 10;
+            $key = 'product:show:v' . $this->cacheVersion('products') . ':' . $language . ':' . $slug . ':' . $limit;
+            $data = Cache::remember($key, 300, function () use ($request) {
+                return (new GetSingleProductResource($this->fetchSingleProduct($request)))->response()->getData(true);
+            });
+            return response()->json($data)->header('Cache-Control', $this->cacheControl());
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
         }
@@ -327,7 +354,13 @@ class ProductController extends CoreController
         $limit = isset($request->limit) ? $request->limit : 10;
         $slug =  $request->slug;
         $language = $request->language ?? DEFAULT_LANGUAGE;
-        return $this->repository->fetchRelated($slug, $limit, $language);
+        // Related = whereHas('categories') join per PDP render; cache anonymous reads.
+        if (!$this->isPublicCacheable($request)) {
+            return $this->repository->fetchRelated($slug, $limit, $language);
+        }
+        $key = 'products:related:v' . $this->cacheVersion('products') . ':' . $language . ':' . $slug . ':' . $limit;
+        return response(Cache::remember($key, 300, fn () => $this->repository->fetchRelated($slug, $limit, $language)))
+            ->header('Cache-Control', $this->cacheControl());
     }
 
 
@@ -639,7 +672,17 @@ class ProductController extends CoreController
 
     public function bestSellingProducts(Request $request)
     {
-        return $this->repository->getBestSellingProducts($request);
+        // Heaviest homepage feed (leftJoin order_product + orders + sum + groupBy + sort).
+        // Cache anonymous reads under the 'products' namespace.
+        if (!$this->isPublicCacheable($request)) {
+            return $this->repository->getBestSellingProducts($request);
+        }
+        $limit = $request->limit ? $request->limit : 10;
+        $language = $request->language ?? DEFAULT_LANGUAGE;
+        $key = 'products:bestselling:v' . $this->cacheVersion('products') . ':' . $language . ':'
+            . ($request->type_id ?? '') . ':' . ($request->type_slug ?? '') . ':' . ($request->range ?? '') . ':' . $limit;
+        return response(Cache::remember($key, 300, fn () => $this->repository->getBestSellingProducts($request)))
+            ->header('Cache-Control', $this->cacheControl());
     }
 
 
@@ -664,17 +707,28 @@ class ProductController extends CoreController
                 throw new MarvelException(NOT_FOUND);
             }
         }
-        $products_query = $this->repository->withCount('orders')->with(['type', 'shop'])->orderBy('orders_count', 'desc')->where('language', $language);
-        if (isset($request->shop_id)) {
-            $products_query = $products_query->where('shop_id', "=", $request->shop_id);
+        // Public homepage feed: full-catalog withCount('orders') + sort aggregate, run on every
+        // anonymous SSR render. Serve a version-keyed server cache (+ edge header) for anonymous
+        // reads; admin/Bearer reads fall through fresh. Reuses the 'products' namespace, so the
+        // existing bustResponseCache('products') on any product write already invalidates it.
+        $build = function () use ($request, $limit, $language, $range, $type_id) {
+            $products_query = $this->repository->withCount('orders')->with(['type', 'shop'])->orderBy('orders_count', 'desc')->where('language', $language);
+            if (isset($request->shop_id)) {
+                $products_query = $products_query->where('shop_id', "=", $request->shop_id);
+            }
+            if ($range) {
+                $products_query = $products_query->whereDate('created_at', '>', Carbon::now()->subDays($range));
+            }
+            if ($type_id) {
+                $products_query = $products_query->where('type_id', '=', $type_id);
+            }
+            return $products_query->take($limit)->get();
+        };
+        if (!$this->isPublicCacheable($request)) {
+            return $build();
         }
-        if ($range) {
-            $products_query = $products_query->whereDate('created_at', '>', Carbon::now()->subDays($range));
-        }
-        if ($type_id) {
-            $products_query = $products_query->where('type_id', '=', $type_id);
-        }
-        return $products_query->take($limit)->get();
+        $key = 'products:popular:v' . $this->cacheVersion('products') . ':' . $language . ':' . $type_id . ':' . $limit . ':' . $range . ':' . ($request->shop_id ?? '');
+        return response(Cache::remember($key, 300, $build))->header('Cache-Control', $this->cacheControl());
     }
 
     /**
@@ -694,19 +748,28 @@ class ProductController extends CoreController
                 throw new MarvelException(NOT_FOUND);
             }
         }
-        $products_query = $this->repository
-            ->with(['type', 'shop'])
-            ->withAvg('reviews', 'rating')
-            ->whereHas('reviews')
-            ->where('language', $language)
-            ->orderByDesc('reviews_avg_rating');
-        if (isset($request->shop_id)) {
-            $products_query = $products_query->where('shop_id', '=', $request->shop_id);
+        // Public homepage feed (withAvg('reviews') + whereHas join aggregate); cache anonymous
+        // reads under the 'products' namespace, mirroring popularProducts.
+        $build = function () use ($request, $limit, $language, $type_id) {
+            $products_query = $this->repository
+                ->with(['type', 'shop'])
+                ->withAvg('reviews', 'rating')
+                ->whereHas('reviews')
+                ->where('language', $language)
+                ->orderByDesc('reviews_avg_rating');
+            if (isset($request->shop_id)) {
+                $products_query = $products_query->where('shop_id', '=', $request->shop_id);
+            }
+            if ($type_id) {
+                $products_query = $products_query->where('type_id', '=', $type_id);
+            }
+            return $products_query->take($limit)->get();
+        };
+        if (!$this->isPublicCacheable($request)) {
+            return $build();
         }
-        if ($type_id) {
-            $products_query = $products_query->where('type_id', '=', $type_id);
-        }
-        return $products_query->take($limit)->get();
+        $key = 'products:toprated:v' . $this->cacheVersion('products') . ':' . $language . ':' . $type_id . ':' . $limit . ':' . ($request->shop_id ?? '');
+        return response(Cache::remember($key, 300, $build))->header('Cache-Control', $this->cacheControl());
     }
 
 
