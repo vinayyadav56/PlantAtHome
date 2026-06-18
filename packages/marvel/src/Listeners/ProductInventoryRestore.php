@@ -10,7 +10,9 @@ use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Variation;
 
-class ProductInventoryRestore implements ShouldQueue
+// Intentionally NOT ShouldQueue: stock restore (cancel/refund) runs synchronously so a worker
+// outage can never strand restored stock. The restore is a fast atomic UPDATE.
+class ProductInventoryRestore
 {
     /**
      * Atomically restore stock when an order/suborder is cancelled or refunded.

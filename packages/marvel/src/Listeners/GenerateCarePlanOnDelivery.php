@@ -15,6 +15,10 @@ use Marvel\Services\CarePlanService;
  */
 class GenerateCarePlanOnDelivery implements ShouldQueue
 {
+    // Run on a dedicated queue with a long-timeout worker (up to ~8 plants x 90s AI calls) so
+    // this slow job never blocks fast notification jobs on the default queue.
+    public $queue = 'careplans';
+
     // Bound the per-order spend regardless of basket size.
     private const MAX_PLANTS_PER_ORDER = 8;
 

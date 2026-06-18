@@ -10,7 +10,10 @@ use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Variation;
 
-class ProductInventoryDecrement implements ShouldQueue
+// Intentionally NOT ShouldQueue: stock must decrement synchronously within the order request
+// (and its transaction) so a queue-worker outage can never let orders be placed without
+// decrementing inventory (mass oversell). The decrement is a fast atomic UPDATE.
+class ProductInventoryDecrement
 {
     /**
      * Atomically (race-safe) decrement stock so concurrent orders can't oversell.

@@ -38,7 +38,13 @@ return [
             'driver' => 'database',
             'table' => 'jobs',
             'queue' => 'default',
-            'retry_after' => 90,
+            // retry_after MUST exceed the longest worker --timeout (the careplans worker is 900s)
+            // so a long-running AI care-plan job is never re-reserved + double-processed.
+            'retry_after' => 960,
+            // Dispatch queued listeners/jobs only AFTER the surrounding DB transaction commits, so
+            // checkout-notification work never enqueues from inside (or before) the order/wallet-lock
+            // transaction, and a rolled-back order never fires its notifications.
+            'after_commit' => true,
         ],
 
         'beanstalkd' => [
