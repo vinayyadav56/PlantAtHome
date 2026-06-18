@@ -23,7 +23,11 @@ class LogRequests
         'cvv', 'otp', 'card', 'card_number', 'razorpay_signature',
         // response-side bearer secrets (auth/register/social/otp login mint these)
         'plaintexttoken', 'access_token', 'refresh_token', 'auth_token',
+        // courier partner secret field names (POST /courier-settings)
+        'api_token', 'webhook_token', 'callback_token', 'callback_key',
     ];
+    // Whole nested secret bags — redact the entire value (covers any current/future field name).
+    private const REDACT_SUBTREE = ['credentials', 'secrets'];
     private const SKIP_CONTAINS = ['request-logs', 'admin-tasks', '/health'];
 
     public function handle(Request $request, Closure $next)
@@ -97,7 +101,12 @@ class LogRequests
             return $data;
         }
         foreach ($data as $k => $v) {
-            if (is_string($k) && in_array(strtolower($k), self::REDACT, true)) {
+            $lk = is_string($k) ? strtolower($k) : '';
+            if ($lk !== '' && in_array($lk, self::REDACT, true)) {
+                $data[$k] = '***redacted***';
+            } elseif ($lk !== '' && in_array($lk, self::REDACT_SUBTREE, true)) {
+                // Redact the WHOLE nested bag (e.g. courier partner credentials) so no secret
+                // field name (api_token/webhook_token/callback_*/url/...) can slip through.
                 $data[$k] = '***redacted***';
             } elseif ($v instanceof \Illuminate\Http\UploadedFile) {
                 $data[$k] = '[file:' . $v->getClientOriginalName() . ']';

@@ -90,11 +90,17 @@ class CourierService
                     ]);
                     break;
                 case 'shipping_service':
+                    $apiKey = $pick($creds, 'api_key', 'services.shipping_service.api_key');
+                    // callback_key mirrors the env default's intent: DB callback_key, else the DB
+                    // api_key (same shared secret), else the env-resolved callback_key.
+                    $callbackKey = !empty($creds['callback_key'])
+                        ? $creds['callback_key']
+                        : (!empty($creds['api_key']) ? $creds['api_key'] : config('services.shipping_service.callback_key'));
                     config([
                         'services.shipping_service.enabled'      => (bool) $row->enabled,
                         'services.shipping_service.url'          => $pick($creds, 'url', 'services.shipping_service.url'),
-                        'services.shipping_service.api_key'      => $pick($creds, 'api_key', 'services.shipping_service.api_key'),
-                        'services.shipping_service.callback_key' => $pick($creds, 'callback_key', 'services.shipping_service.callback_key'),
+                        'services.shipping_service.api_key'      => $apiKey,
+                        'services.shipping_service.callback_key' => $callbackKey,
                         'services.shipping_service.timeout'      => $pick($settings, 'timeout', 'services.shipping_service.timeout'),
                     ]);
                     break;
