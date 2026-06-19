@@ -8,6 +8,7 @@ use Marvel\Http\Controllers\AbusiveReportController;
 use Marvel\Http\Controllers\AddressController;
 use Marvel\Http\Controllers\AiController;
 use Marvel\Http\Controllers\AnalyticsController;
+use Marvel\Http\Controllers\CommandCenterController;
 use Marvel\Http\Controllers\AttachmentController;
 use Marvel\Http\Controllers\AttributeController;
 use Marvel\Http\Controllers\AttributeValueController;
@@ -626,6 +627,13 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('analytics/pending-fulfillments', [AnalyticsController::class, 'pendingFulfillments']);
     Route::get('analytics/courier-orders', [AnalyticsController::class, 'courierOrders']);
     Route::get('top-selling-product', [AnalyticsController::class, 'topSellingProducts']);
+
+    // Operations Command Center (Phase 1) — consumed by the live dashboard (polled).
+    Route::get('command-center/overview', [CommandCenterController::class, 'overview']);
+    Route::get('command-center/live-operations', [CommandCenterController::class, 'liveOperations']);
+    Route::get('command-center/city-health', [CommandCenterController::class, 'cityHealth']);
+    Route::get('command-center/delivery-ops', [CommandCenterController::class, 'deliveryOps']);
+    Route::get('command-center/courier-positions', [CommandCenterController::class, 'courierPositions']);
 
     // Order → vendor + delivery-partner matching/assignment (P3)
     Route::get('orders/{id}/match', [OrderAssignmentController::class, 'match']);
