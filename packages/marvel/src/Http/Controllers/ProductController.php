@@ -693,6 +693,30 @@ class ProductController extends CoreController
      * @param  Request $request
      * @return object
      */
+    /**
+     * F2 — bundles report DERIVED stock (MIN over components), not the snapshot
+     * products.quantity that drifts as components sell. Applied to the popular /
+     * top-rated / drafted / low-stock feeds, which return RAW products (not via
+     * ProductResource). Surgical: only a bundle's `quantity` is overridden — every
+     * other field and the response shape are untouched, so non-bundles (and the
+     * storefront/admin lists that consume these) are unaffected.
+     */
+    private function withDerivedBundleStock($products)
+    {
+        $apply = function ($p) {
+            if (($p->product_type ?? null) === \Marvel\Enums\ProductType::BUNDLE) {
+                $p->quantity = (int) $p->available_bundle_inventory;
+            }
+            return $p;
+        };
+        if ($products instanceof \Illuminate\Contracts\Pagination\LengthAwarePaginator) {
+            $products->getCollection()->transform($apply);
+        } elseif ($products instanceof \Illuminate\Support\Collection) {
+            $products->transform($apply);
+        }
+        return $products;
+    }
+
     public function popularProducts(Request $request)
     {
         $limit = $request->limit ? $request->limit : 10;
@@ -722,7 +746,7 @@ class ProductController extends CoreController
             if ($type_id) {
                 $products_query = $products_query->where('type_id', '=', $type_id);
             }
-            return $products_query->take($limit)->get();
+            return $this->withDerivedBundleStock($products_query->take($limit)->get());
         };
         if (!$this->isPublicCacheable($request)) {
             return $build();
@@ -763,7 +787,7 @@ class ProductController extends CoreController
             if ($type_id) {
                 $products_query = $products_query->where('type_id', '=', $type_id);
             }
-            return $products_query->take($limit)->get();
+            return $this->withDerivedBundleStock($products_query->take($limit)->get());
         };
         if (!$this->isPublicCacheable($request)) {
             return $build();
@@ -863,7 +887,7 @@ class ProductController extends CoreController
     {
         $limit = $request->limit ? $request->limit : 15;
 
-        return $this->fetchDraftedProducts($request)->paginate($limit);
+        return $this->withDerivedBundleStock($this->fetchDraftedProducts($request)->paginate($limit));
     }
 
     /**
@@ -914,7 +938,7 @@ class ProductController extends CoreController
     {
         $limit = $request->limit ? $request->limit : 15;
 
-        return $this->fetchProductStock($request)->paginate($limit);
+        return $this->withDerivedBundleStock($this->fetchProductStock($request)->paginate($limit));
     }
 
     /**
