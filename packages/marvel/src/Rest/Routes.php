@@ -728,6 +728,8 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::apiResource('shippings', ShippingController::class);
     Route::post('approve-shop', [ShopController::class, 'approveShop']);
     Route::post('disapprove-shop', [ShopController::class, 'disApproveShop']);
+    // F3a — vendor document review (approve/reject/pending), stored in shop settings.
+    Route::post('shops/{id}/documents/status', [ShopController::class, 'setDocumentStatus']);
     Route::post('approve-withdraw', [WithdrawController::class, 'approveWithdraw']);
     Route::post('add-points', [UserController::class, 'addPoints']);
     Route::post('users/make-admin', [UserController::class, 'makeOrRevokeAdmin']);

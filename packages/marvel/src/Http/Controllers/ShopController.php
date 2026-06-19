@@ -188,6 +188,43 @@ class ShopController extends CoreController
         throw new AuthorizationException(NOT_AUTHORIZED);
     }
 
+    /**
+     * F3a — super-admin reviews a vendor compliance document. Documents live at
+     * settings.documents.{key}; the review status sits alongside at
+     * settings.documents_status.{key} so the existing FileInput bindings are
+     * untouched. Idempotent overwrite of that one key.
+     */
+    public function setDocumentStatus(Request $request, $id)
+    {
+        if (!$request->user() || !$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
+            throw new MarvelException(NOT_AUTHORIZED);
+        }
+        $request->validate([
+            'key'    => 'required|string|max:64',
+            'status' => 'required|in:approved,rejected,pending',
+            'note'   => 'nullable|string|max:500',
+        ]);
+        try {
+            $shop = $this->repository->findOrFail($id);
+        } catch (\Exception $e) {
+            throw new ModelNotFoundException(NOT_FOUND);
+        }
+
+        $settings = (array) ($shop->settings ?? []);
+        $statuses = (array) ($settings['documents_status'] ?? []);
+        $statuses[$request->key] = [
+            'status'      => $request->status,
+            'note'        => $request->note,
+            'reviewed_at' => now()->toIso8601String(),
+            'reviewed_by' => optional($request->user())->id,
+        ];
+        $settings['documents_status'] = $statuses;
+        $shop->settings = $settings;
+        $shop->save();
+
+        return $shop->fresh();
+    }
+
     public function approveShop(Request $request)
     {
 
