@@ -62,6 +62,7 @@ use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
 use Marvel\Http\Controllers\RolePermissionController;
+use Marvel\Http\Controllers\BundleRuleController;
 use Marvel\Http\Controllers\LocationPriceController;
 use Marvel\Http\Controllers\OrderAssignmentController;
 use Marvel\Http\Controllers\DeliveryPartnerWithdrawController;
@@ -814,6 +815,27 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
         ->middleware('permission:employees.view');
     Route::put('acl/roles/{id}/permissions', [RolePermissionController::class, 'updateRolePermissions'])
         ->middleware('permission:employees.edit');
+});
+
+
+// ── F5: Rule-based bundles ───────────────────────────────────────────────────
+// Module-permission gated (bundles.*). Super-admin passes via the Gate::before
+// bypass; admin/manager get bundles perms from the role matrix.
+Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
+    Route::get('bundle-rules', [BundleRuleController::class, 'index'])
+        ->middleware('permission:bundles.view');
+    Route::get('bundle-rules/{id}', [BundleRuleController::class, 'show'])
+        ->middleware('permission:bundles.view');
+    Route::post('bundle-rules/preview', [BundleRuleController::class, 'preview'])
+        ->middleware('permission:bundles.view');
+    Route::post('bundle-rules', [BundleRuleController::class, 'store'])
+        ->middleware('permission:bundles.create');
+    Route::put('bundle-rules/{id}', [BundleRuleController::class, 'update'])
+        ->middleware('permission:bundles.edit');
+    Route::post('bundle-rules/{id}/toggle', [BundleRuleController::class, 'toggleActive'])
+        ->middleware('permission:bundles.edit');
+    Route::delete('bundle-rules/{id}', [BundleRuleController::class, 'destroy'])
+        ->middleware('permission:bundles.delete');
 });
 
 
