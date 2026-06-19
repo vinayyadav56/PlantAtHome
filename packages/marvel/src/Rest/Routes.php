@@ -10,6 +10,7 @@ use Marvel\Http\Controllers\AiController;
 use Marvel\Http\Controllers\AnalyticsController;
 use Marvel\Http\Controllers\CommandCenterController;
 use Marvel\Http\Controllers\LocationController;
+use Marvel\Http\Controllers\TrackingController;
 use Marvel\Http\Controllers\AttachmentController;
 use Marvel\Http\Controllers\AttributeController;
 use Marvel\Http\Controllers\AttributeValueController;
@@ -198,6 +199,10 @@ Route::get('delivery-pincodes/check', [DeliveryPincodeController::class, 'check'
 // dropdowns (storefront + admin). Read-only, rate-limited.
 Route::get('locations/states', [LocationController::class, 'states'])->middleware('throttle:120,1');
 Route::get('locations/cities', [LocationController::class, 'cities'])->middleware('throttle:120,1');
+
+// Visitor / Live Activity NOC (Phase 3) — public, fire-and-forget storefront
+// event ingest. Fail-safe (always 204); generous throttle for active browsing.
+Route::post('track', [TrackingController::class, 'ingest'])->middleware('throttle:300,1');
 
 // Garden service — logged-in customer: their packages + visit tracking + pay.
 Route::middleware('auth:sanctum')->group(function () {
@@ -641,6 +646,11 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('command-center/delivery-ops', [CommandCenterController::class, 'deliveryOps']);
     Route::get('command-center/courier-positions', [CommandCenterController::class, 'courierPositions']);
     Route::get('command-center/city-dashboard', [CommandCenterController::class, 'cityDashboard']);
+    // Phase 3 — Visitor / Live Activity NOC reads.
+    Route::get('command-center/live-visitors', [CommandCenterController::class, 'liveVisitors']);
+    Route::get('command-center/visitor-journey', [CommandCenterController::class, 'visitorJourney']);
+    Route::get('command-center/funnel', [CommandCenterController::class, 'funnel']);
+    Route::get('command-center/activity-feed', [CommandCenterController::class, 'activityFeed']);
 
     // Order → vendor + delivery-partner matching/assignment (P3)
     Route::get('orders/{id}/match', [OrderAssignmentController::class, 'match']);
