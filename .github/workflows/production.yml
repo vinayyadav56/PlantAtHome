@@ -169,10 +169,23 @@ jobs:
 
             echo "==> Installing PHP dependencies..."
             composer install --no-dev --optimize-autoloader --no-interaction
+
+            echo "==> Reinstalling the marvel/shop path package so NEW package source"
+            echo "    (controllers/services/models/migrations) is picked up — composer skips"
+            echo "    re-copying an unchanged-version path repo, so this is required on prod."
+            composer reinstall marvel/shop --no-interaction || echo "WARNING: marvel/shop reinstall failed"
             composer dump-autoload -o 2>/dev/null || true
 
             echo "==> Running migrations..."
             php artisan migrate --force
+
+            echo "==> Seeding module-based roles & permissions (idempotent, additive)..."
+            php artisan db:seed --class="Marvel\\Database\\Seeders\\RolePermissionSeeder" --force \
+              || echo "WARNING: RolePermissionSeeder failed"
+
+            echo "==> Seeding master locations — states + cities (idempotent, firstOrCreate)..."
+            php artisan db:seed --class="Marvel\\Database\\Seeders\\LocationSeeder" --force \
+              || echo "WARNING: LocationSeeder failed"
 
             echo "==> Forcing license trust ON (prevents recurring 'credentials was wrong')..."
             php artisan plantathome:ensure-trust || echo "WARNING: ensure-trust failed (env MARVEL_FORCE_TRUST still applies)"
