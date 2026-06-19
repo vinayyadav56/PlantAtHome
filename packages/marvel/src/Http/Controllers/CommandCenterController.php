@@ -3,6 +3,8 @@
 namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Marvel\Services\CustomerMetricsService;
+use Marvel\Services\InventoryMetricsService;
 use Marvel\Services\MetricsService;
 use Marvel\Services\VisitorMetricsService;
 
@@ -17,6 +19,8 @@ class CommandCenterController extends CoreController
     public function __construct(
         protected MetricsService $metrics,
         protected VisitorMetricsService $visitors,
+        protected InventoryMetricsService $inventory,
+        protected CustomerMetricsService $customers,
     ) {
     }
 
@@ -78,5 +82,16 @@ class CommandCenterController extends CoreController
     public function activityFeed(Request $request)
     {
         return ['items' => $this->visitors->activityFeed((int) ($request->get('limit', 40)))];
+    }
+
+    // ── Phase 4 — Inventory + Customer Intelligence ─────────────────────────
+    public function inventory(Request $request)
+    {
+        return $this->inventory->overview();
+    }
+
+    public function customerIntelligence(Request $request)
+    {
+        return $this->customers->overview();
     }
 }

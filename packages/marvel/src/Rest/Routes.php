@@ -651,6 +651,9 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('command-center/visitor-journey', [CommandCenterController::class, 'visitorJourney']);
     Route::get('command-center/funnel', [CommandCenterController::class, 'funnel']);
     Route::get('command-center/activity-feed', [CommandCenterController::class, 'activityFeed']);
+    // Phase 4 — Inventory + Customer Intelligence.
+    Route::get('command-center/inventory', [CommandCenterController::class, 'inventory']);
+    Route::get('command-center/customer-intelligence', [CommandCenterController::class, 'customerIntelligence']);
 
     // Order → vendor + delivery-partner matching/assignment (P3)
     Route::get('orders/{id}/match', [OrderAssignmentController::class, 'match']);
