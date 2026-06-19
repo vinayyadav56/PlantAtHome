@@ -81,6 +81,15 @@ class ProductCreateRequest extends FormRequest
             'is_external'                  => ['boolean'],
             'is_rental'                    => ['boolean'],
             "variation_options.upsert.*.sku" => ['string', 'unique:variation_options,sku'],
+            // Bundle composition + config (authoritative rules live in BundleController).
+            'bundle_type'                  => ['nullable', 'string', Rule::in(['manual', 'auto'])],
+            'pricing_mode'                 => ['nullable', 'string', Rule::in(['fixed', 'percentage', 'flat', 'margin'])],
+            'pricing_value'                => ['nullable', 'numeric', 'min:0'],
+            'display_priority'             => ['nullable', 'integer'],
+            'bundle_config'                => ['nullable', 'array'],
+            'bundle_items'                 => ['nullable', 'array'],
+            'bundle_items.*.id'            => ['required_with:bundle_items', 'integer', 'exists:Marvel\Database\Models\Product,id'],
+            'bundle_items.*.quantity'      => ['nullable', 'integer', 'min:1'],
         ];
     }
 

@@ -3,6 +3,7 @@
 namespace Marvel\Http\Resources;
 
 use Illuminate\Http\Request;
+use Marvel\Enums\ProductType;
 use Marvel\Helper\ResourceHelpers;
 
 class GetSingleProductResource extends Resource
@@ -65,7 +66,19 @@ class GetSingleProductResource extends Resource
             'width'                        => $this->width,
             'price'                        => $this->price,
             'delivery_charge'              => $this->delivery_charge,
-            'quantity'                     => $this->quantity,
+            // Bundle stock is derived (MIN over components); surface it as the
+            // public `quantity` so storefront stock gates work. Cost/margin and
+            // pricing internals are NEVER exposed here (public PDP) — the admin
+            // reads those from the dedicated /bundles/{id} endpoint.
+            'quantity'                     => $this->product_type === ProductType::BUNDLE
+                ? $this->available_bundle_inventory
+                : $this->quantity,
+            'is_bundle'                    => $this->product_type === ProductType::BUNDLE,
+            'bundle_type'                  => $this->bundle_type,
+            'available_inventory'          => $this->product_type === ProductType::BUNDLE
+                ? $this->available_bundle_inventory
+                : $this->quantity,
+            'display_priority'             => $this->display_priority,
             'unit'                         => $this->unit,
             'in_flash_sale'                => $this->in_flash_sale
         ];

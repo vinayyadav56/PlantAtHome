@@ -63,6 +63,7 @@ use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
 use Marvel\Http\Controllers\RolePermissionController;
 use Marvel\Http\Controllers\BundleRuleController;
+use Marvel\Http\Controllers\BundleController;
 use Marvel\Http\Controllers\LocationPriceController;
 use Marvel\Http\Controllers\OrderAssignmentController;
 use Marvel\Http\Controllers\DeliveryPartnerWithdrawController;
@@ -835,6 +836,35 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     Route::post('bundle-rules/{id}/toggle', [BundleRuleController::class, 'toggleActive'])
         ->middleware('permission:bundles.edit');
     Route::delete('bundle-rules/{id}', [BundleRuleController::class, 'destroy'])
+        ->middleware('permission:bundles.delete');
+});
+
+
+// ── Bundle Management System (admin-only; bundle = product_type='bundle') ─────
+// Module-permission gated (bundles.*); super-admin passes via Gate::before.
+// Static-segment routes are declared BEFORE bundles/{id} so they aren't captured.
+Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
+    Route::get('bundles', [BundleController::class, 'index'])
+        ->middleware('permission:bundles.view');
+    Route::get('bundles/eligible-plants', [BundleController::class, 'eligiblePlants'])
+        ->middleware('permission:bundles.view');
+    Route::get('bundles/analytics', [BundleController::class, 'analytics'])
+        ->middleware('permission:bundles.view');
+    Route::post('bundles/preview', [BundleController::class, 'preview'])
+        ->middleware('permission:bundles.view');
+    Route::post('bundles/generate', [BundleController::class, 'generate'])
+        ->middleware('permission:bundles.create');
+    Route::get('bundles/{id}', [BundleController::class, 'show'])
+        ->middleware('permission:bundles.view');
+    Route::post('bundles', [BundleController::class, 'store'])
+        ->middleware('permission:bundles.create');
+    Route::put('bundles/{id}', [BundleController::class, 'update'])
+        ->middleware('permission:bundles.edit');
+    Route::post('bundles/{id}/toggle', [BundleController::class, 'toggle'])
+        ->middleware('permission:bundles.edit');
+    Route::post('bundles/{id}/duplicate', [BundleController::class, 'duplicate'])
+        ->middleware('permission:bundles.create');
+    Route::delete('bundles/{id}', [BundleController::class, 'destroy'])
         ->middleware('permission:bundles.delete');
 });
 

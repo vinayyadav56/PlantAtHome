@@ -186,6 +186,13 @@ class CheckoutRepository
     {
         try {
             $product = Product::findOrFail($id);
+            // A bundle holds no stock of its own — gate against its DERIVED
+            // availability (MIN over components) so exhausted bundles surface in
+            // unavailable_products and the storefront drops them.
+            if ($product->product_type === \Marvel\Enums\ProductType::BUNDLE) {
+                $available = app(\Marvel\Services\BundleInventoryService::class)->available($product);
+                return $order_quantity > $available ? $id : false;
+            }
             if ($order_quantity > $product->quantity) {
                 return $id;
             }

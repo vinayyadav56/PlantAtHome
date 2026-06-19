@@ -36,6 +36,8 @@ class Product extends Model
         'image' => 'json',
         'gallery' => 'json',
         'video' => 'json',
+        'bundle_config' => 'array',
+        'pricing_value' => 'float',
     ];
 
     protected $appends = [
@@ -179,6 +181,60 @@ class Product extends Model
             $qty  = (int) ($p->pivot->quantity ?: 1);
             return $unit * $qty;
         });
+    }
+
+    /**
+     * The real inventory units an order line for THIS product mutates.
+     *
+     * A bundle expands into one unit per component (a bundle holds no stock of
+     * its own): qty per component = orderQty × inclusion.pivot.quantity. Every
+     * other product yields a single unit for itself. Both the deduct and the
+     * restore listeners route through this ONE method, so they are guaranteed
+     * symmetric (the classic off-by-multiply bug can't diverge between them).
+     *
+     * @return array<int, array{id:int, variation_option_id:?int, quantity:int}>
+     */
+    public function expandToInventoryUnits(int $orderQty, $variationOptionId = null): array
+    {
+        $orderQty = max(0, $orderQty);
+
+        if ($this->product_type === \Marvel\Enums\ProductType::BUNDLE) {
+            $items = $this->relationLoaded('bundleItems') ? $this->bundleItems : $this->bundleItems()->get();
+
+            return $items->map(function ($child) use ($orderQty) {
+                $perBundle = (int) ($child->pivot->quantity ?: 1);
+                return [
+                    'id'                  => (int) $child->id,
+                    'variation_option_id' => null,
+                    'quantity'            => $orderQty * max(1, $perBundle),
+                ];
+            })->values()->all();
+        }
+
+        return [[
+            'id'                  => (int) $this->id,
+            'variation_option_id' => $variationOptionId,
+            'quantity'            => $orderQty,
+        ]];
+    }
+
+    /**
+     * Derived available stock for a bundle (MIN over components). For every other
+     * product this is just its own `quantity`, so existing callers are untouched.
+     * NOT in $appends — resources surface it explicitly (avoids a query per row on
+     * non-bundle lists). Never throws.
+     */
+    public function getAvailableBundleInventoryAttribute(): int
+    {
+        if ($this->product_type !== \Marvel\Enums\ProductType::BUNDLE) {
+            return (int) ($this->quantity ?? 0);
+        }
+
+        try {
+            return app(\Marvel\Services\BundleInventoryService::class)->available($this);
+        } catch (\Throwable $e) {
+            return 0;
+        }
     }
 
     /**

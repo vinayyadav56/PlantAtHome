@@ -3,6 +3,7 @@
 namespace Marvel\Http\Resources;
 
 use Illuminate\Http\Request;
+use Marvel\Enums\ProductType;
 
 class ProductResource extends Resource
 {
@@ -30,7 +31,17 @@ class ProductResource extends Resource
             'status'               => $this->status,
             'price'                => $this->price,
             'delivery_charge'      => $this->delivery_charge,
-            'quantity'             => $this->quantity,
+            // Bundles hold no stock of their own — surface the DERIVED quantity so
+            // every existing storefront `quantity > 0` stock gate works untouched.
+            'quantity'             => $this->product_type === ProductType::BUNDLE
+                ? $this->available_bundle_inventory
+                : $this->quantity,
+            'is_bundle'            => $this->product_type === ProductType::BUNDLE,
+            'bundle_type'          => $this->bundle_type,
+            'available_inventory'  => $this->product_type === ProductType::BUNDLE
+                ? $this->available_bundle_inventory
+                : $this->quantity,
+            'display_priority'     => $this->display_priority,
             'unit'                 => $this->unit,
             'sku'                  => $this->sku,
             'sold_quantity'        => $this->sold_quantity,
