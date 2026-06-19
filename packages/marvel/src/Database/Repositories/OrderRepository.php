@@ -57,6 +57,7 @@ class OrderRepository extends BaseRepository
         'language',
         'order_status',   // enables vendor "rejected orders" (cancelled/refunded) filtering
         'delivery_mode',  // enables vendor/admin "courier orders" filtering
+        'is_pinned',      // F3: allows filtering pinned orders if ever needed
     ];
     /**
      * @var string[]
@@ -278,6 +279,23 @@ class OrderRepository extends BaseRepository
         } else {
             throw new AuthorizationException(NOT_AUTHORIZED);
         }
+    }
+
+    /**
+     * F3 — pin/unpin an order. `pinned_at` records when it was pinned so the
+     * most-recently-pinned order wins ties in the pinned-first global scope.
+     *
+     * @param  Order $order
+     * @param  bool  $pinned
+     * @return Order
+     */
+    public function togglePin(Order $order, bool $pinned): Order
+    {
+        $order->is_pinned = $pinned;
+        $order->pinned_at = $pinned ? now() : null;
+        $order->save();
+
+        return $order;
     }
 
     /**

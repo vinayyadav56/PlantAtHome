@@ -420,6 +420,9 @@ Route::group(
         Route::apiResource('orders', OrderController::class, [
             'only' => ['update', 'destroy'],
         ]);
+        // F3: pin/unpin an order (super-admin reaches this group via the
+        // store_owner permission granted to the super_admin role).
+        Route::post('orders/{id}/pin', [OrderController::class, 'pin']);
 
         // Route::get('shop-notification/{id}', [ShopNotificationController::class, 'show']);
         // Route::put('shop-notification/{id}', [ShopNotificationController::class, 'update']);

@@ -325,6 +325,40 @@ class OrderController extends CoreController
     }
 
     /**
+     * F3 — pin/unpin an order so it floats to the top of every order listing.
+     * Toggles when `is_pinned` is omitted. Same ownership gate as updateOrder /
+     * destroy: super-admin, or a store owner/staff member of the order's shop.
+     *
+     * @param Request $request
+     * @param int     $id
+     * @return Order
+     */
+    public function pin(Request $request, $id)
+    {
+        try {
+            $order = $this->repository->findOrFail($id);
+        } catch (\Exception $e) {
+            throw new MarvelException(NOT_FOUND);
+        }
+
+        $user = $request->user();
+        $authorized = $user && (
+            $user->hasPermissionTo(Permission::SUPER_ADMIN)
+            || (isset($order->shop_id) && $this->repository->hasPermission($user, $order->shop_id))
+        );
+        if (!$authorized) {
+            throw new AuthorizationException(NOT_AUTHORIZED);
+        }
+
+        $request->validate(['is_pinned' => 'sometimes|boolean']);
+        $pinned = $request->has('is_pinned')
+            ? $request->boolean('is_pinned')
+            : !$order->is_pinned;
+
+        return $this->repository->togglePin($order, $pinned);
+    }
+
+    /**
      * Export order dynamic url
      *
      * @param Request $request

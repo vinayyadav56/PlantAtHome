@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\Schema;
 use Marvel\Traits\TranslationTrait;
 
 class Order extends Model
@@ -24,7 +25,25 @@ class Order extends Model
         'shipping_address'    => 'json',
         'billing_address'     => 'json',
         'payment_intent_info' => 'json',
+        'is_pinned'           => 'boolean',
+        'pinned_at'           => 'datetime',
     ];
+
+    /**
+     * Memoised per request: whether the `is_pinned` column exists yet. Deploys
+     * run migrations in the background AFTER the app starts serving, so the
+     * pinned-first ordering must degrade gracefully until the column lands.
+     */
+    protected static ?bool $supportsPinning = null;
+
+    protected static function ordersSupportPinning(): bool
+    {
+        if (static::$supportsPinning === null) {
+            static::$supportsPinning = Schema::hasColumn('orders', 'is_pinned');
+        }
+
+        return static::$supportsPinning;
+    }
 
     protected $hidden = [
         //        'created_at',
@@ -44,8 +63,13 @@ class Order extends Model
     protected static function boot()
     {
         parent::boot();
-        // Order by created_at desc
+        // Pinned orders float to the top everywhere the model is queried
+        // (board, list, detail siblings), then most-recent first.
         static::addGlobalScope('order', function (Builder $builder) {
+            if (static::ordersSupportPinning()) {
+                $builder->orderBy('is_pinned', 'desc')
+                    ->orderBy('pinned_at', 'desc');
+            }
             $builder->orderBy('created_at', 'desc');
         });
     }
