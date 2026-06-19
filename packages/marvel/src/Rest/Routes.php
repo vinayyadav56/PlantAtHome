@@ -61,6 +61,7 @@ use Marvel\Http\Controllers\SettlementController;
 use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
+use Marvel\Http\Controllers\RolePermissionController;
 use Marvel\Http\Controllers\LocationPriceController;
 use Marvel\Http\Controllers\OrderAssignmentController;
 use Marvel\Http\Controllers\DeliveryPartnerWithdrawController;
@@ -792,6 +793,27 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('request-logs/settings', [SystemController::class, 'logSettings']);
     Route::post('request-logs/settings', [SystemController::class, 'updateLogSettings']);
     Route::post('request-logs/clear', [SystemController::class, 'clearLogs']);
+});
+
+
+// ── F4: Employees + module-based role permissions ────────────────────────────
+// Module-permission-gated (NOT super_admin-only) so the new `admin` role can
+// manage employees/roles too. Super-admin passes every check via the existing
+// Gate::before bypass; manager/staff/viewer are blocked (no employees.* perms).
+Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
+    Route::get('employees', [UserController::class, 'employees'])
+        ->middleware('permission:employees.view');
+    Route::post('employees', [UserController::class, 'storeEmployee'])
+        ->middleware('permission:employees.create');
+    Route::post('users/{id}/assign-role', [UserController::class, 'assignRole'])
+        ->middleware('permission:employees.edit');
+
+    Route::get('acl/roles', [RolePermissionController::class, 'roles'])
+        ->middleware('permission:employees.view');
+    Route::get('acl/permissions', [RolePermissionController::class, 'permissions'])
+        ->middleware('permission:employees.view');
+    Route::put('acl/roles/{id}/permissions', [RolePermissionController::class, 'updateRolePermissions'])
+        ->middleware('permission:employees.edit');
 });
 
 

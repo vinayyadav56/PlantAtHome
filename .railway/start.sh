@@ -265,6 +265,12 @@ try {
     php /tmp/marvel_setup.php || echo "[bg] WARNING: Admin setup script failed"
   fi
 
+  # F4 — module-based roles & permissions (employees + RBAC). Idempotent +
+  # additive (givePermissionTo), so re-running every deploy never revokes.
+  echo "==> [bg] Seeding module-based roles & permissions (F4)..."
+  php artisan db:seed --class="Marvel\\Database\\Seeders\\RolePermissionSeeder" --force \
+    || echo "[bg] WARNING: RolePermissionSeeder failed"
+
   # ── PlantAtHome data seed — enterprise three-tier approach ──────────────────
   # Tier 2: type + categories — updateOrCreate, safe for ALL environments
   # Tier 3: demo products    — truncate+insert, STAGING only (guarded in seeder)

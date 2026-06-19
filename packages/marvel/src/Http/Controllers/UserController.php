@@ -27,6 +27,7 @@ use Marvel\Database\Models\Shop;
 use Marvel\Database\Models\User;
 use Marvel\Database\Models\Wallet;
 use Marvel\Database\Repositories\UserRepository;
+use Marvel\Enums\ModulePermission;
 use Marvel\Enums\Permission;
 use Marvel\Enums\Role;
 use Marvel\Events\ProcessUserData;
@@ -112,6 +113,81 @@ class UserController extends CoreController
             ->paginate($limit);
         return $admins;
         // return UserResource::collection($admins);
+    }
+
+    /**
+     * F4 — list admin-panel employees (users holding an employee role). Vendors
+     * (store_owner) and plain customers are excluded; they have their own screens.
+     */
+    public function employees(Request $request)
+    {
+        $limit = $request->limit ? $request->limit : 15;
+        $employeeRoles = ['super_admin', 'admin', 'manager', 'staff', 'viewer'];
+
+        return User::role($employeeRoles)
+            ->with(['profile', 'permissions', 'roles'])
+            ->when($request->name, function ($query) use ($request) {
+                $query->where('name', 'like', "%{$request->name}%")
+                    ->orWhere('email', 'like', "%{$request->name}%");
+            })
+            ->orderBy('created_at', 'desc')
+            ->paginate($limit);
+    }
+
+    /**
+     * F4 — create an employee: an active, email-verified user with one of the
+     * assignable roles (super_admin is created only via makeOrRevokeAdmin). The
+     * role's module permissions apply via the role; base coarse perms are granted
+     * directly so the account can sign into the admin. Super-admin only (route).
+     */
+    public function storeEmployee(Request $request)
+    {
+        $request->validate([
+            'name'     => 'required|string|max:255',
+            'email'    => 'required|email|unique:users,email',
+            'password' => 'required|string|min:6',
+            'role'     => 'required|string|in:admin,manager,staff,viewer',
+        ]);
+
+        $roleName = $request->input('role');
+        $user = User::create([
+            'name'      => $request->name,
+            'email'     => $request->email,
+            'password'  => Hash::make($request->password),
+            'is_active' => true,
+        ]);
+        $user->email_verified_at = Carbon::now();
+        $user->save();
+
+        $base = ModulePermission::basePermissions()[$roleName] ?? ['staff', 'customer'];
+        $user->syncRoles([$roleName]);
+        $user->givePermissionTo($base);
+
+        return $user->load(['profile', 'permissions', 'roles']);
+    }
+
+    /**
+     * F4 — change an existing employee's role. Super-admin accounts can't be
+     * re-roled here (use the admin toggle) to avoid privilege confusion / lockout.
+     * Super-admin only (route).
+     */
+    public function assignRole(Request $request, $id)
+    {
+        $request->validate([
+            'role' => 'required|string|in:admin,manager,staff,viewer',
+        ]);
+
+        $user = User::findOrFail($id);
+        if ($user->hasRole('super_admin')) {
+            throw new MarvelException(NOT_AUTHORIZED);
+        }
+
+        $roleName = $request->input('role');
+        $base = ModulePermission::basePermissions()[$roleName] ?? ['staff', 'customer'];
+        $user->syncRoles([$roleName]);
+        $user->givePermissionTo($base);
+
+        return $user->load(['profile', 'permissions', 'roles']);
     }
 
     /**
@@ -265,7 +341,9 @@ class UserController extends CoreController
         event(new ProcessUserData());
         return [
             "token" => $user->createToken('auth_token')->plainTextToken,
-            "permissions" => $user->getPermissionNames(),
+            // F4: getAllPermissions (direct + via-role) so module permissions
+            // granted through the user's role reach the admin for UI gating.
+            "permissions" => $user->getAllPermissions()->pluck('name')->unique()->values(),
             "email_verified" => $email_verified,
             "role" => $user->getRoleNames()->first()
         ];
