@@ -245,6 +245,17 @@ class RefundController extends CoreController
                 }
             }
 
+            // Guard the PARENT order too: stock was just restored per-child, so a
+            // later re-cancel of the refunded parent must NOT restore a second time.
+            try {
+                if (\Illuminate\Support\Facades\Schema::hasColumn('orders', 'inventory_restored') && !$order->inventory_restored) {
+                    $order->inventory_restored = true;
+                    $order->saveQuietly();
+                }
+            } catch (\Throwable $e) {
+                // never break the refund money path on a guard write
+            }
+
             // Refund the customer to wallet — ONLY what they actually paid online, and only
             // when the order was prepaid+captured. COD/unpaid refunds are settled off-platform;
             // crediting wallet points there would mint value the customer never paid.

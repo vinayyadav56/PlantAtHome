@@ -195,11 +195,12 @@ class BundleController extends CoreController
         $created = [];
         $skipped = [];
 
-        $plants = Product::whereIn('id', $request->plant_ids)
+        $plantIds = array_values(array_unique(array_map('intval', (array) $request->plant_ids)));
+        $plants = Product::whereIn('id', $plantIds)
             ->where('product_type', '!=', ProductType::BUNDLE)
             ->get()->keyBy('id');
 
-        foreach ($request->plant_ids as $pid) {
+        foreach ($plantIds as $pid) {
             $plant = $plants->get($pid);
             if (!$plant) {
                 $skipped[] = ['plant_id' => (int) $pid, 'reason' => 'not_found_or_bundle'];
@@ -316,7 +317,8 @@ class BundleController extends CoreController
             ->select(
                 'products.id',
                 'products.name',
-                DB::raw('SUM(order_product.order_quantity) as units_sold'),
+                // order_quantity is a VARCHAR column — CAST so SUM is numeric, not lexical.
+                DB::raw('SUM(CAST(order_product.order_quantity AS UNSIGNED)) as units_sold'),
                 DB::raw('SUM(order_product.subtotal) as revenue')
             )
             ->orderByDesc('units_sold')

@@ -137,6 +137,11 @@ class PricingService
             if (!$product) {
                 continue;
             }
+            // A bundle carries a stored offer price (BundlePricingService) and has
+            // no vendor cost sheet — never reprice it from vendor cost.
+            if ($product->product_type === \Marvel\Enums\ProductType::BUNDLE) {
+                continue;
+            }
             $vo = $line['variation_option_id'] ?? null;
             $r = $this->sellingPrice($product, $vo !== null ? (int) $vo : null, $latLng);
             if (!empty($r['has_vendor_cost']) && !empty($r['available'])) {

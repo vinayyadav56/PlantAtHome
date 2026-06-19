@@ -145,14 +145,32 @@ class Product extends Model
     {
         \Illuminate\Support\Facades\DB::table('product_inclusions')->where('parent_id', $this->id)->delete();
 
+        // A bundle must never contain another bundle (no bundle-of-bundle). Drop
+        // any bundle-type child from the 'bundle' relation, even if the generic
+        // /products endpoint passed one through unvalidated.
+        $excludeBundleChildren = [];
+        $candidateIds = collect($bundleItems ?? [])
+            ->map(fn ($item) => (int) (is_array($item) ? ($item['id'] ?? $item['child_id'] ?? 0) : $item))
+            ->filter()
+            ->all();
+        if ($candidateIds) {
+            $excludeBundleChildren = array_flip(
+                static::whereIn('id', $candidateIds)
+                    ->where('product_type', \Marvel\Enums\ProductType::BUNDLE)
+                    ->pluck('id')
+                    ->map(fn ($x) => (int) $x)
+                    ->all()
+            );
+        }
+
         $rows = [];
-        $add = function ($list, $relation) use (&$rows) {
+        $add = function ($list, $relation, array $exclude = []) use (&$rows) {
             foreach (array_values($list ?? []) as $i => $item) {
-                $cid = is_array($item) ? ($item['id'] ?? $item['child_id'] ?? null) : $item;
-                if (!$cid || (int) $cid === (int) $this->id) continue;
+                $cid = (int) (is_array($item) ? ($item['id'] ?? $item['child_id'] ?? 0) : $item);
+                if (!$cid || $cid === (int) $this->id || isset($exclude[$cid])) continue;
                 $rows[] = [
                     'parent_id'  => $this->id,
-                    'child_id'   => (int) $cid,
+                    'child_id'   => $cid,
                     'relation'   => $relation,
                     'quantity'   => (int) (is_array($item) ? ($item['quantity'] ?? 1) : 1) ?: 1,
                     'sort_order' => $i,
@@ -161,7 +179,7 @@ class Product extends Model
                 ];
             }
         };
-        $add($bundleItems, 'bundle');
+        $add($bundleItems, 'bundle', $excludeBundleChildren);
         $add($addons, 'addon');
 
         if ($rows) {

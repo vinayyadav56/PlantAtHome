@@ -2,10 +2,8 @@
 
 namespace Marvel\Services;
 
-use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\Product;
-use Marvel\Database\Models\VendorProductPrice;
 use Marvel\Enums\ProductStatus;
 use Marvel\Enums\ProductType;
 
@@ -23,9 +21,6 @@ use Marvel\Enums\ProductType;
  */
 class BundleInventoryService
 {
-    /** A large sentinel for "stock not tracked" vendor rows so they never falsely cap a bundle. */
-    private const UNTRACKED = 1000000;
-
     /** Derived available bundle count. Non-bundles return their own quantity unchanged. */
     public function available(Product $bundle): int
     {
@@ -55,13 +50,14 @@ class BundleInventoryService
         return (int) ($min ?? 0);
     }
 
-    /** Flag-aware component stock — the single source of truth shared with deduction. */
+    /**
+     * Component stock = products.quantity — the SAME column the order listener
+     * decrements/restores for every product type (simple, variable AND bundle
+     * components). The read MUST match the write or the bundle oversells, so this
+     * does NOT branch on the reserve flag (the listener never writes vendor rows).
+     */
     public function componentAvailable(Product $component): int
     {
-        if (OrderItemService::reserveEnabled()) {
-            return $this->vendorAvailable($component);
-        }
-
         return (int) ($component->quantity ?? 0);
     }
 
@@ -114,50 +110,5 @@ class BundleInventoryService
         }
 
         return $component->status === ProductStatus::PUBLISH;
-    }
-
-    /** Sum of available (stock - reserved) over a plant's effective vendor rows (reserve mode). */
-    protected function vendorAvailable(Product $component): int
-    {
-        $today = Carbon::today()->toDateString();
-
-        $rows = VendorProductPrice::where('product_id', $component->id)
-            ->where('is_available', true)
-            ->where(fn ($q) => $q->whereNull('effective_from')->orWhere('effective_from', '<=', $today))
-            ->where(fn ($q) => $q->whereNull('effective_to')->orWhere('effective_to', '>=', $today))
-            ->get();
-
-        if ($rows->isEmpty()) {
-            // No vendor rows → legacy single-tenant column is the only signal.
-            return (int) ($component->quantity ?? 0);
-        }
-
-        // A price-only sheet (stock_qty <= 0) means "stock not tracked here" → don't cap.
-        if ($rows->contains(fn ($r) => (int) ($r->stock_qty ?? 0) <= 0)) {
-            return self::UNTRACKED;
-        }
-
-        return (int) $rows->sum(fn ($r) => max(0, (int) $r->stock_qty - (int) $r->reserved_qty));
-    }
-
-    /**
-     * Master switch for the order-path component deduction/restore (P4). Default
-     * ON; set BUNDLE_COMPONENT_DEDUCTION=false (or settings
-     * options.marketplace.bundle_deduction=false) as an emergency kill switch.
-     */
-    public static function deductionEnabled(): bool
-    {
-        $env = env('BUNDLE_COMPONENT_DEDUCTION');
-        if ($env !== null && $env !== '') {
-            return filter_var($env, FILTER_VALIDATE_BOOLEAN);
-        }
-
-        try {
-            $settings = \Marvel\Database\Models\Settings::getData();
-            $flag = $settings?->options['marketplace']['bundle_deduction'] ?? true;
-            return (bool) $flag;
-        } catch (\Throwable $e) {
-            return true;
-        }
     }
 }
