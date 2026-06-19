@@ -40,4 +40,14 @@ class CommandCenterController extends CoreController
     {
         return ['couriers' => $this->metrics->courierPositions()];
     }
+
+    /** Per-city dashboard (City Command Center). City passed by name (?city=). */
+    public function cityDashboard(Request $request)
+    {
+        $city = trim((string) $request->get('city', ''));
+        if ($city === '') {
+            return ['city' => '', 'orders_30d' => 0, 'revenue_30d' => 0, 'customers' => 0, 'vendors' => 0, 'by_status' => [], 'revenue_trend' => [], 'recent_orders' => []];
+        }
+        return $this->metrics->cityDashboard($city);
+    }
 }

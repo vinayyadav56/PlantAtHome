@@ -206,6 +206,54 @@ class MetricsService
             ])->all();
     }
 
+    // ── Per-city dashboard (City Command Center) ────────────────────────────
+    public function cityDashboard(string $city): array
+    {
+        $d30 = Carbon::now()->subDays(30);
+        $cityExpr = $this->cityExpr('orders');
+
+        // Closure builds a FRESH query each call (no shared/cloned state).
+        $base = fn () => DB::table('orders')
+            ->whereNull('parent_id')->whereNull('deleted_at')
+            ->whereRaw("$cityExpr = ?", [$city]);
+
+        $statusRows = $base()
+            ->where('created_at', '>=', $d30)
+            ->select('order_status', DB::raw('COUNT(id) as c'))
+            ->groupBy('order_status')->pluck('c', 'order_status');
+
+        $recent = $base()
+            ->select('id', 'tracking_number', 'order_status', 'paid_total', 'created_at')
+            ->orderByDesc('id')->limit(12)->get();
+
+        // 14-day revenue trend (completed).
+        $trend = $base()
+            ->where('order_status', OrderStatus::COMPLETED)
+            ->where('created_at', '>=', Carbon::now()->subDays(14))
+            ->select(DB::raw('DATE(created_at) as d'), DB::raw('SUM(paid_total) as revenue'))
+            ->groupBy('d')->orderBy('d')->get();
+
+        $vendors = (int) DB::table('shops')->whereNull('deleted_at')
+            ->whereRaw($this->shopCityExpr('shops') . ' = ?', [$city])->count();
+
+        return [
+            'city'          => $city,
+            'orders_30d'    => (int) $base()->where('created_at', '>=', $d30)->count(),
+            'revenue_30d'   => (float) $base()->where('order_status', OrderStatus::COMPLETED)->where('created_at', '>=', $d30)->sum('paid_total'),
+            'customers'     => (int) $base()->distinct()->count('customer_id'),
+            'vendors'       => $vendors,
+            'by_status'     => [
+                'pending'        => (int) ($statusRows[OrderStatus::PENDING] ?? 0),
+                'processing'     => (int) ($statusRows[OrderStatus::PROCESSING] ?? 0),
+                'outForDelivery' => (int) ($statusRows[OrderStatus::OUT_FOR_DELIVERY] ?? 0),
+                'completed'      => (int) ($statusRows[OrderStatus::COMPLETED] ?? 0),
+                'cancelled'      => (int) ($statusRows[OrderStatus::CANCELLED] ?? 0),
+            ],
+            'revenue_trend' => $trend,
+            'recent_orders' => $recent,
+        ];
+    }
+
     // ── private helpers ─────────────────────────────────────────────────────
 
     /** All (non-deleted) orders. */

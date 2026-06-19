@@ -640,6 +640,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('command-center/city-health', [CommandCenterController::class, 'cityHealth']);
     Route::get('command-center/delivery-ops', [CommandCenterController::class, 'deliveryOps']);
     Route::get('command-center/courier-positions', [CommandCenterController::class, 'courierPositions']);
+    Route::get('command-center/city-dashboard', [CommandCenterController::class, 'cityDashboard']);
 
     // Order → vendor + delivery-partner matching/assignment (P3)
     Route::get('orders/{id}/match', [OrderAssignmentController::class, 'match']);
