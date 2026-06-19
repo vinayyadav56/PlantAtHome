@@ -271,6 +271,12 @@ try {
   php artisan db:seed --class="Marvel\\Database\\Seeders\\RolePermissionSeeder" --force \
     || echo "[bg] WARNING: RolePermissionSeeder failed"
 
+  # Master Location System (Phase 2) — states + cities (from delivery_pincodes).
+  # Idempotent + additive (firstOrCreate), never overwrites admin city status.
+  echo "==> [bg] Seeding master locations (states + cities)..."
+  php artisan db:seed --class="Marvel\\Database\\Seeders\\LocationSeeder" --force \
+    || echo "[bg] WARNING: LocationSeeder failed"
+
   # ── PlantAtHome data seed — enterprise three-tier approach ──────────────────
   # Tier 2: type + categories — updateOrCreate, safe for ALL environments
   # Tier 3: demo products    — truncate+insert, STAGING only (guarded in seeder)

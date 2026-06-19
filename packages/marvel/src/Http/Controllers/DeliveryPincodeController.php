@@ -31,6 +31,24 @@ class DeliveryPincodeController extends CoreController
         if (!$row) {
             return ['serviceable' => false, 'pincode' => $pincode];
         }
+
+        // City Activation Engine (Phase 2): a paused/disabled city overrides the
+        // pincode allow-list; maintenance stays serviceable but is flagged. Only
+        // applies when the city exists in the master table (else pincode-only).
+        if ($row->city) {
+            $city = \Marvel\Database\Models\City::where('name', $row->city)->first();
+            if ($city && !$city->acceptsOrders()) {
+                return [
+                    'serviceable' => false,
+                    'pincode'     => $row->pincode,
+                    'city'        => $row->city,
+                    'state'       => $row->state,
+                    'reason'      => 'city_' . $city->status, // city_paused | city_disabled
+                ];
+            }
+            $maintenance = $city && $city->status === \Marvel\Database\Models\City::STATUS_MAINTENANCE;
+        }
+
         return [
             'serviceable' => true,
             'pincode'     => $row->pincode,
@@ -39,6 +57,7 @@ class DeliveryPincodeController extends CoreController
             'state'       => $row->state,
             'cod_enabled' => $row->cod_enabled,
             'eta_days'    => $row->eta_days,
+            'maintenance' => $maintenance ?? false,
         ];
     }
 

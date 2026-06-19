@@ -9,6 +9,7 @@ use Marvel\Http\Controllers\AddressController;
 use Marvel\Http\Controllers\AiController;
 use Marvel\Http\Controllers\AnalyticsController;
 use Marvel\Http\Controllers\CommandCenterController;
+use Marvel\Http\Controllers\LocationController;
 use Marvel\Http\Controllers\AttachmentController;
 use Marvel\Http\Controllers\AttributeController;
 use Marvel\Http\Controllers\AttributeValueController;
@@ -192,6 +193,11 @@ Route::post('webhooks/razorpay-garden', [GardenController::class, 'razorpayWebho
 // pincodes at checkout). Rate-limited.
 Route::get('delivery-pincodes/check', [DeliveryPincodeController::class, 'check'])
     ->middleware('throttle:60,1');
+
+// Master Location System (Phase 2) — public lookups for the State→City address
+// dropdowns (storefront + admin). Read-only, rate-limited.
+Route::get('locations/states', [LocationController::class, 'states'])->middleware('throttle:120,1');
+Route::get('locations/cities', [LocationController::class, 'cities'])->middleware('throttle:120,1');
 
 // Garden service — logged-in customer: their packages + visit tracking + pay.
 Route::middleware('auth:sanctum')->group(function () {
@@ -777,6 +783,25 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('delivery-pincodes', [DeliveryPincodeController::class, 'store']);
     Route::put('delivery-pincodes/{id}', [DeliveryPincodeController::class, 'update']);
     Route::delete('delivery-pincodes/{id}', [DeliveryPincodeController::class, 'destroy']);
+
+    // Master Location System (Phase 2) — states / cities / warehouses + the
+    // City Activation Engine (super-admin only).
+    Route::get('states', [LocationController::class, 'stateIndex']);
+    Route::post('states', [LocationController::class, 'stateStore']);
+    Route::put('states/{id}', [LocationController::class, 'stateUpdate']);
+    Route::delete('states/{id}', [LocationController::class, 'stateDestroy']);
+
+    Route::get('cities', [LocationController::class, 'cityIndex']);
+    Route::get('cities/{id}', [LocationController::class, 'cityShow']);
+    Route::post('cities', [LocationController::class, 'cityStore']);
+    Route::put('cities/{id}', [LocationController::class, 'cityUpdate']);
+    Route::post('cities/{id}/status', [LocationController::class, 'citySetStatus']);
+    Route::delete('cities/{id}', [LocationController::class, 'cityDestroy']);
+
+    Route::get('warehouses', [LocationController::class, 'warehouseIndex']);
+    Route::post('warehouses', [LocationController::class, 'warehouseStore']);
+    Route::put('warehouses/{id}', [LocationController::class, 'warehouseUpdate']);
+    Route::delete('warehouses/{id}', [LocationController::class, 'warehouseDestroy']);
 
     // Garden service — admin management
     Route::get('garden-leads', [GardenController::class, 'leads']);
