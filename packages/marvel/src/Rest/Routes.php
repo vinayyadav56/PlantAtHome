@@ -405,39 +405,46 @@ Route::group(['middleware' => ['can:' . Permission::CUSTOMER, 'auth:sanctum', 'e
 Route::group(
     ['middleware' => ['permission:' . Permission::STAFF . '|' . Permission::STORE_OWNER, 'auth:sanctum', 'email.verified']],
     function () {
+        // ── Phase D: inner module gates ─────────────────────────────────────
+        // The outer staff|store_owner gate stays as the safety net; these inner
+        // `permission:<module>.<action>` checks (canAny) make an employee WITHOUT
+        // the module perm get 403. Super-admin bypasses via Gate::before, and the
+        // store_owner (vendor) role already holds products.*/orders.edit via the
+        // roleMatrix, so vendor flows are unaffected.
+        $writeProducts = 'permission:products.create|products.edit|products.delete';
         Route::apiResource('products', ProductController::class, [
             'only' => ['store', 'update', 'destroy'],
-        ]);
+        ])->middleware($writeProducts);
 
         // PlantAtHome — product image (gallery) management
-        Route::get('products/{id}/images', [ProductImageController::class, 'index']);
-        Route::post('products/{id}/images', [ProductImageController::class, 'store']);
-        Route::patch('products/{id}/images/reorder', [ProductImageController::class, 'reorder']);
-        Route::patch('products/{id}/images/{image}/primary', [ProductImageController::class, 'setPrimary']);
-        Route::patch('products/{id}/images/{image}/gallery', [ProductImageController::class, 'setGalleryFlag']);
-        Route::delete('products/{id}/images/{image}', [ProductImageController::class, 'destroy']);
-        Route::post('products/{id}/images/fetch', [ProductImageController::class, 'fetch']);
+        Route::get('products/{id}/images', [ProductImageController::class, 'index'])->middleware('permission:products.view');
+        Route::post('products/{id}/images', [ProductImageController::class, 'store'])->middleware('permission:products.edit');
+        Route::patch('products/{id}/images/reorder', [ProductImageController::class, 'reorder'])->middleware('permission:products.edit');
+        Route::patch('products/{id}/images/{image}/primary', [ProductImageController::class, 'setPrimary'])->middleware('permission:products.edit');
+        Route::patch('products/{id}/images/{image}/gallery', [ProductImageController::class, 'setGalleryFlag'])->middleware('permission:products.edit');
+        Route::delete('products/{id}/images/{image}', [ProductImageController::class, 'destroy'])->middleware('permission:products.edit');
+        Route::post('products/{id}/images/fetch', [ProductImageController::class, 'fetch'])->middleware('permission:products.edit');
         // bulk + coverage report (non-products/{id} paths to avoid the show route shadow)
-        Route::post('plant-images/fetch-missing', [ProductImageController::class, 'fetchMissing']);
-        Route::get('plant-images/coverage-summary', [ProductImageController::class, 'coverageSummary']);
-        Route::get('plant-images/coverage-report', [ProductImageController::class, 'coverageReport']);
-        Route::get('plant-images/list', [ProductImageController::class, 'list']);
+        Route::post('plant-images/fetch-missing', [ProductImageController::class, 'fetchMissing'])->middleware('permission:products.edit');
+        Route::get('plant-images/coverage-summary', [ProductImageController::class, 'coverageSummary'])->middleware('permission:products.view');
+        Route::get('plant-images/coverage-report', [ProductImageController::class, 'coverageReport'])->middleware('permission:products.view');
+        Route::get('plant-images/list', [ProductImageController::class, 'list'])->middleware('permission:products.view');
 
         Route::apiResource('resources', ResourceController::class, [
             'only' => ['store']
         ]);
         Route::apiResource('attributes', AttributeController::class, [
             'only' => ['store', 'update', 'destroy'],
-        ]);
+        ])->middleware($writeProducts);
         Route::apiResource('attribute-values', AttributeValueController::class, [
             'only' => ['store', 'update', 'destroy'],
-        ]);
+        ])->middleware($writeProducts);
         Route::apiResource('orders', OrderController::class, [
             'only' => ['update', 'destroy'],
-        ]);
+        ])->middleware('permission:orders.edit|orders.delete');
         // F3: pin/unpin an order (super-admin reaches this group via the
         // store_owner permission granted to the super_admin role).
-        Route::post('orders/{id}/pin', [OrderController::class, 'pin']);
+        Route::post('orders/{id}/pin', [OrderController::class, 'pin'])->middleware('permission:orders.edit');
 
         // Route::get('shop-notification/{id}', [ShopNotificationController::class, 'show']);
         // Route::put('shop-notification/{id}', [ShopNotificationController::class, 'update']);
@@ -448,10 +455,10 @@ Route::group(
         ]);
         Route::apiResource('authors', AuthorController::class, [
             'only' => ['store'],
-        ]);
+        ])->middleware($writeProducts);
         Route::apiResource('manufacturers', ManufacturerController::class, [
             'only' => ['store'],
-        ]);
+        ])->middleware($writeProducts);
         Route::get('store-notices/getStoreNoticeType', [StoreNoticeController::class, 'getStoreNoticeType']);
         Route::get('store-notices/getUsersToNotify', [StoreNoticeController::class, 'getUsersToNotify']);
         Route::post('store-notices/read/', [StoreNoticeController::class, 'readNotice']);
@@ -460,19 +467,20 @@ Route::group(
             'only' => ['show', 'store', 'update', 'destroy']
         ]);
 
-        Route::get('export-order-url/{shop_id?}', 'Marvel\Http\Controllers\OrderController@exportOrderUrl');
-        Route::post('download-invoice-url', 'Marvel\Http\Controllers\OrderController@downloadInvoiceUrl');
+        Route::get('export-order-url/{shop_id?}', 'Marvel\Http\Controllers\OrderController@exportOrderUrl')->middleware('permission:orders.view');
+        Route::post('download-invoice-url', 'Marvel\Http\Controllers\OrderController@downloadInvoiceUrl')->middleware('permission:orders.view');
         Route::apiResource('faqs', FaqsController::class, [
             'only' => ['store', 'update', 'destroy'],
         ]);
+        // Dashboard summary stays coarse-gated (every admin-panel user's home).
         Route::get('analytics', [AnalyticsController::class, 'analytics']);
-        Route::get('low-stock-products', [AnalyticsController::class, 'lowStockProducts']);
-        Route::get('category-wise-product', [AnalyticsController::class, 'categoryWiseProduct']);
-        Route::get('category-wise-product-sale', [AnalyticsController::class, 'categoryWiseProductSale']);
-        Route::get('draft-products', [ProductController::class, 'draftedProducts']);
-        Route::get('products-stock', [ProductController::class, 'productStock']);
-        Route::get('products-by-flash-sale', [FlashSaleController::class, 'getProductsByFlashSale']);
-        Route::get('top-rate-product', [AnalyticsController::class, 'topRatedProducts']);
+        Route::get('low-stock-products', [AnalyticsController::class, 'lowStockProducts'])->middleware('permission:products.view');
+        Route::get('category-wise-product', [AnalyticsController::class, 'categoryWiseProduct'])->middleware('permission:products.view');
+        Route::get('category-wise-product-sale', [AnalyticsController::class, 'categoryWiseProductSale'])->middleware('permission:products.view');
+        Route::get('draft-products', [ProductController::class, 'draftedProducts'])->middleware('permission:products.view');
+        Route::get('products-stock', [ProductController::class, 'productStock'])->middleware('permission:products.view');
+        Route::get('products-by-flash-sale', [FlashSaleController::class, 'getProductsByFlashSale'])->middleware('permission:products.view');
+        Route::get('top-rate-product', [AnalyticsController::class, 'topRatedProducts'])->middleware('permission:products.view');
         Route::apiResource('coupons', CouponController::class, [
             'only' => ['update'],
         ]);
