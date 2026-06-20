@@ -125,10 +125,12 @@ class UserController extends CoreController
     public function employees(Request $request)
     {
         $limit = $request->limit ? $request->limit : 15;
-        $employeeRoles = ['super_admin', 'admin', 'manager', 'staff', 'viewer'];
+        // Includes `employee` — the neutral coarse role designation-based
+        // employees carry (their capability comes from the materialised perms).
+        $employeeRoles = ['super_admin', 'admin', 'manager', 'staff', 'viewer', 'employee'];
 
         return User::role($employeeRoles)
-            ->with(['profile', 'permissions', 'roles'])
+            ->with(['profile', 'permissions', 'roles', 'designation'])
             ->when($request->name, function ($query) use ($request) {
                 $query->where('name', 'like', "%{$request->name}%")
                     ->orWhere('email', 'like', "%{$request->name}%");
