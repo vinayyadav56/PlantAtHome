@@ -74,7 +74,12 @@ final class ModulePermission
     {
         return [
             'super_admin' => ['super_admin', 'store_owner', 'customer'],
-            'admin'       => ['store_owner', 'customer'],
+            // Internal admin is a PLATFORM employee, not a vendor: it must carry the
+            // 'staff' coarse login-gate (so the admin app routes it into the filtered
+            // admin panel via isAdminPanelUser), NOT 'store_owner' (which made admin
+            // employees render the vendor dashboard). roleMatrix still grants it full
+            // module access, so capability is unchanged — only the coarse perm changes.
+            'admin'       => ['staff', 'customer'],
             'manager'     => ['staff', 'customer'],
             'staff'       => ['staff', 'customer'],
             'viewer'      => ['staff', 'customer'],
