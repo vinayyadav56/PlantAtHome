@@ -183,6 +183,10 @@ jobs:
             php artisan db:seed --class="Marvel\\Database\\Seeders\\RolePermissionSeeder" --force \
               || echo "WARNING: RolePermissionSeeder failed"
 
+            echo "==> Seeding designations — permission templates (idempotent, updateOrCreate)..."
+            php artisan db:seed --class="Marvel\\Database\\Seeders\\DesignationSeeder" --force \
+              || echo "WARNING: DesignationSeeder failed"
+
             echo "==> Seeding master locations — states + cities (idempotent, firstOrCreate)..."
             php artisan db:seed --class="Marvel\\Database\\Seeders\\LocationSeeder" --force \
               || echo "WARNING: LocationSeeder failed"

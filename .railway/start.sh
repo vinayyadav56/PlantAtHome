@@ -271,6 +271,13 @@ try {
   php artisan db:seed --class="Marvel\\Database\\Seeders\\RolePermissionSeeder" --force \
     || echo "[bg] WARNING: RolePermissionSeeder failed"
 
+  # Phase B — example designations (permission templates). Idempotent
+  # (updateOrCreate by slug); refreshes canonical defaults, never drops
+  # admin-created designations.
+  echo "==> [bg] Seeding designations (Phase B)..."
+  php artisan db:seed --class="Marvel\\Database\\Seeders\\DesignationSeeder" --force \
+    || echo "[bg] WARNING: DesignationSeeder failed"
+
   # Master Location System (Phase 2) — states + cities (from delivery_pincodes).
   # Idempotent + additive (firstOrCreate), never overwrites admin city status.
   echo "==> [bg] Seeding master locations (states + cities)..."

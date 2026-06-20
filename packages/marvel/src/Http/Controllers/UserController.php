@@ -18,8 +18,10 @@ use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Redirect;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use Laravel\Socialite\Facades\Socialite;
 use Marvel\Console\MarvelVerification;
+use Marvel\Database\Models\Designation;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Profile;
 use Marvel\Database\Models\Settings;
@@ -40,6 +42,7 @@ use Marvel\Http\Requests\UserUpdateRequest;
 use Marvel\Http\Resources\UserResource;
 use Marvel\Mail\ContactAdmin;
 use Marvel\Otp\Gateways\OtpGateway;
+use Marvel\Services\PermissionResolver;
 use Marvel\Traits\UsersTrait;
 use Marvel\Traits\WalletsTrait;
 use Spatie\Newsletter\Facades\Newsletter;
@@ -143,27 +146,116 @@ class UserController extends CoreController
     public function storeEmployee(Request $request)
     {
         $request->validate([
-            'name'     => 'required|string|max:255',
-            'email'    => 'required|email|unique:users,email',
-            'password' => 'required|string|min:6',
-            'role'     => 'required|string|in:admin,manager,staff,viewer',
+            'name'                 => 'required|string|max:255',
+            'email'                => 'required|email|unique:users,email',
+            'password'             => 'required|string|min:6',
+            // Phase B: designation mode preferred; legacy `role` still accepted.
+            'role'                 => 'nullable|string|in:admin,manager,staff,viewer',
+            'designation_id'       => 'nullable|integer|exists:designations,id',
+            'phone'                => 'nullable|string|max:40',
+            'department'           => 'nullable|string|max:255',
+            'reporting_manager_id' => 'nullable|integer|exists:users,id',
+            'city'                 => 'nullable|string|max:255',
+            'state'                => 'nullable|string|max:255',
+            'permission_source'    => 'nullable|string|in:designation,custom',
+            'permission_overrides' => 'nullable|array',
+            'is_active'            => 'nullable|boolean',
         ]);
 
-        $roleName = $request->input('role');
-        $user = User::create([
-            'name'      => $request->name,
-            'email'     => $request->email,
-            'password'  => Hash::make($request->password),
-            'is_active' => true,
+        if (!$request->filled('designation_id') && !$request->filled('role')) {
+            throw ValidationException::withMessages([
+                'designation_id' => ['Choose a designation (or a legacy role) for the employee.'],
+            ]);
+        }
+
+        return DB::transaction(function () use ($request) {
+            $user = User::create([
+                'name'                 => $request->name,
+                'email'                => $request->email,
+                'password'             => Hash::make($request->password),
+                'is_active'            => $request->boolean('is_active', true),
+                'department'           => $request->input('department'),
+                'reporting_manager_id' => $request->input('reporting_manager_id'),
+                'city'                 => $request->input('city'),
+                'state'                => $request->input('state'),
+            ]);
+            $user->email_verified_at = Carbon::now();
+            $user->save();
+
+            if ($request->filled('phone')) {
+                $user->profile()->create(['contact' => $request->input('phone')]);
+            }
+
+            if ($request->filled('designation_id')) {
+                // Designation mode: a neutral `employee` role is the coarse login
+                // gate (no module perms of its own), and capability is the
+                // materialised effective set from designation + overrides.
+                $user->syncRoles(['employee']);
+                $user->forceFill([
+                    'designation_id'       => $request->input('designation_id'),
+                    'permission_source'    => $request->input('permission_source', 'designation'),
+                    'permission_overrides' => $request->input('permission_overrides'),
+                ])->save();
+                app(PermissionResolver::class)->materialize($user->fresh());
+            } else {
+                // Legacy role mode (unchanged): role grants module perms.
+                $roleName = $request->input('role');
+                $base = ModulePermission::basePermissions()[$roleName] ?? ['staff', 'customer'];
+                $user->syncRoles([$roleName]);
+                $user->givePermissionTo($base);
+            }
+
+            return $user->fresh()->load(['profile', 'permissions', 'roles', 'designation', 'reporting_manager']);
+        });
+    }
+
+    /**
+     * Phase B — set/replace an existing employee's designation + overrides + org
+     * fields, then re-materialise their effective permissions. Super-admin only
+     * (route). Super-admin accounts are never re-scoped here (lockout guard).
+     */
+    public function setEmployeeAccess(Request $request, $id)
+    {
+        $request->validate([
+            'designation_id'       => 'nullable|integer|exists:designations,id',
+            'permission_source'    => 'nullable|string|in:designation,custom',
+            'permission_overrides' => 'nullable|array',
+            'department'           => 'nullable|string|max:255',
+            'reporting_manager_id' => 'nullable|integer|exists:users,id',
+            'city'                 => 'nullable|string|max:255',
+            'state'                => 'nullable|string|max:255',
+            'is_active'            => 'nullable|boolean',
         ]);
-        $user->email_verified_at = Carbon::now();
-        $user->save();
 
-        $base = ModulePermission::basePermissions()[$roleName] ?? ['staff', 'customer'];
-        $user->syncRoles([$roleName]);
-        $user->givePermissionTo($base);
+        $user = User::findOrFail($id);
+        if ($user->hasRole('super_admin')) {
+            throw new MarvelException(NOT_AUTHORIZED);
+        }
 
-        return $user->load(['profile', 'permissions', 'roles']);
+        return DB::transaction(function () use ($request, $user) {
+            $user->forceFill(array_filter([
+                'designation_id'       => $request->input('designation_id'),
+                'permission_source'    => $request->input('permission_source'),
+                'permission_overrides' => $request->input('permission_overrides'),
+                'department'           => $request->input('department'),
+                'reporting_manager_id' => $request->input('reporting_manager_id'),
+                'city'                 => $request->input('city'),
+                'state'                => $request->input('state'),
+            ], fn ($v) => !is_null($v)));
+
+            if ($request->has('is_active')) {
+                $user->is_active = $request->boolean('is_active');
+            }
+            $user->save();
+
+            // Ensure the coarse login gate + materialise effective perms.
+            if (!$user->hasRole('employee') && !$user->hasAnyRole(['admin', 'manager', 'staff', 'viewer', 'super_admin'])) {
+                $user->syncRoles(['employee']);
+            }
+            app(PermissionResolver::class)->materialize($user->fresh());
+
+            return $user->fresh()->load(['profile', 'permissions', 'roles', 'designation', 'reporting_manager']);
+        });
     }
 
     /**

@@ -40,6 +40,12 @@ class RolePermissionSeeder extends Seeder
             $role->givePermissionTo($full);
         }
 
+        // 3b. Phase B — the neutral `employee` role: the coarse login gate for
+        // designation-based employees, carrying NO module perms of its own so a
+        // designation (materialised as DIRECT perms) is the single source of
+        // capability. syncPermissions keeps it coarse-only even on re-runs.
+        Role::findOrCreate('employee', $guard)->syncPermissions(['staff', 'customer']);
+
         // 4. Flush the Spatie cache so new grants take effect immediately.
         app(PermissionRegistrar::class)->forgetCachedPermissions();
     }

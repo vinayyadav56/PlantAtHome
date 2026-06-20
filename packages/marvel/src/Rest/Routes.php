@@ -65,6 +65,7 @@ use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
 use Marvel\Http\Controllers\RolePermissionController;
+use Marvel\Http\Controllers\DesignationController;
 use Marvel\Http\Controllers\BundleController;
 use Marvel\Http\Controllers\LocationPriceController;
 use Marvel\Http\Controllers\OrderAssignmentController;
@@ -863,6 +864,23 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     Route::get('acl/permissions', [RolePermissionController::class, 'permissions'])
         ->middleware('permission:employees.view');
     Route::put('acl/roles/{id}/permissions', [RolePermissionController::class, 'updateRolePermissions'])
+        ->middleware('permission:employees.edit');
+
+    // Phase B — Designations (permission templates) + per-employee access.
+    Route::get('designations', [DesignationController::class, 'index'])
+        ->middleware('permission:employees.view');
+    Route::get('designations/{id}', [DesignationController::class, 'show'])
+        ->middleware('permission:employees.view');
+    Route::post('designations', [DesignationController::class, 'store'])
+        ->middleware('permission:employees.create');
+    Route::put('designations/{id}', [DesignationController::class, 'update'])
+        ->middleware('permission:employees.edit');
+    Route::post('designations/{id}/status', [DesignationController::class, 'setStatus'])
+        ->middleware('permission:employees.edit');
+    Route::delete('designations/{id}', [DesignationController::class, 'destroy'])
+        ->middleware('permission:employees.delete');
+
+    Route::put('employees/{id}/access', [UserController::class, 'setEmployeeAccess'])
         ->middleware('permission:employees.edit');
 });
 

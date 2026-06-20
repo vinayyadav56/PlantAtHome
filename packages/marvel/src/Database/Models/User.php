@@ -31,7 +31,10 @@ class User extends Authenticatable implements MustVerifyEmail
      * @var array
      */
     protected $fillable = [
-        'name', 'email', 'password', 'is_active', 'shop_id'
+        'name', 'email', 'password', 'is_active', 'shop_id',
+        // Phase B — employee / org + RBAC override fields (all nullable).
+        'designation_id', 'reporting_manager_id', 'department', 'city', 'state',
+        'permission_source', 'permission_overrides',
     ];
 
     /**
@@ -44,7 +47,8 @@ class User extends Authenticatable implements MustVerifyEmail
     ];
 
     protected $casts = [
-        'email_verified_at' => 'datetime',
+        'email_verified_at'    => 'datetime',
+        'permission_overrides' => 'array',
     ];
 
     protected $appends = ['email_verified'];
@@ -94,6 +98,26 @@ class User extends Authenticatable implements MustVerifyEmail
     public function profile(): HasOne
     {
         return $this->hasOne(Profile::class, 'customer_id');
+    }
+
+    /**
+     * Phase B — the employee's designation (permission template).
+     *
+     * @return BelongsTo
+     */
+    public function designation(): BelongsTo
+    {
+        return $this->belongsTo(Designation::class, 'designation_id');
+    }
+
+    /**
+     * Phase B — the employee's reporting manager (self-referential).
+     *
+     * @return BelongsTo
+     */
+    public function reporting_manager(): BelongsTo
+    {
+        return $this->belongsTo(User::class, 'reporting_manager_id');
     }
 
     /**
