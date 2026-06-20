@@ -863,6 +863,8 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
         ->middleware('permission:employees.view');
     Route::get('acl/permissions', [RolePermissionController::class, 'permissions'])
         ->middleware('permission:employees.view');
+    Route::get('acl/catalog', [RolePermissionController::class, 'catalog'])
+        ->middleware('permission:employees.view');
     Route::put('acl/roles/{id}/permissions', [RolePermissionController::class, 'updateRolePermissions'])
         ->middleware('permission:employees.edit');
 

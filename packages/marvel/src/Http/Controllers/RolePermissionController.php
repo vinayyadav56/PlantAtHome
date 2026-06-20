@@ -4,6 +4,7 @@ namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
+use Marvel\Enums\ModuleCatalog;
 use Marvel\Enums\ModulePermission;
 use Spatie\Permission\Models\Role;
 use Spatie\Permission\PermissionRegistrar;
@@ -48,7 +49,15 @@ class RolePermissionController extends CoreController
             'roles'   => $roles,
             'modules' => ModulePermission::MODULES,
             'actions' => ModulePermission::ACTIONS,
+            // Phase C — submodule catalogue for the professional matrix UI.
+            'catalog' => ModuleCatalog::forUi(),
         ];
+    }
+
+    /** Phase C — the module → submodule → action catalogue (standalone). */
+    public function catalog(Request $request)
+    {
+        return ModuleCatalog::forUi();
     }
 
     /** Flat catalogue of every module permission (grouped by module). */

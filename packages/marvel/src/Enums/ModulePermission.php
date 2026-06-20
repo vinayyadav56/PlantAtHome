@@ -34,17 +34,15 @@ final class ModulePermission
     /** Legacy coarse permissions that grant admin-panel sign-in + existing routes. */
     public const GUARD = 'api';
 
-    /** Every "<module>.<action>" permission name. */
+    /**
+     * Every permission name. Phase C — delegated to the data-driven ModuleCatalog
+     * so it returns the legacy 2-segment module.action perms (default submodules,
+     * unchanged) PLUS the new 3-segment submodule perms. The seeder reads this, so
+     * new catalogue entries auto-create their permission rows on the next deploy.
+     */
     public static function all(): array
     {
-        $permissions = [];
-        foreach (self::MODULES as $module) {
-            foreach (self::ACTIONS as $action) {
-                $permissions[] = "{$module}.{$action}";
-            }
-        }
-
-        return $permissions;
+        return ModuleCatalog::all();
     }
 
     /** "<module>.<action>" names for a single module (defaults to every action). */
@@ -59,10 +57,10 @@ final class ModulePermission
         return array_map(fn ($module) => "{$module}.view", self::MODULES);
     }
 
-    /** Is $name a valid module permission string. */
+    /** Is $name a valid permission string (2- or 3-segment, via the catalogue). */
     public static function isValid(string $name): bool
     {
-        return in_array($name, self::all(), true);
+        return ModuleCatalog::isValid($name);
     }
 
     /**
