@@ -135,9 +135,21 @@ final class ModulePermission
         return ['super_admin'];
     }
 
-    /** Roles this system manages in the matrix UI. */
+    /** Roles this system manages (validation + seeding): all of them. */
     public static function managedRoles(): array
     {
         return array_keys(self::roleMatrix());
+    }
+
+    /**
+     * Roles SHOWN in the System Roles matrix UI. Only the true system roles —
+     * super_admin (full, locked) and store_owner (marketplace vendors). The
+     * legacy employee presets (admin/manager/staff/viewer) still exist + seed,
+     * but employee access is now managed via Designations, so they're hidden
+     * from the matrix to avoid confusion.
+     */
+    public static function systemRoles(): array
+    {
+        return ['super_admin', 'store_owner'];
     }
 }

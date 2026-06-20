@@ -24,7 +24,9 @@ class RolePermissionController extends CoreController
     public function roles(Request $request)
     {
         $guard = ModulePermission::GUARD;
-        $managed = ModulePermission::managedRoles();
+        // Only the true system roles are shown in the matrix; employee access is
+        // managed via Designations. Legacy presets still seed but stay hidden.
+        $managed = ModulePermission::systemRoles();
 
         $roles = Role::where('guard_name', $guard)
             ->whereIn('name', $managed)
