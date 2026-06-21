@@ -24,6 +24,21 @@ class ServiceAvailabilityController extends CoreController
     {
     }
 
+    /**
+     * PUBLIC — storefront availability check for one vertical in a city. Used by
+     * the PDP to gate add-to-cart + show the maintenance message. Fail-open
+     * (resolve() never throws; missing vertical ⇒ available).
+     */
+    public function check(Request $request)
+    {
+        $vertical = trim((string) $request->get('vertical', ''));
+        if ($vertical === '') {
+            return ['available' => true, 'status' => 'active', 'reason' => null, 'message' => null];
+        }
+        $city = $request->get('city');
+        return $this->availability->resolve($vertical, $city !== null ? (string) $city : null);
+    }
+
     // ── Reads ───────────────────────────────────────────────────────────────
 
     /** Summary cards for the dashboard top row. */

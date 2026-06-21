@@ -225,6 +225,9 @@ Route::get('location-price', [LocationPriceController::class, 'show']);
 Route::post('location-price/batch', [LocationPriceController::class, 'batch'])->middleware('throttle:60,1');
 Route::get('city-availability', [LocationPriceController::class, 'cityAvailability']);
 Route::post('checkout/estimate', [LocationPriceController::class, 'checkoutEstimate']);
+// Operations Control Center — public storefront availability check (PDP gate).
+Route::get('service-availability/check', [ServiceAvailabilityController::class, 'check'])
+    ->middleware('throttle:120,1');
 
 // Public: live courier position for an order (only while out for delivery)
 Route::get('orders/{tracking}/courier-location', [OrderAssignmentController::class, 'courierLocation']);
