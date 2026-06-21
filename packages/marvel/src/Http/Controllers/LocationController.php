@@ -89,13 +89,16 @@ class LocationController extends CoreController
     public function cityStore(Request $request)
     {
         $data = $this->validateCity($request);
-        return City::create($data);
+        $city = City::create($data);
+        $this->bustServiceAvailability();
+        return $city;
     }
 
     public function cityUpdate(Request $request, $id)
     {
         $city = City::findOrFail($id);
         $city->update($this->validateCity($request, $city->id));
+        $this->bustServiceAvailability();
         return $city->fresh('state');
     }
 
@@ -103,7 +106,20 @@ class LocationController extends CoreController
     {
         $city = City::findOrFail($id);
         $city->delete();
+        $this->bustServiceAvailability();
         return $city;
+    }
+
+    /**
+     * Operations Control Center — a city's status/serviceability is Tier-2 of
+     * the availability resolver (cached). Any city mutation must bump both the
+     * availability map version AND the city-scoped product-list cache so the
+     * change takes effect immediately (not after the 300s TTL).
+     */
+    protected function bustServiceAvailability(): void
+    {
+        app(\Marvel\Services\ServiceAvailabilityService::class)->bust();
+        \Marvel\Services\AvailabilityService::bustCatalogCache();
     }
 
     /** City Activation Engine — flip a city's operational state. */
@@ -119,6 +135,7 @@ class LocationController extends CoreController
             $city->is_serviceable = true;
         }
         $city->save();
+        $this->bustServiceAvailability();
         return $city->fresh('state');
     }
 

@@ -5,6 +5,7 @@ namespace Marvel\Listeners;
 use Carbon\Carbon;
 use Marvel\Database\Models\ServiceAvailabilityLog;
 use Marvel\Events\ServiceAvailabilityChanged;
+use Marvel\Services\AvailabilityService;
 use Marvel\Services\ServiceAvailabilityService;
 
 /**
@@ -31,5 +32,8 @@ class RecordServiceAvailabilityChange
         ]);
 
         $this->availability->bust();
+        // Also bump the product-list cache version so city-scoped storefront
+        // listings reflect the change immediately (they key on products:ver).
+        AvailabilityService::bustCatalogCache();
     }
 }

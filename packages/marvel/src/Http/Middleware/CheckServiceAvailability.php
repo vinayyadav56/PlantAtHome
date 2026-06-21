@@ -23,6 +23,11 @@ class CheckServiceAvailability
 
     public function handle(Request $request, Closure $next, string $scope = 'orders')
     {
+        // Only gate writes (creation/checkout); reads (e.g. viewing an existing
+        // order) stay available even during an emergency stop.
+        if ($request->isMethod('get')) {
+            return $next($request);
+        }
         try {
             $flags = $this->availability->platformFlags();
 

@@ -287,10 +287,13 @@ Route::apiResource('authors', AuthorController::class, [
 Route::apiResource('manufacturers', ManufacturerController::class, [
     'only' => ['index', 'show'],
 ]);
-Route::post('orders/checkout/verify', [CheckoutController::class, 'verify']);
+// Operations Control Center — platform kill-switch on checkout + order creation
+// (the middleware passes GET, so `orders` show is never blocked).
+Route::post('orders/checkout/verify', [CheckoutController::class, 'verify'])
+    ->middleware('service.available:orders');
 Route::apiResource('orders', OrderController::class, [
     'only' => ['show', 'store'],
-]);
+])->middleware('service.available:orders');
 
 Route::post('/email/verification-notification', [UserController::class, 'sendVerificationEmail'])
     ->middleware(['auth:sanctum', 'throttle:6,1'])

@@ -49,6 +49,23 @@ class DeliveryPincodeController extends CoreController
             $maintenance = $city && $city->status === \Marvel\Database\Models\City::STATUS_MAINTENANCE;
         }
 
+        // Operations Control Center — optional per-vertical gate: a vertical
+        // paused/disabled in this city overrides serviceability for that vertical.
+        if ($request->filled('vertical') && $row->city) {
+            $av = app(\Marvel\Services\ServiceAvailabilityService::class)->resolve((string) $request->vertical, $row->city);
+            if (!$av['available']) {
+                return [
+                    'serviceable' => false,
+                    'pincode'     => $row->pincode,
+                    'city'        => $row->city,
+                    'state'       => $row->state,
+                    'vertical'    => (string) $request->vertical,
+                    'reason'      => $av['reason'],
+                    'message'     => $av['message'],
+                ];
+            }
+        }
+
         return [
             'serviceable' => true,
             'pincode'     => $row->pincode,

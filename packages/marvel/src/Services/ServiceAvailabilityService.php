@@ -28,6 +28,10 @@ class ServiceAvailabilityService
     private const VER_KEY = 'service_availability:ver';
     private const TTL = 300;
 
+    /** Per-instance memo so one request deserializes the map at most once. */
+    private ?array $memo = null;
+    private ?int $memoVer = null;
+
     /** Normalize a city name to the key convention used across the catalog. */
     public static function norm(?string $city): string
     {
@@ -52,7 +56,11 @@ class ServiceAvailabilityService
      */
     public function map(): array
     {
-        return Cache::remember('service_availability:v' . $this->version(), self::TTL, function () {
+        $ver = $this->version();
+        if ($this->memo !== null && $this->memoVer === $ver) {
+            return $this->memo;
+        }
+        $map = Cache::remember('service_availability:v' . $ver, self::TTL, function () {
             $global = [];
             $platform = ['stop_platform' => false, 'stop_orders' => false, 'stop_deliveries' => false, 'maintenance' => false, 'message' => null];
             foreach (GVS::all() as $g) {
@@ -74,13 +82,25 @@ class ServiceAvailabilityService
                 ];
             }
 
+            // The storefront passes a free-text city WITHOUT a state, so two
+            // same-named cities in different states collapse to one key. We
+            // aggregate them FAIL-SAFE (most-restrictive: any non-accepting
+            // city makes the key non-accepting) and keep ALL their ids so the
+            // Tier-3 matrix check covers every same-named city.
             $cities = [];
             foreach (City::all(['id', 'name', 'status', 'is_serviceable']) as $c) {
-                $cities[self::norm($c->name)] = [
-                    'id'      => $c->id,
-                    'status'  => $c->status,
-                    'accepts' => $c->acceptsOrders(),
-                ];
+                $key = self::norm($c->name);
+                $accepts = $c->acceptsOrders();
+                if (!isset($cities[$key])) {
+                    $cities[$key] = ['ids' => [$c->id], 'accepts' => $accepts, 'status' => $c->status];
+                } else {
+                    $cities[$key]['ids'][] = $c->id;
+                    if (!$accepts && $cities[$key]['accepts']) {
+                        // Promote the blocking city's status as the reason.
+                        $cities[$key]['accepts'] = false;
+                        $cities[$key]['status'] = $c->status;
+                    }
+                }
             }
 
             $matrix = [];
@@ -99,6 +119,10 @@ class ServiceAvailabilityService
                 'matrix'        => $matrix,
             ];
         });
+
+        $this->memo = $map;
+        $this->memoVer = $ver;
+        return $map;
     }
 
     /** Every known vertical slug: catalog Type slugs ∪ the 2 service verticals. */
@@ -145,11 +169,14 @@ class ServiceAvailabilityService
                 return $this->blocked('city_' . $c['status'], null, $c['status']);
             }
 
-            // Tier 3 — city × vertical override (matrix).
+            // Tier 3 — city × vertical override (matrix). Check EVERY same-named
+            // city id (most-restrictive) so a duplicate-name city can't dodge it.
             if ($c) {
-                $o = $map['matrix'][$c['id']][$vertical] ?? null;
-                if ($o && in_array($o['status'], CVS::BLOCKING, true)) {
-                    return $this->blocked('city_vertical_' . $o['status'], $o['message'], $o['status']);
+                foreach ($c['ids'] as $cid) {
+                    $o = $map['matrix'][$cid][$vertical] ?? null;
+                    if ($o && in_array($o['status'], CVS::BLOCKING, true)) {
+                        return $this->blocked('city_vertical_' . $o['status'], $o['message'], $o['status']);
+                    }
                 }
             }
 

@@ -116,6 +116,10 @@ class OrderRepository extends BaseRepository
     public function storeOrder($request, $settings): mixed
     {
         $request['tracking_number'] = $this->generateTrackingNumber();
+
+        // Operations Control Center — final guard: never create an order
+        // containing a vertical that's unavailable in the shipping city.
+        $this->assertVerticalsAvailable($request);
         // $request->merge([
         //     'payable'         => $request['paid_total'], // amount to be paid through paymentGateway
         //     'wallet_currency' => 0
@@ -654,6 +658,44 @@ class OrderRepository extends BaseRepository
             }
         }
         return round($total, 2);
+    }
+
+    /**
+     * Operations Control Center — throw 503 if the order contains a vertical
+     * unavailable in the shipping city. FAIL OPEN: no city / resolver error ⇒
+     * allow (never block commerce on a fault). The throw is OUTSIDE the try so
+     * a genuine block is never swallowed.
+     */
+    protected function assertVerticalsAvailable($request): void
+    {
+        $blocked = [];
+        $city = null;
+        try {
+            $addr = $request['shipping_address'] ?? null;
+            $city = is_array($addr) ? ($addr['city'] ?? null) : null;
+            if (empty($city)) {
+                return;
+            }
+            $ids = collect($request['products'] ?? [])->pluck('product_id')->filter()->unique()->all();
+            if (empty($ids)) {
+                return;
+            }
+            $svc = app(\Marvel\Services\ServiceAvailabilityService::class);
+            foreach (\Marvel\Database\Models\Product::with('type')->whereIn('id', $ids)->get(['id', 'type_id']) as $p) {
+                $slug = optional($p->type)->slug;
+                if ($slug && !$svc->resolve($slug, (string) $city)['available']) {
+                    $blocked[$slug] = true;
+                }
+            }
+        } catch (\Throwable $e) {
+            return; // fail open
+        }
+        if (!empty($blocked)) {
+            throw new \Symfony\Component\HttpKernel\Exception\HttpException(
+                503,
+                'Some items are currently unavailable in ' . $city . '. Please remove them and try again.'
+            );
+        }
     }
 
     /** Customer coordinates from the order's shipping_address.location (if shared). */

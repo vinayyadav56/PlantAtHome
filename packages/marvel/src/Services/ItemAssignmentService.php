@@ -56,6 +56,27 @@ class ItemAssignmentService
     {
         $qty = max(1, $qty);
         $cityN = $this->norm($city);
+
+        // Operations Control Center — no vendor / delivery assignment when the
+        // "Stop All Deliveries" kill-switch is engaged, or for a vertical that's
+        // unavailable in the city. FAIL OPEN (no city / error).
+        try {
+            $svc = app(\Marvel\Services\ServiceAvailabilityService::class);
+            if (!empty($svc->platformFlags()['stop_deliveries'])) {
+                return [];
+            }
+            if (!empty($city)) {
+                $slug = \Marvel\Database\Models\Product::where('products.id', $productId)
+                    ->join('types', 'products.type_id', '=', 'types.id')
+                    ->value('types.slug');
+                if ($slug && !$svc->resolve($slug, (string) $city)['available']) {
+                    return [];
+                }
+            }
+        } catch (\Throwable $e) {
+            // fail open
+        }
+
         $vendors = $this->availability->vendorsForProduct($productId, $variationOptionId);
         if (empty($vendors)) {
             return [];

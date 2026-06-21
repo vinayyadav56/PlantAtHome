@@ -35,6 +35,33 @@ class CheckoutRepository
         $minimumOrderAmount = isset($settings['options']['minimumOrderAmount']) ? $settings['options']['minimumOrderAmount'] : 0;
         $unavailable_products = $this->checkStock($request['products']);
 
+        // Operations Control Center — block any cart line whose vertical is
+        // currently unavailable in the shipping city. FAIL OPEN: no city ⇒ no gate.
+        $blocked_verticals = [];
+        $shipCity = is_array($request['shipping_address'] ?? null) ? ($request['shipping_address']['city'] ?? null) : null;
+        if (!empty($shipCity)) {
+            try {
+                $availSvc = app(\Marvel\Services\ServiceAvailabilityService::class);
+                $ids = collect($request['products'])->pluck('product_id')->filter()->unique()->values()->all();
+                if (!empty($ids)) {
+                    foreach (Product::with('type')->whereIn('id', $ids)->get(['id', 'type_id']) as $p) {
+                        $slug = optional($p->type)->slug;
+                        if (!$slug) {
+                            continue;
+                        }
+                        $res = $availSvc->resolve($slug, (string) $shipCity);
+                        if (!$res['available']) {
+                            $unavailable_products[] = $p->id;
+                            $blocked_verticals[$slug] = $res['message'];
+                        }
+                    }
+                    $unavailable_products = array_values(array_unique($unavailable_products));
+                }
+            } catch (\Throwable $e) {
+                // fail open
+            }
+        }
+
         // Server-authoritative pricing: reprice vendor-cost-sheet products to their
         // margin-over-cost selling price so the previewed total matches what the
         // order will charge (products without a cost sheet are untouched).
@@ -53,6 +80,9 @@ class CheckoutRepository
             'total_tax'            => $tax,
             'shipping_charge'      => $shipping_charge,
             'unavailable_products' => $unavailable_products,
+            // Operations Control Center — { vertical_slug: message } for blocked
+            // lines. Cast to object so the shape is stable (always {} when empty).
+            'blocked_verticals'    => (object) $blocked_verticals,
             // Server-authoritative amount + repriced lines (margin-over-cost for
             // vendor-cost-sheet products); the storefront uses these for the total.
             'amount'               => round((float) $amount, 2),

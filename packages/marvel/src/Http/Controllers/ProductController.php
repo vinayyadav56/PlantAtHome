@@ -147,6 +147,18 @@ class ProductController extends CoreController
             if ((clone $sub)->exists()) {
                 $products_query = $products_query->whereIn('id', $sub);
             }
+
+            // Operations Control Center — hide products whose vertical is
+            // currently unavailable in this city. FAIL OPEN: only narrows when a
+            // vertical is actually disabled there; an unconfigured/all-active
+            // config never filters, so the catalog is never emptied.
+            $availSvc = app(\Marvel\Services\ServiceAvailabilityService::class);
+            if ($availSvc->shouldFilterCity((string) $request->city)) {
+                $availableVerticals = $availSvc->availableVerticalsForCity((string) $request->city);
+                $products_query = $products_query->whereHas('type', function ($q) use ($availableVerticals) {
+                    $q->whereIn('slug', $availableVerticals);
+                });
+            }
         }
 
         if ($request->flash_sale_builder) {
@@ -217,7 +229,9 @@ class ProductController extends CoreController
 
             if (!$cacheable) {
                 $product = $this->fetchSingleProduct($request);
-                return (new GetSingleProductResource($product))->response();
+                $data = (new GetSingleProductResource($product))->response()->getData(true);
+                $data = $this->attachAvailability($data, $request);
+                return response()->json($data);
             }
 
             $language = $request->language ?? DEFAULT_LANGUAGE;
@@ -226,10 +240,42 @@ class ProductController extends CoreController
             $data = Cache::remember($key, 300, function () use ($request) {
                 return (new GetSingleProductResource($this->fetchSingleProduct($request)))->response()->getData(true);
             });
+            // Operations Control Center — availability depends on the request's
+            // city (not in the cache key), so it's resolved + attached per-request.
+            $data = $this->attachAvailability($data, $request);
             return response()->json($data)->header('Cache-Control', $this->cacheControl());
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
         }
+    }
+
+    /**
+     * Operations Control Center — attach an `availability` block to a PDP
+     * response for the request's city. Fail open (city absent / no vertical /
+     * error ⇒ no block, never throws). The storefront reads it to gate
+     * add-to-cart + show the maintenance message.
+     */
+    private function attachAvailability(array $data, Request $request): array
+    {
+        try {
+            if (!$request->filled('city')) {
+                return $data;
+            }
+            $slug = \Illuminate\Support\Arr::get($data, 'data.type.slug');
+            if (!$slug) {
+                $pslug = \Illuminate\Support\Arr::get($data, 'data.slug') ?? $request->input('slug');
+                $typeId = \Marvel\Database\Models\Product::where('slug', $pslug)->value('type_id');
+                $slug = $typeId ? \Marvel\Database\Models\Type::where('id', $typeId)->value('slug') : null;
+            }
+            if (!$slug) {
+                return $data;
+            }
+            $av = app(\Marvel\Services\ServiceAvailabilityService::class)->resolve($slug, (string) $request->city);
+            \Illuminate\Support\Arr::set($data, 'data.availability', $av);
+        } catch (\Throwable $e) {
+            // fail open
+        }
+        return $data;
     }
 
 
