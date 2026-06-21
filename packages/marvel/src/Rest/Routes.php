@@ -890,6 +890,8 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     Route::delete('designations/{id}', [DesignationController::class, 'destroy'])
         ->middleware('permission:employees.delete');
 
+    Route::get('employees/{id}', [UserController::class, 'showEmployee'])
+        ->middleware('permission:employees.view');
     Route::put('employees/{id}/access', [UserController::class, 'setEmployeeAccess'])
         ->middleware('permission:employees.edit');
 });

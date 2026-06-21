@@ -212,6 +212,22 @@ class UserController extends CoreController
     }
 
     /**
+     * Phase B — a single employee with the data the access editor needs
+     * (designation, reporting manager, profile, roles, perms). Gated by
+     * employees.view so a non-super-admin employee-manager can load it.
+     */
+    public function showEmployee($id)
+    {
+        return User::with([
+            'profile',
+            'permissions',
+            'roles',
+            'designation',
+            'reporting_manager',
+        ])->findOrFail($id);
+    }
+
+    /**
      * Phase B — set/replace an existing employee's designation + overrides + org
      * fields, then re-materialise their effective permissions. Super-admin only
      * (route). Super-admin accounts are never re-scoped here (lockout guard).

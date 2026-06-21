@@ -16,7 +16,7 @@ _Status as of 2026-06-21. Everything below is **on `staging`** (api `vinayyadav5
 ---
 
 ## 🔧 Recommended before go-live (non-blocking, but do these)
-1. **Build the "Edit employee access" UI.** Backend `PUT employees/{id}/access` + `useSetEmployeeAccessMutation` + `employeeClient.setAccess` all exist, but **no page/button uses them** (`pages/employees/` has only `create` + `index`). Today an admin cannot change an employee's designation, switch them to custom, or edit org fields after onboarding — they'd delete + recreate. → _Status: IN PROGRESS this session._
+1. ~~Build the "Edit employee access" UI.~~ **✅ DONE this session.** New `GET employees/{id}` (employees.view-gated) + `pages/employees/[id]/edit.tsx` (pre-filled from the employee's current designation + effective perms) + an "Access" button per row in the employees list, wired to the existing `setAccess` endpoint. Admins can now change designation, switch to custom (grant/revoke), and edit org fields without delete-and-recreate.
 2. **End-to-end verify on staging before promoting:** create a designation → onboard an employee → log in as them → confirm filtered sidebar + a non-permitted route is blocked → confirm a real vendor login is unchanged.
 3. **Add a post-deploy RBAC smoke step** (see runbook) — the seeders run with `|| echo WARNING`, so a silent seeder failure deploys GREEN while leaving the `employee` role/perms missing (every designation employee then locked out) and `/api/health` still 200. The fix is a 30-second manual check, or remove `|| echo WARNING` on `RolePermissionSeeder`.
 
