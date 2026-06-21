@@ -278,6 +278,12 @@ try {
   php artisan db:seed --class="Marvel\\Database\\Seeders\\DesignationSeeder" --force \
     || echo "[bg] WARNING: DesignationSeeder failed"
 
+  # Operations Control Center — one active global row per vertical (+ platform).
+  # Idempotent firstOrCreate, never resets admin toggles; all-active = no-op.
+  echo "==> [bg] Seeding service availability (Operations Control Center)..."
+  php artisan db:seed --class="Marvel\\Database\\Seeders\\ServiceAvailabilitySeeder" --force \
+    || echo "[bg] WARNING: ServiceAvailabilitySeeder failed"
+
   # Master Location System (Phase 2) — states + cities (from delivery_pincodes).
   # Idempotent + additive (firstOrCreate), never overwrites admin city status.
   echo "==> [bg] Seeding master locations (states + cities)..."

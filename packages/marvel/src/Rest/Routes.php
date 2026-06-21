@@ -66,6 +66,7 @@ use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
 use Marvel\Http\Controllers\RolePermissionController;
 use Marvel\Http\Controllers\DesignationController;
+use Marvel\Http\Controllers\ServiceAvailabilityController;
 use Marvel\Http\Controllers\BundleController;
 use Marvel\Http\Controllers\LocationPriceController;
 use Marvel\Http\Controllers\OrderAssignmentController;
@@ -894,6 +895,26 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
         ->middleware('permission:employees.view');
     Route::put('employees/{id}/access', [UserController::class, 'setEmployeeAccess'])
         ->middleware('permission:employees.edit');
+});
+
+
+// ── Operations Control Center: Service Availability ──────────────────────────
+// Module-permission gated (operations.*); super-admin passes via Gate::before.
+Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
+    Route::get('operations/availability/overview', [ServiceAvailabilityController::class, 'overview'])
+        ->middleware('permission:operations.view');
+    Route::get('operations/availability/matrix', [ServiceAvailabilityController::class, 'matrix'])
+        ->middleware('permission:operations.view');
+    Route::get('operations/availability/logs', [ServiceAvailabilityController::class, 'logs'])
+        ->middleware('permission:operations.view');
+    Route::post('operations/availability/global', [ServiceAvailabilityController::class, 'setGlobal'])
+        ->middleware('permission:operations.edit');
+    Route::post('operations/availability/city-vertical', [ServiceAvailabilityController::class, 'setCityVertical'])
+        ->middleware('permission:operations.edit');
+    Route::post('operations/availability/bulk', [ServiceAvailabilityController::class, 'bulk'])
+        ->middleware('permission:operations.manage');
+    Route::post('operations/availability/emergency', [ServiceAvailabilityController::class, 'emergency'])
+        ->middleware('permission:operations.manage');
 });
 
 

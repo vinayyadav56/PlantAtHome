@@ -62,5 +62,8 @@ class Kernel extends HttpKernel
         'signed' => \Illuminate\Routing\Middleware\ValidateSignature::class,
         'throttle' => \Illuminate\Routing\Middleware\ThrottleRequests::class,
         'verified' => \Illuminate\Auth\Middleware\EnsureEmailIsVerified::class,
+        // Operations Control Center — platform kill-switch guard (applied to
+        // transactional routes in Phase 2). service.available[:orders|deliveries]
+        'service.available' => \Marvel\Http\Middleware\CheckServiceAvailability::class,
     ];
 }

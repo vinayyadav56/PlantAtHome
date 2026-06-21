@@ -24,6 +24,7 @@ use Marvel\Events\PaymentFailed;
 use Marvel\Events\PaymentMethods;
 use Marvel\Events\PaymentSuccess;
 use Marvel\Events\ProcessUserData;
+use Marvel\Events\ServiceAvailabilityChanged;
 use Marvel\Events\ProductReviewApproved;
 use Marvel\Events\ProductReviewRejected;
 use Marvel\Events\RefundRequested;
@@ -55,6 +56,7 @@ use Marvel\Listeners\SendOrderStatusChangedNotification;
 use Marvel\Listeners\SendPaymentFailedNotification;
 use Marvel\Listeners\SendPaymentSuccessNotification;
 use Marvel\Listeners\SendRefundRequestedNotification;
+use Marvel\Listeners\RecordServiceAvailabilityChange;
 use Marvel\Listeners\StoredMessagedNotifyLogsListener;
 use Marvel\Listeners\StoredOrderNotifyLogsListener;
 use Marvel\Listeners\StoredStoreNoticeNotifyLogsListener;
@@ -149,6 +151,9 @@ class EventServiceProvider extends ServiceProvider
         ],
         ShopMaintenance::class => [
             ShopMaintenanceListener::class
+        ],
+        ServiceAvailabilityChanged::class => [
+            RecordServiceAvailabilityChange::class
         ]
     ];
 

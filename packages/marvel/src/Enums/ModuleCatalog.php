@@ -77,6 +77,11 @@ final class ModuleCatalog
             'kanban' => [
                 'kanban' => self::CRUD, // view/edit used; rest kept for compat
             ],
+            'operations' => [
+                // Service Control Center: view the grid, edit toggles, manage
+                // bulk + emergency kill-switches.
+                'operations' => ['view', 'edit', 'manage'],
+            ],
         ];
     }
 
