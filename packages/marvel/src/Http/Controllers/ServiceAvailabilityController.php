@@ -41,29 +41,39 @@ class ServiceAvailabilityController extends CoreController
 
     // ── Reads ───────────────────────────────────────────────────────────────
 
-    /** Summary cards for the dashboard top row. */
+    /** Summary cards for the dashboard top row. Fail-soft: never 500 the panel. */
     public function overview(Request $request)
     {
-        $verticals = GVS::where('vertical_slug', '!=', GVS::PLATFORM_SLUG)->get();
-        $citiesActive = City::whereIn('status', [City::STATUS_ACTIVE, City::STATUS_MAINTENANCE])
-            ->where('is_serviceable', true)->count();
-        $citiesTotal = City::count();
-        $platform = $this->availability->platformFlags();
+        try {
+            $verticals = GVS::where('vertical_slug', '!=', GVS::PLATFORM_SLUG)->get();
+            $citiesActive = City::whereIn('status', [City::STATUS_ACTIVE, City::STATUS_MAINTENANCE])
+                ->where('is_serviceable', true)->count();
+            $citiesTotal = City::count();
 
-        return [
-            'verticals_active'   => $verticals->where('is_active', true)->count(),
-            'verticals_disabled' => $verticals->where('is_active', false)->count(),
-            'verticals_total'    => count($this->availability->allVerticals()),
-            'cities_active'      => $citiesActive,
-            'cities_disabled'    => max(0, $citiesTotal - $citiesActive),
-            'cities_total'       => $citiesTotal,
-            'overrides'          => CVS::whereIn('status', CVS::BLOCKING)->count(),
-            'platform'           => $platform,
-            'active_vendors'     => DB::table('shops')->whereNull('deleted_at')->where('is_active', true)->count(),
-            'online_partners'    => $this->onlinePartners(),
-            'changes_24h'        => ServiceAvailabilityLog::where('created_at', '>=', now()->subDay())->count(),
-            'recent'             => ServiceAvailabilityLog::orderByDesc('created_at')->limit(6)->get(),
-        ];
+            return [
+                'verticals_active'   => $verticals->where('is_active', true)->count(),
+                'verticals_disabled' => $verticals->where('is_active', false)->count(),
+                'verticals_total'    => count($this->availability->allVerticals()),
+                'cities_active'      => $citiesActive,
+                'cities_disabled'    => max(0, $citiesTotal - $citiesActive),
+                'cities_total'       => $citiesTotal,
+                'overrides'          => CVS::whereIn('status', CVS::BLOCKING)->count(),
+                'platform'           => $this->availability->platformFlags(),
+                // `shops` has no soft-deletes — no deleted_at column (was 500ing the whole endpoint).
+                'active_vendors'     => DB::table('shops')->where('is_active', true)->count(),
+                'online_partners'    => $this->onlinePartners(),
+                'changes_24h'        => ServiceAvailabilityLog::where('created_at', '>=', now()->subDay())->count(),
+                'recent'             => ServiceAvailabilityLog::orderByDesc('created_at')->limit(6)->get(),
+            ];
+        } catch (\Throwable $e) {
+            // Safe zeros so the Service Control Center never errors on a metric hiccup.
+            return [
+                'verticals_active' => 0, 'verticals_disabled' => 0, 'verticals_total' => 0,
+                'cities_active' => 0, 'cities_disabled' => 0, 'cities_total' => 0, 'overrides' => 0,
+                'platform' => ['stop_platform' => false, 'stop_orders' => false, 'stop_deliveries' => false, 'maintenance' => false, 'message' => null],
+                'active_vendors' => 0, 'online_partners' => 0, 'changes_24h' => 0, 'recent' => [],
+            ];
+        }
     }
 
     private function onlinePartners(): int
