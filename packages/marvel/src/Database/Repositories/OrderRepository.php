@@ -183,13 +183,29 @@ class OrderRepository extends BaseRepository
         // Hidden from customers; persisted on the parent + split across suborders.
         $request['vendor_cost_total'] = $this->computeVendorCostTotal($request['products'], $custLatLng);
 
+        // H8 — block oversell at order creation. The atomic decrement keeps the
+        // stock column from going negative, but without this the order would still
+        // be created + charged for unfulfillable items. Runs inside the order's
+        // DB::transaction (OrderController::store) so a failure rolls the order back.
+        $stockUnavailable = (new CheckoutRepository())->checkStock((array) $request['products']);
+        if (!empty($stockUnavailable)) {
+            throw new \Symfony\Component\HttpKernel\Exception\HttpException(422, 'Some items in your cart are out of stock.');
+        }
+
+        // Discount is server-authoritative: it stays 0 unless a coupon is supplied
+        // AND passes full validation here (a client can't send a bare `discount`).
+        $request['discount'] = 0;
         if (isset($request->coupon_id)) {
-            try {
-                $coupon = Coupon::findOrFail($request['coupon_id']);
-                $request['discount'] = $this->calculateDiscount($coupon,  $request['amount']);
-            } catch (Exception $th) {
-                throw $th;
+            $coupon = Coupon::findOrFail($request['coupon_id']);
+            // C3 — validate the coupon AT ORDER CREATION (approval + active window +
+            // minimum cart), not only in the advisory `verify` preview. Use the
+            // server-recomputed subtotal.
+            $subtotal = (float) $request['amount'];
+            if (!$coupon->is_approve || !$coupon->is_valid || $subtotal < (float) $coupon->minimum_cart_amount) {
+                throw new \Symfony\Component\HttpKernel\Exception\HttpException(422, 'This coupon is not valid for this order.');
             }
+            // Clamp the discount so it can never exceed the subtotal (no negative totals).
+            $request['discount'] = min((float) $this->calculateDiscount($coupon, $subtotal), $subtotal);
         }
 
         // Server-authoritative delivery_fee + sales_tax — NEVER trust the client's figures
@@ -211,7 +227,8 @@ class OrderRepository extends BaseRepository
             : (float) $checkout->calculateShippingCharge($request, $request['amount']);
         $request['sales_tax'] = (float) $checkout->calculateTax($request, $request['delivery_fee'], $request['amount']);
 
-        $request['paid_total'] = $request['amount'] + $request['sales_tax'] + $request['delivery_fee'] -  $request['discount'];
+        // Floor at 0 — a payable total must never be negative (C3 defense-in-depth).
+        $request['paid_total'] = max(0, $request['amount'] + $request['sales_tax'] + $request['delivery_fee'] - $request['discount']);
         $request['total'] = $request['paid_total'];
         if (($useWalletPoints || $request->isFullWalletPayment) && $user) {
             $wallet = $user->wallet;
@@ -427,6 +444,26 @@ class OrderRepository extends BaseRepository
     }
 
     /**
+     * Server-authoritative unit price for a cart line — the SAME resolution the
+     * charged total uses (vendor cost-sheet margin → variation → product, with
+     * sale_price winning over price). Never trusts the client's unit_price.
+     */
+    protected function serverUnitPrice(array $item): float
+    {
+        $voId = $item['variation_option_id'] ?? null;
+        $margin = $this->vendorMarginUnitPrice($item['product_id'] ?? null, $voId);
+        if ($margin !== null) {
+            return (float) $margin;
+        }
+        if (!empty($voId)) {
+            $v = Variation::find($voId);
+            return (float) ($v && $v->sale_price ? $v->sale_price : optional($v)->price);
+        }
+        $p = Product::find($item['product_id'] ?? null);
+        return (float) ($p && $p->sale_price ? $p->sale_price : optional($p)->price);
+    }
+
+    /**
      * processProducts
      *
      * @param  mixed $products
@@ -439,8 +476,15 @@ class OrderRepository extends BaseRepository
         foreach ($products as $key => $product) {
             if (!isset($product['variation_option_id'])) {
                 $product['variation_option_id'] = null;
-                $products[$key] = $product;
             }
+            // H7 — persist the SERVER-authoritative line price (the exact same
+            // logic the charged total uses), never the client-sent unit_price/
+            // subtotal. Keeps the order record/invoice/settlement consistent.
+            $unit = $this->serverUnitPrice($product);
+            $product['unit_price'] = $unit;
+            $product['subtotal']   = $unit * (int) ($product['order_quantity'] ?? 1);
+            $products[$key] = $product;
+
             try {
                 if ($order->parent_id === null) {
                     $productData = Product::with('digital_file')->findOrFail($product['product_id']);

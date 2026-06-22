@@ -31,7 +31,8 @@ class AddressRequest extends FormRequest
             'type'        => ['required', 'string', 'max:255'],
             'default'     => ['boolean'],
             'address'     => ['required', 'array'],
-            'customer_id' => ['required', 'exists:Marvel\Database\Models\User,id'],
+            // Server-set from the authenticated user in the controller — never trusted from the client.
+            'customer_id' => ['nullable', 'exists:Marvel\Database\Models\User,id'],
         ];
     }
 

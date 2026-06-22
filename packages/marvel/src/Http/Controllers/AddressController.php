@@ -30,7 +30,12 @@ class AddressController extends CoreController
      */
     public function index(Request $request)
     {
-        return $this->repository->with('customer')->all();
+        $user = $request->user();
+        // Customers only ever see their own addresses; super-admin sees all.
+        if ($user && $user->hasPermissionTo(Permission::SUPER_ADMIN)) {
+            return $this->repository->with('customer')->all();
+        }
+        return $this->repository->with('customer')->findWhere(['customer_id' => optional($user)->id]);
     }
 
     /**
@@ -43,8 +48,10 @@ class AddressController extends CoreController
     public function store(AddressRequest $request)
     {
         try {
-            $validatedData = $request->all();
-            return $this->repository->create($validatedData);
+            $data = $request->validated();
+            // Never trust a client-supplied customer_id — bind to the caller.
+            $data['customer_id'] = $request->user()->id;
+            return $this->repository->create($data);
         } catch (MarvelException $e) {
             throw new MarvelException(COULD_NOT_CREATE_THE_RESOURCE);
         }
@@ -56,10 +63,12 @@ class AddressController extends CoreController
      * @param $id
      * @return JsonResponse
      */
-    public function show($id)
+    public function show($id, Request $request)
     {
         try {
-            return $this->repository->with('customer')->findOrFail($id);
+            $address = $this->repository->with('customer')->findOrFail($id);
+            $this->authorizeOwner($address, $request);
+            return $address;
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
         }
@@ -75,10 +84,26 @@ class AddressController extends CoreController
     public function update(AddressRequest $request, $id)
     {
         try {
-            $validatedData = $request->all();
-            return $this->repository->findOrFail($id)->update($validatedData);
+            $address = $this->repository->findOrFail($id);
+            $this->authorizeOwner($address, $request);
+            $data = $request->validated();
+            unset($data['customer_id']); // never re-parent an address to another user
+            $address->update($data);
+            return $address;
         } catch (MarvelException $e) {
             throw new MarvelException(COULD_NOT_UPDATE_THE_RESOURCE);
+        }
+    }
+
+    /** Allow the owner or a super-admin; otherwise 403. */
+    private function authorizeOwner($address, Request $request): void
+    {
+        $user = $request->user();
+        if ($user && $user->hasPermissionTo(Permission::SUPER_ADMIN)) {
+            return;
+        }
+        if (!$user || (int) $address->customer_id !== (int) $user->id) {
+            throw new MarvelException(NOT_AUTHORIZED);
         }
     }
 

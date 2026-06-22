@@ -137,8 +137,32 @@ class Razorpay extends Base implements PaymentInterface
     {
         $payload = $request->payload['payment']['entity'];
         $paymentIntent = PaymentIntent::whereJsonContains('payment_intent_info', ['payment_id' => $payload['order_id']])->first();
+        if (!$paymentIntent) {
+            return; // unknown intent — nothing to reconcile
+        }
+
+        // H2 — on a successful capture, the signature-verified captured amount MUST
+        // cover the amount we registered with Razorpay (paid_total − wallet, stored
+        // on the intent in rupees). Reject underpayment so a partial/tampered
+        // capture can never mark an order fully paid.
+        if ($paymentStatus === PaymentStatus::SUCCESS) {
+            $expectedPaise = (int) round(((float) data_get($paymentIntent->payment_intent_info, 'amount', 0)) * 100);
+            $capturedPaise = (int) ($payload['amount'] ?? 0);
+            if ($expectedPaise > 0 && $capturedPaise < $expectedPaise) {
+                \Illuminate\Support\Facades\Log::warning('Razorpay capture underpaid — not marking SUCCESS', [
+                    'rzp_order_id'   => $payload['order_id'] ?? null,
+                    'expected_paise' => $expectedPaise,
+                    'captured_paise' => $capturedPaise,
+                ]);
+                return;
+            }
+        }
+
         $trackingId = $paymentIntent->tracking_number;
         $order = Order::where('tracking_number', '=', $trackingId)->first();
+        if (!$order) {
+            return;
+        }
         $this->webhookSuccessResponse($order, $orderStatus, $paymentStatus);
     }
 

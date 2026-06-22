@@ -21,6 +21,24 @@ trait OrderManagementTrait
     public function changeOrderStatus($order, $status)
     {
         $prev_order_status = $order->order_status;
+
+        // C4 — reject illegal/backward transitions that corrupt money + inventory.
+        // CANCELLED/REFUNDED are final; a COMPLETED order may only move to REFUNDED
+        // (refunds run through their own atomic flow, not this path). This blocks
+        // re-crediting vendor earnings via completed→processing→completed and
+        // restoring stock for already-shipped/delivered orders.
+        if ($prev_order_status !== $status) {
+            $final = [OrderStatusEnum::CANCELLED, OrderStatusEnum::REFUNDED];
+            $illegal = in_array($prev_order_status, $final, true)
+                || ($prev_order_status === OrderStatusEnum::COMPLETED && $status !== OrderStatusEnum::REFUNDED);
+            if ($illegal) {
+                throw new \Symfony\Component\HttpKernel\Exception\HttpException(
+                    422,
+                    'Invalid order status transition: an order that is ' . $prev_order_status . ' cannot become ' . $status . '.'
+                );
+            }
+        }
+
         $order->order_status = $status;
         $new_order_status = $order->order_status;
 

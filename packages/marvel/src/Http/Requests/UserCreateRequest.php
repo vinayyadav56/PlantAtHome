@@ -30,7 +30,7 @@ class UserCreateRequest extends FormRequest
         return [
             'name'     => ['required', 'string', 'max:255'],
             'email'    => ['required', 'email', 'unique:users'],
-            'password' => ['required', 'string'],
+            'password' => ['required', 'string', \Illuminate\Validation\Rules\Password::min(8)],
             'shop_id' => ['nullable', 'exists:Marvel\Database\Models\Shop,id'],
             'profile'  => ['array'],
             'address'  => ['array'],

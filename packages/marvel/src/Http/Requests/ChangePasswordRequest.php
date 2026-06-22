@@ -27,7 +27,7 @@ class ChangePasswordRequest extends FormRequest
     {
         return [
             'oldPassword' => 'required|string',
-            'newPassword' => 'required|string',
+            'newPassword' => ['required', 'string', \Illuminate\Validation\Rules\Password::min(8)],
         ];
     }
 

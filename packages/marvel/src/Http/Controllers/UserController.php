@@ -19,6 +19,7 @@ use Illuminate\Support\Facades\Redirect;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
+use Illuminate\Validation\Rules\Password;
 use Laravel\Socialite\Facades\Socialite;
 use Marvel\Console\MarvelVerification;
 use Marvel\Database\Models\Designation;
@@ -250,6 +251,26 @@ class UserController extends CoreController
             throw new MarvelException(NOT_AUTHORIZED);
         }
 
+        // H1 — prevent privilege escalation: a non-super-admin employee-manager
+        // may not edit their OWN access, nor grant access they don't themselves
+        // hold (via overrides.grant OR a designation whose defaults exceed theirs).
+        $actor = $request->user();
+        $actorPerms = $actor ? $actor->getAllPermissions()->pluck('name')->all() : [];
+        $isSuper = $actor && ($actor->hasRole('super_admin') || in_array('super_admin', $actorPerms, true));
+        if (!$isSuper) {
+            if ($actor && (int) $actor->id === (int) $user->id) {
+                throw new MarvelException(NOT_AUTHORIZED);
+            }
+            $requested = (array) data_get($request->input('permission_overrides'), 'grant', []);
+            if ($request->filled('designation_id')) {
+                $desig = \Marvel\Database\Models\Designation::find($request->input('designation_id'));
+                $requested = array_merge($requested, (array) ($desig->default_permissions ?? []));
+            }
+            if (array_diff(array_unique($requested), $actorPerms)) {
+                throw new MarvelException(NOT_AUTHORIZED);
+            }
+        }
+
         return DB::transaction(function () use ($request, $user) {
             $user->forceFill(array_filter([
                 'designation_id'       => $request->input('designation_id'),
@@ -290,6 +311,19 @@ class UserController extends CoreController
         $user = User::findOrFail($id);
         if ($user->hasRole('super_admin')) {
             throw new MarvelException(NOT_AUTHORIZED);
+        }
+
+        // H1 — only a super-admin may assign the broad admin/manager roles or
+        // re-role themselves (otherwise an employees.edit holder self-escalates).
+        $actor = $request->user();
+        $isSuper = $actor && ($actor->hasRole('super_admin') || in_array('super_admin', $actor->getAllPermissions()->pluck('name')->all(), true));
+        if (!$isSuper) {
+            if ($actor && (int) $actor->id === (int) $user->id) {
+                throw new MarvelException(NOT_AUTHORIZED);
+            }
+            if (in_array($request->input('role'), ['admin', 'manager'], true)) {
+                throw new MarvelException(NOT_AUTHORIZED);
+            }
         }
 
         $roleName = $request->input('role');
@@ -571,37 +605,43 @@ class UserController extends CoreController
 
     public function forgetPassword(Request $request)
     {
+        $request->validate(['email' => 'required|email']);
         $user = $this->repository->findByField('email', $request->email);
-        if (count($user) < 1) {
-            return ['message' => NOT_FOUND, 'success' => false];
-        }
-        $tokenData = DB::table('password_resets')
-            ->where('email', $request->email)->first();
-        if (!$tokenData) {
+
+        // Only generate + send when the account exists, but ALWAYS return the
+        // same response so the endpoint can't be used to enumerate accounts.
+        if (count($user) >= 1) {
+            // Rotate a fresh, hashed, time-stamped token every request
+            // (single-use + expiring — never re-send a stale token).
+            DB::table('password_resets')->where('email', $request->email)->delete();
+            $token = Str::random(64);
             DB::table('password_resets')->insert([
-                'email' => $request->email,
-                'token' => Str::random(16),
-                'created_at' => Carbon::now()
+                'email'      => $request->email,
+                'token'      => Hash::make($token),
+                'created_at' => Carbon::now(),
             ]);
-            $tokenData = DB::table('password_resets')
-                ->where('email', $request->email)->first();
+            $this->repository->sendResetEmail($request->email, $token);
         }
 
-        if ($this->repository->sendResetEmail($request->email, $tokenData->token)) {
-            return ['message' => CHECK_INBOX_FOR_PASSWORD_RESET_EMAIL, 'success' => true];
-        } else {
-            return ['message' => SOMETHING_WENT_WRONG, 'success' => false];
-        }
+        return ['message' => CHECK_INBOX_FOR_PASSWORD_RESET_EMAIL, 'success' => true];
     }
+
+    /** A reset token is valid only when it matches the row for THAT email and is unexpired. */
+    private function isResetTokenValid(string $email, string $token): bool
+    {
+        $row = DB::table('password_resets')->where('email', $email)->first();
+        if (!$row || !Hash::check($token, $row->token)) {
+            return false;
+        }
+        $expire = (int) config('auth.passwords.users.expire', 60);
+        return !Carbon::parse($row->created_at)->addMinutes($expire)->isPast();
+    }
+
     public function verifyForgetPasswordToken(Request $request)
     {
-        $tokenData = DB::table('password_resets')->where('token', $request->token)->first();
-        if (!$tokenData) {
+        $request->validate(['email' => 'required|email', 'token' => 'required|string']);
+        if (!$this->isResetTokenValid($request->email, $request->token)) {
             return ['message' => INVALID_TOKEN, 'success' => false];
-        }
-        $user = $this->repository->findByField('email', $request->email);
-        if (count($user) < 1) {
-            return ['message' => NOT_FOUND, 'success' => false];
         }
         return ['message' => TOKEN_IS_VALID, 'success' => true];
     }
@@ -609,18 +649,30 @@ class UserController extends CoreController
     {
         try {
             $request->validate([
-                'password' => 'required|string',
-                'email' => 'email|required',
-                'token' => 'required|string'
+                'password' => ['required', 'string', Password::min(8)],
+                'email'    => ['required', 'email'],
+                'token'    => ['required', 'string'],
             ]);
 
+            // The token MUST match the row for this email and be unexpired —
+            // otherwise anyone could reset any account by supplying its email.
+            if (!$this->isResetTokenValid($request->email, $request->token)) {
+                return ['message' => INVALID_TOKEN, 'success' => false];
+            }
+
             $user = $this->repository->where('email', $request->email)->first();
+            if (!$user) {
+                return ['message' => NOT_FOUND, 'success' => false];
+            }
             $user->password = Hash::make($request->password);
             $user->save();
 
-            DB::table('password_resets')->where('email', $user->email)->delete();
+            // Single-use: invalidate the token after a successful reset.
+            DB::table('password_resets')->where('email', $request->email)->delete();
 
             return ['message' => PASSWORD_RESET_SUCCESSFUL, 'success' => true];
+        } catch (ValidationException $ve) {
+            throw $ve;
         } catch (\Exception $th) {
             return ['message' => SOMETHING_WENT_WRONG, 'success' => false];
         }
@@ -864,7 +916,6 @@ class UserController extends CoreController
             if (!$sendOtpCode->isValid()) {
                 return ['message' => OTP_SEND_FAIL, 'success' => false];
             }
-            $profile = Profile::where('contact', $phoneNumber)->first();
             return [
                 'message' => OTP_SEND_SUCCESSFUL,
                 'success' => true,
@@ -872,7 +923,7 @@ class UserController extends CoreController
                 'channel' => $channel,
                 'id' => $sendOtpCode->getId(),
                 'phone_number' => $phoneNumber,
-                'is_contact_exist' => $profile ? true : false
+                // Do NOT disclose whether the phone is registered (account enumeration).
             ];
         } catch (MarvelException $e) {
             throw new MarvelException(INVALID_GATEWAY);
