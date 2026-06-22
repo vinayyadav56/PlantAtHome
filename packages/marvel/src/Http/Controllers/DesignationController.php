@@ -55,10 +55,12 @@ class DesignationController extends CoreController
 
             // Re-materialise EVERY employee with this designation — both
             // designation-sourced and custom (custom effective also depends on
-            // the designation defaults). Bounded fan-out.
+            // the designation defaults). Bounded fan-out. Flush the Spatie cache
+            // ONCE after the loop instead of once per user.
             $designation->users()->each(function ($user) {
-                $this->resolver->materialize($user);
+                $this->resolver->materialize($user, false);
             });
+            app(\Spatie\Permission\PermissionRegistrar::class)->forgetCachedPermissions();
 
             return $designation->fresh();
         });

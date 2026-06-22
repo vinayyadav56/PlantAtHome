@@ -29,6 +29,8 @@ class Openai extends Base implements AiInterface
             $language = $request->language ?? 'en';
             $response = $this->openAiClient->chat()->create([
                 'model' => 'gpt-4o-mini',
+                // Cap output cost per call (product descriptions are short).
+                'max_tokens' => 600,
                 'messages' => [
                     [
                         'role' => 'system',

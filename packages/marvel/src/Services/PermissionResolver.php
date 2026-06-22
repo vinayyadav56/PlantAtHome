@@ -57,7 +57,7 @@ class PermissionResolver
      * Write the effective set (+ coarse login-gate perms) as the user's DIRECT
      * permissions and flush the Spatie cache. Idempotent.
      */
-    public function materialize(User $user): User
+    public function materialize(User $user, bool $flushCache = true): User
     {
         $full = array_values(array_unique(array_merge(
             $this->resolveEffective($user),
@@ -65,7 +65,11 @@ class PermissionResolver
         )));
 
         $user->syncPermissions($full);
-        app(PermissionRegistrar::class)->forgetCachedPermissions();
+        // Callers materialising many users in a loop pass false and flush ONCE
+        // afterwards (avoids an O(n) cache flush).
+        if ($flushCache) {
+            app(PermissionRegistrar::class)->forgetCachedPermissions();
+        }
 
         return $user;
     }

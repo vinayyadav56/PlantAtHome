@@ -29,8 +29,10 @@ class AiDescriptionRequest extends FormRequest
     public function rules()
     {
         return [
-            'prompt'                  => ['string', 'required'],
-            'language'                => ['string', 'nullable'],
+            // Cap the prompt — this relays to a paid LLM, so an unbounded prompt
+            // is a cost/abuse vector (route is public + throttled).
+            'prompt'                  => ['string', 'required', 'max:2000'],
+            'language'                => ['string', 'nullable', 'max:16'],
         ];
     }
 

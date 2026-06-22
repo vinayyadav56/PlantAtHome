@@ -110,12 +110,15 @@ Route::get('best-selling-products', [ProductController::class, 'bestSellingProdu
 Route::get('top-rated-products', [ProductController::class, 'topRatedProducts']);
 Route::get('check-availability', [ProductController::class, 'checkAvailability']);
 Route::get("products/calculate-rental-price", [ProductController::class, 'calculateRentalPrice']);
-Route::post('import-products', [ProductController::class, 'importProducts']);
-Route::post('import-variation-options', [ProductController::class, 'importVariationOptions']);
-Route::get('export-products/{shop_id}', [ProductController::class, 'exportProducts']);
-Route::get('export-variation-options/{shop_id}', [ProductController::class, 'exportVariableOptions']);
-Route::post('generate-description', [ProductController::class, 'generateDescription']);
-Route::post('import-attributes', [AttributeController::class, 'importAttributes']);
+// Bulk import/export carry an in-controller hasPermission() check; add a throttle
+// so the public routes can't be abused for bulk-write storms / catalog scraping.
+Route::post('import-products', [ProductController::class, 'importProducts'])->middleware('throttle:20,1');
+Route::post('import-variation-options', [ProductController::class, 'importVariationOptions'])->middleware('throttle:20,1');
+Route::get('export-products/{shop_id}', [ProductController::class, 'exportProducts'])->middleware('throttle:30,1');
+Route::get('export-variation-options/{shop_id}', [ProductController::class, 'exportVariableOptions'])->middleware('throttle:30,1');
+// (removed dead `generate-description` singular route — ProductController has no
+//  such method; it 500'd. The working endpoint is the plural `generate-descriptions`.)
+Route::post('import-attributes', [AttributeController::class, 'importAttributes'])->middleware('throttle:20,1');
 Route::get('export-attributes/{shop_id}', [AttributeController::class, 'exportAttributes']);
 Route::get('download_url/token/{token}', [DownloadController::class, 'downloadFile'])->name('download_url.token');
 Route::get('export-order/token/{token}', [OrderController::class, 'exportOrder'])->name('export_order.token');
@@ -218,13 +221,13 @@ Route::post('license-key/verify', [UserController::class, 'verifyLicenseKey']);
 
 Route::get('callback/flutterwave', [WebHookController::class, 'callback'])->name('callback.flutterwave');
 
-Route::get('near-by-shop/{lat}/{lng}', [ShopController::class, 'nearByShop']);
+Route::get('near-by-shop/{lat}/{lng}', [ShopController::class, 'nearByShop'])->middleware('throttle:60,1');
 
 // Public: location-derived selling price + availability (margin over hidden vendor cost)
-Route::get('location-price', [LocationPriceController::class, 'show']);
+Route::get('location-price', [LocationPriceController::class, 'show'])->middleware('throttle:120,1');
 Route::post('location-price/batch', [LocationPriceController::class, 'batch'])->middleware('throttle:60,1');
-Route::get('city-availability', [LocationPriceController::class, 'cityAvailability']);
-Route::post('checkout/estimate', [LocationPriceController::class, 'checkoutEstimate']);
+Route::get('city-availability', [LocationPriceController::class, 'cityAvailability'])->middleware('throttle:120,1');
+Route::post('checkout/estimate', [LocationPriceController::class, 'checkoutEstimate'])->middleware('throttle:60,1');
 // Operations Control Center — public storefront availability check (PDP gate).
 Route::get('service-availability/check', [ServiceAvailabilityController::class, 'check'])
     ->middleware('throttle:120,1');
@@ -302,7 +305,9 @@ Route::post('/email/verification-notification', [UserController::class, 'sendVer
     ->middleware(['auth:sanctum', 'throttle:6,1'])
     ->name('verification.send');
 
-Route::post('orders/payment', [OrderController::class, 'submitPayment']);
+// Payment submission keyed by a guessable tracking_number — throttle to stop
+// enumeration/replay storms against the live payment processor.
+Route::post('orders/payment', [OrderController::class, 'submitPayment'])->middleware('throttle:20,1');
 Route::post('generate-descriptions', [AiController::class, 'generateDescription'])->middleware('throttle:10,1');
 Route::get('/payment-intent', [PaymentIntentController::class, 'getPaymentIntent']);
 
