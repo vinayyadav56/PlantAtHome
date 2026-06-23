@@ -4,6 +4,7 @@ namespace Marvel\Services;
 
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Marvel\Database\Models\City;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\ProductCityAvailability;
 use Marvel\Database\Models\VendorProductPrice;
@@ -176,5 +177,81 @@ class AvailabilityService
             return [];
         }
         return $this->availabilityProductIdQuery($city, $localOnly)->pluck('product_id')->all();
+    }
+
+    /**
+     * City-first storefront policy — the single source of truth for "which products
+     * are visible when the customer has selected city C". Returns either a query of
+     * allowed product ids (apply with whereIn) or NULL meaning "no restriction / full
+     * catalog". Three cases:
+     *   1. City HAS vendor inventory mapped  -> STRICT: only that inventory. The
+     *      marketplace is live for this city, so we honour it exactly (e.g. Rewari
+     *      with one mapped vendor shows only that vendor's product).
+     *   2. City is SERVICEABLE but unmapped  -> NULL (full catalog). The master
+     *      PlantAtHome shop serves every serviceable city, so we never empty it
+     *      while vendors are still onboarding.
+     *   3. City is NOT serviceable           -> the (empty) projection query -> zero
+     *      products -> a proper "we don't deliver here yet" empty state. No fallback
+     *      ever exposes another city's catalog.
+     * Defensive: any fault returns NULL (full catalog) so a DB hiccup never empties
+     * the storefront.
+     */
+    public function cityScopeProductIds(string $city, bool $localOnly = false)
+    {
+        try {
+            $key = strtolower(trim($city));
+            if ($key === '') {
+                return null;
+            }
+            $vendorSub = $this->availabilityProductIdQuery($city, $localOnly);
+            if ((clone $vendorSub)->exists()) {
+                return $vendorSub; // (1) marketplace live here — strict
+            }
+            if ($this->cityIsServiceable($key)) {
+                return null;        // (2) serviceable + unmapped — full catalog
+            }
+            return $vendorSub;      // (3) not serviceable — empty -> empty state
+        } catch (\Throwable $e) {
+            return null;            // never empty the store on a fault
+        }
+    }
+
+    /** Whether a city (matched by name, case-insensitive) is serviceable + accepting orders. */
+    public function cityIsServiceable(string $cityName): bool
+    {
+        static $cache = [];
+        $key = strtolower(trim($cityName));
+        if ($key === '') {
+            return false;
+        }
+        if (!array_key_exists($key, $cache)) {
+            try {
+                $cache[$key] = City::whereRaw('LOWER(name) = ?', [$key])
+                    ->where('is_serviceable', true)
+                    ->whereIn('status', [City::STATUS_ACTIVE, City::STATUS_MAINTENANCE])
+                    ->exists();
+            } catch (\Throwable $e) {
+                $cache[$key] = true; // fail-open: treat as serviceable so we don't empty the store
+            }
+        }
+        return $cache[$key];
+    }
+
+    /**
+     * Apply the city-first product scope to ANY products query. Centralises the
+     * policy so the listing, search, category, popular, best-selling, top-rated and
+     * related feeds all behave identically. No-op when no city is given. `$idColumn`
+     * is qualified ('products.id') so it works on joined queries (best-sellers).
+     */
+    public function applyCityScope($query, ?string $city, bool $localOnly = false, string $idColumn = 'products.id')
+    {
+        if (empty($city)) {
+            return $query;
+        }
+        $ids = $this->cityScopeProductIds((string) $city, $localOnly);
+        if ($ids === null) {
+            return $query; // full catalog (serviceable + unmapped, or no city)
+        }
+        return $query->whereIn($idColumn, $ids);
     }
 }

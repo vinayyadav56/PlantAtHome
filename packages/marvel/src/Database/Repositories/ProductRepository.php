@@ -611,18 +611,24 @@ class ProductRepository extends BaseRepository
         if ($type_id) {
             $products_query = $products_query->where('type_id', '=', $type_id);
         }
+        // City-first scope (same policy as the listing). Qualified id column for the joins.
+        $city = $request->filled('city') ? (string) $request->city : null;
+        $products_query = (new \Marvel\Services\AvailabilityService())->applyCityScope($products_query, $city, false, 'products.id');
         return $products_query->take($limit)->get();
     }
 
-    public function fetchRelated($slug, $limit = 10, $language = DEFAULT_LANGUAGE)
+    public function fetchRelated($slug, $limit = 10, $language = DEFAULT_LANGUAGE, $city = null)
     {
         try {
             $product    = $this->findOneByFieldOrFail('slug', $slug);
             $categories = $product->categories->pluck('id');
 
-            return $this->where('language', $language)->whereHas('categories', function ($query) use ($categories) {
+            $query = $this->where('language', $language)->whereHas('categories', function ($query) use ($categories) {
                 $query->whereIn('categories.id', $categories);
-            })->with('type')->limit($limit)->get();
+            })->with('type');
+            // City-first scope (same policy as the listing).
+            $query = (new \Marvel\Services\AvailabilityService())->applyCityScope($query, $city, false, 'products.id');
+            return $query->limit($limit)->get();
         } catch (Exception $e) {
             return [];
         }

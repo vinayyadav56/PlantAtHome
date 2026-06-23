@@ -132,21 +132,15 @@ class ProductController extends CoreController
         }
         $products_query = $products_query->whereNotIn('id', $unavailableProducts);
 
-        // City-first availability: when the customer's city is provided, restrict to
-        // master products a vendor can fulfil there (local and/or courier). If nothing
-        // is mapped to that city yet we fall through to the full catalog, so the
-        // storefront is never empty during rollout (the "Available in your city" badge
-        // simply doesn't show until vendors map inventory there). `availability=local`
-        // narrows to same-city local delivery only.
+        // City-first availability (single source of truth: AvailabilityService::cityScopeProductIds):
+        //   - city has vendor inventory -> STRICT, only that inventory
+        //   - serviceable + unmapped    -> full master catalog (never empty a live city)
+        //   - NOT serviceable           -> 0 products -> proper empty state (no cross-city leak)
+        // `availability=local` narrows to same-city local delivery only.
         if ($request->filled('city')) {
             $localOnly = $request->input('availability') === 'local';
             $svc = new \Marvel\Services\AvailabilityService();
-            $sub = $svc->availabilityProductIdQuery((string) $request->city, $localOnly);
-            // Filter with a SQL subquery (never pluck the whole projection). Only scope
-            // when the city actually has availability, else show the full catalog.
-            if ((clone $sub)->exists()) {
-                $products_query = $products_query->whereIn('id', $sub);
-            }
+            $products_query = $svc->applyCityScope($products_query, (string) $request->city, $localOnly, 'products.id');
         }
 
         // Operations Control Center — hide products whose vertical is currently
@@ -403,12 +397,13 @@ class ProductController extends CoreController
         $limit = isset($request->limit) ? $request->limit : 10;
         $slug =  $request->slug;
         $language = $request->language ?? DEFAULT_LANGUAGE;
+        $city = $request->filled('city') ? (string) $request->city : null;
         // Related = whereHas('categories') join per PDP render; cache anonymous reads.
         if (!$this->isPublicCacheable($request)) {
-            return $this->repository->fetchRelated($slug, $limit, $language);
+            return $this->repository->fetchRelated($slug, $limit, $language, $city);
         }
-        $key = 'products:related:v' . $this->cacheVersion('products') . ':' . $language . ':' . $slug . ':' . $limit;
-        return response(Cache::remember($key, 300, fn () => $this->repository->fetchRelated($slug, $limit, $language)))
+        $key = 'products:related:v' . $this->cacheVersion('products') . ':' . $language . ':' . $slug . ':' . $limit . ':' . strtolower((string) $city);
+        return response(Cache::remember($key, 300, fn () => $this->repository->fetchRelated($slug, $limit, $language, $city)))
             ->header('Cache-Control', $this->cacheControl());
     }
 
@@ -729,7 +724,8 @@ class ProductController extends CoreController
         $limit = $request->limit ? $request->limit : 10;
         $language = $request->language ?? DEFAULT_LANGUAGE;
         $key = 'products:bestselling:v' . $this->cacheVersion('products') . ':' . $language . ':'
-            . ($request->type_id ?? '') . ':' . ($request->type_slug ?? '') . ':' . ($request->range ?? '') . ':' . $limit;
+            . ($request->type_id ?? '') . ':' . ($request->type_slug ?? '') . ':' . ($request->range ?? '') . ':' . $limit
+            . ':' . strtolower((string) ($request->filled('city') ? $request->city : ''));
         return response(Cache::remember($key, 300, fn () => $this->repository->getBestSellingProducts($request)))
             ->header('Cache-Control', $this->cacheControl());
     }
@@ -784,7 +780,8 @@ class ProductController extends CoreController
         // anonymous SSR render. Serve a version-keyed server cache (+ edge header) for anonymous
         // reads; admin/Bearer reads fall through fresh. Reuses the 'products' namespace, so the
         // existing bustResponseCache('products') on any product write already invalidates it.
-        $build = function () use ($request, $limit, $language, $range, $type_id) {
+        $city = $request->filled('city') ? (string) $request->city : null;
+        $build = function () use ($request, $limit, $language, $range, $type_id, $city) {
             $products_query = $this->repository->withCount('orders')->with(['type', 'shop'])->orderBy('orders_count', 'desc')->where('language', $language);
             if (isset($request->shop_id)) {
                 $products_query = $products_query->where('shop_id', "=", $request->shop_id);
@@ -795,12 +792,14 @@ class ProductController extends CoreController
             if ($type_id) {
                 $products_query = $products_query->where('type_id', '=', $type_id);
             }
+            // City-first scope (same policy as the listing).
+            $products_query = (new \Marvel\Services\AvailabilityService())->applyCityScope($products_query, $city, false, 'products.id');
             return $this->withDerivedBundleStock($products_query->take($limit)->get());
         };
         if (!$this->isPublicCacheable($request)) {
             return $build();
         }
-        $key = 'products:popular:v' . $this->cacheVersion('products') . ':' . $language . ':' . $type_id . ':' . $limit . ':' . $range . ':' . ($request->shop_id ?? '');
+        $key = 'products:popular:v' . $this->cacheVersion('products') . ':' . $language . ':' . $type_id . ':' . $limit . ':' . $range . ':' . ($request->shop_id ?? '') . ':' . strtolower((string) $city);
         return response(Cache::remember($key, 300, $build))->header('Cache-Control', $this->cacheControl());
     }
 
@@ -823,7 +822,8 @@ class ProductController extends CoreController
         }
         // Public homepage feed (withAvg('reviews') + whereHas join aggregate); cache anonymous
         // reads under the 'products' namespace, mirroring popularProducts.
-        $build = function () use ($request, $limit, $language, $type_id) {
+        $city = $request->filled('city') ? (string) $request->city : null;
+        $build = function () use ($request, $limit, $language, $type_id, $city) {
             $products_query = $this->repository
                 ->with(['type', 'shop'])
                 ->withAvg('reviews', 'rating')
@@ -836,12 +836,13 @@ class ProductController extends CoreController
             if ($type_id) {
                 $products_query = $products_query->where('type_id', '=', $type_id);
             }
+            $products_query = (new \Marvel\Services\AvailabilityService())->applyCityScope($products_query, $city, false, 'products.id');
             return $this->withDerivedBundleStock($products_query->take($limit)->get());
         };
         if (!$this->isPublicCacheable($request)) {
             return $build();
         }
-        $key = 'products:toprated:v' . $this->cacheVersion('products') . ':' . $language . ':' . $type_id . ':' . $limit . ':' . ($request->shop_id ?? '');
+        $key = 'products:toprated:v' . $this->cacheVersion('products') . ':' . $language . ':' . $type_id . ':' . $limit . ':' . ($request->shop_id ?? '') . ':' . strtolower((string) $city);
         return response(Cache::remember($key, 300, $build))->header('Cache-Control', $this->cacheControl());
     }
 
