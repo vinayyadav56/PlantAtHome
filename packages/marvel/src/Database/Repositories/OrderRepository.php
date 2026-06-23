@@ -727,18 +727,31 @@ class OrderRepository extends BaseRepository
             $svc = app(\Marvel\Services\ServiceAvailabilityService::class);
             foreach (\Marvel\Database\Models\Product::with('type')->whereIn('id', $ids)->get(['id', 'type_id']) as $p) {
                 $slug = optional($p->type)->slug;
-                if ($slug && !$svc->resolve($slug, (string) $city)['available']) {
-                    $blocked[$slug] = true;
+                if (!$slug) {
+                    continue;
+                }
+                $res = $svc->resolve($slug, (string) $city);
+                if (!$res['available']) {
+                    // Keep the reason so the message can distinguish a GLOBAL /
+                    // platform disable from one specific to this city.
+                    $blocked[$slug] = $res['reason'] ?? 'unavailable';
                 }
             }
         } catch (\Throwable $e) {
             return; // fail open
         }
         if (!empty($blocked)) {
-            throw new \Symfony\Component\HttpKernel\Exception\HttpException(
-                503,
-                'Some items are currently unavailable in ' . $city . '. Please remove them and try again.'
-            );
+            // Only name the city when the block is actually city-specific;
+            // otherwise (a global/platform disable) "unavailable in <city>"
+            // wrongly implies a delivery problem with that city.
+            $cityScoped = count(array_filter(
+                array_values($blocked),
+                fn ($r) => is_string($r) && str_starts_with($r, 'city_')
+            )) > 0;
+            $message = $cityScoped
+                ? 'Some items are currently unavailable in ' . $city . '. Please remove them and try again.'
+                : 'Some items in your cart are currently unavailable. Please remove them and try again.';
+            throw new \Symfony\Component\HttpKernel\Exception\HttpException(503, $message);
         }
     }
 

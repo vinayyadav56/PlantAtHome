@@ -73,7 +73,14 @@ class CheckoutRepository
         $shipping_charge = !empty($settings['options']['freeShipping']) && $settings['options']['freeShippingAmount'] <= $amount ? 0 : $this->calculateShippingCharge($request, $amount);
         $tax = $this->calculateTax($request, $shipping_charge, $amount);
         $total = $amount + $tax + $shipping_charge;
-        if ($total < $minimumOrderAmount) {
+        // Only enforce the minimum-order-amount on a fully-available cart. When
+        // some lines are unavailable (out of stock, or a vertical the Operations
+        // Control Center has disabled) they're excluded from $amount, which can
+        // drop the total below the minimum and surface a misleading "Minimum
+        // order amount" error instead of the real "item unavailable" reason. Let
+        // the storefront show the unavailable items (returned below) first; the
+        // next verify — after the shopper removes them — re-applies this check.
+        if (empty($unavailable_products) && $total < $minimumOrderAmount) {
             throw new HttpException(400, 'Minimum order amount is ' . $minimumOrderAmount);
         }
         return [
