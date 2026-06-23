@@ -47,6 +47,9 @@ class OrderCreateRequest extends FormRequest
             'shipping_address'        => 'array',
             'billing_address'         => 'array',
             'note'                    => 'nullable|string',
+            'is_non_serviceable_order' => 'nullable|boolean',
+            'detected_city'           => 'nullable|string',
+            'serviceable_city'        => 'nullable|string',
         ];
     }
 

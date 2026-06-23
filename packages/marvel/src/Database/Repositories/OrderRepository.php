@@ -86,6 +86,11 @@ class OrderRepository extends BaseRepository
         'customer_name',
         'note',
         'vendor_cost_total',
+        // Operations / courier-area order flags (set by the storefront when the
+        // shopper continues from a non-serviceable area).
+        'is_non_serviceable_order',
+        'detected_city',
+        'serviceable_city',
     ];
 
     public function boot()
