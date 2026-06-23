@@ -39,17 +39,42 @@ class TypeController extends CoreController
         // Types (verticals) rarely change but every storefront page (SSR)
         // fetches them. Server-cache + edge-cache for anonymous reads; admin
         // (real Bearer) stays fresh.
+        // Admin (real Bearer) always sees the full, unfiltered vertical list.
         if (!$this->isPublicCacheable($request)) {
             return TypeResource::collection($this->repository->where('language', $language)->get());
         }
 
-        $key = 'types:v' . $this->cacheVersion('types') . ':' . $language;
-        $data = Cache::remember($key, 600, function () use ($language) {
+        // Storefront: hide verticals the Operations Control Center has turned off
+        // — globally, or in the shopper's city when a `city` is provided — so a
+        // disabled vertical disappears from the nav immediately. The cache key
+        // carries the availability version + city, so any Operations toggle
+        // invalidates it instantly; the short edge TTL bounds CDN staleness.
+        $availSvc = app(\Marvel\Services\ServiceAvailabilityService::class);
+        $city = $request->filled('city') ? (string) $request->city : null;
+        $cityKey = \Marvel\Services\ServiceAvailabilityService::norm($city);
+        $availVer = (int) Cache::get('service_availability:ver', 1);
+
+        $key = 'types:v' . $this->cacheVersion('types')
+            . ':a' . $availVer
+            . ':' . ($cityKey !== '' ? $cityKey : '_')
+            . ':' . $language;
+
+        $data = Cache::remember($key, 600, function () use ($language, $availSvc, $city) {
             $types = $this->repository->where('language', $language)->get();
+            // FAIL OPEN: only narrow when something is actually disabled, and
+            // never hide EVERY vertical (an explicit all-off is the platform
+            // kill-switch, handled elsewhere — don't blank the storefront here).
+            $available = $availSvc->availableVerticalsForCity($city);
+            $all = $availSvc->allVerticals();
+            if (count($available) > 0 && count($available) < count($all)) {
+                $types = $types->filter(fn ($t) => in_array($t->slug, $available, true))->values();
+            }
             return TypeResource::collection($types)->response()->getData(true);
         });
 
-        return response()->json($data)->header('Cache-Control', $this->cacheControl());
+        // Short shared TTL so an Operations toggle propagates to the CDN in
+        // seconds (the version-keyed server cache keeps origin cheap).
+        return response()->json($data)->header('Cache-Control', $this->cacheControl(20));
     }
 
     /**

@@ -147,18 +147,21 @@ class ProductController extends CoreController
             if ((clone $sub)->exists()) {
                 $products_query = $products_query->whereIn('id', $sub);
             }
+        }
 
-            // Operations Control Center — hide products whose vertical is
-            // currently unavailable in this city. FAIL OPEN: only narrows when a
-            // vertical is actually disabled there; an unconfigured/all-active
-            // config never filters, so the catalog is never emptied.
-            $availSvc = app(\Marvel\Services\ServiceAvailabilityService::class);
-            if ($availSvc->shouldFilterCity((string) $request->city)) {
-                $availableVerticals = $availSvc->availableVerticalsForCity((string) $request->city);
-                $products_query = $products_query->whereHas('type', function ($q) use ($availableVerticals) {
-                    $q->whereIn('slug', $availableVerticals);
-                });
-            }
+        // Operations Control Center — hide products whose vertical is currently
+        // unavailable. Applies to BOTH a GLOBAL disable (no city in the request)
+        // and a PER-CITY disable (city present → that city's resolution). FAIL
+        // OPEN: only narrows when a vertical is actually disabled, and never
+        // empties the whole catalog (an all-off is the platform kill-switch).
+        $availSvc = app(\Marvel\Services\ServiceAvailabilityService::class);
+        $availCity = $request->filled('city') ? (string) $request->city : null;
+        $availableVerticals = $availSvc->availableVerticalsForCity($availCity);
+        $allVerticals = $availSvc->allVerticals();
+        if (count($availableVerticals) > 0 && count($availableVerticals) < count($allVerticals)) {
+            $products_query = $products_query->whereHas('type', function ($q) use ($availableVerticals) {
+                $q->whereIn('slug', $availableVerticals);
+            });
         }
 
         if ($request->flash_sale_builder) {
