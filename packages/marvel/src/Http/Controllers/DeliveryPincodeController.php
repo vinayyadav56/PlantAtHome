@@ -24,8 +24,19 @@ class DeliveryPincodeController extends CoreController
         if (!DeliveryPincode::where('is_active', true)->exists()) {
             return ['serviceable' => true, 'pincode' => $pincode, 'unconfigured' => true];
         }
-        $row = DeliveryPincode::where('pincode', $pincode)
-            ->where('is_active', true)
+        // Match an exact pincode OR a range row [pincode .. pincode_end] that
+        // contains it. Prefer an exact (single-pincode) row over a range.
+        $pin = (int) $pincode;
+        $row = DeliveryPincode::where('is_active', true)
+            ->where(function ($q) use ($pincode, $pin) {
+                $q->where('pincode', $pincode)
+                    ->orWhere(function ($r) use ($pin) {
+                        $r->whereNotNull('pincode_end')
+                            ->whereRaw('CAST(pincode AS UNSIGNED) <= ?', [$pin])
+                            ->whereRaw('CAST(pincode_end AS UNSIGNED) >= ?', [$pin]);
+                    });
+            })
+            ->orderByRaw('pincode_end IS NULL DESC')
             ->first();
 
         if (!$row) {
@@ -147,9 +158,12 @@ class DeliveryPincodeController extends CoreController
     private function payload(Request $request): array
     {
         $data = $request->only([
-            'pincode', 'area', 'city', 'state', 'is_active', 'cod_enabled', 'eta_days',
+            'pincode', 'pincode_end', 'area', 'city', 'state', 'is_active', 'cod_enabled', 'eta_days',
         ]);
         $data['pincode'] = $this->normalize($data['pincode'] ?? '');
+        // Optional range end — normalised, or null for a single-pincode row.
+        $end = $this->normalize($data['pincode_end'] ?? '');
+        $data['pincode_end'] = strlen($end) >= 4 ? $end : null;
         return $data;
     }
 

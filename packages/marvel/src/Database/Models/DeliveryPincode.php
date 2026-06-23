@@ -10,6 +10,7 @@ class DeliveryPincode extends Model
 
     protected $fillable = [
         'pincode',
+        'pincode_end',
         'area',
         'city',
         'state',

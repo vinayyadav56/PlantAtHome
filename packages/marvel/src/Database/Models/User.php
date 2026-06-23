@@ -35,6 +35,8 @@ class User extends Authenticatable implements MustVerifyEmail
         // Phase B — employee / org + RBAC override fields (all nullable).
         'designation_id', 'reporting_manager_id', 'department', 'city', 'state',
         'permission_source', 'permission_overrides',
+        // Customer location preferences (storefront; distinct from org city/state).
+        'preferred_city', 'last_detected_city', 'last_lat', 'last_lng', 'location_updated_at',
     ];
 
     /**
