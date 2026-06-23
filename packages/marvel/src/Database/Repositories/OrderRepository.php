@@ -119,12 +119,32 @@ class OrderRepository extends BaseRepository
      * @return LengthAwarePaginator|JsonResponse|Collection|mixed
      * @throws Exception
      */
+    /**
+     * Whether the orders.tracking_token column exists yet. Memoised per request;
+     * background migrations can lag the code deploy, so guard column usage.
+     */
+    protected static ?bool $supportsTrackingToken = null;
+
+    protected function ordersSupportTrackingToken(): bool
+    {
+        if (static::$supportsTrackingToken === null) {
+            static::$supportsTrackingToken = \Illuminate\Support\Facades\Schema::hasColumn('orders', 'tracking_token');
+        }
+        return static::$supportsTrackingToken;
+    }
+
     public function storeOrder($request, $settings): mixed
     {
         $request['tracking_number'] = $this->generateTrackingNumber();
         // Per-order secret: required to view a GUEST order (no customer_id). High
         // entropy so it can't be guessed; carried by the redirect + the order email.
-        $request['tracking_token'] = Str::random(48);
+        // Railway/EC2 run migrations in the BACKGROUND after the app starts serving
+        // (see Order::ordersSupportPinning), so the column can lag the code deploy.
+        // Guard the write so order creation never breaks while it catches up — until
+        // then orders simply have no token and fall back to the legacy guest view.
+        if ($this->ordersSupportTrackingToken()) {
+            $request['tracking_token'] = Str::random(48);
+        }
 
         // Operations Control Center — final guard: never create an order
         // containing a vertical that's unavailable in the shipping city.
