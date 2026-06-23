@@ -64,6 +64,7 @@ class OrderRepository extends BaseRepository
      */
     protected array $dataArray = [
         'tracking_number',
+        'tracking_token',
         'customer_id',
         'shop_id',
         'language',
@@ -121,6 +122,9 @@ class OrderRepository extends BaseRepository
     public function storeOrder($request, $settings): mixed
     {
         $request['tracking_number'] = $this->generateTrackingNumber();
+        // Per-order secret: required to view a GUEST order (no customer_id). High
+        // entropy so it can't be guessed; carried by the redirect + the order email.
+        $request['tracking_token'] = Str::random(48);
 
         // Operations Control Center — final guard: never create an order
         // containing a vertical that's unavailable in the shipping city.
@@ -426,7 +430,12 @@ class OrderRepository extends BaseRepository
             'translated_text' => $translatedText,
             'is_rtl'          => $isRTL,
             'language'        => $language,
+            // Guest orders need the per-order token in the link so the buyer can open
+            // their confirmation from the email; registered orders are owner-gated.
             'url' => config('shop.shop_url') . '/orders/' . $order->tracking_number
+                . (empty($order->customer_id) && !empty($order->tracking_token)
+                    ? '?token=' . $order->tracking_token
+                    : '')
         ];
     }
 

@@ -167,7 +167,14 @@ class OrderController extends CoreController
             //     throw new HttpException(400, PLEASE_ENABLE_PAYMENT_OPTION_FROM_THE_SETTINGS);
             // }
 
-            return DB::transaction(fn () => $this->repository->storeOrder($request, $this->settings));
+            $order = DB::transaction(fn () => $this->repository->storeOrder($request, $this->settings));
+            // Surface the per-order token to the buyer's client (and only here) so the
+            // storefront can carry it to the order-confirmation page. It stays hidden
+            // in every other response (list/detail) — see Order::$hidden.
+            if ($order instanceof \Marvel\Database\Models\Order) {
+                $order->makeVisible('tracking_token');
+            }
+            return $order;
         } catch (MarvelException $th) {
             throw new MarvelException(SOMETHING_WENT_WRONG, $th->getMessage());
         }
@@ -225,27 +232,36 @@ class OrderController extends CoreController
             $order['payment_intent'] = $this->attachPaymentIntent($orderParam);
         }
 
+        $providedToken = (string) ($request->query('token') ?? $request->input('token') ?? '');
+
         if (!$order->customer_id) {
-            // Guest order, looked up by an enumerable tracking_number. Strip the heaviest PII so
-            // an enumerating attacker can't harvest the buyer's billing address / contact / linked
-            // account; shipping_address + items + status remain for the buyer's order-received page.
-            // (Group-wide throttle:api now also rate-limits enumeration; a per-order secret token
-            //  is the complete fix and is tracked as a follow-up.)
+            // GUEST order (no owner to authorise against). New orders carry a per-order
+            // secret token; require it so an attacker can't harvest a buyer's order by
+            // enumerating tracking numbers. On any mismatch we behave EXACTLY like a
+            // missing order (404) so we don't even confirm the order exists.
+            if (!empty($order->tracking_token)) {
+                if ($providedToken === '' || !hash_equals((string) $order->tracking_token, $providedToken)) {
+                    throw new ModelNotFoundException(NOT_FOUND);
+                }
+                $order->unsetRelation('customer');
+                return $order;
+            }
+            // Legacy guest order (created before tokens existed): keep the hardened
+            // PII-stripped public fallback so old emailed links keep working.
             $order->makeHidden(['billing_address', 'customer_contact']);
             $order->unsetRelation('customer');
             return $order;
         }
-        if ($user && $user->hasPermissionTo(Permission::SUPER_ADMIN)) {
+
+        // REGISTERED-customer order: owner, the fulfilling vendor, or a super-admin only.
+        $isSuperAdmin = $user && $user->hasPermissionTo(Permission::SUPER_ADMIN);
+        $isOwner      = $user && ((int) $user->id === (int) $order->customer_id);
+        $isVendor     = $user && isset($order->shop_id) && $this->repository->hasPermission($user, $order->shop_id);
+        if ($isSuperAdmin || $isOwner || $isVendor) {
             return $order;
-        } elseif (isset($order->shop_id)) {
-            if ($user && ($this->repository->hasPermission($user, $order->shop_id) || $user->id == $order->customer_id)) {
-                return $order;
-            }
-        } elseif ($user && $user->id == $order->customer_id) {
-            return $order;
-        } else {
-            throw new AuthorizationException(NOT_AUTHORIZED);
         }
+        // Not permitted — reveal NOTHING about whether this order exists (404, not 403).
+        throw new ModelNotFoundException(NOT_FOUND);
     }
 
     /**
@@ -258,21 +274,32 @@ class OrderController extends CoreController
     public function findByTrackingNumber(Request $request, $tracking_number)
     {
         $user = $request->user() ?? null;
+        $providedToken = (string) ($request->query('token') ?? $request->input('token') ?? '');
         try {
             $order = $this->repository->with(['products', 'children.shop', 'wallet_point', 'payment_intent'])
                 ->findOneByFieldOrFail('tracking_number', $tracking_number);
-
-            if ($order->customer_id === null) {
-                return $order;
-            }
-            if ($user && ($user->id === $order->customer_id || $user->can('super_admin'))) {
-                return $order;
-            } else {
-                throw new AuthorizationException(NOT_AUTHORIZED);
-            }
-        } catch (MarvelException $e) {
+        } catch (\Exception $e) {
             throw new MarvelException(NOT_FOUND);
         }
+
+        if ($order->customer_id === null) {
+            // GUEST order — require the per-order token (new orders); fall back to the
+            // PII-stripped public view only for legacy token-less orders.
+            if (!empty($order->tracking_token)) {
+                if ($providedToken === '' || !hash_equals((string) $order->tracking_token, $providedToken)) {
+                    throw new MarvelException(NOT_FOUND);
+                }
+                return $order;
+            }
+            $order->makeHidden(['billing_address', 'customer_contact']);
+            $order->unsetRelation('customer');
+            return $order;
+        }
+        if ($user && ((int) $user->id === (int) $order->customer_id || $user->can('super_admin'))) {
+            return $order;
+        }
+        // Hide existence from everyone else (404, never a 403 that confirms it exists).
+        throw new MarvelException(NOT_FOUND);
     }
 
     /**

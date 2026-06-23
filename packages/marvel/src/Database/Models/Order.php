@@ -49,6 +49,10 @@ class Order extends Model
         //        'created_at',
         'updated_at',
         'deleted_at',
+        // Per-order secret for guest-order access. Hidden everywhere by default so it
+        // never leaks in list/detail payloads; explicitly made visible only on the
+        // create response (so the buyer's client can capture it for their order page).
+        'tracking_token',
         // Internal fulfilment/assignment columns (populated by the vendor-DP
         // matching engine). Admin-only; not consumed by the order list/detail
         // JSON yet — hidden so they never bloat the already-large list payload.
