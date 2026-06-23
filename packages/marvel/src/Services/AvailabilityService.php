@@ -158,9 +158,29 @@ class AvailabilityService
     }
 
     /** A query builder of product ids available in a city — used as a whereIn subquery (no pluck). */
-    public function availabilityProductIdQuery(string $city, bool $localOnly = false)
+    /**
+     * Normalise a customer-supplied city name to the canonical key used in the
+     * cities table + the product_city_availability projection. Handles the common
+     * Indian endonym/exonym aliases (e.g. an IP/GPS lookup returning "Gurgaon"
+     * while the city is stored as "Gurugram") so we don't wrongly empty the store.
+     */
+    public function normalizeCityKey(string $city): string
     {
         $key = strtolower(trim($city));
+        static $aliases = [
+            'gurgaon'   => 'gurugram',
+            'bangalore' => 'bengaluru',
+            'bombay'    => 'mumbai',
+            'calcutta'  => 'kolkata',
+            'madras'    => 'chennai',
+            'new delhi' => 'delhi',
+        ];
+        return $aliases[$key] ?? $key;
+    }
+
+    public function availabilityProductIdQuery(string $city, bool $localOnly = false)
+    {
+        $key = $this->normalizeCityKey($city);
         $q = ProductCityAvailability::query()->select('product_id')->where('city', $key);
         if ($localOnly) {
             $q->where('has_local', true);
@@ -199,11 +219,11 @@ class AvailabilityService
     public function cityScopeProductIds(string $city, bool $localOnly = false)
     {
         try {
-            $key = strtolower(trim($city));
+            $key = $this->normalizeCityKey($city);
             if ($key === '') {
                 return null;
             }
-            $vendorSub = $this->availabilityProductIdQuery($city, $localOnly);
+            $vendorSub = $this->availabilityProductIdQuery($key, $localOnly);
             if ((clone $vendorSub)->exists()) {
                 return $vendorSub; // (1) marketplace live here — strict
             }
@@ -220,7 +240,7 @@ class AvailabilityService
     public function cityIsServiceable(string $cityName): bool
     {
         static $cache = [];
-        $key = strtolower(trim($cityName));
+        $key = $this->normalizeCityKey($cityName);
         if ($key === '') {
             return false;
         }

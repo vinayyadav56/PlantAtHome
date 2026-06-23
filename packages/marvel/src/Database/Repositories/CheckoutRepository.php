@@ -62,6 +62,28 @@ class CheckoutRepository
             }
         }
 
+        // City-first availability — a cart line must belong to the shipping city.
+        // cityScopeProductIds() returns null for a serviceable-but-unmapped city
+        // (full catalog ⇒ no gate); a restricted set for a vendor-mapped city; and an
+        // empty set for a non-serviceable city ⇒ every line flagged. FAIL OPEN on fault.
+        if (!empty($shipCity)) {
+            try {
+                $availSvc = app(\Marvel\Services\AvailabilityService::class);
+                $scope = $availSvc->cityScopeProductIds((string) $shipCity);
+                if ($scope !== null) {
+                    $allowed = array_flip(array_map('intval', $scope->pluck('product_id')->all()));
+                    foreach (collect($request['products'])->pluck('product_id')->filter()->unique() as $pid) {
+                        if (!isset($allowed[(int) $pid])) {
+                            $unavailable_products[] = (int) $pid;
+                        }
+                    }
+                    $unavailable_products = array_values(array_unique($unavailable_products));
+                }
+            } catch (\Throwable $e) {
+                // fail open
+            }
+        }
+
         // Server-authoritative pricing: reprice vendor-cost-sheet products to their
         // margin-over-cost selling price so the previewed total matches what the
         // order will charge (products without a cost sheet are untouched).
