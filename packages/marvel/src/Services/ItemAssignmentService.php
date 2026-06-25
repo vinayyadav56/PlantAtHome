@@ -31,6 +31,13 @@ class ItemAssignmentService
     private array $areaCache = [];
     private array $rateCache = [];
 
+    // Optional warm-start memo for the per-line Operations gate. Populated by warm() so a
+    // whole-cart pass resolves "stop_deliveries" + per-(vertical,city) availability ONCE
+    // instead of N times. When unset (the default), candidatesFor behaves byte-identically.
+    private ?array $platformFlagsMemo = null;   // ['stop_deliveries' => bool, ...]
+    private ?array $slugByProductMemo = null;    // productId => type slug
+    private array $availabilityMemo = [];        // "slug|cityN" => bool available
+
     public function __construct(private ?AvailabilityService $availability = null)
     {
         $this->availability = $availability ?: new AvailabilityService();
@@ -48,6 +55,48 @@ class ItemAssignmentService
     }
 
     /**
+     * Whole-cart warm-start for the Delivery Optimizer (and any multi-line caller): resolve
+     * the Operations gate ONCE for every product/vertical at the given city, so the
+     * per-line candidatesFor() calls hit O(1) memo reads instead of re-running
+     * ServiceAvailabilityService N times. Purely additive — never changes outcomes, only
+     * collapses repeated work. Safe to call more than once.
+     *
+     * @param int[] $productIds
+     */
+    public function warm(array $productIds, ?string $city): void
+    {
+        $productIds = array_values(array_unique(array_map('intval', $productIds)));
+        if (empty($productIds)) {
+            return;
+        }
+        try {
+            $svc = app(\Marvel\Services\ServiceAvailabilityService::class);
+            $this->platformFlagsMemo = (array) $svc->platformFlags();
+
+            // products -> type slug, in one query.
+            $this->slugByProductMemo = \Marvel\Database\Models\Product::whereIn('products.id', $productIds)
+                ->join('types', 'products.type_id', '=', 'types.id')
+                ->pluck('types.slug', 'products.id')
+                ->map(fn ($s) => (string) $s)
+                ->all();
+
+            if (!empty($city)) {
+                $cityN = $this->norm($city);
+                foreach (array_values(array_unique($this->slugByProductMemo)) as $slug) {
+                    if ($slug === '') {
+                        continue;
+                    }
+                    $this->availabilityMemo["{$slug}|{$cityN}"] = (bool) $svc->resolve($slug, (string) $city)['available'];
+                }
+            }
+        } catch (\Throwable $e) {
+            // fail open — leave memos as-is; candidatesFor falls back to live resolution.
+            $this->platformFlagsMemo = null;
+            $this->slugByProductMemo = null;
+        }
+    }
+
+    /**
      * Ranked vendor candidates for one line. Returns [] when nobody can fulfil it.
      * Each candidate: shop_id, vendor_name, selling_price, available_qty, fulfillment_mode,
      * pincode_covered, sla_days, eta_days, rating, priority, shipping_cost, score, recommended.
@@ -59,18 +108,27 @@ class ItemAssignmentService
 
         // Operations Control Center — no vendor / delivery assignment when the
         // "Stop All Deliveries" kill-switch is engaged, or for a vertical that's
-        // unavailable in the city. FAIL OPEN (no city / error).
+        // unavailable in the city. FAIL OPEN (no city / error). When warm() has been
+        // called, the flags / slug / availability come from memo (one resolution per cart).
         try {
             $svc = app(\Marvel\Services\ServiceAvailabilityService::class);
-            if (!empty($svc->platformFlags()['stop_deliveries'])) {
+            $flags = $this->platformFlagsMemo ?? (array) $svc->platformFlags();
+            if (!empty($flags['stop_deliveries'])) {
                 return [];
             }
             if (!empty($city)) {
-                $slug = \Marvel\Database\Models\Product::where('products.id', $productId)
-                    ->join('types', 'products.type_id', '=', 'types.id')
-                    ->value('types.slug');
-                if ($slug && !$svc->resolve($slug, (string) $city)['available']) {
-                    return [];
+                $slug = $this->slugByProductMemo[$productId]
+                    ?? \Marvel\Database\Models\Product::where('products.id', $productId)
+                        ->join('types', 'products.type_id', '=', 'types.id')
+                        ->value('types.slug');
+                if ($slug) {
+                    $memoKey = "{$slug}|{$cityN}";
+                    $available = array_key_exists($memoKey, $this->availabilityMemo)
+                        ? $this->availabilityMemo[$memoKey]
+                        : $svc->resolve($slug, (string) $city)['available'];
+                    if (!$available) {
+                        return [];
+                    }
                 }
             }
         } catch (\Throwable $e) {
@@ -245,6 +303,25 @@ class ItemAssignmentService
             ?: $rates->first(fn ($r) => $r->fulfillment_mode === $mode)
             ?: $rates->first();
         return $row ? (float) $row->base_cost : 0.0;
+    }
+
+    /**
+     * Per-kg shipping rate for (shop, mode), reusing the SAME memoised rate rows that
+     * candidatesFor already batch-loaded via loadRates — so the Delivery Optimizer can attach
+     * the per-kg term without issuing its own per-shop query (no N+1). Public companion to the
+     * private shippingCost(); zone selection is identical.
+     */
+    public function perKgCostFor(int $shopId, string $mode): float
+    {
+        $rates = $this->loadRates([$shopId])->get($shopId) ?? collect();
+        if ($rates->isEmpty()) {
+            return 0.0;
+        }
+        $zone = $mode === 'local' ? 'same_city' : 'national';
+        $row = $rates->first(fn ($r) => $r->fulfillment_mode === $mode && $r->zone === $zone)
+            ?: $rates->first(fn ($r) => $r->fulfillment_mode === $mode)
+            ?: $rates->first();
+        return $row ? (float) ($row->per_kg_cost ?? 0) : 0.0;
     }
 
     /** @return \Illuminate\Support\Collection keyed by shop id (cached). */

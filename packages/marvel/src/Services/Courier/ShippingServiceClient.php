@@ -3,6 +3,7 @@
 namespace Marvel\Services\Courier;
 
 use Carbon\Carbon;
+use Illuminate\Http\Client\Pool;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\Shipment;
@@ -45,6 +46,121 @@ class ShippingServiceClient
             'quotes'   => $d['quotes'] ?? [],
             'cheapest' => $d['cheapest'] ?? null,
         ];
+    }
+
+    /**
+     * Quote a PROSPECTIVE leg from a raw, already-built body (no persisted Shipment) — the
+     * Delivery Optimizer's firm-quote entry point. Takes a TIGHT per-call timeout (ms) so a
+     * slow service can't stall the hot path; the structured never-throws contract is preserved.
+     */
+    public function quoteRaw(array $body, ?int $timeoutMs = null): array
+    {
+        $timeout = $timeoutMs !== null ? max(0.05, $timeoutMs / 1000) : null;
+        $res = $this->request('post', '/v1/quotes', $body, $timeout);
+        if (empty($res['ok'])) {
+            return ['ok' => false, 'error' => $res['error'] ?? 'Shipping service quote failed.', 'quotes' => [], 'cheapest' => null];
+        }
+        $d = (array) ($res['data'] ?? []);
+        return [
+            'ok'       => !empty($d['quotes']),
+            'mode'     => $d['mode'] ?? null,
+            'quotes'   => $d['quotes'] ?? [],
+            'cheapest' => $d['cheapest'] ?? null,
+        ];
+    }
+
+    /**
+     * Quote MANY prospective legs at once. Each $body must carry a 'ref' (idempotency token).
+     * Prefers POST /v1/quotes/batch; until the service ships that route, falls back to an
+     * Http::pool of parallel singles. Returns ['ok'=>bool, 'results'=>[{ref,ok,quotes,cheapest}]].
+     *
+     * Contract for the shipping team (PROVIDED BY shipping-service):
+     *   POST /v1/quotes/batch  { quotes:[ { ref, mode, cod, cod_amount, pickup, drop, weight_g, items } ] }
+     *     -> { results:[ { ref, ok, quotes:[...], cheapest } ] }
+     */
+    public function quoteBatch(array $bodies, ?int $timeoutMs = null): array
+    {
+        if (empty($bodies) || !$this->configured()) {
+            return ['ok' => false, 'results' => []];
+        }
+        $timeout = $timeoutMs !== null ? max(0.05, $timeoutMs / 1000) : (float) config('services.shipping_service.timeout', 25);
+
+        // Prefer the bulk endpoint when the service exposes it.
+        $batch = $this->request('post', '/v1/quotes/batch', ['quotes' => array_values($bodies)], $timeout);
+        if (!empty($batch['ok'])) {
+            $d = (array) ($batch['data'] ?? []);
+            if (isset($d['results']) && is_array($d['results'])) {
+                return ['ok' => true, 'results' => $this->normalizeResults($d['results'])];
+            }
+        }
+
+        // Fallback: parallel singles.
+        return $this->poolQuotes(array_values($bodies), $timeout);
+    }
+
+    private function normalizeResults(array $rows): array
+    {
+        $out = [];
+        foreach ($rows as $row) {
+            $row = (array) $row;
+            $quotes = $row['quotes'] ?? [];
+            $out[] = [
+                'ref'      => (string) ($row['ref'] ?? ''),
+                'ok'       => array_key_exists('ok', $row) ? (bool) $row['ok'] : !empty($quotes),
+                'mode'     => $row['mode'] ?? null,
+                'quotes'   => $quotes,
+                'cheapest' => $row['cheapest'] ?? null,
+            ];
+        }
+        return $out;
+    }
+
+    private function poolQuotes(array $bodies, float $timeout): array
+    {
+        try {
+            $responses = Http::pool(function (Pool $pool) use ($bodies, $timeout) {
+                $reqs = [];
+                foreach ($bodies as $i => $body) {
+                    $payload = $body;
+                    unset($payload['ref']);
+                    $reqs[] = $pool->as((string) $i)
+                        ->withOptions(['timeout' => $timeout, 'connect_timeout' => $timeout]) // sub-second float; avoid timeout(int) truncation
+                        ->withHeaders(['X-Api-Key' => $this->apiKey])
+                        ->acceptJson()
+                        ->post($this->baseUrl . '/v1/quotes', $payload);
+                }
+                return $reqs;
+            });
+        } catch (\Throwable $e) {
+            Log::warning('Shipping service batch pool failed', ['error' => $e->getMessage()]);
+            return ['ok' => false, 'results' => []];
+        }
+
+        $results = [];
+        foreach ($bodies as $i => $body) {
+            $ref = (string) ($body['ref'] ?? $i);
+            $resp = $responses[(string) $i] ?? null;
+            if (!is_object($resp) || $resp instanceof \Throwable) {
+                $results[] = ['ref' => $ref, 'ok' => false, 'quotes' => [], 'cheapest' => null];
+                continue;
+            }
+            try {
+                $ok = $resp->successful();
+                $d = (array) $resp->json();
+            } catch (\Throwable $e) {
+                $ok = false;
+                $d = [];
+            }
+            $quotes = $d['quotes'] ?? [];
+            $results[] = [
+                'ref'      => $ref,
+                'ok'       => $ok && !empty($quotes),
+                'mode'     => $d['mode'] ?? null,
+                'quotes'   => $quotes,
+                'cheapest' => $d['cheapest'] ?? null,
+            ];
+        }
+        return ['ok' => true, 'results' => $results];
     }
 
     /** Book via the service (idempotent on shipment_ref) + persist the returned provider fields. */
@@ -178,15 +294,25 @@ class ShippingServiceClient
         return preg_replace('/\D+/', '', (string) $s) ?: '';
     }
 
-    private function request(string $method, string $path, array $body = []): array
+    private function request(string $method, string $path, array $body = [], ?float $timeoutSeconds = null): array
     {
         if (!$this->configured()) {
             return ['ok' => false, 'status' => 0, 'data' => null, 'error' => 'Shipping service is not configured.'];
         }
         try {
-            $http = Http::timeout((int) config('services.shipping_service.timeout', 25))
-                ->withHeaders(['X-Api-Key' => $this->apiKey]) // shared secret — header only, never logged
-                ->acceptJson();
+            // Booking (no timeout passed) keeps the existing int timeout() path byte-for-byte.
+            // The optimizer passes a tight sub-second float; Laravel 10's timeout(int) would
+            // TRUNCATE 0.12 -> 0 (curl reads 0 as "no timeout / wait forever"), defeating the
+            // whole degrade-to-estimate design — so set the raw Guzzle options directly.
+            if ($timeoutSeconds !== null) {
+                $http = Http::withOptions(['timeout' => $timeoutSeconds, 'connect_timeout' => $timeoutSeconds])
+                    ->withHeaders(['X-Api-Key' => $this->apiKey]) // shared secret — header only, never logged
+                    ->acceptJson();
+            } else {
+                $http = Http::timeout((int) config('services.shipping_service.timeout', 25))
+                    ->withHeaders(['X-Api-Key' => $this->apiKey])
+                    ->acceptJson();
+            }
             $resp = $method === 'get'
                 ? $http->get($this->baseUrl . $path)
                 : $http->post($this->baseUrl . $path, $body);

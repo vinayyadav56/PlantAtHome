@@ -202,7 +202,7 @@ class LocationPriceController extends CoreController
             ];
         }
 
-        return [
+        $response = [
             'items'  => $out,
             'totals' => [
                 'subtotal'                => round($subtotal, 2),
@@ -212,6 +212,54 @@ class LocationPriceController extends CoreController
                 'expected_delivery_date'  => $maxEtaDays !== null ? Carbon::now()->addDays($maxEtaDays)->toDateString() : null,
             ],
         ];
+
+        // ── Delivery Optimizer (additive, non-breaking) ───────────────────────────
+        // When enabled (config flag or ?consolidate=1), append a top-level `optimized`
+        // block: items consolidated into the fewest delivery legs, ONE flat fee, per-leg
+        // dates + upsell hint. The legacy items[]/totals above are untouched for
+        // back-compat. Browse path → estimated rates (no shipping-service call); never
+        // breaks the response (try/catch fallback).
+        if (config('deliveryoptimizer.enabled') || $request->boolean('consolidate')) {
+            $optimized = $this->buildOptimized($items, $products, $city, $pincode, $cod);
+            if ($optimized !== null) {
+                $response['optimized'] = $optimized;
+            }
+        }
+
+        return $response;
+    }
+
+    /** Build the optimizer block from the same cart, or null on any failure. */
+    private function buildOptimized(array $items, $products, ?string $city, ?string $pincode, bool $cod): ?array
+    {
+        try {
+            $cartItems = [];
+            foreach ($items as $item) {
+                $pid = $item['product_id'] ?? null;
+                if (!$pid || !isset($products[$pid])) {
+                    continue;
+                }
+                $product = $products[$pid];
+                $cartItems[] = new \Marvel\Services\DeliveryOptimizer\Dto\CartItem(
+                    (int) $pid,
+                    isset($item['variation_option_id']) ? (int) $item['variation_option_id'] : null,
+                    max(1, (int) ($item['quantity'] ?? 1)),
+                    (int) (($product->weight ?? 0) ?: (int) config('deliveryoptimizer.default_weight_g', 500)),
+                    isset($product->length) && is_numeric($product->length) ? (float) $product->length : null,
+                    isset($product->breadth) && is_numeric($product->breadth) ? (float) $product->breadth : null,
+                    isset($product->height) && is_numeric($product->height) ? (float) $product->height : null,
+                );
+            }
+            if (empty($cartItems)) {
+                return null;
+            }
+            $loc = new \Marvel\Services\DeliveryOptimizer\Dto\UserLocation($city, $pincode);
+            $optimizer = app(\Marvel\Services\DeliveryOptimizer\DeliveryOptimizerService::class);
+            // Browse path: estimate-first (firm=false). cod flows through for COD-aware rates.
+            return $optimizer->optimizeCart($cartItems, $loc, ['firm' => false, 'cod' => $cod])->toArray();
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     private function latLng(Request $request): ?array

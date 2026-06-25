@@ -14,6 +14,7 @@ use Marvel\Enums\Permission;
 use Marvel\Providers\GraphQLServiceProvider;
 use Marvel\Providers\RestApiServiceProvider;
 use Marvel\Providers\EventServiceProvider;
+use Marvel\Providers\DeliveryOptimizerServiceProvider;
 use Marvel\Console\InstallCommand;
 use Illuminate\Support\Facades\App;
 use Nuwave\Lighthouse\WhereConditions\WhereConditionsServiceProvider;
@@ -66,6 +67,7 @@ class ShopServiceProvider extends ServiceProvider
         EventServiceProvider::class,
         WhereConditionsServiceProvider::class,
         MarvelBroadcastServiceProvider::class,
+        DeliveryOptimizerServiceProvider::class,
         // Maatwebsite\Excel\ExcelServiceProvider::class,
 
     ];
@@ -228,6 +230,7 @@ class ShopServiceProvider extends ServiceProvider
     {
 
         $this->mergeConfigFrom(__DIR__ . '/../config/shop.php', 'shop');
+        $this->mergeConfigFrom(__DIR__ . '/../config/deliveryoptimizer.php', 'deliveryoptimizer');
 
         config([
             'auth'               => File::getRequire(__DIR__ . '/../config/auth.php'),

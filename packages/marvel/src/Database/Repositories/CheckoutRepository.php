@@ -108,6 +108,10 @@ class CheckoutRepository
         return [
             'total_tax'            => $tax,
             'shipping_charge'      => $shipping_charge,
+            // Delivery Optimizer (additive, flag-gated): FIRM consolidated shipments at
+            // checkout. Metadata only for now — `shipping_charge` above is unchanged until
+            // an explicit cutover, so the charged total stays byte-identical. Never throws.
+            'optimized'            => $this->optimizedCheckout($request, (float) $amount, (bool) ($request['isFullWalletPayment'] ?? false)),
             'unavailable_products' => $unavailable_products,
             // Operations Control Center — { vertical_slug: message } for blocked
             // lines. Cast to object so the shape is stable (always {} when empty).
@@ -124,6 +128,56 @@ class CheckoutRepository
             'wallet_amount' => isset($wallet->available_points) ? $wallet->available_points : 0,
             'wallet_currency' => isset($wallet->available_points) ? $this->walletPointsToCurrency($wallet->available_points) : 0
         ];
+    }
+
+    /**
+     * Delivery Optimizer at checkout (FIRM): consolidate the cart into the fewest legs and
+     * price them with live carrier quotes. Returns the OptimizationResult array, or null
+     * when disabled / on any failure. Metadata only — does NOT change the charged total.
+     */
+    protected function optimizedCheckout($request, float $amount, bool $isFullWalletPayment): ?array
+    {
+        if (!config('deliveryoptimizer.enabled')) {
+            return null;
+        }
+        try {
+            $ship = (array) ($request['shipping_address'] ?? []);
+            $addr = (array) ($ship['address'] ?? $ship);
+            $city = $addr['city'] ?? ($ship['city'] ?? null);
+            $pincode = $addr['zip'] ?? $addr['pincode'] ?? $addr['postal_code'] ?? ($ship['zip'] ?? null);
+
+            $cartItems = [];
+            foreach ((array) $request['products'] as $p) {
+                $pid = $p['product_id'] ?? null;
+                if (!$pid) {
+                    continue;
+                }
+                $cartItems[] = new \Marvel\Services\DeliveryOptimizer\Dto\CartItem(
+                    (int) $pid,
+                    isset($p['variation_option_id']) ? (int) $p['variation_option_id'] : null,
+                    max(1, (int) ($p['order_quantity'] ?? $p['quantity'] ?? 1)),
+                    (int) config('deliveryoptimizer.default_weight_g', 500),
+                );
+            }
+            if (empty($cartItems)) {
+                return null;
+            }
+            $cod = in_array(strtoupper((string) ($request['payment_gateway'] ?? '')), ['CASH_ON_DELIVERY', 'COD', 'CASH'], true);
+            $loc = new \Marvel\Services\DeliveryOptimizer\Dto\UserLocation(
+                $city !== null ? (string) $city : null,
+                $pincode !== null ? (string) $pincode : null,
+            );
+            $optimizer = app(\Marvel\Services\DeliveryOptimizer\DeliveryOptimizerService::class);
+            return $optimizer->optimizeCart($cartItems, $loc, [
+                'firm'      => true,
+                'cod'       => $cod,
+                'codAmount' => $cod ? $amount : 0.0,
+                // Authoritative order amount → optimizer free-delivery gate matches line 95.
+                'amount'    => $amount,
+            ])->toArray();
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /** Customer coordinates from shipping_address.location, if shared. */
