@@ -18,6 +18,10 @@ final class OptimizerConfig implements OptimizerConfigInterface
 
     public function enabled(): bool
     {
+        $v = $this->doOption('enabled');
+        if ($v !== null) {
+            return (bool) $v;
+        }
         return (bool) config('deliveryoptimizer.enabled', false);
     }
 
@@ -43,16 +47,28 @@ final class OptimizerConfig implements OptimizerConfigInterface
 
     public function slaPenaltyPerDay(): float
     {
+        $v = $this->doOption('sla_penalty_per_day');
+        if ($v !== null && $v !== '') {
+            return (float) $v;
+        }
         return (float) config('deliveryoptimizer.sla_penalty_per_day', 5.0);
     }
 
     public function targetSlaDays(): int
     {
+        $v = $this->doOption('target_sla_days');
+        if ($v !== null && $v !== '') {
+            return max(1, (int) $v);
+        }
         return max(1, (int) config('deliveryoptimizer.target_sla_days', 3));
     }
 
     public function baseFlatFee(): float
     {
+        $v = $this->doOption('flat_fee');
+        if ($v !== null && $v !== '') {
+            return (float) $v;
+        }
         return (float) config('deliveryoptimizer.flat_fee', 49.0);
     }
 
@@ -82,6 +98,10 @@ final class OptimizerConfig implements OptimizerConfigInterface
 
     public function firmQuotesAtBrowse(): bool
     {
+        $v = $this->doOption('firm_quotes_at_browse');
+        if ($v !== null) {
+            return (bool) $v;
+        }
         return (bool) config('deliveryoptimizer.firm_quotes_at_browse', false);
     }
 
@@ -103,6 +123,20 @@ final class OptimizerConfig implements OptimizerConfigInterface
     public function marginalReoptThreshold(): float
     {
         return (float) config('deliveryoptimizer.marginal_reopt_threshold', 1.0);
+    }
+
+    /**
+     * Admin-tunable value from settings.options['deliveryOptimizer'][$key] (the live CMS
+     * passthrough the admin Delivery Optimizer page writes), or null when unset → caller
+     * falls back to config/deliveryoptimizer.php. No deploy needed to change these.
+     */
+    private function doOption(string $key)
+    {
+        $do = $this->option('deliveryOptimizer');
+        if (is_array($do) && array_key_exists($key, $do)) {
+            return $do[$key];
+        }
+        return null;
     }
 
     /** settings.options[$key] or null when unset/unavailable (fail-safe). */

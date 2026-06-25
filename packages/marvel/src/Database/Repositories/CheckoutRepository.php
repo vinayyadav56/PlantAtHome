@@ -137,7 +137,7 @@ class CheckoutRepository
      */
     protected function optimizedCheckout($request, float $amount, bool $isFullWalletPayment): ?array
     {
-        if (!config('deliveryoptimizer.enabled')) {
+        if (!app(\Marvel\Services\DeliveryOptimizer\Contracts\OptimizerConfigInterface::class)->enabled()) {
             return null;
         }
         try {

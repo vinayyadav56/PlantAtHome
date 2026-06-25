@@ -219,7 +219,8 @@ class LocationPriceController extends CoreController
         // dates + upsell hint. The legacy items[]/totals above are untouched for
         // back-compat. Browse path → estimated rates (no shipping-service call); never
         // breaks the response (try/catch fallback).
-        if (config('deliveryoptimizer.enabled') || $request->boolean('consolidate')) {
+        $optimizerOn = app(\Marvel\Services\DeliveryOptimizer\Contracts\OptimizerConfigInterface::class)->enabled();
+        if ($optimizerOn || $request->boolean('consolidate')) {
             $optimized = $this->buildOptimized($items, $products, $city, $pincode, $cod);
             if ($optimized !== null) {
                 $response['optimized'] = $optimized;
