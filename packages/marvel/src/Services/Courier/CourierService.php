@@ -270,37 +270,52 @@ class CourierService
         }
 
         $quotes = [];
+        $partnerErrors = [];
         foreach (AdapterRegistry::candidatesForMode($mode, (bool) $cod) as $code => $adapter) {
             $q = $adapter->quote($shipment, (bool) $cod);
-            if (!empty($q['ok'])) {
-                $quotes[] = [
-                    'partner'       => $code,
-                    'cost'          => $q['cost'] ?? null,
-                    'eta_days'      => $q['eta_days'] ?? null,
-                    'cod_available' => $q['cod_available'] ?? null,
-                ];
-                // Audit row (book-against-quote + analytics). Never let a persistence hiccup break
-                // the quote response.
-                try {
-                    DeliveryQuote::create([
-                        'shipment_id'     => $shipment->id,
-                        'order_id'        => $shipment->order_id,
-                        'partner'         => $code,
-                        'mode'            => $mode,
-                        'cod'             => (bool) $cod,
-                        'cod_amount'      => $shipment->cod_amount,
-                        'quoted_cost'     => $q['cost'] ?? null,
-                        'quoted_eta_days' => $q['eta_days'] ?? null,
-                        'raw'             => $q['raw'] ?? null,
-                        'expires_at'      => Carbon::now()->addMinutes(15),
-                    ]);
-                } catch (\Throwable $e) {
-                    // audit-only; ignore
-                }
+            if (empty($q['ok'])) {
+                // Keep the real reason (credential/network/serviceability) per partner so the
+                // caller can tell "no serviceable courier" from "auth failed / service down".
+                $partnerErrors[$code] = $q['error'] ?? 'no quote returned';
+                continue;
+            }
+            $quotes[] = [
+                'partner'       => $code,
+                'cost'          => $q['cost'] ?? null,
+                'eta_days'      => $q['eta_days'] ?? null,
+                'cod_available' => $q['cod_available'] ?? null,
+            ];
+            // Audit row (book-against-quote + analytics). Never let a persistence hiccup break
+            // the quote response.
+            try {
+                DeliveryQuote::create([
+                    'shipment_id'     => $shipment->id,
+                    'order_id'        => $shipment->order_id,
+                    'partner'         => $code,
+                    'mode'            => $mode,
+                    'cod'             => (bool) $cod,
+                    'cod_amount'      => $shipment->cod_amount,
+                    'quoted_cost'     => $q['cost'] ?? null,
+                    'quoted_eta_days' => $q['eta_days'] ?? null,
+                    'raw'             => $q['raw'] ?? null,
+                    'expires_at'      => Carbon::now()->addMinutes(15),
+                ]);
+            } catch (\Throwable $e) {
+                // audit-only; ignore
             }
         }
         usort($quotes, fn ($a, $b) => ($a['cost'] ?? INF) <=> ($b['cost'] ?? INF));
-        return ['ok' => !empty($quotes), 'mode' => $mode, 'cod' => (bool) $cod, 'quotes' => $quotes, 'cheapest' => $quotes[0] ?? null];
+        $ok = !empty($quotes);
+        $out = ['ok' => $ok, 'mode' => $mode, 'cod' => (bool) $cod, 'quotes' => $quotes, 'cheapest' => $quotes[0] ?? null];
+        if (!$ok) {
+            // Surface WHY there's no quote instead of a blank result, so the admin sees a
+            // real failure (auth/network) rather than assuming the route is unserviceable.
+            $out['error'] = !empty($partnerErrors)
+                ? 'No courier quote — ' . implode('; ', array_map(fn ($k, $v) => "{$k}: {$v}", array_keys($partnerErrors), $partnerErrors))
+                : 'No courier partner serves this shipment in mode "' . $mode . '".';
+            $out['partner_errors'] = $partnerErrors;
+        }
+        return $out;
     }
 
     /** Apply a Borzo order/delivery status through the SHARED order-advance seam (idempotent). */
@@ -457,6 +472,12 @@ class CourierService
     {
         if ($this->shippingServiceEnabled()) {
             return $this->shippingClient()->track($shipment);
+        }
+        // Borzo (same-city/instant) shipments aren't AWB-based — track via the Borzo adapter.
+        if (($shipment->provider ?? '') === 'borzo') {
+            return $this->borzoEnabled()
+                ? $this->borzo->track($shipment)
+                : ['ok' => false, 'error' => 'Borzo lane is not enabled.'];
         }
         if (!$this->enabled() || !$shipment->awb_number) {
             return ['ok' => false, 'error' => 'No AWB to track.'];
