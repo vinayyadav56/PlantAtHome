@@ -84,6 +84,11 @@ class MarvelVerification implements JsonSerializable
     {
         Cache::flush();
         $settings = Settings::getData($language);
+        // No settings row for this language yet (e.g. a locale never seeded). Skip rather
+        // than dereference null — this runs in the login success path and must never 500 a login.
+        if (!$settings) {
+            return;
+        }
         $settings->update([
             'options' => [
                 ...$settings->options,

@@ -1,0 +1,81 @@
+name: Admin – Reset Super-Admin (Production)
+
+# ─── Manual trigger only ───────────────────────────────────────────────────────
+# Repairs (or creates) a super-admin account on the production EC2 box so it can
+# log into the admin dashboard. Runs `php artisan plantathome:reset-admin`, which
+# forces is_active=true + email_verified, resets the password, and re-grants the
+# super_admin role/permissions. With no password supplied, a strong one is
+# generated and PRINTED IN THIS RUN'S LOG — read it, log in, then change it.
+#
+# Requires the same GitHub Secrets as production.yml:
+#   EC2_SSH_KEY, EC2_HOST, EC2_USER,
+#   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION, AWS_EC2_SG_ID
+on:
+  workflow_dispatch:
+    inputs:
+      email:
+        description: 'Admin email to repair/create'
+        required: true
+        default: 'yadavvinay9996@gmail.com'
+        type: string
+      password:
+        description: 'Password to set (leave blank to auto-generate + print it)'
+        required: false
+        default: ''
+        type: string
+      confirm:
+        description: 'Type "reset-admin" to confirm — this changes a live admin account'
+        required: true
+        type: string
+
+jobs:
+  reset:
+    name: Reset super-admin → AWS EC2 (Production)
+    runs-on: ubuntu-latest
+    if: inputs.confirm == 'reset-admin'
+    environment: production
+
+    steps:
+      - name: Open port 22 for this runner
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          RUNNER_IP=$(curl -s ifconfig.me/ip)
+          echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_ENV
+          aws ec2 authorize-security-group-ingress \
+            --group-id ${{ secrets.AWS_EC2_SG_ID }} \
+            --protocol tcp --port 22 --cidr "${RUNNER_IP}/32" \
+            --region ${{ secrets.AWS_REGION }} || true
+
+      - name: SSH → run plantathome:reset-admin
+        uses: appleboy/ssh-action@v1.2.5
+        env:
+          RESET_EMAIL: ${{ inputs.email }}
+          RESET_PASSWORD: ${{ inputs.password }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: RESET_EMAIL,RESET_PASSWORD
+          script: |
+            set -e
+            cd /var/www/plantathome/api
+            if [ -n "$RESET_PASSWORD" ]; then
+              php artisan plantathome:reset-admin --email="$RESET_EMAIL" --password="$RESET_PASSWORD"
+            else
+              php artisan plantathome:reset-admin --email="$RESET_EMAIL"
+            fi
+
+      - name: Close port 22 for this runner
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id ${{ secrets.AWS_EC2_SG_ID }} \
+            --protocol tcp --port 22 --cidr "${RUNNER_IP}/32" \
+            --region ${{ secrets.AWS_REGION }} || true
