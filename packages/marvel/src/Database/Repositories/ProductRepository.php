@@ -102,6 +102,21 @@ class ProductRepository extends BaseRepository
 
     public function boot()
     {
+        // PlantAtHome — the storefront sends `search` as `key:value` (e.g. name:rose), but a
+        // colon-less free-text value (e.g. ?search=rose) makes Prettus RequestCriteria apply the
+        // bare value to EVERY $fieldSearchable entry — including the integer/boolean columns
+        // shop_id, is_rental and visibility. Under MySQL STRICT mode (prod/RDS default)
+        // `shop_id = 'rose'` raises an invalid-numeric-value error -> 500. Normalize a colon-less
+        // value into the already-safe `name:<value>` form so only `name LIKE '%value%'` is emitted.
+        $request = app('request');
+        $rawSearch = $request->get('search');
+        if (is_string($rawSearch) && $rawSearch !== '' && !str_contains($rawSearch, ':')) {
+            $clean = trim(preg_replace('/\s+/', ' ', str_replace([';', ':'], ' ', $rawSearch)));
+            if ($clean !== '') {
+                $request->merge(['search' => 'name:' . $clean]);
+            }
+        }
+
         try {
             $this->pushCriteria(app(RequestCriteria::class));
         } catch (RepositoryException $e) {

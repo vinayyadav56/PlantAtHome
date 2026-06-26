@@ -336,7 +336,9 @@ Route::post('shop-maintenance-event', [ShopController::class, 'shopMaintenanceEv
  * ******************************************
  */
 
-Route::group(['middleware' => ['can:' . Permission::CUSTOMER, 'auth:sanctum', 'email.verified']], function () {
+// auth:sanctum BEFORE the can: gate so a tokenless request returns a clean 401 (the gate
+// running first on a guest user surfaced AuthenticationException as a 500).
+Route::group(['middleware' => ['auth:sanctum', 'can:' . Permission::CUSTOMER, 'email.verified']], function () {
     Route::post('/update-email', [UserController::class, 'updateUserEmail']);
     Route::get('me', [UserController::class, 'me']);
     Route::apiResource('orders', OrderController::class, [

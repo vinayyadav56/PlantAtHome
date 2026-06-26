@@ -83,6 +83,9 @@ class FlashSaleProductProcess
 
             foreach ($data['attached_product_ids'] as $key => $product_id) {
                 $product = Product::where('id', '=', $product_id)->with(['variation_options'])->first();
+                if (!$product) {
+                    continue;
+                }
 
                 if ($current_date === $start_date) {
                     switch ($flash_sale->type) {
@@ -141,6 +144,9 @@ class FlashSaleProductProcess
 
             foreach ($product_ids as $key => $product_id) {
                 $product = Product::where('id', '=', $product_id)->with(['variation_options'])->first();
+                if (!$product) {
+                    continue;
+                }
 
                 if ($flash_sale->sale_status == 1) {
                     if ($current_date === $start_date) {
@@ -231,6 +237,9 @@ class FlashSaleProductProcess
     {
         foreach ($product_ids as $key => $product_id) {
             $product = Product::where('id', '=', $product_id)->with(['variation_options'])->first();
+            if (!$product) {
+                continue;
+            }
 
             if ($product->product_type === ProductType::VARIABLE) {
                 foreach ($product->variation_options as $key => $variation) {
