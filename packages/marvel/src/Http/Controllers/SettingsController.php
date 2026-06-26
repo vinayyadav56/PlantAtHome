@@ -68,7 +68,9 @@ class SettingsController extends CoreController
         // it — every page (SSR) fetches settings. Admin (real Bearer) stays
         // uncached so the dashboard reflects edits immediately.
         if ($this->isPublicCacheable($request)) {
-            return response()->json($data)->header('Cache-Control', $this->cacheControl());
+            // Short shared TTL (60s) so admin toggles (homepage banners, hero slides, design
+            // system, …) reach the live storefront within ~1 min instead of the 5-min default.
+            return response()->json($data)->header('Cache-Control', $this->cacheControl(60));
         }
 
         return $data;
