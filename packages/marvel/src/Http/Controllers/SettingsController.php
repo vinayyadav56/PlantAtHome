@@ -138,9 +138,17 @@ class SettingsController extends CoreController
      */
     public function update(SettingsRequest $request, $id)
     {
+        $language = $request->language ? $request->language : DEFAULT_LANGUAGE;
         $settings = $this->repository->first();
         if (isset($settings->id)) {
-            return $this->repository->update($request->only(['options']), $settings->id);
+            $updated = $this->repository->update($request->only(['options']), $settings->id);
+            // Bust the forever-cached settings response so storefront + admin reflect the edit
+            // immediately. store() already did this; update() previously did NOT — so admin
+            // saves (homepage banners, hero slides, design system, …) read stale until restart.
+            Cache::forget('cached_settings_' . $language);
+            Cache::forget('cached_settings_' . DEFAULT_LANGUAGE);
+            event(new Maintenance($language));
+            return $updated;
         } else {
             return $this->repository->create(['options' => $request['options']]);
         }
