@@ -62,11 +62,30 @@ jobs:
           script: |
             set -e
             cd /var/www/plantathome/api
+
+            # storage/ is owned by www-data (PHP-FPM); artisan runs as the SSH user, so
+            # grant it write access first (mirrors production.yml) and ensure the cache/log
+            # dirs exist, otherwise artisan fails on log/cache writes.
+            sudo chown -R ubuntu:ubuntu storage bootstrap/cache 2>/dev/null || true
+            chmod -R 775 storage bootstrap/cache 2>/dev/null || true
+            mkdir -p storage/framework/cache/data storage/logs 2>/dev/null || true
+
+            # Run the reset; capture its exit so we ALWAYS restore www-data ownership
+            # afterwards — never leave the live site with storage owned by ubuntu.
+            set +e
             if [ -n "$RESET_PASSWORD" ]; then
               php artisan plantathome:reset-admin --email="$RESET_EMAIL" --password="$RESET_PASSWORD"
             else
               php artisan plantathome:reset-admin --email="$RESET_EMAIL"
             fi
+            RC=$?
+            set -e
+
+            echo "==> Restoring www-data ownership for PHP-FPM..."
+            sudo chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
+            chmod -R 775 storage bootstrap/cache 2>/dev/null || true
+
+            exit $RC
 
       - name: Close port 22 for this runner
         if: always()
