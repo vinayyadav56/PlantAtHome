@@ -295,37 +295,25 @@ class CheckoutRepository
         return $unavailable_products;
     }
 
+    /**
+     * City-inventory availability model: per-unit stock is NEVER a blocker. A
+     * product (any vertical) that is listed/available in the customer's city is
+     * always orderable — vendors fulfil on demand, so nothing is ever "out of
+     * stock". The ONLY availability gate is city/vertical, handled by
+     * CheckoutRepository::verify() (unavailable_products) and
+     * OrderRepository::assertVerticalsAvailable(). Both isInStock and
+     * isVariationInStock therefore always report "in stock" so checkStock()
+     * returns [] and the 422 "Some items in your cart are out of stock" can
+     * never fire for a city-available item.
+     */
     protected function isInStock($id, $order_quantity)
     {
-        try {
-            $product = Product::findOrFail($id);
-            // A bundle holds no stock of its own — gate against its DERIVED
-            // availability (MIN over components) so exhausted bundles surface in
-            // unavailable_products and the storefront drops them.
-            if ($product->product_type === \Marvel\Enums\ProductType::BUNDLE) {
-                $available = app(\Marvel\Services\BundleInventoryService::class)->available($product);
-                return $order_quantity > $available ? $id : false;
-            }
-            if ($order_quantity > $product->quantity) {
-                return $id;
-            }
-            return false;
-        } catch (Exception $e) {
-            return false;
-        }
+        return false; // never out of stock — city is the only gate
     }
 
     protected function isVariationInStock($variation_id, $order_quantity)
     {
-        try {
-            $variationOption = Variation::findOrFail($variation_id);
-            if ($order_quantity > $variationOption->quantity) {
-                return $variationOption->product_id;
-            }
-            return false;
-        } catch (Exception $e) {
-            return false;
-        }
+        return false; // never out of stock — city is the only gate
     }
 
     protected function getShippingCharge($shipping_class, $amount)
