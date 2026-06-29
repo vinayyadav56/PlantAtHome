@@ -107,8 +107,25 @@ class TranslationContext
     /**
      * Bulk-resolve every pending id of $type in the current language:
      * Redis MGET first, DB (status=translated) for the misses, write-through.
+     *
+     * Fail-safe: ANY error here falls back to English — a translation problem
+     * must NEVER break content delivery.
      */
     protected function resolveType(string $type): void
+    {
+        try {
+            $this->resolveTypeInner($type);
+        } catch (\Throwable $e) {
+            // Mark every pending id of this type as resolved-empty so reads fall
+            // back to the canonical English column and we don't retry on error.
+            foreach (array_keys($this->pending[$type] ?? []) as $id) {
+                $this->loaded[$type][$id] = [];
+            }
+            unset($this->pending[$type]);
+        }
+    }
+
+    protected function resolveTypeInner(string $type): void
     {
         $ids = array_keys($this->pending[$type] ?? []);
         // The model that triggered this may not have fired `retrieved` (e.g.
@@ -182,25 +199,32 @@ class TranslationContext
         if (!config('translation.lazy', true)) {
             return;
         }
+        // Lazy translation needs a REAL async worker. Under the `sync` driver the
+        // job would run inline during this read — blocking the response and, on a
+        // provider error (e.g. missing key), breaking content delivery entirely.
+        // On sync environments, translations are populated via marvel:translate-entities.
+        if (config('queue.default') === 'sync') {
+            return;
+        }
         $key = "{$type}:{$id}:{$this->language}";
         if (isset($this->dispatched[$key])) {
             return;
         }
         $this->dispatched[$key] = true;
 
-        // In-flight lock so a burst on a cold entity enqueues once.
+        // Belt-and-suspenders: a translation dispatch must NEVER break a read.
         try {
+            // In-flight lock so a burst on a cold entity enqueues once.
             $lock = "txnlock:{$this->shortType($type)}:{$id}:{$this->language}";
             if (!Cache::add($lock, 1, 120)) {
                 return;
             }
+            if (class_exists(\Marvel\Jobs\TranslateEntityJob::class)) {
+                \Marvel\Jobs\TranslateEntityJob::dispatch($type, $id, $this->language)
+                    ->onQueue(config('translation.queue', 'translations'));
+            }
         } catch (\Throwable $e) {
-            // proceed without lock if cache unavailable
-        }
-
-        if (class_exists(\Marvel\Jobs\TranslateEntityJob::class)) {
-            \Marvel\Jobs\TranslateEntityJob::dispatch($type, $id, $this->language)
-                ->onQueue(config('translation.queue', 'translations'));
+            // swallow — content delivery is more important than a translation
         }
     }
 
