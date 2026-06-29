@@ -110,6 +110,7 @@ class ShopServiceProvider extends ServiceProvider
         \Marvel\Console\PruneNonSeedPlantsCommand::class,
         \Marvel\Console\TranslateLangCommand::class,
         \Marvel\Console\TranslateCatalogCommand::class,
+        \Marvel\Console\TranslateEntitiesCommand::class,
         \Marvel\Console\RecomputeCityAvailabilityCommand::class,
         \Marvel\Console\RunSettlementsCommand::class,
         \Marvel\Console\BackfillOrderItemsCommand::class,

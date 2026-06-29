@@ -678,6 +678,16 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('command-center/inventory', [CommandCenterController::class, 'inventory']);
     Route::get('command-center/customer-intelligence', [CommandCenterController::class, 'customerIntelligence']);
 
+    // Translation / Language Management (enterprise i18n engine).
+    Route::get('translations/stats', [\Marvel\Http\Controllers\TranslationAdminController::class, 'stats']);
+    Route::get('translations/missing', [\Marvel\Http\Controllers\TranslationAdminController::class, 'missing']);
+    Route::post('translations/retranslate', [\Marvel\Http\Controllers\TranslationAdminController::class, 'retranslate']);
+    Route::post('translations/bulk-retranslate', [\Marvel\Http\Controllers\TranslationAdminController::class, 'bulkRetranslate']);
+    Route::post('translations/clear-cache', [\Marvel\Http\Controllers\TranslationAdminController::class, 'clearCache']);
+    Route::post('translations/mark-reviewed', [\Marvel\Http\Controllers\TranslationAdminController::class, 'markReviewed']);
+    Route::get('translation-providers', [\Marvel\Http\Controllers\TranslationProviderController::class, 'index']);
+    Route::post('translation-providers', [\Marvel\Http\Controllers\TranslationProviderController::class, 'update']);
+
     // Order → vendor + delivery-partner matching/assignment (P3)
     Route::get('orders/{id}/match', [OrderAssignmentController::class, 'match']);
     Route::get('orders/{id}/fulfillment-plan', [OrderAssignmentController::class, 'fulfillmentPlan']);
