@@ -59,7 +59,14 @@ return [
     // Provider env fallbacks (DB-configured encrypted creds take precedence).
     'providers' => [
         'google' => [
-            'api_key' => env('GOOGLE_TRANSLATE_API_KEY'),
+            // Reuse the SAME Google Cloud key the platform already uses for Maps
+            // (server key) when a dedicated translate key isn't set — so enabling
+            // the Translation API on that key makes translation "just work" with no
+            // new secret. NOTE: must be a SERVER key (no HTTP-referrer restriction),
+            // not the browser NEXT_PUBLIC_* key, since this is a server-to-server call.
+            'api_key' => env('GOOGLE_TRANSLATE_API_KEY')
+                ?: env('GOOGLE_MAPS_SERVER_KEY')
+                ?: env('GOOGLE_MAP_API_KEY'),
             // Optional service-account / project for the v3 API.
             'project_id' => env('GOOGLE_TRANSLATE_PROJECT_ID'),
             'endpoint' => env('GOOGLE_TRANSLATE_ENDPOINT', 'https://translation.googleapis.com/language/translate/v2'),
