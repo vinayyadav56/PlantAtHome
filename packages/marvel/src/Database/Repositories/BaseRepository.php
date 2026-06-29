@@ -243,9 +243,12 @@ abstract class BaseRepository extends Repository implements CacheableInterface
 
     public function findBySlugOrId(int | string $value, string $language = DEFAULT_LANGUAGE)
     {
+        // Translation overlay: resolve to the canonical English row (the only row);
+        // the requested language is applied at read-time by the overlay. $language
+        // is kept in the signature for backward compatibility.
         return match (true) {
-            is_numeric($value) => $this->where('id', $value)->where('language', $language)->firstOrFail(),
-            is_string($value)  => $this->where('slug', $value)->where('language', $language)->firstOrFail(),
+            is_numeric($value) => $this->where('id', $value)->where('language', DEFAULT_LANGUAGE)->firstOrFail(),
+            is_string($value)  => $this->where('slug', $value)->where('language', DEFAULT_LANGUAGE)->firstOrFail(),
         };
     }
 }

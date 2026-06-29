@@ -121,7 +121,7 @@ class ProductController extends CoreController
 
         // PlantAtHome — eager-load botanical details + bundle items so the list
         // resource can expose scientific_name, care chips and bundle totals (no N+1).
-        $products_query = $this->repository->with(['plantAttribute', 'bundleItems'])->where('language', $language);
+        $products_query = $this->repository->with(['plantAttribute', 'bundleItems'])->where('language', DEFAULT_LANGUAGE);
 
         if (isset($request->date_range)) {
             $dateRange = explode('//', $request->date_range);
@@ -290,7 +290,7 @@ class ProductController extends CoreController
             $language = $request->language ?? DEFAULT_LANGUAGE;
             $user = $request->user();
             $limit = isset($request->limit) ? $request->limit : 10;
-            $product = $this->repository->where('language', $language)->where('slug', $slug)->orWhere('id', $slug)->firstOrFail();
+            $product = $this->repository->where('language', DEFAULT_LANGUAGE)->where('slug', $slug)->orWhere('id', $slug)->firstOrFail();
             if (
                 in_array('variation_options.digital_file', explode(';', $request->with)) || in_array('digital_file', explode(';', $request->with))
             ) {
@@ -770,7 +770,7 @@ class ProductController extends CoreController
         $type_id = $request->type_id ? $request->type_id : '';
         if (isset($request->type_slug) && empty($type_id)) {
             try {
-                $type = Type::where('slug', $request->type_slug)->where('language', $language)->firstOrFail();
+                $type = Type::where('slug', $request->type_slug)->where('language', DEFAULT_LANGUAGE)->firstOrFail();
                 $type_id = $type->id;
             } catch (MarvelException $e) {
                 throw new MarvelException(NOT_FOUND);
@@ -782,7 +782,7 @@ class ProductController extends CoreController
         // existing bustResponseCache('products') on any product write already invalidates it.
         $city = $request->filled('city') ? (string) $request->city : null;
         $build = function () use ($request, $limit, $language, $range, $type_id, $city) {
-            $products_query = $this->repository->withCount('orders')->with(['type', 'shop'])->orderBy('orders_count', 'desc')->where('language', $language);
+            $products_query = $this->repository->withCount('orders')->with(['type', 'shop'])->orderBy('orders_count', 'desc')->where('language', DEFAULT_LANGUAGE);
             if (isset($request->shop_id)) {
                 $products_query = $products_query->where('shop_id', "=", $request->shop_id);
             }
@@ -814,7 +814,7 @@ class ProductController extends CoreController
         $type_id = $request->type_id ? $request->type_id : '';
         if (isset($request->type_slug) && empty($type_id)) {
             try {
-                $type = Type::where('slug', $request->type_slug)->where('language', $language)->firstOrFail();
+                $type = Type::where('slug', $request->type_slug)->where('language', DEFAULT_LANGUAGE)->firstOrFail();
                 $type_id = $type->id;
             } catch (MarvelException $e) {
                 throw new MarvelException(NOT_FOUND);
@@ -828,7 +828,7 @@ class ProductController extends CoreController
                 ->with(['type', 'shop'])
                 ->withAvg('reviews', 'rating')
                 ->whereHas('reviews')
-                ->where('language', $language)
+                ->where('language', DEFAULT_LANGUAGE)
                 ->orderByDesc('reviews_avg_rating');
             if (isset($request->shop_id)) {
                 $products_query = $products_query->where('shop_id', '=', $request->shop_id);
@@ -951,7 +951,7 @@ class ProductController extends CoreController
         $user = $request->user() ?? null;;
         $language = $request->language ? $request->language : DEFAULT_LANGUAGE;
 
-        $products_query = $this->repository->with(['type', 'shop'])->where('language', $language);
+        $products_query = $this->repository->with(['type', 'shop'])->where('language', DEFAULT_LANGUAGE);
 
         switch ($user) {
             case $user->hasPermissionTo(Permission::SUPER_ADMIN):
@@ -1002,7 +1002,7 @@ class ProductController extends CoreController
         $user = $request->user();
         $language = $request->language ? $request->language : DEFAULT_LANGUAGE;
 
-        $products_query = $this->repository->with(['type', 'shop'])->where('language', $language)->where('quantity', '<', 10);
+        $products_query = $this->repository->with(['type', 'shop'])->where('language', DEFAULT_LANGUAGE)->where('quantity', '<', 10);
 
         switch ($user) {
             case $user->hasPermissionTo(Permission::SUPER_ADMIN):

@@ -29,6 +29,9 @@ class RestApiServiceProvider extends ServiceProvider
         // Rest/Routes.php, which (with TrustProxies now trusting the platform proxy) key on the
         // real client IP.
         Route::prefix('api')->middleware([
+            // FIRST: resolve request language (?language= or Accept-Language) so the
+            // translation overlay localizes every downstream response.
+            \Marvel\Http\Middleware\ResolveLanguage::class,
             \Marvel\Http\Middleware\SecurityHeaders::class,
             \Marvel\Http\Middleware\LogRequests::class,
         ])->group(function () {

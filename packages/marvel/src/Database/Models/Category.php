@@ -11,15 +11,19 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
 use Illuminate\Database\Eloquent\Relations\HasOne;
 use Marvel\Traits\TranslationTrait;
+use Marvel\Translation\HasTranslationOverlay;
 
 class Category extends Model
 {
-    use TranslationTrait, Sluggable;
+    use TranslationTrait, Sluggable, HasTranslationOverlay;
 
 
     protected $table = 'categories';
 
     public $guarded = [];
+
+    /** Fields localized at read-time by the translation overlay (cache-table model). */
+    protected array $translatable = ['name', 'details'];
 
     protected $casts = [
         'image' => 'json',

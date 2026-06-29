@@ -92,8 +92,11 @@ class CategoryController extends CoreController
             // N+1 fix: CategoryResource reads $this->parentCategory (the show() path at :155/:158
             // already eager-loads 'parentCategory'); 'parent' was loaded-but-unused while
             // parentCategory lazy-loaded per row.
+            // Translation overlay: always read the canonical English row; the
+            // requested language is applied at read-time by the overlay (the
+            // per-language response cache key still keys on $language).
             $categoriesQuery = $this->repository->with(['type', 'parentCategory', 'children'])
-                ->where('language', $language);
+                ->where('language', DEFAULT_LANGUAGE);
 
             if ($typeSlug) {
                 $categoriesQuery->whereHas('type', function ($q) use ($typeSlug) {

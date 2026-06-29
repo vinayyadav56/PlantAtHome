@@ -160,6 +160,11 @@ class ShopServiceProvider extends ServiceProvider
         $this->loadMigrations();
         $this->loadHelpers();
         Resource::withoutWrapping();
+
+        // Translation overlay (cache-table model): version + requeue translations
+        // when an entity's canonical English fields change.
+        \Marvel\Database\Models\Product::observe(\Marvel\Observers\TranslatableObserver::class);
+        \Marvel\Database\Models\Category::observe(\Marvel\Observers\TranslatableObserver::class);
     }
 
     public function loadMigrations()
@@ -259,12 +264,18 @@ class ShopServiceProvider extends ServiceProvider
             'paymongo'           => File::getRequire(__DIR__ . '/../config/paymongo.php'),
             'graphiql'           => File::getRequire(__DIR__ . '/../config/graphiql.php'),
             'sslcommerz'         => File::getRequire(__DIR__ . '/../config/sslcommerz.php'),
-            'broadcasting'       => File::getRequire(__DIR__ . '/../config/broadcasting.php')
+            'broadcasting'       => File::getRequire(__DIR__ . '/../config/broadcasting.php'),
+            'translation'        => File::getRequire(__DIR__ . '/../config/translation.php')
         ]);
 
         // Register the service the package provides.
         $this->app->singleton('shop', function () {
             return new Shop();
+        });
+
+        // Request-scoped translation overlay state (reset per request).
+        $this->app->scoped(\Marvel\Translation\TranslationContext::class, function () {
+            return new \Marvel\Translation\TranslationContext();
         });
 
         $this->app->singleton('payment', function ($app) {

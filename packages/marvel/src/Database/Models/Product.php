@@ -19,12 +19,16 @@ use Marvel\Traits\Excludable;
 use Kodeine\Metable\Metable;
 use Marvel\Exceptions\MarvelException;
 use Marvel\Traits\TranslationTrait;
+use Marvel\Translation\HasTranslationOverlay;
 
 class Product extends Model
 {
-    use Sluggable, SoftDeletes, Excludable, Metable, TranslationTrait;
+    use Sluggable, SoftDeletes, Excludable, Metable, TranslationTrait, HasTranslationOverlay;
 
     public $guarded = [];
+
+    /** Fields localized at read-time by the translation overlay (cache-table model). */
+    protected array $translatable = ['name', 'description'];
 
     protected $table = 'products';
     protected $metaTable = 'products_meta'; //optional.
