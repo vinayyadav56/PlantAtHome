@@ -4,6 +4,7 @@ namespace Marvel\Traits;
 
 use Exception;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\Order;
 use Marvel\Database\Models\PaymentGateway;
 use Marvel\Database\Models\Settings;
@@ -198,7 +199,20 @@ trait PaymentTrait
             $created_intent['selected_payment_path'] = $request['payment_sub_gateway'];
         }
 
-        return Payment::getIntent($created_intent);
+        try {
+            return Payment::getIntent($created_intent);
+        } catch (HttpException $e) {
+            throw $e;
+        } catch (\Throwable $e) {
+            // A misconfigured/unreachable gateway (e.g. missing Razorpay creds)
+            // must fail as a clean 400 the storefront can render, never a 500.
+            Log::warning('payment-intent creation failed', [
+                'gateway'         => $payment_gateway,
+                'tracking_number' => $order->tracking_number,
+                'error'           => $e->getMessage(),
+            ]);
+            throw new HttpException(400, SOMETHING_WENT_WRONG_WITH_PAYMENT);
+        }
     }
 
 

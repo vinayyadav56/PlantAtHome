@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Str;
 use Marvel\Database\Models\Balance;
 use Marvel\Database\Models\Coupon;
@@ -290,11 +291,21 @@ class OrderRepository extends BaseRepository
         if (!$eligible) {
             throw new MarvelBadRequestException('COULD_NOT_PROCESS_THE_ORDER_PLEASE_CONTACT_WITH_THE_ADMIN');
         }
-        // Create Intent
+        // Create Intent — a payment-provider failure must never void the placed
+        // order (the customer retries from the order's Pay Now flow instead).
         if (!in_array($order->payment_gateway, [
             PaymentGatewayType::CASH, PaymentGatewayType::CASH_ON_DELIVERY, PaymentGatewayType::FULL_WALLET_PAYMENT
         ])) {
-            $order['payment_intent'] = $this->processPaymentIntent($request, $settings);
+            try {
+                $order['payment_intent'] = $this->processPaymentIntent($request, $settings);
+            } catch (\Throwable $e) {
+                Log::warning('order-create payment-intent failed; order kept payable', [
+                    'gateway'         => $order->payment_gateway,
+                    'tracking_number' => $order->tracking_number,
+                    'error'           => $e->getMessage(),
+                ]);
+                $order['payment_intent'] = null;
+            }
         }
 
 
