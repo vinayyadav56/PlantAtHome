@@ -40,8 +40,11 @@ class TypeController extends CoreController
         // fetches them. Server-cache + edge-cache for anonymous reads; admin
         // (real Bearer) stays fresh.
         // Admin (real Bearer) always sees the full, unfiltered vertical list.
+        // Overlay i18n model: rows exist ONLY in DEFAULT_LANGUAGE — localized
+        // fields are merged by the translation overlay, so always query the
+        // canonical rows (a `language=hi` row filter would return nothing).
         if (!$this->isPublicCacheable($request)) {
-            return TypeResource::collection($this->repository->where('language', $language)->get());
+            return TypeResource::collection($this->repository->where('language', DEFAULT_LANGUAGE)->get());
         }
 
         // Storefront: hide verticals the Operations Control Center has turned off
@@ -59,8 +62,10 @@ class TypeController extends CoreController
             . ':' . ($cityKey !== '' ? $cityKey : '_')
             . ':' . $language;
 
-        $data = Cache::remember($key, 600, function () use ($language, $availSvc, $city) {
-            $types = $this->repository->where('language', $language)->get();
+        $data = Cache::remember($key, 600, function () use ($availSvc, $city) {
+            // Canonical rows only — the overlay localizes fields per request
+            // language (the cache key above still varies by $language).
+            $types = $this->repository->where('language', DEFAULT_LANGUAGE)->get();
             // FAIL OPEN: only narrow when something is actually disabled, and
             // never hide EVERY vertical (an explicit all-off is the platform
             // kill-switch, handled elsewhere — don't blank the storefront here).
@@ -111,7 +116,8 @@ class TypeController extends CoreController
                 $type = $this->repository->where('id', $params)->with('banners')->firstOrFail();
                 return new TypeResource($type);
             }
-            $type = $this->repository->where('slug', $params)->where('language', $language)->with('banners')->firstOrFail();
+            // Canonical row lookup (slugs are not translated in the overlay model).
+            $type = $this->repository->where('slug', $params)->where('language', DEFAULT_LANGUAGE)->with('banners')->firstOrFail();
             return new TypeResource($type);
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
