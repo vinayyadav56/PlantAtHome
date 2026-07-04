@@ -42,8 +42,12 @@ class CourierShipmentController extends CoreController
     /**
      * POST shipments/{id}/dispatch — book the shipment via the partner for its mode
      * (courier → Shiprocket, instant/same-city → Borzo). Idempotent on provider_order_id.
+     *
+     * NB: named dispatchShipment (not dispatch) — CoreController pulls in the
+     * DispatchesJobs trait whose dispatch($job) signature would clash and fatal
+     * the whole controller (and route:list) at link time.
      */
-    public function dispatch(Request $request, $id)
+    public function dispatchShipment(Request $request, $id)
     {
         $res = $this->courier()->book($this->shipment($id));
         return response()->json($res, !empty($res['ok']) ? 200 : 409);

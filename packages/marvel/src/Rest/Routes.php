@@ -309,7 +309,7 @@ Route::post('/email/verification-notification', [UserController::class, 'sendVer
 // enumeration/replay storms against the live payment processor.
 Route::post('orders/payment', [OrderController::class, 'submitPayment'])->middleware('throttle:20,1');
 Route::post('generate-descriptions', [AiController::class, 'generateDescription'])->middleware('throttle:10,1');
-Route::get('/payment-intent', [PaymentIntentController::class, 'getPaymentIntent']);
+Route::get('/payment-intent', [PaymentIntentController::class, 'getPaymentIntent'])->middleware('throttle:20,1');
 
 Route::apiResource('faqs', FaqsController::class, [
     'only' => ['index', 'show'],
@@ -651,7 +651,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('shops/{id}/sync-pickup', [CourierShipmentController::class, 'syncPickup']);
     // Multi-partner shipping (Shiprocket + Borzo): ranked quotes, mode-routed dispatch, cancel.
     Route::get('shipments/{id}/shipping-quotes', [CourierShipmentController::class, 'quotes']);
-    Route::post('shipments/{id}/dispatch', [CourierShipmentController::class, 'dispatch']);
+    Route::post('shipments/{id}/dispatch', [CourierShipmentController::class, 'dispatchShipment']);
     Route::post('shipments/{id}/cancel-shipment', [CourierShipmentController::class, 'cancelShipment']);
 
     // Marketplace analytics widgets (admin dashboard, D1).

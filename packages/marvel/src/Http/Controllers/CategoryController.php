@@ -64,7 +64,11 @@ class CategoryController extends CoreController
         $language = $request->language ?? DEFAULT_LANGUAGE;
         $parent = $request->parent;
         $selfId = $request->self;
-        $limit = $request->limit ?? 15;
+        // Clamp to 100 (mirrors ProductController). With the recursive `children`
+        // eager-load, serializing the full category forest at limit=1000 blew the
+        // PHP-FPM memory_limit mid-json_encode on Railway, so nginx truncated the
+        // chunked body → the storefront's JSON.parse failed (dead filters/grids).
+        $limit = min(max((int) ($request->limit ?: 15), 1), 100);
         $page = $request->page ?? 1;
 
         // The storefront filters per vertical via `search=type.slug:plants`
