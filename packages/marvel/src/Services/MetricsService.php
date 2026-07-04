@@ -114,9 +114,10 @@ class MetricsService
             ->get();
 
         // Vendors per city (shops whose address city matches). One grouped query.
+        // NB: the `shops` table has no `deleted_at` column (not SoftDeletes) —
+        // filtering on it 500'd /command-center/city-health in every environment.
         $shopCityExpr = $this->shopCityExpr('shops');
         $vendorsByCity = DB::table('shops')
-            ->whereNull('deleted_at')
             ->select(DB::raw("$shopCityExpr as city"), DB::raw('COUNT(id) as vendors'))
             ->groupBy('city')
             ->pluck('vendors', 'city');
@@ -233,7 +234,7 @@ class MetricsService
             ->select(DB::raw('DATE(created_at) as d'), DB::raw('SUM(paid_total) as revenue'))
             ->groupBy('d')->orderBy('d')->get();
 
-        $vendors = (int) DB::table('shops')->whereNull('deleted_at')
+        $vendors = (int) DB::table('shops')
             ->whereRaw($this->shopCityExpr('shops') . ' = ?', [$city])->count();
 
         return [
