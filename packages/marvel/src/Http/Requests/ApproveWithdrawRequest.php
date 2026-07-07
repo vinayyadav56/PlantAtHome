@@ -9,7 +9,7 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Marvel\Enums\WithdrawStatus;
 
-class WithdrawRequest extends FormRequest
+class ApproveWithdrawRequest extends FormRequest
 {
     /**
      * Determine if the user is authorized to make this request.
@@ -29,11 +29,8 @@ class WithdrawRequest extends FormRequest
     public function rules()
     {
         return [
-            'shop_id'     => ['required', 'exists:Marvel\Database\Models\Shop,id'],
-            'amount'   => ['required', 'numeric', 'min:0.01'],
-            'payment_method' => ['nullable', 'string'],
-            'details' => ['nullable', 'string'],
-            'note' => ['nullable', 'string'],
+            'id'     => ['required', 'exists:Marvel\Database\Models\Withdraw,id'],
+            'status' => ['required', Rule::in(WithdrawStatus::getValues())],
         ];
     }
 

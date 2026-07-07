@@ -43,6 +43,11 @@ class VendorInventoryController extends CoreController
         if (!$first) {
             abort(422, 'No vendor shop is associated with your account.');
         }
+        // A multi-shop owner must say WHICH shop — otherwise a caller (or a future UI path) that
+        // omits shop_id would silently read/write the wrong shop's inventory.
+        if ($shops->count() > 1) {
+            abort(422, 'Your account manages more than one shop — please specify shop_id.');
+        }
         return (int) $first->id;
     }
 
@@ -93,12 +98,15 @@ class VendorInventoryController extends CoreController
     /** POST /vendor/inventory/bulk-attach — multi-select save (price + stock per item). */
     public function bulkAttach(Request $request)
     {
+        // NOTE: cost_price is deliberately NOT accepted here — it is the vendor's hidden buy price
+        // that drives margin-over-cost pricing and the profit ledger, and is admin-only (set via
+        // the price-sheet import). Letting a vendor write it would let them skew platform margins.
         $request->validate([
             'items'                          => 'required|array|min:1|max:500',
             'items.*.product_id'             => 'required_without:items.*.sku',
             'items.*.vendor_selling_price'   => 'nullable|numeric|min:0',
-            'items.*.cost_price'             => 'nullable|numeric|min:0',
             'items.*.stock_qty'              => 'nullable|integer|min:0',
+            'items.*.track_stock'            => 'nullable|boolean',
             'items.*.fulfillment_mode'       => 'nullable|in:local,courier,both',
         ]);
         $shopId = $this->resolveShopId($request);
@@ -144,21 +152,27 @@ class VendorInventoryController extends CoreController
     {
         $shopId = $this->resolveShopId($request);
         $row = VendorProductPrice::where('shop_id', $shopId)->findOrFail($id);
+        // cost_price is admin-only (see bulkAttach) — a vendor cannot edit it here.
         $request->validate([
             'vendor_selling_price' => 'nullable|numeric|min:0',
-            'cost_price'           => 'nullable|numeric|min:0',
             'stock_qty'            => 'nullable|integer|min:0',
+            'track_stock'          => 'nullable|boolean',
             'fulfillment_mode'     => 'nullable|in:local,courier,both',
         ]);
 
         if ($request->has('vendor_selling_price')) {
             $row->vendor_selling_price = $request->vendor_selling_price !== null ? (float) $request->vendor_selling_price : null;
         }
-        if ($request->has('cost_price')) {
-            $row->cost_price = $request->cost_price !== null ? (float) $request->cost_price : null;
-        }
         if ($request->has('stock_qty')) {
             $row->stock_qty = max(0, (int) $request->stock_qty);
+            // Setting an explicit stock number means the vendor wants it tracked (so 0 = out of
+            // stock), unless they also explicitly say otherwise below.
+            if (!$request->has('track_stock')) {
+                $row->track_stock = true;
+            }
+        }
+        if ($request->has('track_stock')) {
+            $row->track_stock = (bool) $request->track_stock;
         }
         if ($request->has('fulfillment_mode')) {
             $row->fulfillment_mode = $request->fulfillment_mode;
@@ -210,11 +224,14 @@ class VendorInventoryController extends CoreController
             'shop_id'     => $shopId,
             'period_type' => $periodType,
             'file'        => $path,
-            'status'      => 'completed',
+            // Marked processing until the import finishes; set to completed/failed below. A worker
+            // killed mid-import (OOM) then leaves an honest "processing", not a false "completed".
+            'status'      => 'processing',
         ]);
 
         try {
-            $import = new VendorPriceSheetImport($shopId, $periodType, null, null, $batch->id, optional($request->user())->id);
+            // Vendor self-serve upload — allowCost=false so a vendor cannot set the hidden cost.
+            $import = new VendorPriceSheetImport($shopId, $periodType, null, null, $batch->id, optional($request->user())->id, false);
             Excel::import($import, $uploaded);
         } catch (\Throwable $e) {
             $batch->update(['status' => 'failed', 'errors' => [['line' => 0, 'error' => $e->getMessage()]]]);

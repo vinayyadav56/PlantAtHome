@@ -529,14 +529,18 @@ class UserController extends CoreController
 
     public function register(UserCreateRequest $request)
     {
-        $notAllowedPermissions = [Permission::SUPER_ADMIN];
-        if ((isset($request->permission->value) && in_array($request->permission->value, $notAllowedPermissions)) || (isset($request->permission) && in_array($request->permission, $notAllowedPermissions))) {
+        // Public self-registration may ONLY create a customer (default) or a store_owner
+        // (self-serve vendor). Any other requested permission — staff, super_admin, an arbitrary
+        // string — is a privilege-escalation attempt and is rejected. The shop's admin approval
+        // remains the gate before a store_owner can actually sell.
+        $requested = isset($request->permission->value) ? $request->permission->value : ($request->permission ?? null);
+        if ($requested !== null && $requested !== Permission::STORE_OWNER) {
             throw new AuthorizationException(NOT_AUTHORIZED);
         }
         $permissions = [Permission::CUSTOMER];
         $role = Role::CUSTOMER;
-        if (isset($request->permission)) {
-            $permissions[] = isset($request->permission->value) ? $request->permission->value : $request->permission;
+        if ($requested === Permission::STORE_OWNER) {
+            $permissions[] = Permission::STORE_OWNER;
             $role = Role::STORE_OWNER;
         }
         $user = $this->repository->create([

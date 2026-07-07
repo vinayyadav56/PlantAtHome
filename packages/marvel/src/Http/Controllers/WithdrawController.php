@@ -15,6 +15,7 @@ use Marvel\Enums\Permission;
 use Marvel\Enums\WithdrawStatus;
 use Marvel\Exceptions\MarvelException;
 use Marvel\Services\VendorLedgerService;
+use Marvel\Http\Requests\ApproveWithdrawRequest;
 use Marvel\Http\Requests\UpdateWithdrawRequest;
 use Marvel\Http\Requests\WithdrawRequest;
 use Prettus\Validator\Exceptions\ValidatorException;
@@ -169,20 +170,42 @@ class WithdrawController extends CoreController
         }
     }
 
-    public function approveWithdraw(Request $request)
+    public function approveWithdraw(ApproveWithdrawRequest $request)
     {
-        try {
-            if ($request->user() && $request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
-                $id = $request->id;
-                $status = $request->status->value ?? $request->status;
-                $withdraw = $this->repository->findOrFail($id);
-                $withdraw->status = $status;
-                $withdraw->save();
-                return $withdraw;
-            }
+        if (!($request->user() && $request->user()->hasPermissionTo(Permission::SUPER_ADMIN))) {
             throw new AuthorizationException(NOT_AUTHORIZED);
-        } catch (MarvelException $e) {
-            throw new MarvelException(SOMETHING_WENT_WRONG);
         }
+
+        $id = $request->id;
+        $status = $request->status instanceof \BenSampo\Enum\Enum
+            ? $request->status->value
+            : (is_object($request->status) ? ($request->status->value ?? null) : $request->status);
+
+        // The amount is debited from the vendor's balance at request time (see store()).
+        // When a withdrawal is REJECTED we must give that money back — exactly once, and only
+        // if it was still outstanding (never from an already-paid/approved or already-rejected state).
+        return DB::transaction(function () use ($id, $status) {
+            $withdraw = $this->repository->findOrFail($id);
+            $previousStatus = $withdraw->status instanceof \BenSampo\Enum\Enum
+                ? $withdraw->status->value
+                : $withdraw->status;
+
+            $restoreFromStates = [WithdrawStatus::PENDING, WithdrawStatus::PROCESSING, WithdrawStatus::ON_HOLD];
+            if (
+                $status === WithdrawStatus::REJECTED
+                && in_array($previousStatus, $restoreFromStates, true)
+            ) {
+                $balance = Balance::where('shop_id', '=', $withdraw->shop_id)->lockForUpdate()->first();
+                if ($balance) {
+                    $balance->current_balance   = $balance->current_balance + $withdraw->amount;
+                    $balance->withdrawn_amount  = max(0, $balance->withdrawn_amount - $withdraw->amount);
+                    $balance->save();
+                }
+            }
+
+            $withdraw->status = $status;
+            $withdraw->save();
+            return $withdraw;
+        });
     }
 }

@@ -65,6 +65,7 @@ class AvailabilityService
                 'selling_price'        => ($product && $hasPrice) ? $this->pricing->effectivePrice($product, $r) : null,
                 'stock_qty'            => (int) ($r->stock_qty ?? 0),
                 'available_qty'        => (int) $r->available_qty,
+                'track_stock'          => (bool) ($r->track_stock ?? false),
                 'is_available'         => (bool) $r->is_available && $hasPrice,
                 'fulfillment_mode'     => $r->fulfillment_mode,
                 'cities'               => $cities,
@@ -80,13 +81,14 @@ class AvailabilityService
     public function recomputeForProduct(int $productId): void
     {
         // Available in a city = a vendor has a current, priced, in-stock-OR-untracked row.
-        // stock_qty <= 0 means "stock not tracked" (the common price-only sheet) → still
-        // sellable; real stock is enforced at order time, not here.
+        // track_stock = 0 means "stock not tracked" (the common price-only sheet) → always
+        // sellable. When track_stock = 1 the vendor IS managing stock, so a row with no free
+        // stock (stock_qty - reserved_qty <= 0) is out of stock and excluded.
         $rows = $this->effective(
             VendorProductPrice::where('product_id', $productId)
                 ->where('is_available', true)
                 ->where(fn ($q) => $q->where('vendor_selling_price', '>', 0)->orWhere('cost_price', '>', 0))
-                ->where(fn ($q) => $q->where('stock_qty', '<=', 0)->orWhereRaw('(stock_qty - reserved_qty) > 0'))
+                ->where(fn ($q) => $q->where('track_stock', false)->orWhereRaw('(stock_qty - reserved_qty) > 0'))
         )->get();
 
         $product = Product::with('categories:id')->find($productId);

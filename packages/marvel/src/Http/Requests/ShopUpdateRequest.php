@@ -42,6 +42,11 @@ class ShopUpdateRequest extends FormRequest
             'service_areas.*.pincode'          => ['nullable', 'string', 'max:12'],
             'service_areas.*.fulfillment_mode' => ['nullable', 'in:local,courier,both'],
             'service_areas.*.eta_days'         => ['nullable', 'integer', 'min:0', 'max:60'],
+            // Compliance / banking identifiers — validate format whenever provided. Documents are
+            // not re-required on update (they may already be on file from onboarding).
+            'settings.compliance.gst'  => ['nullable', 'string', 'regex:/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]{3}$/'],
+            'settings.compliance.pan'  => ['nullable', 'string', 'regex:/^[A-Z]{5}[0-9]{4}[A-Z]$/'],
+            'settings.banking.ifsc'    => ['nullable', 'string', 'regex:/^[A-Z]{4}0[A-Z0-9]{6}$/'],
         ];
     }
 

@@ -6,6 +6,7 @@ namespace Marvel\Database\Repositories;
 use Exception;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Arr;
+use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\Balance;
 use Marvel\Database\Models\OwnershipTransfer;
 use Marvel\Database\Models\Product;
@@ -114,32 +115,48 @@ class ShopRepository extends BaseRepository
         return Shop::class;
     }
 
+    /**
+     * Normalise the GST number the onboarding form stores inside
+     * settings.compliance.gst so it can be mirrored into the shops.gst_number
+     * column (the source ReportController reads for GST reports/invoices).
+     */
+    private function gstFromSettings($request): ?string
+    {
+        $gst = $request['settings']['compliance']['gst'] ?? null;
+        $gst = is_string($gst) ? strtoupper(trim($gst)) : null;
+        return $gst !== null && $gst !== '' ? $gst : null;
+    }
+
     public function storeShop($request)
     {
         try {
-            $data = $request->only($this->dataArray);
-            $data['slug'] = $this->makeSlug($request);
-            $data['owner_id'] = $request->user()->id;
-            // SECURITY: a newly-created shop is inactive until a super-admin approves it; a store
-            // owner cannot self-activate by passing is_active=true.
-            if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
-                unset($data['is_active']);
-            }
-            $shop = $this->create($data);
-            if (isset($request['categories'])) {
-                $shop->categories()->attach($request['categories']);
-            }
-            // SECURITY: only the operator-editable payment_info is mass-assignable on the balance;
-            // never current_balance/total_earnings/withdrawn_amount from client input.
-            if (isset($request['balance']['payment_info'])) {
-                $shop->balance()->create(Arr::only($request['balance'], ['payment_info']));
-            }
-            $this->syncServiceAreas($shop, $request);
+            // Shop insert + category attach + balance row + service areas must be all-or-nothing;
+            // a partial failure previously left an orphan shop with no balance/areas.
+            return DB::transaction(function () use ($request) {
+                $data = $request->only($this->dataArray);
+                $data['slug'] = $this->makeSlug($request);
+                $data['owner_id'] = $request->user()->id;
+                // SECURITY: a newly-created shop is inactive until a super-admin approves it; a store
+                // owner cannot self-activate by passing is_active=true.
+                if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
+                    unset($data['is_active']);
+                }
+                if (array_key_exists('settings', $data)) {
+                    $data['gst_number'] = $this->gstFromSettings($request);
+                }
+                $shop = $this->create($data);
+                if (isset($request['categories'])) {
+                    $shop->categories()->attach($request['categories']);
+                }
+                // SECURITY: only the operator-editable payment_info is mass-assignable on the balance;
+                // never current_balance/total_earnings/withdrawn_amount from client input.
+                if (isset($request['balance']['payment_info'])) {
+                    $shop->balance()->create(Arr::only($request['balance'], ['payment_info']));
+                }
+                $this->syncServiceAreas($shop, $request);
 
-            // TODO : why this code is needed
-            // $shop->categories = $shop->categories;
-            // $shop->staffs = $shop->staffs;
-            return $shop;
+                return $shop;
+            });
         } catch (Exception $e) {
             throw new HttpException(400, COULD_NOT_CREATE_THE_RESOURCE);
         }
@@ -148,24 +165,28 @@ class ShopRepository extends BaseRepository
     public function updateShop($request, $id)
     {
         try {
-            $shop = $this->findOrFail($id);
-            if (isset($request['categories'])) {
-                $shop->categories()->sync($request['categories']);
-            }
-            if (isset($request['balance'])) {
-                $this->updateBalance($request['balance'], $id, $request->user()->hasPermissionTo(Permission::SUPER_ADMIN));
-            }
-            $data = $request->only($this->dataArray);
-            // SECURITY: only a super-admin (via the approve/disApprove flow) may set is_active —
-            // a store owner must not self-activate their shop and bypass admin approval.
-            if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
-                unset($data['is_active']);
-            }
-            if (!empty($request->slug) &&  $request->slug != $shop['slug']) {
-                $data['slug'] = $this->makeSlug($request);
-            }
-            $shop->update($data);
-            $this->syncServiceAreas($shop, $request);
+            return DB::transaction(function () use ($request, $id) {
+                $shop = $this->findOrFail($id);
+                if (isset($request['categories'])) {
+                    $shop->categories()->sync($request['categories']);
+                }
+                if (isset($request['balance'])) {
+                    $this->updateBalance($request['balance'], $id, $request->user()->hasPermissionTo(Permission::SUPER_ADMIN));
+                }
+                $data = $request->only($this->dataArray);
+                // SECURITY: only a super-admin (via the approve/disApprove flow) may set is_active —
+                // a store owner must not self-activate their shop and bypass admin approval.
+                if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
+                    unset($data['is_active']);
+                }
+                if (array_key_exists('settings', $data)) {
+                    $data['gst_number'] = $this->gstFromSettings($request);
+                }
+                if (!empty($request->slug) &&  $request->slug != $shop['slug']) {
+                    $data['slug'] = $this->makeSlug($request);
+                }
+                $shop->update($data);
+                $this->syncServiceAreas($shop, $request);
 
             // TODO : why this code is needed
             // $shop->categories = $shop->categories;
@@ -178,15 +199,16 @@ class ShopRepository extends BaseRepository
             // 3. countdown onStart a sob product private
             // 4. countdown onComplete a sob product public
 
-            if (isset($request['settings']['isShopUnderMaintenance'])) {
-                if ($request['settings']['isShopUnderMaintenance']) {
-                    event(new ShopMaintenance($shop, 'enable'));
-                } else {
-                    event(new ShopMaintenance($shop, 'disable'));
+                if (isset($request['settings']['isShopUnderMaintenance'])) {
+                    if ($request['settings']['isShopUnderMaintenance']) {
+                        event(new ShopMaintenance($shop, 'enable'));
+                    } else {
+                        event(new ShopMaintenance($shop, 'disable'));
+                    }
                 }
-            }
 
-            return $shop;
+                return $shop;
+            });
         } catch (Exception $e) {
             throw new HttpException(400, COULD_NOT_UPDATE_THE_RESOURCE);
         }

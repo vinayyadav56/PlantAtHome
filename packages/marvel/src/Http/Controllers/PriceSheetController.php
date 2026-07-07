@@ -19,7 +19,7 @@ class PriceSheetController extends CoreController
     public function import(Request $request)
     {
         $request->validate([
-            'shop_id'     => 'required|integer',
+            'shop_id'     => 'required|integer|exists:Marvel\Database\Models\Shop,id',
             'period_type' => 'nullable|in:weekly,monthly',
         ]);
 
@@ -38,7 +38,9 @@ class PriceSheetController extends CoreController
         }
 
         $shopId     = (int) $request->input('shop_id');
-        $periodType = $request->input('period_type', 'weekly');
+        // Default to 'monthly' to match the vendor self-serve standing row — a mismatched default
+        // would fork a second vendor_product_prices row for the same product+vendor.
+        $periodType = $request->input('period_type', 'monthly');
         $from       = $request->input('effective_from');
         $to         = $request->input('effective_to');
 
@@ -56,7 +58,7 @@ class PriceSheetController extends CoreController
             'effective_from' => $from,
             'effective_to'   => $to,
             'file'           => $path,
-            'status'         => 'completed',
+            'status'         => 'processing',
         ]);
 
         try {

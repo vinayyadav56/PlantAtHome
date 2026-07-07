@@ -40,7 +40,14 @@ class VendorInventoryWriter
         $savedRows = [];
 
         foreach (array_values($items) as $i => $item) {
-            $res = $this->writeOne($shopId, (array) $item, $ctx);
+            // A DB error on one row (deadlock, constraint) must NOT abort the batch and 500 with
+            // earlier rows already committed — route it to the same per-row error channel as a
+            // validation failure so the vendor gets a partial result + a precise skip list.
+            try {
+                $res = $this->writeOne($shopId, (array) $item, $ctx);
+            } catch (\Throwable $e) {
+                $res = ['ok' => false, 'error' => 'Could not save this row: ' . $e->getMessage()];
+            }
             if ($res['ok']) {
                 $saved++;
                 $touched[$res['product_id']] = true;
@@ -96,36 +103,32 @@ class VendorInventoryWriter
             $variationOptionId = $vo->id;
         }
 
+        // cost_price is admin-only (the hidden buy price that drives margin + profit). This is the
+        // vendor self-serve writer, so we IGNORE any client-supplied cost and require a selling price.
         $sellRaw = $item['vendor_selling_price'] ?? $item['selling_price'] ?? null;
-        $costRaw = $item['cost_price'] ?? $item['cost'] ?? null;
         $sell = is_numeric($sellRaw) ? (float) $sellRaw : null;
-        $cost = is_numeric($costRaw) ? (float) $costRaw : null;
 
-        if ($sell !== null && $sell < 0) {
-            return ['ok' => false, 'error' => 'Selling price must be a positive number.'];
-        }
-        if ($cost !== null && $cost < 0) {
-            return ['ok' => false, 'error' => 'Cost must be a positive number.'];
-        }
-        if (($sell === null || $sell <= 0) && ($cost === null || $cost <= 0)) {
-            return ['ok' => false, 'error' => 'A selling price (or cost) greater than 0 is required.'];
+        if ($sell === null || $sell <= 0) {
+            return ['ok' => false, 'error' => 'A selling price greater than 0 is required.'];
         }
 
         $values = [
-            'is_available'       => ($sell !== null && $sell > 0) || ($cost !== null && $cost > 0),
-            'source'             => $ctx['userId'] ? 'vendor' : 'manual',
-            'effective_to'       => $ctx['effectiveTo'],
-            'updated_by_user_id' => $ctx['userId'],
-            'deleted_at'         => null, // restore a previously-removed mapping on re-add
+            'is_available'          => true,
+            'source'                => $ctx['userId'] ? 'vendor' : 'manual',
+            'effective_to'          => $ctx['effectiveTo'],
+            'updated_by_user_id'    => $ctx['userId'],
+            'deleted_at'            => null, // restore a previously-removed mapping on re-add
+            'vendor_selling_price'  => $sell,
         ];
-        if ($sell !== null) {
-            $values['vendor_selling_price'] = $sell;
-        }
-        if ($cost !== null) {
-            $values['cost_price'] = $cost;
-        }
         if (isset($item['stock_qty']) && is_numeric($item['stock_qty'])) {
             $values['stock_qty'] = max(0, (int) $item['stock_qty']);
+            // An explicit stock number implies the vendor wants it tracked (so 0 = out of stock)
+            // unless they explicitly say otherwise.
+            $values['track_stock'] = array_key_exists('track_stock', $item)
+                ? (bool) $item['track_stock']
+                : true;
+        } elseif (array_key_exists('track_stock', $item)) {
+            $values['track_stock'] = (bool) $item['track_stock'];
         }
         $mode = strtolower(trim((string) ($item['fulfillment_mode'] ?? '')));
         if (in_array($mode, ['local', 'courier', 'both'], true)) {
@@ -138,20 +141,40 @@ class VendorInventoryWriter
             $values['lead_time_days'] = max(0, (int) $item['lead_time_days']);
         }
 
-        $row = VendorProductPrice::withTrashed()->firstOrNew([
+        $keys = [
             'shop_id'             => $shopId,
             'product_id'          => $product->id,
             'variation_option_id' => $variationOptionId,
             'period_type'         => $ctx['periodType'],
             'effective_from'      => $ctx['effectiveFrom'],
-        ]);
+        ];
+        $row = VendorProductPrice::withTrashed()->firstOrNew($keys);
         $isNew = !$row->exists;
         $row->fill($values);
         if ($isNew) {
             $row->created_by_user_id = $ctx['userId'];
         }
-        $row->save();
+        try {
+            $row->save();
+        } catch (\Illuminate\Database\QueryException $e) {
+            // With the unique index on (shop, product, variant, period, effective_from), a
+            // concurrent insert can win the race. Reload the now-existing row and apply our
+            // values so the attach stays idempotent instead of throwing a duplicate error.
+            if ($this->isUniqueViolation($e)) {
+                $row = VendorProductPrice::withTrashed()->where($keys)->firstOrFail();
+                $row->fill($values);
+                $row->save();
+            } else {
+                throw $e;
+            }
+        }
 
         return ['ok' => true, 'product_id' => (int) $product->id, 'row' => $row];
+    }
+
+    private function isUniqueViolation(\Throwable $e): bool
+    {
+        return $e instanceof \Illuminate\Database\QueryException
+            && (($e->errorInfo[1] ?? null) === 1062 || (string) $e->getCode() === '23000');
     }
 }

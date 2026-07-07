@@ -11,7 +11,9 @@ use Illuminate\Http\JsonResponse;
 use Marvel\Database\Models\Balance;
 use Marvel\Database\Models\Product;
 use Illuminate\Support\Facades\Hash;
+use Marvel\Enums\ProductStatus;
 use Marvel\Exceptions\MarvelException;
+use Marvel\Http\Requests\ApproveShopRequest;
 use Marvel\Http\Requests\ShopCreateRequest;
 use Marvel\Http\Requests\ShopUpdateRequest;
 use Marvel\Http\Requests\TransferShopOwnerShipRequest;
@@ -225,60 +227,65 @@ class ShopController extends CoreController
         return $shop->fresh();
     }
 
-    public function approveShop(Request $request)
+    public function approveShop(ApproveShopRequest $request)
     {
-
+        if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
+            throw new MarvelException(NOT_AUTHORIZED);
+        }
+        $id = $request->id;
+        $admin_commission_rate = $request->admin_commission_rate;
         try {
-            if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
-                throw new MarvelException(NOT_AUTHORIZED);
-            }
-            $id = $request->id;
-            $admin_commission_rate = $request->admin_commission_rate;
-            $id = $request->id;
-            $admin_commission_rate = $request->admin_commission_rate;
-            try {
-                $shop = $this->repository->findOrFail($id);
-            } catch (\Exception $e) {
-                throw new ModelNotFoundException(NOT_FOUND);
-            }
+            $shop = $this->repository->findOrFail($id);
+        } catch (\Exception $e) {
+            throw new ModelNotFoundException(NOT_FOUND);
+        }
+
+        // Activation, product publish and the commission row must all land together — a partial
+        // apply left a live shop with no commission row (corrupt earnings) or vice-versa.
+        return DB::transaction(function () use ($shop, $id, $admin_commission_rate) {
             $shop->is_active = true;
             $shop->save();
 
-            if (Product::count() > 0) {
-                Product::where('shop_id', '=', $id)->update(['status' => 'publish']);
-            }
+            // Publish ONLY products awaiting approval — never republish items the vendor has
+            // deliberately drafted/unpublished (the old code force-published everything on every
+            // approve, so a re-approval resurrected hidden products).
+            Product::where('shop_id', '=', $id)
+                ->where('status', ProductStatus::UNDER_REVIEW)
+                ->update(['status' => ProductStatus::PUBLISH]);
 
             $balance = Balance::firstOrNew(['shop_id' => $id]);
             $balance->admin_commission_rate = $admin_commission_rate;
             $balance->save();
+
             return $shop;
-        } catch (MarvelException $th) {
-            throw new MarvelException(SOMETHING_WENT_WRONG);
-        }
+        });
     }
 
     public function disApproveShop(Request $request)
     {
+        if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
+            throw new MarvelException(NOT_AUTHORIZED);
+        }
+        $id = $request->id;
         try {
-            if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
-                throw new MarvelException(NOT_AUTHORIZED);
-            }
-            $id = $request->id;
-            try {
-                $shop = $this->repository->findOrFail($id);
-            } catch (\Exception $e) {
-                throw new ModelNotFoundException(NOT_FOUND);
-            }
+            $shop = $this->repository->findOrFail($id);
+        } catch (\Exception $e) {
+            throw new ModelNotFoundException(NOT_FOUND);
+        }
 
+        return DB::transaction(function () use ($shop, $id) {
             $shop->is_active = false;
             $shop->save();
 
-            Product::where('shop_id', '=', $id)->update(['status' => 'draft']);
+            // Hide only currently-live products (send them back to review); leave the vendor's
+            // deliberate drafts/unpublished items exactly as they are so a later re-approval
+            // restores precisely what was live before, nothing more.
+            Product::where('shop_id', '=', $id)
+                ->where('status', ProductStatus::PUBLISH)
+                ->update(['status' => ProductStatus::UNDER_REVIEW]);
 
             return $shop;
-        } catch (MarvelException $th) {
-            throw new MarvelException(SOMETHING_WENT_WRONG);
-        }
+        });
     }
 
     public function addStaff(UserCreateRequest $request)

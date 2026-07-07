@@ -27,9 +27,34 @@ class VendorProductPrice extends Model
         'effective_to'         => 'date',
         'stock_qty'            => 'integer',
         'reserved_qty'         => 'integer',
+        'track_stock'          => 'boolean',
         'moq'                  => 'integer',
         'lead_time_days'       => 'integer',
     ];
+
+    protected static function booted(): void
+    {
+        // Maintain dedupe_key so a UNIQUE index can block duplicate vendor listings for the same
+        // (shop, product, variant, period, effective_from) — a plain unique index can't, because
+        // MySQL treats each NULL variant/effective_from as distinct. A soft-deleted row drops out
+        // of the unique space (key = null) so the same logical mapping can be re-created later.
+        static::saving(function (VendorProductPrice $row) {
+            if ($row->deleted_at !== null) {
+                $row->dedupe_key = null;
+                return;
+            }
+            $from = $row->effective_from
+                ? \Illuminate\Support\Carbon::parse($row->effective_from)->format('Y-m-d')
+                : '0';
+            $row->dedupe_key = implode('|', [
+                (int) $row->shop_id,
+                (int) $row->product_id,
+                $row->variation_option_id !== null ? (int) $row->variation_option_id : '0',
+                (string) ($row->period_type ?? ''),
+                $from,
+            ]);
+        });
+    }
 
     /** True when this row carries a price the customer can be charged (vendor-set OR cost). */
     public function getHasPriceAttribute(): bool

@@ -151,10 +151,12 @@ class ItemAssignmentService
         foreach ($vendors as $v) {
             $shopId = (int) $v['shop_id'];
 
-            // Hard filter 1 — inventory.
+            // Hard filter 1 — inventory. An untracked row (track_stock = false) is always
+            // sellable; a tracked row must have enough free stock for this line's quantity.
             $stockQty = (int) ($v['stock_qty'] ?? 0);
             $availQty = (int) ($v['available_qty'] ?? 0);
-            $inStock = !empty($v['is_available']) && ($stockQty <= 0 || $availQty >= $qty);
+            $trackStock = !empty($v['track_stock']);
+            $inStock = !empty($v['is_available']) && (!$trackStock || $availQty >= $qty);
             if (!$inStock) {
                 continue;
             }
@@ -184,7 +186,7 @@ class ItemAssignmentService
                 'vendor_name'             => $v['vendor_name'] ?? null,
                 'selling_price'           => $v['selling_price'] ?? null,
                 'available_qty'    => $availQty,
-                'stock_tracked'    => $stockQty > 0,
+                'stock_tracked'    => $trackStock,
                 'fulfillment_mode' => $mode,
                 'serves_city'      => true,
                 'pincode_covered'  => $area['pincode_covered'],
@@ -194,7 +196,7 @@ class ItemAssignmentService
                 'priority'         => $priority,
                 'shipping_cost'    => $shippingCost,
                 // raw score parts filled below after we know the max shipping cost
-                '_inv'             => $stockQty <= 0 ? 0.5 : $this->clamp($availQty / ($qty * 3), 0, 1),
+                '_inv'             => !$trackStock ? 0.5 : $this->clamp($availQty / ($qty * 3), 0, 1),
                 '_pincode'         => $area['pincode_covered'] ? 1.0 : ($mode === 'local' ? 0.7 : 0.5),
                 '_sla'             => 1 - $this->clamp(((int) $slaDays - $this->targetSla) / $this->targetSla, 0, 1),
                 '_rating'          => $rating !== null ? $rating / 5 : 0.6,
