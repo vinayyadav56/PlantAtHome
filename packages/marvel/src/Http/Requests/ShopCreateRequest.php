@@ -5,7 +5,6 @@ namespace Marvel\Http\Requests;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
-use Marvel\Enums\Permission;
 
 
 class ShopCreateRequest extends FormRequest
@@ -51,23 +50,15 @@ class ShopCreateRequest extends FormRequest
             'settings.compliance.gst'  => ['nullable', 'string', 'regex:/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]{3}$/'],
             'settings.compliance.pan'  => ['nullable', 'string', 'regex:/^[A-Z]{5}[0-9]{4}[A-Z]$/'],
             'settings.banking.ifsc'    => ['nullable', 'string', 'regex:/^[A-Z]{4}0[A-Z0-9]{6}$/'],
+            // KYC documents are optional at creation so onboarding is never blocked — a shop is
+            // created inactive and the KYC gate is enforced at approval (go-live) instead. See
+            // ShopController::approveShop.
+            'settings.documents.gstCertificate' => ['nullable'],
+            'settings.documents.pan'            => ['nullable'],
+            'settings.documents.cheque'         => ['nullable'],
         ];
 
-        // KYC: a self-serve vendor (store owner) must attach the core documents to onboard.
-        // A super-admin creating a shop on someone's behalf may skip them (admin override).
-        if ($this->isSelfServeVendor()) {
-            $rules['settings.documents.gstCertificate'] = ['required'];
-            $rules['settings.documents.pan']            = ['required'];
-            $rules['settings.documents.cheque']         = ['required'];
-        }
-
         return $rules;
-    }
-
-    private function isSelfServeVendor(): bool
-    {
-        $user = $this->user();
-        return $user && !$user->getPermissionNames()->contains(Permission::SUPER_ADMIN);
     }
 
     public function failedValidation(Validator $validator)

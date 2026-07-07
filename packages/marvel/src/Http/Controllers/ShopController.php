@@ -4,6 +4,7 @@ namespace Marvel\Http\Controllers;
 
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Http\Request;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Marvel\Enums\Permission;
 use Marvel\Database\Models\Shop;
 use Marvel\Database\Models\User;
@@ -238,6 +239,33 @@ class ShopController extends CoreController
             $shop = $this->repository->findOrFail($id);
         } catch (\Exception $e) {
             throw new ModelNotFoundException(NOT_FOUND);
+        }
+
+        // KYC go-live gate for self-serve vendors. Shop creation is intentionally NOT blocked on
+        // documents (that only stalls onboarding); instead a self-serve vendor's shop cannot be
+        // activated until the core compliance documents are on file. A super-admin-owned shop
+        // (e.g. a house/test shop) is exempt. This is the point where "KYC required for self-serve"
+        // is actually enforced.
+        $owner = $shop->owner_id ? User::find($shop->owner_id) : null;
+        $ownerIsSuperAdmin = $owner && $owner->getPermissionNames()->contains(Permission::SUPER_ADMIN);
+        if (!$ownerIsSuperAdmin) {
+            $documents = data_get($shop->settings, 'documents', []);
+            $required = [
+                'gstCertificate' => 'GST Certificate',
+                'pan'            => 'PAN card',
+                'cheque'         => 'Cancelled cheque',
+            ];
+            $missing = [];
+            foreach ($required as $key => $label) {
+                if (empty(data_get($documents, $key))) {
+                    $missing[] = $label;
+                }
+            }
+            if (!empty($missing)) {
+                throw new HttpResponseException(response()->json([
+                    'message' => 'Cannot approve this vendor yet — the following KYC document(s) are still missing: ' . implode(', ', $missing) . '. Ask the vendor to upload them (or add them from the shop edit page), then approve.',
+                ], 422));
+            }
         }
 
         // Activation, product publish and the commission row must all land together — a partial
