@@ -381,6 +381,12 @@ class Product extends Model
         return $this->belongsTo(Shop::class, 'shop_id');
     }
 
+    /** The vendor shop that PROPOSED this catalog product (single-shop model). */
+    public function proposedByShop(): BelongsTo
+    {
+        return $this->belongsTo(Shop::class, 'proposed_by_shop_id');
+    }
+
     /**
      * @return BelongsTo
      */

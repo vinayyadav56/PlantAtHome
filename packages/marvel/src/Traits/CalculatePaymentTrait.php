@@ -12,7 +12,7 @@ trait CalculatePaymentTrait
 {
     use WalletsTrait;
 
-    public function calculateSubtotal($cartItems)
+    public function calculateSubtotal($cartItems, ?string $city = null)
     {
         if (!is_array($cartItems)) {
             throw new MarvelException(CART_ITEMS_NOT_FOUND);
@@ -22,10 +22,10 @@ trait CalculatePaymentTrait
             foreach ($cartItems as $item) {
                 $qty = $item['order_quantity'];
 
-                // Vendor cost-sheet margin price wins (server-authoritative). Products
-                // without a cost sheet fall through to the normal catalog price, so
-                // nothing changes for them.
-                $marginUnit = $this->vendorMarginUnitPrice($item['product_id'] ?? null, $item['variation_option_id'] ?? null);
+                // Vendor city price wins (server-authoritative: max vendor rate + margin).
+                // Products without vendor inventory fall through to the normal catalog
+                // price, so nothing changes for them.
+                $marginUnit = $this->vendorMarginUnitPrice($item['product_id'] ?? null, $item['variation_option_id'] ?? null, $city);
                 if ($marginUnit !== null) {
                     $subtotal += $marginUnit * $qty;
                     continue;
@@ -45,8 +45,8 @@ trait CalculatePaymentTrait
         }
     }
 
-    /** Margin-over-cost unit price for a cart line, or null when the product has no cost sheet. */
-    protected function vendorMarginUnitPrice($productId, $voId): ?float
+    /** City vendor unit price for a cart line, or null when the product has no vendor inventory. */
+    protected function vendorMarginUnitPrice($productId, $voId, ?string $city = null): ?float
     {
         try {
             if (!$productId && $voId) {
@@ -59,7 +59,7 @@ trait CalculatePaymentTrait
             if (!$product) {
                 return null;
             }
-            $r = (new \Marvel\Services\PricingService())->sellingPrice($product, $voId ? (int) $voId : null);
+            $r = (new \Marvel\Services\PricingService())->sellingPrice($product, $voId ? (int) $voId : null, null, $city);
             return (!empty($r['has_vendor_cost']) && !empty($r['available'])) ? (float) $r['price'] : null;
         } catch (\Throwable $e) {
             return null;

@@ -62,7 +62,10 @@ class AvailabilityService
                 'variation_option_id'     => $r->variation_option_id,
                 'cost_price'           => (float) $r->cost_price,
                 'vendor_selling_price' => $r->vendor_selling_price !== null ? (float) $r->vendor_selling_price : null,
-                'selling_price'        => ($product && $hasPrice) ? $this->pricing->effectivePrice($product, $r) : null,
+                // The vendor's supply rate (what they receive when assigned). The customer
+                // selling price is derived from the city's MAX rate + margin, not per-row.
+                'vendor_rate'          => ($product && $hasPrice) ? $this->pricing->vendorRate($product, $r) : null,
+                'selling_price'        => ($product && $hasPrice) ? $this->pricing->vendorRate($product, $r) : null,
                 'stock_qty'            => (int) ($r->stock_qty ?? 0),
                 'available_qty'        => (int) $r->available_qty,
                 'track_stock'          => (bool) ($r->track_stock ?? false),
@@ -94,6 +97,10 @@ class AvailabilityService
         $product = Product::with('categories:id')->find($productId);
         $cities = [];
         if ($rows->isNotEmpty() && $product) {
+            // Each row's vendor RATE, computed once (rate = vendor quote, or legacy
+            // margin-over-cost for cost-only sheets).
+            $rateByRowId = $rows->mapWithKeys(fn ($r) => [$r->id => $this->pricing->vendorRate($product, $r)]);
+
             $shopIds = $rows->pluck('shop_id')->unique()->values()->all();
             $areas = VendorServiceArea::whereIn('shop_id', $shopIds)->where('is_active', true)->get();
             foreach ($areas as $area) {
@@ -106,7 +113,7 @@ class AvailabilityService
                     continue;
                 }
                 if (!isset($cities[$key])) {
-                    $cities[$key] = ['has_local' => false, 'has_courier' => false, 'vendors' => [], 'min_price' => null];
+                    $cities[$key] = ['has_local' => false, 'has_courier' => false, 'vendors' => [], 'max_rate' => []];
                 }
                 $mode = $area->fulfillment_mode;
                 if ($mode === 'local' || $mode === 'both') {
@@ -116,10 +123,12 @@ class AvailabilityService
                     $cities[$key]['has_courier'] = true;
                 }
                 $cities[$key]['vendors'][$area->shop_id] = true;
-                // Customer-facing price = lowest displayed price among this city's vendors
-                // (vendor-set selling price, or margin-over-cost for legacy cost-only rows).
-                $minPrice = (float) $vendorRows->min(fn ($r) => $this->pricing->effectivePrice($product, $r));
-                $cities[$key]['min_price'] = is_null($cities[$key]['min_price']) ? $minPrice : min($cities[$key]['min_price'], $minPrice);
+                // Selling price per variant in a city = MAX vendor rate (+ margin below).
+                foreach ($vendorRows as $r) {
+                    $variant = $r->variation_option_id ?? 0; // 0 = simple/base row
+                    $rate = (float) $rateByRowId[$r->id];
+                    $cities[$key]['max_rate'][$variant] = max($cities[$key]['max_rate'][$variant] ?? 0.0, $rate);
+                }
             }
         }
 
@@ -129,13 +138,22 @@ class AvailabilityService
             ->delete();
 
         $now = Carbon::now();
+        $resolver = new MarginResolver();
+        $typeId = ($product && $product->type_id) ? (int) $product->type_id : null;
         foreach ($cities as $city => $info) {
+            // The card "from ₹" price = the cheapest VARIANT's city price, where each
+            // variant's city price is MAX-over-vendors rate × (1 + margin(city, vertical)).
+            $margin = $resolver->marginPercent($city, $typeId);
+            $minVariantMaxRate = !empty($info['max_rate']) ? min($info['max_rate']) : null;
+            $minPrice = $minVariantMaxRate !== null
+                ? round($minVariantMaxRate * (1 + $margin / 100), 2)
+                : null;
             ProductCityAvailability::updateOrCreate(
                 ['product_id' => $productId, 'city' => $city],
                 [
                     'has_local'    => $info['has_local'],
                     'has_courier'  => $info['has_courier'],
-                    'min_price'    => $info['min_price'],
+                    'min_price'    => $minPrice,
                     'vendor_count' => count($info['vendors']),
                     'updated_at'   => $now,
                 ]

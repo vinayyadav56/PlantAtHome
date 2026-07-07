@@ -72,6 +72,7 @@ class ProductController extends CoreController
 
         if (!$cacheable) {
             $products = $this->fetchProducts($request)->paginate($limit)->withQueryString();
+            $this->overlayCityPrices($products, $request->filled('city') ? (string) $request->city : null);
             $data = ProductResource::collection($products)->response()->getData(true);
             return formatAPIResourcePaginate($data);
         }
@@ -99,11 +100,60 @@ class ProductController extends CoreController
         $key = 'products:v' . $this->cacheVersion('products') . ':' . $language . ':' . md5(json_encode($params));
         $data = Cache::remember($key, 300, function () use ($request, $limit) {
             $products = $this->fetchProducts($request)->paginate($limit)->withQueryString();
+            $this->overlayCityPrices($products, $request->filled('city') ? (string) $request->city : null);
             return ProductResource::collection($products)->response()->getData(true);
         });
 
         return formatAPIResourcePaginate($data)
             ->header('Cache-Control', $this->cacheControl());
+    }
+
+    /**
+     * City-price overlay for listings: when the customer's city is known and a
+     * product has vendor inventory there, the card price becomes the projected CITY
+     * selling price (MAX vendor rate + PlantAtHome margin — product_city_availability
+     * .min_price, maintained by AvailabilityService). Cards then match the PDP's
+     * location-price and the checkout-verified charge. `city` is part of the response
+     * cache key, so cached entries stay city-correct. sale_price is cleared so the
+     * overlay never renders as a fake strike-through discount.
+     */
+    private function overlayCityPrices($products, ?string $city): void
+    {
+        if (empty($city)) {
+            return;
+        }
+        try {
+            $svc = new \Marvel\Services\AvailabilityService();
+            $key = $svc->normalizeCityKey($city);
+            if ($key === '') {
+                return;
+            }
+            $items = collect($products->items());
+            $ids = $items->pluck('id')->filter()->all();
+            if (empty($ids)) {
+                return;
+            }
+            $cityPrices = \Marvel\Database\Models\ProductCityAvailability::whereIn('product_id', $ids)
+                ->where('city', $key)
+                ->whereNotNull('min_price')
+                ->pluck('min_price', 'product_id');
+            if ($cityPrices->isEmpty()) {
+                return;
+            }
+            foreach ($items as $p) {
+                $cp = $cityPrices[$p->id] ?? null;
+                if ($cp === null || (float) $cp <= 0) {
+                    continue;
+                }
+                $p->price = (float) $cp;
+                $p->sale_price = null;
+                if ((float) ($p->min_price ?? 0) > 0) {
+                    $p->min_price = (float) $cp; // variable products: "from ₹" = city price
+                }
+            }
+        } catch (\Throwable $e) {
+            // overlay is best-effort — never break the listing
+        }
     }
 
 
@@ -191,19 +241,83 @@ class ProductController extends CoreController
      */
     public function ProductStore(Request $request)
     {
+        // ── Single-shop master catalog ─────────────────────────────────────────
+        // Every product belongs to THE master PlantAtHome shop. A super admin
+        // creates directly; a store owner (vendor) PROPOSES — the product enters
+        // the master catalog as UNDER_REVIEW, attributed to their shop, and goes
+        // live only after admin approval (update-product-status).
+        $user = $request->user();
+        $isSuperAdmin = $user && $user->hasPermissionTo(Permission::SUPER_ADMIN);
+        $vendorShopId = null;
+        if (!$isSuperAdmin) {
+            $vendorShopId = $this->vendorActiveShopId($user);
+            if (!$vendorShopId) {
+                throw new AuthorizationException(NOT_AUTHORIZED);
+            }
+        }
+
+        // The master catalog stays UNIQUE: an exact (case-insensitive) name match
+        // within the same vertical blocks the create and points at the existing
+        // product, so the vendor attaches inventory to it instead of duplicating.
+        $existing = $this->findCatalogDuplicate((string) $request->name, $request->type_id ? (int) $request->type_id : null);
+        if ($existing) {
+            return response()->json([
+                'message'  => 'This product is already in the PlantAtHome catalogue — attach your rate & stock to it from "Add from catalogue" instead of creating a duplicate.',
+                'existing' => [
+                    'id'     => $existing->id,
+                    'name'   => $existing->name,
+                    'slug'   => $existing->slug,
+                    'status' => $existing->status,
+                ],
+            ], 422);
+        }
+
+        $request->merge(['shop_id' => \Marvel\Database\Models\Shop::masterId()]);
+        if (!$isSuperAdmin) {
+            $request->merge(['status' => \Marvel\Enums\ProductStatus::UNDER_REVIEW]);
+        }
+
         try {
             // inform_purchased_customer
             $setting = $this->settings->first();
-            if ($this->repository->hasPermission($request->user(), $request->shop_id)) {
-                $product = $this->repository->storeProduct($request, $setting);
-                $this->bustResponseCache('products'); // refresh storefront list/PDP caches
-                return $product;
-            } else {
-                throw new AuthorizationException(NOT_AUTHORIZED);
+            $product = $this->repository->storeProduct($request, $setting);
+            // Attribute a vendor proposal to their shop (review-queue display + the
+            // vendor's own edit rights while pending). Guarded for deploy lag.
+            if ($vendorShopId && $product && \Illuminate\Support\Facades\Schema::hasColumn('products', 'proposed_by_shop_id')) {
+                $product->proposed_by_shop_id = $vendorShopId;
+                $product->save();
             }
+            $this->bustResponseCache('products'); // refresh storefront list/PDP caches
+            return $product;
         } catch (MarvelException $e) {
             throw new MarvelException(SOMETHING_WENT_WRONG, $e->getMessage());
         }
+    }
+
+    /** The caller's ACTIVE shop id (store owner), or null. Approval gates proposing. */
+    private function vendorActiveShopId($user): ?int
+    {
+        if (!$user || !$user->hasPermissionTo(Permission::STORE_OWNER)) {
+            return null;
+        }
+        $id = \Marvel\Database\Models\Shop::where('owner_id', $user->id)
+            ->where('is_active', true)
+            ->where('slug', '!=', \Marvel\Database\Models\Shop::MASTER_SLUG)
+            ->value('id');
+        return $id ? (int) $id : null;
+    }
+
+    /** Exact (case-insensitive) catalog duplicate by name within a vertical, if any. */
+    private function findCatalogDuplicate(string $name, ?int $typeId): ?Product
+    {
+        $name = trim($name);
+        if ($name === '') {
+            return null;
+        }
+        return Product::whereRaw('LOWER(name) = ?', [mb_strtolower($name)])
+            ->where('language', DEFAULT_LANGUAGE)
+            ->when($typeId, fn ($q) => $q->where('type_id', $typeId))
+            ->first();
     }
 
 
@@ -342,7 +456,16 @@ class ProductController extends CoreController
     public function updateProduct(Request $request)
     {
         $setting = $this->settings->first();
-        if ($this->repository->hasPermission($request->user(), $request->shop_id)) {
+        if ($this->canManageProduct($request->user(), $request->id)) {
+            // Master-catalog invariants a vendor edit must not break: ownership stays
+            // with the master shop, and a pending proposal stays pending.
+            $user = $request->user();
+            if (!($user && $user->hasPermissionTo(Permission::SUPER_ADMIN))) {
+                $request->merge([
+                    'shop_id' => \Marvel\Database\Models\Shop::masterId(),
+                    'status'  => \Marvel\Enums\ProductStatus::UNDER_REVIEW,
+                ]);
+            }
             $id = $request->id;
             $product = $this->repository->updateProduct($request, $id, $setting);
             $this->bustResponseCache('products'); // refresh storefront list/PDP caches (incl. bundle/add-on edits)
@@ -350,6 +473,59 @@ class ProductController extends CoreController
         } else {
             throw new AuthorizationException(NOT_AUTHORIZED);
         }
+    }
+
+    /**
+     * Single-shop management gate: super admin manages everything; a store owner
+     * may only touch their OWN pending proposal (under_review / draft / rejected —
+     * never a live catalog product).
+     */
+    private function canManageProduct($user, $productId): bool
+    {
+        if ($user && $user->hasPermissionTo(Permission::SUPER_ADMIN)) {
+            return true;
+        }
+        if (!$user || !$user->hasPermissionTo(Permission::STORE_OWNER) || !$productId) {
+            return false;
+        }
+        $product = Product::find((int) $productId);
+        if (!$product || !$product->proposed_by_shop_id) {
+            return false;
+        }
+        $ownsProposal = \Marvel\Database\Models\Shop::where('owner_id', $user->id)
+            ->where('id', (int) $product->proposed_by_shop_id)
+            ->exists();
+        return $ownsProposal && in_array($product->status, [
+            \Marvel\Enums\ProductStatus::UNDER_REVIEW,
+            \Marvel\Enums\ProductStatus::DRAFT,
+            \Marvel\Enums\ProductStatus::REJECTED,
+        ], true);
+    }
+
+    /**
+     * POST update-product-status { id, status } — the admin review queue's
+     * lightweight approve/reject (no full product payload round-trip).
+     */
+    public function updateStatus(Request $request)
+    {
+        if (!($request->user() && $request->user()->hasPermissionTo(Permission::SUPER_ADMIN))) {
+            throw new AuthorizationException(NOT_AUTHORIZED);
+        }
+        $data = $request->validate([
+            'id'     => ['required', 'integer', 'exists:products,id'],
+            'status' => ['required', 'in:publish,rejected,under_review,draft,unpublish'],
+        ]);
+        $product = Product::findOrFail((int) $data['id']);
+        $product->status = $data['status'];
+        $product->save();
+        $this->bustResponseCache('products');
+        // A newly-published proposal becomes attachable/visible; refresh projections.
+        try {
+            (new \Marvel\Services\AvailabilityService())->recomputeForProduct((int) $product->id);
+        } catch (\Throwable $e) {
+            // projection refresh must never fail the status change
+        }
+        return $product->fresh();
     }
 
 
@@ -376,7 +552,9 @@ class ProductController extends CoreController
     {
         try {
             $product = $this->repository->findOrFail($request->id);
-            if ($this->repository->hasPermission($request->user(), $product->shop_id)) {
+            // Single-shop gate: super admin, or a vendor withdrawing their OWN
+            // pending proposal (never a live catalog product).
+            if ($this->canManageProduct($request->user(), $product->id)) {
                 $product->delete();
                 $this->bustResponseCache('products'); // refresh storefront list/PDP caches
                 return $product;
@@ -954,27 +1132,31 @@ class ProductController extends CoreController
         $user = $request->user() ?? null;;
         $language = $request->language ? $request->language : DEFAULT_LANGUAGE;
 
-        $products_query = $this->repository->with(['type', 'shop'])->where('language', DEFAULT_LANGUAGE);
+        $products_query = $this->repository->with(['type', 'shop', 'proposedByShop'])->where('language', DEFAULT_LANGUAGE);
 
+        // Single-shop model: catalog products all belong to the master shop, so
+        // draft/review scoping is by PROPOSER, not owner. Super admin sees the whole
+        // platform queue; a vendor sees products they proposed (legacy own-shop rows
+        // keep matching for pre-migration data).
         switch ($user) {
             case $user->hasPermissionTo(Permission::SUPER_ADMIN):
-                return $products_query->whereIn('shop_id', $user->shops->pluck('id'));
+                return $products_query;
                 break;
 
             case $user->hasPermissionTo(Permission::STORE_OWNER):
-                if (isset($request->shop_id)) {
-                    return $products_query->where('shop_id', '=', $request->shop_id);
-                } else {
-                    return $products_query->whereIn('shop_id', $user->shops->pluck('id'));
-                }
+                $shopIds = isset($request->shop_id)
+                    ? [(int) $request->shop_id]
+                    : $user->shops->pluck('id')->all();
+                return $products_query->where(function ($q) use ($shopIds) {
+                    $q->whereIn('proposed_by_shop_id', $shopIds)->orWhereIn('shop_id', $shopIds);
+                });
                 break;
 
             case $user->hasPermissionTo(Permission::STAFF):
-                if (isset($request->shop_id)) {
-                    return $products_query->where('shop_id', '=', $request->shop_id);
-                } else {
-                    return $products_query->where('shop_id', $user->managed_shop->id);
-                }
+                $staffShopId = isset($request->shop_id) ? (int) $request->shop_id : optional($user->managed_shop)->id;
+                return $products_query->where(function ($q) use ($staffShopId) {
+                    $q->where('proposed_by_shop_id', $staffShopId)->orWhere('shop_id', $staffShopId);
+                });
                 break;
         }
 

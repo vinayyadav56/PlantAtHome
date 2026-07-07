@@ -6,39 +6,49 @@ use Carbon\Carbon;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Settings;
 use Marvel\Database\Models\VendorProductPrice;
+use Marvel\Database\Models\VendorServiceArea;
 
 /**
- * Customer-facing price = margin over the nearest AVAILABLE vendor cost (the cost
- * itself is never exposed). Margin precedence: per-product → per-category → global,
- * from settings.options.vendorPricing. cost=0 ⇒ available=false (orderable, shown
- * with the "available within 6h" message). No cost sheet at all ⇒ catalog price.
+ * PlantAtHome pricing: the customer-facing selling price for a product (+variant) in a
+ * city is
  *
- * P2 is COARSE: the representative (cheapest available) cost for the product/size.
- * P3 narrows nearestCost() by the customer location (nearest vendor).
+ *     MAX(vendor rate among available vendors covering the city) × (1 + margin%)
+ *
+ * where the margin resolves city+vertical → city → vertical → global (MarginResolver).
+ * "Vendor rate" is the vendor's quoted supply rate (vendor_selling_price — what the
+ * vendor RECEIVES when assigned), or margin-over-cost for legacy cost-only sheets.
+ * Basing the price on the HIGHEST rate guarantees any covering vendor can be assigned
+ * without selling below their quote; assignment prefers the cheapest vendor, so the
+ * realised platform take is ≥ the configured margin. The vendor is never named.
+ *
+ * No vendor mapping at all ⇒ catalog price. Mapped-but-unavailable ⇒ orderable with
+ * the "available within 6h" message. Cost prices are never exposed.
  */
 class PricingService
 {
     private array $vp;
 
-    public function __construct()
+    public function __construct(private ?MarginResolver $margins = null)
     {
         $settings = Settings::getData();
         $this->vp = (array) (($settings->options['vendorPricing'] ?? []) ?: []);
+        $this->margins = $margins ?: new MarginResolver();
     }
 
     /**
-     * @return array{price: float, available: bool, message: ?string, base_price: float, has_vendor_cost: bool}
+     * @return array{price: float, available: bool, message: ?string, base_price: float, has_vendor_cost: bool, max_vendor_rate: ?float, margin_percent: ?float}
      */
-    public function sellingPrice(Product $product, ?int $variationOptionId = null, ?array $latLng = null): array
+    public function sellingPrice(Product $product, ?int $variationOptionId = null, ?array $latLng = null, ?string $city = null): array
     {
         $basePrice = (float) ($product->sale_price ?: $product->price ?: $product->min_price ?: 0);
+        $cityKey = $this->cityKey($city);
 
-        // Customer price = the LOWEST displayed price among available vendor rows. The
-        // displayed price per row is the vendor's own selling price, or — for legacy
-        // cost-only rows — margin-over-cost. The vendor is never named to the customer.
-        $cheapest = $this->cheapestAvailableRow($product, $variationOptionId, $latLng);
-        if ($cheapest) {
-            return $this->result($this->effectivePrice($product, $cheapest), true, null, $basePrice, true);
+        $rows = $this->coveredRows($product->id, $variationOptionId, $cityKey);
+        if ($rows->isNotEmpty()) {
+            $maxRate = (float) $rows->max(fn ($r) => $this->vendorRate($product, $r));
+            $margin  = $this->margins->marginPercent($cityKey, $product->type_id ? (int) $product->type_id : null);
+            $price   = round($maxRate * (1 + $margin / 100), 2);
+            return $this->result($price, true, null, $basePrice, true, $maxRate, $margin);
         }
 
         // Nothing available. Is there any effective row at all (priced but unavailable)?
@@ -52,10 +62,11 @@ class PricingService
     }
 
     /**
-     * The customer-facing price for a single vendor row: the vendor's own selling price
-     * when set, else margin-over-cost (legacy cost-only rows). Never exposes the cost.
+     * The vendor's supply rate for one row: their quoted vendor_selling_price when set,
+     * else margin-over-cost (legacy cost-only sheets). This is what the vendor RECEIVES
+     * when assigned — never exposed to customers as-is (the city margin goes on top).
      */
-    public function effectivePrice(Product $product, VendorProductPrice $row): float
+    public function vendorRate(Product $product, VendorProductPrice $row): float
     {
         $sell = (float) ($row->vendor_selling_price ?? 0);
         if ($sell > 0) {
@@ -64,15 +75,31 @@ class PricingService
         return $this->priceFromCost($product, (float) $row->cost_price);
     }
 
-    /** Cheapest currently-available vendor row by DISPLAYED price (vendor-set or margin). */
-    public function cheapestAvailableRow(Product $product, ?int $variationOptionId, ?array $latLng = null): ?VendorProductPrice
+    /** @deprecated semantics changed — the per-row figure is now the vendor RATE. */
+    public function effectivePrice(Product $product, VendorProductPrice $row): float
     {
-        $rows = $this->availableRowsQuery($product->id, $variationOptionId)->get();
-        if ($rows->isEmpty()) {
-            return null;
+        return $this->vendorRate($product, $row);
+    }
+
+    /**
+     * Available vendor rows for a product/variant, narrowed to vendors whose active
+     * service area covers the city. When a city is given but NO vendor covers it, fall
+     * back to all available rows (national-courier tier — mirrors
+     * ItemAssignmentService::matchArea) so a fulfillable line is never unpriced.
+     */
+    public function coveredRows(int $productId, ?int $variationOptionId, ?string $cityKey)
+    {
+        $rows = $this->availableRowsQuery($productId, $variationOptionId)->get();
+        if ($rows->isEmpty() || !$cityKey) {
+            return $rows;
         }
-        // P3 will narrow by $latLng (nearest in-stock vendor). For now: lowest price wins.
-        return $rows->sortBy(fn ($r) => $this->effectivePrice($product, $r))->first();
+        $coveredShopIds = VendorServiceArea::whereIn('shop_id', $rows->pluck('shop_id')->unique()->values())
+            ->where('is_active', true)
+            ->whereRaw('LOWER(TRIM(city)) = ?', [$cityKey])
+            ->pluck('shop_id')
+            ->flip();
+        $covered = $rows->filter(fn ($r) => isset($coveredShopIds[$r->shop_id]));
+        return $covered->isNotEmpty() ? $covered->values() : $rows;
     }
 
     /** Effective, available, priced vendor rows for a product/size (vendor-set OR cost). */
@@ -86,9 +113,9 @@ class PricingService
             ->where(fn ($q) => $q->where('vendor_selling_price', '>', 0)->orWhere('cost_price', '>', 0))
             // Exclude TRACKED sold-out vendors so the charged/displayed price can never come
             // from a vendor the browse listing already dropped. Mirrors AvailabilityService
-            // exactly: stock_qty <= 0 means "stock not tracked" (price-only sheet) → still
-            // sellable; a tracked row is sellable only while (stock_qty - reserved_qty) > 0.
-            ->where(fn ($q) => $q->where('stock_qty', '<=', 0)->orWhereRaw('(stock_qty - reserved_qty) > 0'));
+            // exactly: an untracked row (track_stock = false) is always sellable; a tracked
+            // row is sellable only while (stock_qty - reserved_qty) > 0.
+            ->where(fn ($q) => $q->where('track_stock', false)->orWhereRaw('(stock_qty - reserved_qty) > 0'));
 
         if (is_null($variationOptionId)) {
             $query->whereNull('variation_option_id');
@@ -98,7 +125,7 @@ class PricingService
         return $query;
     }
 
-    /** The currently-effective representative cost row for a product/size (P2 coarse). */
+    /** The currently-effective representative cost row for a product/size (unavailability probe). */
     public function nearestCost(int $productId, ?int $variationOptionId, ?array $latLng = null): ?VendorProductPrice
     {
         $today = Carbon::today()->toDateString();
@@ -111,7 +138,6 @@ class PricingService
         } else {
             $query->where('variation_option_id', $variationOptionId);
         }
-        // P3: narrow by nearest vendor to $latLng. P2: representative (cheapest available).
         $available = (clone $query)->where('is_available', true)->where('cost_price', '>', 0)
             ->orderBy('cost_price')->first();
 
@@ -119,14 +145,13 @@ class PricingService
     }
 
     /**
-     * Server-authoritative repricing of cart lines. For products that carry a
-     * vendor cost sheet (and are available), overrides unit_price + subtotal with
-     * the margin-over-cost selling price; products WITHOUT a cost sheet are left
-     * exactly as the client sent them (so nothing changes for them — safe). This
-     * makes the charged price match the displayed location price and is
-     * tamper-proof (the price is computed here, not trusted from the client).
+     * Server-authoritative repricing of cart lines. For products that carry vendor
+     * inventory (and are available), overrides unit_price + subtotal with the city
+     * selling price (max rate + margin); products WITHOUT a vendor mapping are left
+     * exactly as the client sent them. Tamper-proof — the price is computed here,
+     * never trusted from the client — and consistent with the displayed location price.
      */
-    public function repriceLines(array $products, ?array $latLng = null): array
+    public function repriceLines(array $products, ?array $latLng = null, ?string $city = null): array
     {
         foreach ($products as &$line) {
             $pid = $line['product_id'] ?? null;
@@ -138,12 +163,12 @@ class PricingService
                 continue;
             }
             // A bundle carries a stored offer price (BundlePricingService) and has
-            // no vendor cost sheet — never reprice it from vendor cost.
+            // no vendor cost sheet — never reprice it from vendor rates.
             if ($product->product_type === \Marvel\Enums\ProductType::BUNDLE) {
                 continue;
             }
             $vo = $line['variation_option_id'] ?? null;
-            $r = $this->sellingPrice($product, $vo !== null ? (int) $vo : null, $latLng);
+            $r = $this->sellingPrice($product, $vo !== null ? (int) $vo : null, $latLng, $city);
             if (!empty($r['has_vendor_cost']) && !empty($r['available'])) {
                 $qty = (int) ($line['order_quantity'] ?? 1);
                 $line['unit_price'] = $r['price'];
@@ -153,17 +178,41 @@ class PricingService
         return $products;
     }
 
-    /** True vendor cost for the profit snapshot (null if none / unavailable). */
-    public function vendorCost(int $productId, ?int $variationOptionId, ?array $latLng = null): ?float
+    /**
+     * Expected vendor payout for one line (hidden profit basis): the LOWEST rate among
+     * covering vendors — assignment prefers the cheapest vendor, so this is what the
+     * platform expects to pay out. Null when the product has no available vendor rows.
+     */
+    public function vendorCost(int $productId, ?int $variationOptionId, ?array $latLng = null, ?string $city = null): ?float
     {
-        $row = $this->nearestCost($productId, $variationOptionId, $latLng);
-        return $row && (float) $row->cost_price > 0 ? (float) $row->cost_price : null;
+        $product = Product::find($productId);
+        if (!$product) {
+            return null;
+        }
+        $rows = $this->coveredRows($productId, $variationOptionId, $this->cityKey($city));
+        if ($rows->isEmpty()) {
+            return null;
+        }
+        return (float) $rows->min(fn ($r) => $this->vendorRate($product, $r));
     }
 
-    /** Customer-facing selling price for a given vendor cost (margin applied). */
+    /** Legacy margin-over-cost rate for cost-only rows (never exposes the cost). */
     public function priceFromCost(Product $product, float $cost): float
     {
         return round($cost * (1 + $this->marginFor($product) / 100), 2);
+    }
+
+    /** Normalize a customer city to the canonical projection key (alias-aware, memoized). */
+    private function cityKey(?string $city): ?string
+    {
+        if ($city === null || trim($city) === '') {
+            return null;
+        }
+        static $memo = [];
+        if (!array_key_exists($city, $memo)) {
+            $memo[$city] = (new AvailabilityService($this))->normalizeCityKey($city);
+        }
+        return $memo[$city];
     }
 
     private function marginFor(Product $product): float
@@ -192,14 +241,23 @@ class PricingService
             ?? 'We will update the availability of this plant within 6 hours.');
     }
 
-    private function result(float $price, bool $available, ?string $message, float $basePrice, bool $hasCost): array
-    {
+    private function result(
+        float $price,
+        bool $available,
+        ?string $message,
+        float $basePrice,
+        bool $hasCost,
+        ?float $maxRate = null,
+        ?float $marginPercent = null
+    ): array {
         return [
             'price'           => $price,
             'available'       => $available,
             'message'         => $message,
             'base_price'      => $basePrice,
             'has_vendor_cost' => $hasCost,
+            'max_vendor_rate' => $maxRate,
+            'margin_percent'  => $marginPercent,
         ];
     }
 }

@@ -60,9 +60,25 @@ class VendorLedgerService
         }
 
         $shopId = (int) $order->shop_id;
-        $rate = (float) (Balance::where('shop_id', $shopId)->value('admin_commission_rate') ?? 0);
-
         $productValue = round((float) ($order->amount ?? 0), 2);
+
+        // Single-shop model: the child order belongs to the master PlantAtHome shop, and
+        // the actual supplying vendor lives on the parent's assigned order_items. When
+        // every matching item is assigned to ONE vendor with a rate snapshot, the entry
+        // is written for THAT vendor with product_value = Σ rate × qty (their payout
+        // basis — commission is deducted from the rate, never from the retail markup).
+        // Items across multiple vendors need a per-item ledger (follow-up); rather than
+        // write wrong money, we skip. Legacy vendor-owned child orders keep working.
+        $rateBase = $this->rateBase($order);
+        if ($rateBase !== null) {
+            if ($rateBase['multi_vendor']) {
+                return; // never split one order-level entry across vendors — see note above
+            }
+            $shopId = $rateBase['shop_id'];
+            $productValue = $rateBase['value'];
+        }
+
+        $rate = (float) (Balance::where('shop_id', $shopId)->value('admin_commission_rate') ?? 0);
         $commission   = round($productValue * $rate / 100, 2);
         $platformFee  = $this->platformFee($productValue);
         $pgFee        = $this->pgFee($productValue);
@@ -165,6 +181,56 @@ class VendorLedgerService
             if (!$this->isUniqueViolation($e)) {
                 throw $e;
             }
+        }
+    }
+
+    /**
+     * The vendor payout basis for a child order from the parent's assigned order_items:
+     * match this child's lines by (product_id, variation_option_id) against parent items
+     * carrying assigned_shop_id + vendor_price_snapshot (the vendor RATE). Returns
+     * ['shop_id', 'value' => Σ rate × qty, 'multi_vendor'] when EVERY child line matched,
+     * null when assignment hasn't run / snapshots are absent (caller falls back to the
+     * legacy order-level basis). Never throws.
+     */
+    private function rateBase(Order $order): ?array
+    {
+        try {
+            if (!$order->parent_id) {
+                return null;
+            }
+            $lines = $order->products; // pivot: order_quantity, variation_option_id
+            if ($lines->isEmpty()) {
+                return null;
+            }
+            $items = \Marvel\Database\Models\OrderItem::where('order_id', $order->parent_id)
+                ->whereNotNull('assigned_shop_id')
+                ->whereNotNull('vendor_price_snapshot')
+                ->get();
+            if ($items->isEmpty()) {
+                return null;
+            }
+            $byKey = $items->keyBy(fn ($i) => $i->product_id . '|' . ($i->variation_option_id ?? 0));
+
+            $total = 0.0;
+            $shopIds = [];
+            foreach ($lines as $line) {
+                $key = $line->id . '|' . (int) ($line->pivot->variation_option_id ?? 0);
+                $item = $byKey[$key] ?? null;
+                if (!$item) {
+                    return null; // a line without an assigned item → basis incomplete
+                }
+                $qty = max(1, (int) ($line->pivot->order_quantity ?? 1));
+                $total += (float) $item->vendor_price_snapshot * $qty;
+                $shopIds[(int) $item->assigned_shop_id] = true;
+            }
+            $vendorIds = array_keys($shopIds);
+            return [
+                'shop_id'      => count($vendorIds) === 1 ? $vendorIds[0] : 0,
+                'value'        => round($total, 2),
+                'multi_vendor' => count($vendorIds) > 1,
+            ];
+        } catch (\Throwable $e) {
+            return null;
         }
     }
 

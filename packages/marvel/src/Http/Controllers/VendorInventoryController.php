@@ -57,8 +57,20 @@ class VendorInventoryController extends CoreController
         $shopId = $this->resolveShopId($request);
         $limit = min(50, max(1, (int) ($request->limit ?? 20)));
 
+        // Published master-catalog products + this vendor's OWN pending proposals
+        // (flagged pending_approval below), so a proposer can attach rate/stock
+        // right away — the listing turns customer-visible only after admin approval.
+        $hasProposalCol = \Illuminate\Support\Facades\Schema::hasColumn('products', 'proposed_by_shop_id');
         $query = Product::query()
-            ->where('status', ProductStatus::PUBLISH)
+            ->where(function ($w) use ($shopId, $hasProposalCol) {
+                $w->where('status', ProductStatus::PUBLISH);
+                if ($hasProposalCol) {
+                    $w->orWhere(function ($own) use ($shopId) {
+                        $own->whereIn('status', [ProductStatus::UNDER_REVIEW, ProductStatus::DRAFT])
+                            ->where('proposed_by_shop_id', $shopId);
+                    });
+                }
+            })
             ->with(['variation_options:id,product_id,title,sku,price']);
 
         if ($request->filled('q')) {
@@ -73,8 +85,8 @@ class VendorInventoryController extends CoreController
             $query->whereHas('categories', fn ($c) => $c->where('categories.id', $cid));
         }
 
-        $page = $query->select('id', 'name', 'slug', 'sku', 'image', 'type_id', 'product_type', 'price')
-            ->orderBy('name')->paginate($limit);
+        $select = ['id', 'name', 'slug', 'sku', 'image', 'type_id', 'product_type', 'price', 'status'];
+        $page = $query->select($select)->orderBy('name')->paginate($limit);
 
         // Annotate already-attached + my price/stock per product for this vendor.
         $ids = collect($page->items())->pluck('id')->all();
@@ -83,6 +95,7 @@ class VendorInventoryController extends CoreController
         $page->getCollection()->transform(function ($p) use ($mine) {
             $rows = $mine[$p->id] ?? collect();
             $p->already_attached = $rows->isNotEmpty();
+            $p->pending_approval = $p->status !== ProductStatus::PUBLISH;
             $p->my_inventory = $rows->map(fn ($r) => [
                 'id'                   => $r->id,
                 'variation_option_id'  => $r->variation_option_id,

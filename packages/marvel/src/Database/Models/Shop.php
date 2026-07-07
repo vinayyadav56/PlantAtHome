@@ -42,6 +42,37 @@ class Shop extends Model
         ];
     }
 
+    /** The master PlantAtHome shop's canonical slug (single-shop model). */
+    public const MASTER_SLUG = 'plantathome';
+
+    /**
+     * Single-shop model: every catalog product belongs to THE master PlantAtHome
+     * shop; vendor shops are pure suppliers (inventory + service areas only).
+     * Find-or-create keeps fresh installs working; static-cached per request.
+     */
+    public static function masterId(): int
+    {
+        static $id = null;
+        if ($id !== null) {
+            return $id;
+        }
+        $shop = static::where('slug', self::MASTER_SLUG)->first();
+        if (!$shop) {
+            $ownerId = User::whereHas(
+                'permissions',
+                fn ($q) => $q->where('name', \Marvel\Enums\Permission::SUPER_ADMIN)
+            )->value('id');
+            $shop = static::create([
+                'name'      => 'PlantAtHome',
+                'slug'      => self::MASTER_SLUG,
+                'owner_id'  => $ownerId,
+                'is_active' => true,
+                'settings'  => ['is_master' => true],
+            ]);
+        }
+        return $id = (int) $shop->id;
+    }
+
     /**
      * @return HasOne
      */

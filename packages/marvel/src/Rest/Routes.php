@@ -64,6 +64,7 @@ use Marvel\Http\Controllers\SettlementController;
 use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
+use Marvel\Http\Controllers\PricingMarginController;
 use Marvel\Http\Controllers\RolePermissionController;
 use Marvel\Http\Controllers\DesignationController;
 use Marvel\Http\Controllers\ServiceAvailabilityController;
@@ -618,6 +619,19 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
         'only' => ['index', 'show', 'store', 'update', 'destroy'],
     ]);
     Route::post('approve-delivery-partner', [DeliveryPartnerController::class, 'approve']);
+
+    // PlantAtHome selling margins: selling price = MAX vendor rate × (1 + margin%).
+    // Matrix rows resolve city+vertical → city → vertical → global (MarginResolver).
+    Route::apiResource('pricing-margins', PricingMarginController::class, [
+        'only' => ['index', 'store', 'update', 'destroy'],
+    ]);
+
+    // Review queue: approve/reject a vendor-proposed catalog product (lightweight —
+    // no full product payload). Publish also refreshes the city projection.
+    Route::post('update-product-status', [ProductController::class, 'updateStatus']);
+
+    // Edit a vendor's commission after onboarding (approve-shop sets it initially).
+    Route::post('update-shop-commission', [ShopController::class, 'updateCommission']);
 
     // Vendor price sheets (admin-only Excel cost upload + audit + review)
     Route::post('import-vendor-price-sheet', [PriceSheetController::class, 'import']);

@@ -261,17 +261,32 @@ class OrderItemService
             }
         }
 
-        $item->update([
+        // vendor_price_snapshot = the assigned vendor's RATE (their payout basis).
+        // margin_amount = (customer unit price − rate) × qty — the platform take,
+        // frozen at assignment so later margin-config changes never rewrite history.
+        $vendorRate = isset($pick['vendor_rate']) ? (float) $pick['vendor_rate'] : null;
+        $marginAmount = null;
+        if ($vendorRate !== null && (float) $item->unit_price > 0) {
+            $marginAmount = round(((float) $item->unit_price - $vendorRate) * max(1, (int) $item->order_quantity), 2);
+        }
+        $update = [
             'assigned_shop_id'        => $shopId,
             'vendor_product_price_id' => $vppId,
             'reserved_qty'            => $reservedQty,
             'fulfillment_mode'        => $mode,
             'eta_days'                => $pick['eta_days'] ?? null,
             'shipment_id'             => $shipment->id,
-            'vendor_price_snapshot'   => $pick['selling_price'] ?? null,
+            'vendor_price_snapshot'   => $vendorRate ?? ($pick['selling_price'] ?? null),
             'assignment_status'       => $status,
             'item_status'             => 'assigned',
-        ]);
+        ];
+        // Railway/EC2 run migrations in the background after deploy — guard the new
+        // columns so assignment never breaks while the schema catches up.
+        if (self::supportsMarginSnapshot()) {
+            $update['margin_amount'] = $marginAmount;
+            $update['margin_percent_snapshot'] = isset($pick['margin_percent']) ? (float) $pick['margin_percent'] : null;
+        }
+        $item->update($update);
     }
 
     /** Rebuild shipments from the items' current (assigned_shop_id, mode), dropping empties. */
@@ -313,6 +328,20 @@ class OrderItemService
             }
             $item->update(['shipment_id' => $shipments[$key]->id]);
         }
+    }
+
+    /** Whether order_items has the margin-snapshot columns yet (deploy-lag guard). */
+    private static function supportsMarginSnapshot(): bool
+    {
+        static $supports = null;
+        if ($supports === null) {
+            try {
+                $supports = \Illuminate\Support\Facades\Schema::hasColumn('order_items', 'margin_amount');
+            } catch (\Throwable $e) {
+                $supports = false;
+            }
+        }
+        return $supports;
     }
 
     /** @return array{0: ?string, 1: ?string} [city, pincode] from the order's shipping address. */

@@ -201,17 +201,17 @@ class OrderRepository extends BaseRepository
                 throw new AuthorizationException(NOT_AUTHORIZED);
             }
         }
-        // Server-authoritative pricing: for products with a vendor cost sheet, charge
-        // the margin-over-cost selling price (computed here, not trusted from the
-        // client). Products without a cost sheet are untouched — nothing changes for
-        // them. Uses the customer's shared coordinates when present (coarse for now).
+        // Server-authoritative pricing: for vendor-supplied products, charge the CITY
+        // selling price (max vendor rate + PlantAtHome margin — computed here, not
+        // trusted from the client). Products without vendor inventory are untouched.
         $custLatLng = $this->customerLatLngFromRequest($request);
-        $request['products'] = (new PricingService())->repriceLines((array) $request['products'], $custLatLng);
-        $request['amount'] = $this->calculateSubtotal($request['products']);
+        $custCity   = $this->customerCityFromRequest($request);
+        $request['products'] = (new PricingService())->repriceLines((array) $request['products'], $custLatLng, $custCity);
+        $request['amount'] = $this->calculateSubtotal($request['products'], $custCity);
 
-        // Snapshot the vendor cost for true-profit reporting (selling − cost − dp − fees).
-        // Hidden from customers; persisted on the parent + split across suborders.
-        $request['vendor_cost_total'] = $this->computeVendorCostTotal($request['products'], $custLatLng);
+        // Snapshot the expected vendor payout (lowest covering rate) for true-profit
+        // reporting. Hidden from customers; persisted on the parent + split across suborders.
+        $request['vendor_cost_total'] = $this->computeVendorCostTotal($request['products'], $custLatLng, $custCity);
 
         // H8 — block oversell at order creation. The atomic decrement keeps the
         // stock column from going negative, but without this the order would still
@@ -420,10 +420,18 @@ class OrderRepository extends BaseRepository
             // P4 dual-write: mirror the cart lines into order_items (the single-customer-order
             // model) alongside the legacy per-vertical child orders. Wrapped so a failure here
             // can never break order creation — order_items is additive shadow data for now.
+            // Auto-assignment then routes every line to its best vendor (cheapest rate wins
+            // within the scorer) and groups per-vendor shipments — this is how a supplier
+            // learns about (and sees) the order under the single-shop model.
             try {
-                (new \Marvel\Services\OrderItemService())->writeForOrder($order, $products);
+                $itemService = new \Marvel\Services\OrderItemService();
+                $itemService->writeForOrder($order, $products);
+                $itemService->assignAndGroup($order);
             } catch (\Throwable $e) {
-                // additive shadow — swallow
+                Log::warning('order auto-assignment failed (order kept; assign from admin)', [
+                    'order_id' => $order->id ?? null,
+                    'error'    => $e->getMessage(),
+                ]);
             }
             $this->createChildOrder($order->id, $request);
             //  $this->calculateShopIncome($order);
@@ -490,13 +498,13 @@ class OrderRepository extends BaseRepository
 
     /**
      * Server-authoritative unit price for a cart line — the SAME resolution the
-     * charged total uses (vendor cost-sheet margin → variation → product, with
+     * charged total uses (city vendor price → variation → product, with
      * sale_price winning over price). Never trusts the client's unit_price.
      */
-    protected function serverUnitPrice(array $item): float
+    protected function serverUnitPrice(array $item, ?string $city = null): float
     {
         $voId = $item['variation_option_id'] ?? null;
-        $margin = $this->vendorMarginUnitPrice($item['product_id'] ?? null, $voId);
+        $margin = $this->vendorMarginUnitPrice($item['product_id'] ?? null, $voId, $city);
         if ($margin !== null) {
             return (float) $margin;
         }
@@ -518,6 +526,9 @@ class OrderRepository extends BaseRepository
      */
     protected function processProducts($products, $customer_id, $order)
     {
+        // City context for the vendor-price resolution — same city the charged total used.
+        $addr = is_array($order->shipping_address) ? $order->shipping_address : (array) ($order->shipping_address ?? []);
+        $orderCity = isset($addr['city']) && $addr['city'] !== '' ? (string) $addr['city'] : null;
         foreach ($products as $key => $product) {
             if (!isset($product['variation_option_id'])) {
                 $product['variation_option_id'] = null;
@@ -525,7 +536,7 @@ class OrderRepository extends BaseRepository
             // H7 — persist the SERVER-authoritative line price (the exact same
             // logic the charged total uses), never the client-sent unit_price/
             // subtotal. Keeps the order record/invoice/settlement consistent.
-            $unit = $this->serverUnitPrice($product);
+            $unit = $this->serverUnitPrice($product, $orderCity);
             $product['unit_price'] = $unit;
             $product['subtotal']   = $unit * (int) ($product['order_quantity'] ?? 1);
             $products[$key] = $product;
@@ -727,10 +738,11 @@ class OrderRepository extends BaseRepository
     }
 
     /**
-     * Σ (nearest vendor cost × qty) across the cart — the hidden cost basis used
-     * for per-order profit. 0 when no vendor cost sheets exist for the products.
+     * Σ (expected vendor payout × qty) across the cart — the hidden cost basis used
+     * for per-order profit (lowest covering vendor rate; assignment prefers the
+     * cheapest vendor). 0 when no vendor inventory exists for the products.
      */
-    protected function computeVendorCostTotal($products, ?array $latLng = null): float
+    protected function computeVendorCostTotal($products, ?array $latLng = null, ?string $city = null): float
     {
         $service = new PricingService();
         $total = 0.0;
@@ -740,7 +752,7 @@ class OrderRepository extends BaseRepository
                 continue;
             }
             $vo   = $item['variation_option_id'] ?? null;
-            $cost = $service->vendorCost((int) $pid, $vo !== null ? (int) $vo : null, $latLng);
+            $cost = $service->vendorCost((int) $pid, $vo !== null ? (int) $vo : null, $latLng, $city);
             if ($cost !== null) {
                 $qty = (int) ($item['order_quantity'] ?? 1);
                 $total += $cost * max($qty, 1);
@@ -809,6 +821,14 @@ class OrderRepository extends BaseRepository
             return ['lat' => (float) $loc['lat'], 'lng' => (float) $loc['lng']];
         }
         return null;
+    }
+
+    /** Customer city from the order's shipping_address (drives the margin resolution). */
+    protected function customerCityFromRequest($request): ?string
+    {
+        $addr = $request['shipping_address'] ?? null;
+        $city = is_array($addr) ? ($addr['city'] ?? null) : null;
+        return ($city !== null && trim((string) $city) !== '') ? (string) $city : null;
     }
 
     /**

@@ -165,10 +165,11 @@ class FulfillmentService
         return null;
     }
 
-    /** Cheapest [vendor, area] pair by cost_price. */
+    /** Cheapest [vendor, area] pair by vendor RATE (their payout — maximizes platform margin). */
     private function cheapest(array $pairs): array
     {
-        usort($pairs, fn ($a, $b) => ($a[0]['cost_price'] ?? INF) <=> ($b[0]['cost_price'] ?? INF));
+        usort($pairs, fn ($a, $b) => ($a[0]['vendor_rate'] ?? $a[0]['cost_price'] ?? INF)
+            <=> ($b[0]['vendor_rate'] ?? $b[0]['cost_price'] ?? INF));
         return $pairs[0];
     }
 

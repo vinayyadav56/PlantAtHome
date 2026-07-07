@@ -33,7 +33,8 @@ class LocationPriceController extends CoreController
 
         $variationOptionId = $request->filled('variation_option_id') ? (int) $request->input('variation_option_id') : null;
         $service = new PricingService();
-        $result  = $service->sellingPrice($product, $variationOptionId, $this->latLng($request));
+        $city    = $request->filled('city') ? (string) $request->input('city') : null;
+        $result  = $service->sellingPrice($product, $variationOptionId, $this->latLng($request), $city);
 
         // Delivery timing for the customer's city: local (same-city) vs courier ETA.
         $fulfillment = null;
@@ -57,6 +58,7 @@ class LocationPriceController extends CoreController
         // CPU/DB amplification DoS (mirrors checkoutEstimate's existing 50-item cap).
         $items  = array_slice((array) $request->input('items', []), 0, 50);
         $latLng = $this->latLng($request);
+        $city   = $request->filled('city') ? (string) $request->input('city') : null;
         $service = new PricingService();
 
         $ids = collect($items)->pluck('product_id')->filter()->unique()->values();
@@ -71,7 +73,8 @@ class LocationPriceController extends CoreController
             $results[$pid] = $service->sellingPrice(
                 $products[$pid],
                 isset($item['variation_option_id']) ? (int) $item['variation_option_id'] : null,
-                $latLng
+                $latLng,
+                $city
             );
         }
         return ['results' => $results];
@@ -142,7 +145,7 @@ class LocationPriceController extends CoreController
                 // Nobody can fulfil this line at the customer's city/pincode/qty — show the
                 // catalog reference price but flag it unfulfillable (NOT free, NOT instant) and
                 // keep it out of the payable totals.
-                $ref = $pricing->sellingPrice($product, $voId, $this->latLng($request));
+                $ref = $pricing->sellingPrice($product, $voId, $this->latLng($request), $city);
                 $out[] = [
                     'product_id'            => (int) $pid,
                     'variation_option_id'   => $voId,
@@ -158,8 +161,9 @@ class LocationPriceController extends CoreController
             }
 
             $best = $candidates[0]; // recommended (top score)
-            $prices = array_filter(array_map(fn ($c) => $c['selling_price'], $candidates), fn ($p) => $p !== null);
-            $unit = !empty($prices) ? (float) min($prices) : (float) ($best['selling_price'] ?? 0);
+            // Every candidate now carries the SAME uniform city price (max vendor rate +
+            // PlantAtHome margin) — the vendor choice changes margin, never the price.
+            $unit = (float) ($best['selling_price'] ?? 0);
             $shipping = (float) ($best['shipping_cost'] ?? 0);
             $eta = $best['eta_days'] ?? null;
 

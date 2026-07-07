@@ -115,19 +115,17 @@ class OrderController extends CoreController
 
             case $user->hasPermissionTo(Permission::STORE_OWNER):
                 if ($this->repository->hasPermission($user, $request->shop_id)) {
-                    return $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('shop_id', '=', $request->shop_id)->where('parent_id', '!=', null);
+                    return $this->vendorScopedOrders([(int) $request->shop_id]);
                 } else {
-                    $orders = $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('parent_id', '!=', null)->whereIn('shop_id', $user->shops->pluck('id'));
-                    return $orders;
+                    return $this->vendorScopedOrders($user->shops->pluck('id')->map(fn ($i) => (int) $i)->all());
                 }
                 break;
 
             case $user->hasPermissionTo(Permission::STAFF):
                 if ($this->repository->hasPermission($user, $request->shop_id)) {
-                    return $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('shop_id', '=', $request->shop_id)->where('parent_id', '!=', null);
+                    return $this->vendorScopedOrders([(int) $request->shop_id]);
                 } else {
-                    $orders = $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('parent_id', '!=', null)->where('shop_id', '=', $user->shop_id);
-                    return $orders;
+                    return $this->vendorScopedOrders([(int) $user->shop_id]);
                 }
                 break;
 
@@ -135,6 +133,36 @@ class OrderController extends CoreController
                 return $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('customer_id', '=', $user->id)->where('parent_id', '=', null);
                 break;
         }
+    }
+
+    /**
+     * Child orders a vendor may see. Single-shop model: catalog products (and so the
+     * per-vertical child orders) belong to the master PlantAtHome shop — a vendor's
+     * claim to an order comes from the ASSIGNMENT layer (parent order_items with
+     * assigned_shop_id = their shop, for products in this child order). Legacy
+     * child orders that carry the vendor's own shop_id keep matching too.
+     */
+    private function vendorScopedOrders(array $shopIds)
+    {
+        $shopIds = array_values(array_filter(array_map('intval', $shopIds)));
+        return $this->repository
+            ->with(['children' => fn ($q) => $q->without('customer', 'products')])
+            ->where('parent_id', '!=', null)
+            ->where(function ($q) use ($shopIds) {
+                $q->whereIn('shop_id', $shopIds) // legacy vendor-owned child orders
+                    ->orWhereExists(function ($sub) use ($shopIds) {
+                        $sub->selectRaw('1')
+                            ->from('order_items')
+                            ->whereColumn('order_items.order_id', 'orders.parent_id')
+                            ->whereIn('order_items.assigned_shop_id', $shopIds)
+                            ->whereExists(function ($line) {
+                                $line->selectRaw('1')
+                                    ->from('order_product')
+                                    ->whereColumn('order_product.order_id', 'orders.id')
+                                    ->whereColumn('order_product.product_id', 'order_items.product_id');
+                            });
+                    });
+            });
 
         // ********************* Old code *********************
 
@@ -256,12 +284,37 @@ class OrderController extends CoreController
         // REGISTERED-customer order: owner, the fulfilling vendor, or a super-admin only.
         $isSuperAdmin = $user && $user->hasPermissionTo(Permission::SUPER_ADMIN);
         $isOwner      = $user && ((int) $user->id === (int) $order->customer_id);
-        $isVendor     = $user && isset($order->shop_id) && $this->repository->hasPermission($user, $order->shop_id);
+        $isVendor     = ($user && isset($order->shop_id) && $this->repository->hasPermission($user, $order->shop_id))
+            // Single-shop model: the fulfilling vendor's claim comes from the assignment
+            // layer (order_items.assigned_shop_id), not the order's (master) shop_id.
+            || $this->vendorHasAssignment($user, $order);
         if ($isSuperAdmin || $isOwner || $isVendor) {
             return $order;
         }
         // Not permitted — reveal NOTHING about whether this order exists (404, not 403).
         throw new ModelNotFoundException(NOT_FOUND);
+    }
+
+    /** Whether any of the caller's shops is assigned an item of this order (or its parent). */
+    private function vendorHasAssignment($user, $order): bool
+    {
+        try {
+            if (!$user || !($user->hasPermissionTo(Permission::STORE_OWNER) || $user->hasPermissionTo(Permission::STAFF))) {
+                return false;
+            }
+            $shopIds = $user->hasPermissionTo(Permission::STORE_OWNER)
+                ? $user->shops->pluck('id')->map(fn ($i) => (int) $i)->all()
+                : array_filter([(int) $user->shop_id]);
+            if (empty($shopIds)) {
+                return false;
+            }
+            $orderId = $order->parent_id ? (int) $order->parent_id : (int) $order->id;
+            return \Marvel\Database\Models\OrderItem::where('order_id', $orderId)
+                ->whereIn('assigned_shop_id', $shopIds)
+                ->exists();
+        } catch (\Throwable $e) {
+            return false;
+        }
     }
 
     /**

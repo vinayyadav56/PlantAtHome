@@ -25,6 +25,19 @@ class AttributeController extends CoreController
         $this->repository = $repository;
     }
 
+    /**
+     * Single-shop model: attributes are GLOBAL (one platform list feeds the master
+     * catalog + vendor per-variant pricing) and managed by the platform only —
+     * vendors consume them, never edit them.
+     */
+    private function assertPlatformAdmin(Request $request): void
+    {
+        $user = $request->user();
+        if (!($user && $user->hasPermissionTo(\Marvel\Enums\Permission::SUPER_ADMIN))) {
+            throw new AuthorizationException(NOT_AUTHORIZED);
+        }
+    }
+
 
     /**
      * Display a listing of the resource.
@@ -48,11 +61,11 @@ class AttributeController extends CoreController
      */
     public function store(AttributeRequest $request)
     {
+        $this->assertPlatformAdmin($request);
         try {
-            if ($this->repository->hasPermission($request->user(), $request->shop_id)) {
-                return $this->repository->storeAttribute($request);
-            }
-            throw new AuthorizationException(NOT_AUTHORIZED);
+            // Global attribute — never scoped to a vendor shop.
+            $request->merge(['shop_id' => null]);
+            return $this->repository->storeAttribute($request);
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
         }
@@ -100,16 +113,14 @@ class AttributeController extends CoreController
 
     public function updateAttribute(AttributeRequest $request)
     {
-
-        if ($this->repository->hasPermission($request->user(), $request->shop_id)) {
-            try {
-                $attribute = $this->repository->with('values')->findOrFail($request->id);
-            } catch (\Exception $e) {
-                throw new HttpException(404, NOT_FOUND);
-            }
-            return $this->repository->updateAttribute($request, $attribute);
+        $this->assertPlatformAdmin($request);
+        try {
+            $attribute = $this->repository->with('values')->findOrFail($request->id);
+        } catch (\Exception $e) {
+            throw new HttpException(404, NOT_FOUND);
         }
-        throw new AuthorizationException(NOT_AUTHORIZED);
+        $request->merge(['shop_id' => null]); // attributes are global
+        return $this->repository->updateAttribute($request, $attribute);
     }
 
     /**
@@ -130,16 +141,14 @@ class AttributeController extends CoreController
 
     public function deleteAttribute(Request $request)
     {
+        $this->assertPlatformAdmin($request);
         try {
             $attribute = $this->repository->findOrFail($request->id);
         } catch (\Exception $e) {
             throw new HttpException(404, NOT_FOUND);
         }
-        if ($this->repository->hasPermission($request->user(), $attribute->shop->id)) {
-            $attribute->delete();
-            return $attribute;
-        }
-        throw new AuthorizationException(NOT_AUTHORIZED);
+        $attribute->delete();
+        return $attribute;
     }
 
     public function exportAttributes(Request $request, $shop_id)

@@ -29,6 +29,13 @@ class ProductResource extends Resource
             'min_price'            => $this->min_price,
             'image'                => $this->image,
             'status'               => $this->status,
+            // Single-shop model: who proposed this catalog product (review queue).
+            'proposed_by_shop_id'  => $this->proposed_by_shop_id ?? null,
+            'proposed_by_shop'     => $this->whenLoaded('proposedByShop', fn () => [
+                'id'   => optional($this->proposedByShop)->id,
+                'name' => optional($this->proposedByShop)->name,
+                'slug' => optional($this->proposedByShop)->slug,
+            ]),
             'price'                => $this->price,
             'delivery_charge'      => $this->delivery_charge,
             // Bundles hold no stock of their own — surface the DERIVED quantity so

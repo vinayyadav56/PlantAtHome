@@ -289,6 +289,29 @@ class ShopController extends CoreController
         });
     }
 
+    /**
+     * POST update-shop-commission { id, admin_commission_rate } — edit a vendor's
+     * commission % after onboarding (approve-shop sets the initial rate). The rate
+     * is deducted from the vendor's earnings on settlement — it does not change
+     * the customer selling price (that's the PlantAtHome margin's job).
+     */
+    public function updateCommission(ApproveShopRequest $request)
+    {
+        if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
+            throw new MarvelException(NOT_AUTHORIZED);
+        }
+        try {
+            $shop = $this->repository->findOrFail($request->id);
+        } catch (\Exception $e) {
+            throw new ModelNotFoundException(NOT_FOUND);
+        }
+        $balance = Balance::firstOrNew(['shop_id' => $shop->id]);
+        $balance->admin_commission_rate = $request->admin_commission_rate;
+        $balance->save();
+
+        return $shop->fresh(['balance']);
+    }
+
     public function disApproveShop(Request $request)
     {
         if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {

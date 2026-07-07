@@ -84,11 +84,12 @@ class CheckoutRepository
             }
         }
 
-        // Server-authoritative pricing: reprice vendor-cost-sheet products to their
-        // margin-over-cost selling price so the previewed total matches what the
-        // order will charge (products without a cost sheet are untouched).
+        // Server-authoritative pricing: reprice vendor-supplied products to the city
+        // selling price (max vendor rate + PlantAtHome margin) so the previewed total
+        // matches what the order will charge (products without vendor inventory are
+        // untouched). $shipCity threads the city into the margin resolution.
         $request['products'] = (new \Marvel\Services\PricingService())
-            ->repriceLines((array) $request['products'], $this->customerLatLng($request));
+            ->repriceLines((array) $request['products'], $this->customerLatLng($request), $shipCity ? (string) $shipCity : null);
         $request['amount'] = collect($request['products'])->sum('subtotal');
 
         $amount = $this->getOrderAmount($request, $unavailable_products);

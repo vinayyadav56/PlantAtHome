@@ -50,6 +50,9 @@ class ItemAssignmentService
             'rating'   => (float) ($opts['w_rating'] ?? 0.15),
             'priority' => (float) ($opts['w_priority'] ?? 0.15),
             'shipping' => (float) ($opts['w_shipping'] ?? 0.25),
+            // Prefer the CHEAPEST vendor rate: the customer price is fixed per city
+            // (max rate + margin), so a lower assigned rate = higher platform margin.
+            'rate'     => (float) ($opts['w_rate'] ?? 0.15),
         ];
         $this->targetSla = max(1, (int) ($opts['target_sla_days'] ?? 3));
     }
@@ -184,6 +187,9 @@ class ItemAssignmentService
                 'shop_id'                 => $shopId,
                 'vendor_product_price_id' => $v['vendor_product_price_id'] ?? null,
                 'vendor_name'             => $v['vendor_name'] ?? null,
+                // The vendor's supply rate (their payout when assigned). selling_price is
+                // overwritten below with the UNIFORM city price (max rate + margin).
+                'vendor_rate'             => isset($v['vendor_rate']) ? (float) $v['vendor_rate'] : null,
                 'selling_price'           => $v['selling_price'] ?? null,
                 'available_qty'    => $availQty,
                 'stock_tracked'    => $trackStock,
@@ -208,23 +214,50 @@ class ItemAssignmentService
             return [];
         }
 
+        // Uniform customer selling price for this line: MAX vendor rate among the
+        // fulfillable candidates × (1 + margin(city, vertical)). Every candidate carries
+        // the SAME price — the vendor choice changes the platform's margin, never the
+        // customer's price. margin_percent rides along for order snapshots.
+        $rates = array_values(array_filter(
+            array_map(fn ($c) => $c['vendor_rate'], $candidates),
+            fn ($r) => $r !== null
+        ));
+        $sellingPrice = null;
+        $marginPercent = null;
+        if (!empty($rates)) {
+            $typeId = \Marvel\Database\Models\Product::where('id', $productId)->value('type_id');
+            $marginPercent = (new MarginResolver())->marginPercent($cityN !== '' ? $cityN : null, $typeId ? (int) $typeId : null);
+            $sellingPrice = round(max($rates) * (1 + $marginPercent / 100), 2);
+        }
+
         $maxShipping = max(array_map(fn ($c) => $c['shipping_cost'], $candidates)) ?: 0.0;
+        $minRate = !empty($rates) ? min($rates) : 0.0;
+        $maxRate = !empty($rates) ? max($rates) : 0.0;
         foreach ($candidates as &$c) {
+            $c['selling_price']  = $sellingPrice ?? ($c['selling_price'] ?? null);
+            $c['margin_percent'] = $marginPercent;
             $shipNorm = $maxShipping > 0 ? $this->clamp($c['shipping_cost'] / $maxShipping, 0, 1) : 0.0;
+            // Normalize the rate within THIS candidate set (0 = cheapest, 1 = priciest)
+            // and subtract like shipping — a cheaper vendor rate scores higher.
+            $rateNorm = ($maxRate > $minRate && $c['vendor_rate'] !== null)
+                ? ($c['vendor_rate'] - $minRate) / ($maxRate - $minRate)
+                : 0.0;
             $c['score'] = round(
                 $this->weights['inv'] * $c['_inv']
                 + $this->weights['pincode'] * $c['_pincode']
                 + $this->weights['sla'] * $c['_sla']
                 + $this->weights['rating'] * $c['_rating']
                 + $this->weights['priority'] * $c['_priority']
-                - $this->weights['shipping'] * $shipNorm,
+                - $this->weights['shipping'] * $shipNorm
+                - $this->weights['rate'] * $rateNorm,
                 4
             );
             unset($c['_inv'], $c['_pincode'], $c['_sla'], $c['_rating'], $c['_priority']);
         }
         unset($c);
 
-        // LOCAL tier first (fast local), then by score desc, then cheaper price.
+        // LOCAL tier first (fast local), then by score desc, then cheaper vendor rate
+        // (higher platform margin — the customer price is identical either way).
         usort($candidates, function ($a, $b) {
             $ta = $a['fulfillment_mode'] === 'local' ? 0 : 1;
             $tb = $b['fulfillment_mode'] === 'local' ? 0 : 1;
@@ -234,7 +267,7 @@ class ItemAssignmentService
             if ($a['score'] !== $b['score']) {
                 return $b['score'] <=> $a['score'];
             }
-            return ($a['selling_price'] ?? INF) <=> ($b['selling_price'] ?? INF);
+            return ($a['vendor_rate'] ?? INF) <=> ($b['vendor_rate'] ?? INF);
         });
 
         $candidates[0]['recommended'] = true;
