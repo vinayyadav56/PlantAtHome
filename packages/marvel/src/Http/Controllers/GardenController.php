@@ -21,6 +21,7 @@ class GardenController extends CoreController
             'phone' => 'required|string|max:32',
             'email' => 'nullable|email|max:191',
             'city' => 'nullable|string|max:191',
+            'state' => 'nullable|string|max:191',
             'garden_type' => 'nullable|string|max:64',
             'space_size' => 'nullable|string|max:64',
             'budget_range' => 'nullable|string|max:64',
@@ -55,7 +56,7 @@ class GardenController extends CoreController
     public function updateLead(Request $request, $id): JsonResponse
     {
         $lead = GardenLead::findOrFail($id);
-        $lead->fill($request->only(['name', 'phone', 'email', 'city', 'garden_type', 'space_size', 'budget_range', 'message', 'status']))->save();
+        $lead->fill($request->only(['name', 'phone', 'email', 'city', 'state', 'garden_type', 'space_size', 'budget_range', 'message', 'status']))->save();
         return response()->json(['data' => $lead]);
     }
 

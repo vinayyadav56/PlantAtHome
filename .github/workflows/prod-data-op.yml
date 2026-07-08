@@ -42,6 +42,7 @@ on:
           - tools-seed
           - sku-gen
           - recompute-availability
+          - cities-seed
         default: dry-run
 
 jobs:
@@ -77,7 +78,7 @@ jobs:
             img-limit10)   ARGS="plantathome:repair-plant-images --limit=10" ;;
             img-full)      ARGS="plantathome:repair-plant-images" ;;
             img-rollback)  ARGS="plantathome:repair-plant-images --rollback" ;;
-            cat-backup|cat-restore|cat-seed|tools-seed|sku-gen|recompute-availability) ARGS="" ;;
+            cat-backup|cat-restore|cat-seed|tools-seed|sku-gen|recompute-availability|cities-seed) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             *) echo "Unknown mode"; exit 1 ;;
@@ -171,6 +172,20 @@ jobs:
                 php artisan marvel:recompute-city-availability
                 php artisan cache:clear 2>/dev/null || true
                 echo "==> RECOMPUTE-AVAILABILITY COMPLETE"
+                ;;
+
+              cities-seed)
+                echo "==> Ensuring latest code on EC2..."
+                git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || true
+                echo "==> Re-syncing marvel path package + autoloader (new seeder + bundled data)..."
+                composer reinstall marvel/shop --no-interaction 2>&1 | tail -3 || true
+                composer dump-autoload -o 2>/dev/null || true
+                echo "==> diag: dataset present?"
+                ls -la packages/marvel/data/india-cities.json 2>&1 || true
+                echo "==> Seeding addressable India cities (idempotent, is_serviceable=false)..."
+                php artisan db:seed --class="Marvel\\Database\\Seeders\\IndiaCitySeeder" --force
+                php artisan cache:clear 2>/dev/null || true
+                echo "==> CITIES-SEED COMPLETE"
                 ;;
 
               tools-seed)

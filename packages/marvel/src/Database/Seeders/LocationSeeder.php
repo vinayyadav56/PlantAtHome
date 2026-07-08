@@ -73,5 +73,10 @@ class LocationSeeder extends Seeder
                 );
             }
         }
+
+        // 3. Addressable master city list (powers the State→City dropdowns). Seeded
+        // AFTER the serviceable cities above so those keep is_serviceable = true.
+        // Additive + idempotent — safe to chain on every deploy.
+        $this->call(IndiaCitySeeder::class);
     }
 }
