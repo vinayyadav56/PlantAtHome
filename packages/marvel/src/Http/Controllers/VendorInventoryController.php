@@ -75,7 +75,21 @@ class VendorInventoryController extends CoreController
 
         if ($request->filled('q')) {
             $term = trim((string) $request->q);
-            $query->where(fn ($w) => $w->where('name', 'like', "%{$term}%")->orWhere('sku', 'like', "%{$term}%"));
+            // Scalable search: MySQL FULLTEXT (index-backed) for terms ≥ 3 chars;
+            // LIKE fallback for short terms / non-MySQL so behaviour never regresses.
+            $useFulltext = strlen($term) >= 3
+                && \Illuminate\Support\Facades\DB::connection()->getDriverName() === 'mysql';
+            if ($useFulltext) {
+                // Boolean-mode prefix match ("term*") so partial words still hit the index.
+                $boolean = preg_replace('/[+\-><\(\)~*"@]+/', ' ', $term);
+                $boolean = trim($boolean);
+                $query->whereRaw(
+                    'MATCH(products.name, products.sku) AGAINST (? IN BOOLEAN MODE)',
+                    [$boolean === '' ? $term : $boolean . '*']
+                );
+            } else {
+                $query->where(fn ($w) => $w->where('name', 'like', "%{$term}%")->orWhere('sku', 'like', "%{$term}%"));
+            }
         }
         if ($request->filled('type_id')) {
             $query->where('type_id', (int) $request->type_id);
@@ -121,6 +135,14 @@ class VendorInventoryController extends CoreController
             'items.*.stock_qty'              => 'nullable|integer|min:0',
             'items.*.track_stock'            => 'nullable|boolean',
             'items.*.fulfillment_mode'       => 'nullable|in:local,courier,both',
+            // Per-vendor, per-size logistics (vendor_sku maps to vpp.sku; `sku` is the
+            // master-product lookup key, kept separate).
+            'items.*.vendor_sku'             => 'nullable|string|max:191',
+            'items.*.barcode'                => 'nullable|string|max:191',
+            'items.*.weight'                 => 'nullable|numeric|min:0',
+            'items.*.length'                 => 'nullable|numeric|min:0',
+            'items.*.breadth'                => 'nullable|numeric|min:0',
+            'items.*.height'                 => 'nullable|numeric|min:0',
         ]);
         $shopId = $this->resolveShopId($request);
         $result = (new VendorInventoryWriter())->writeItems($shopId, $request->input('items'), [
@@ -171,7 +193,25 @@ class VendorInventoryController extends CoreController
             'stock_qty'            => 'nullable|integer|min:0',
             'track_stock'          => 'nullable|boolean',
             'fulfillment_mode'     => 'nullable|in:local,courier,both',
+            'vendor_sku'           => 'nullable|string|max:191',
+            'barcode'              => 'nullable|string|max:191',
+            'weight'               => 'nullable|numeric|min:0',
+            'length'               => 'nullable|numeric|min:0',
+            'breadth'              => 'nullable|numeric|min:0',
+            'height'               => 'nullable|numeric|min:0',
         ]);
+
+        // Per-vendor, per-size logistics (guarded until the migration runs).
+        if (\Illuminate\Support\Facades\Schema::hasColumn('vendor_product_prices', 'weight')) {
+            if ($request->has('vendor_sku')) {
+                $row->sku = $request->vendor_sku !== null ? trim((string) $request->vendor_sku) : null;
+            }
+            foreach (['barcode', 'weight', 'length', 'breadth', 'height'] as $f) {
+                if ($request->has($f)) {
+                    $row->{$f} = $request->{$f};
+                }
+            }
+        }
 
         if ($request->has('vendor_selling_price')) {
             $row->vendor_selling_price = $request->vendor_selling_price !== null ? (float) $request->vendor_selling_price : null;

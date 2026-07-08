@@ -53,6 +53,10 @@ class ShopRepository extends BaseRepository
         'notifications',
         'lat',
         'lng',
+        // Vendor profile fields (shops = the vendors table).
+        'contact_person',
+        'mobile',
+        'upi',
     ];
 
     /**
@@ -144,6 +148,9 @@ class ShopRepository extends BaseRepository
                 if (array_key_exists('settings', $data)) {
                     $data['gst_number'] = $this->gstFromSettings($request);
                 }
+                // Audit stamp + mirror mobile into settings.contact for BC readers.
+                $data['created_by'] = $request->user()->id ?? null;
+                $data['updated_by'] = $request->user()->id ?? null;
                 $shop = $this->create($data);
                 if (isset($request['categories'])) {
                     $shop->categories()->attach($request['categories']);
@@ -185,6 +192,7 @@ class ShopRepository extends BaseRepository
                 if (!empty($request->slug) &&  $request->slug != $shop['slug']) {
                     $data['slug'] = $this->makeSlug($request);
                 }
+                $data['updated_by'] = $request->user()->id ?? null;
                 $shop->update($data);
                 $this->syncServiceAreas($shop, $request);
 

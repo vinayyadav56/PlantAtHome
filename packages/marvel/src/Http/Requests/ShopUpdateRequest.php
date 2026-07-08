@@ -28,8 +28,12 @@ class ShopUpdateRequest extends FormRequest
         return [
             'name'                   => ['required', 'string', 'max:255'],
             'categories'             => ['array'],
+            'categories.*'           => ['integer', 'exists:categories,id'],
             'is_active'              => ['boolean'],
             'description'            => ['nullable', 'string', 'max:10000'],
+            'contact_person'         => ['nullable', 'string', 'max:191'],
+            'mobile'                 => ['nullable', 'string', 'regex:/^[0-9]{10}$/'],
+            'upi'                    => ['nullable', 'string', 'regex:/^[\w.\-]{2,256}@[a-zA-Z]{2,64}$/'],
             'balance'                => ['array'],
             'image'                  => ['nullable', 'array'],
             'cover_image'            => ['nullable', 'array'],

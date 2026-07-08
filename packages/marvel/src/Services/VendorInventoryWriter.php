@@ -2,6 +2,7 @@
 
 namespace Marvel\Services;
 
+use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Variation;
 use Marvel\Database\Models\VendorProductPrice;
@@ -139,6 +140,22 @@ class VendorInventoryWriter
         }
         if (isset($item['lead_time_days']) && is_numeric($item['lead_time_days'])) {
             $values['lead_time_days'] = max(0, (int) $item['lead_time_days']);
+        }
+        // Per-vendor, per-size logistics. `vendor_sku` (NOT `sku`, which is the
+        // master-product lookup key above) maps to the vpp.sku column. Guarded so
+        // it's a no-op until the size-fields migration has run.
+        if (Schema::hasColumn('vendor_product_prices', 'weight')) {
+            if (array_key_exists('vendor_sku', $item) && trim((string) $item['vendor_sku']) !== '') {
+                $values['sku'] = trim((string) $item['vendor_sku']);
+            }
+            if (array_key_exists('barcode', $item) && trim((string) $item['barcode']) !== '') {
+                $values['barcode'] = trim((string) $item['barcode']);
+            }
+            foreach (['weight', 'length', 'breadth', 'height'] as $dim) {
+                if (isset($item[$dim]) && is_numeric($item[$dim])) {
+                    $values[$dim] = (float) $item[$dim];
+                }
+            }
         }
 
         $keys = [

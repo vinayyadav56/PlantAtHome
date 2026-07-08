@@ -320,6 +320,74 @@ class ProductController extends CoreController
             ->first();
     }
 
+    /**
+     * Fuzzy near-duplicate detection for the propose flow. Beyond the exact match,
+     * find catalog products whose name is SIMILAR (shared first token or a
+     * scientific-name match), scored by PHP similar_text, so a vendor is warned
+     * before proposing "Money Plant" when "Money-Plant" already exists. Returns the
+     * top matches ≥ threshold. Read-only; safe to call as a pre-submit check.
+     *
+     * @return array<int, array{id:int,name:string,slug:string,status:string,score:float}>
+     */
+    private function similarProducts(string $name, ?int $typeId, float $threshold = 55.0, int $limit = 6): array
+    {
+        $name = trim($name);
+        if (mb_strlen($name) < 3) {
+            return [];
+        }
+        // First meaningful token, splitting on spaces AND hyphens/underscores so
+        // "Money-Plant" and "Money Plant" both key on "Money".
+        $tokens = array_values(array_filter(preg_split('/[\s\-_]+/', $name), fn ($t) => mb_strlen($t) >= 3));
+        $firstToken = $tokens[0] ?? $name;
+
+        $candidates = Product::query()
+            ->where('language', DEFAULT_LANGUAGE)
+            ->when($typeId, fn ($q) => $q->where('type_id', $typeId))
+            ->where(function ($q) use ($firstToken, $name) {
+                $q->where('name', 'like', $firstToken . '%')
+                    ->orWhere('name', 'like', '%' . $firstToken . '%')
+                    ->orWhere('name', 'like', '%' . $name . '%');
+            })
+            ->limit(60)
+            ->get(['id', 'name', 'slug', 'status']);
+
+        // scientific-name match (strong signal) from plant_attributes.
+        $scientific = \Marvel\Database\Models\PlantAttribute::whereRaw('LOWER(scientific_name) = ?', [mb_strtolower($name)])
+            ->pluck('product_id')->all();
+
+        $lname = mb_strtolower($name);
+        $scored = [];
+        foreach ($candidates as $p) {
+            similar_text($lname, mb_strtolower((string) $p->name), $percent);
+            if (in_array($p->id, $scientific, true)) {
+                $percent = max($percent, 95.0);
+            }
+            if ($percent >= $threshold) {
+                $scored[] = [
+                    'id'     => (int) $p->id,
+                    'name'   => $p->name,
+                    'slug'   => $p->slug,
+                    'status' => $p->status,
+                    'score'  => round($percent, 1),
+                ];
+            }
+        }
+        usort($scored, fn ($a, $b) => $b['score'] <=> $a['score']);
+        return array_slice($scored, 0, $limit);
+    }
+
+    /**
+     * GET product-search/similar?name=&type_id= — pre-submit near-duplicate check
+     * for the "Request new product" flow (so vendors attach to an existing catalog
+     * item instead of proposing a duplicate).
+     */
+    public function similar(Request $request)
+    {
+        $name = (string) $request->input('name', '');
+        $typeId = $request->filled('type_id') ? (int) $request->input('type_id') : null;
+        return ['similar' => $this->similarProducts($name, $typeId)];
+    }
+
 
 
     /**

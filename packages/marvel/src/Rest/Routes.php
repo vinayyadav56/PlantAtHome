@@ -65,6 +65,7 @@ use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
 use Marvel\Http\Controllers\PricingMarginController;
+use Marvel\Http\Controllers\VendorController;
 use Marvel\Http\Controllers\RolePermissionController;
 use Marvel\Http\Controllers\DesignationController;
 use Marvel\Http\Controllers\ServiceAvailabilityController;
@@ -276,6 +277,19 @@ Route::apiResource('attributes', AttributeController::class, [
 Route::apiResource('shops', ShopController::class, [
     'only' => ['index', 'show'],
 ]);
+// ── Canonical Vendor API (thin layer over the shop domain; see VendorController).
+// PlantAtHome is a single storefront — a "Vendor" is an internal supplier. The
+// legacy /shops routes stay as deprecated back-compat aliases. Read aliases below
+// map the vendor vocabulary onto the existing controllers (no logic duplication).
+// Constrain {vendor} so it never shadows the sibling literal `vendors/list`
+// (UserController@vendors, registered later in a super-admin group).
+Route::apiResource('vendors', VendorController::class, [
+    'only' => ['index', 'show'],
+])->where(['vendor' => '(?!list$)[A-Za-z0-9._-]+']);
+Route::get('master-products', [ProductController::class, 'index'])->middleware('throttle:120,1');
+Route::get('pricing', [LocationPriceController::class, 'show'])->middleware('throttle:120,1');
+Route::post('pricing/batch', [LocationPriceController::class, 'batch'])->middleware('throttle:60,1');
+Route::get('city-settings', [LocationController::class, 'cities'])->middleware('throttle:120,1');
 Route::apiResource('settings', SettingsController::class, [
     'only' => ['index'],
 ]);
@@ -520,6 +534,20 @@ Route::group(
         Route::apiResource('shops', ShopController::class, [
             'only' => ['store', 'update', 'destroy'],
         ]);
+        // Canonical Vendor write API (thin layer over ShopController). Legacy /shops
+        // writes remain as deprecated aliases.
+        Route::apiResource('vendors', VendorController::class, [
+            'only' => ['store', 'update', 'destroy'],
+        ]);
+        // Vendor products = a vendor's inventory mapping onto master products.
+        Route::get('vendor-products', [VendorInventoryController::class, 'inventory']);
+        Route::post('vendor-products', [VendorInventoryController::class, 'bulkAttach']);
+        Route::patch('vendor-products/{id}', [VendorInventoryController::class, 'updateInventory']);
+        Route::delete('vendor-products/{id}', [VendorInventoryController::class, 'deleteInventory']);
+        Route::get('inventory', [VendorInventoryController::class, 'inventory']);
+        // Canonical master-catalog search + fuzzy near-duplicate pre-check (propose flow).
+        Route::get('product-search', [VendorInventoryController::class, 'catalogSearch']);
+        Route::get('product-search/similar', [ProductController::class, 'similar']);
         // Route::get('analytics', [AnalyticsController::class, 'analytics']);
         Route::apiResource('withdraws', WithdrawController::class, [
             'only' => ['store', 'index', 'show'],

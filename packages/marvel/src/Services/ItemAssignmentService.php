@@ -290,11 +290,26 @@ class ItemAssignmentService
         return $candidates;
     }
 
-    /** The single best vendor for a line (auto-assign + checkout estimate), or null. */
+    /**
+     * The single best vendor for a line (auto-assign + checkout estimate), or null.
+     * candidatesFor() applies the hard filters + scoring; the configured
+     * VendorSelectionStrategy (default 'cheapest') then picks the winner. Swapping
+     * strategy (settings.options.assignment.strategy) never touches this pipeline.
+     */
     public function bestFor(int $productId, ?int $variationOptionId, int $qty, ?string $city, ?string $pincode = null): ?array
     {
-        $c = $this->candidatesFor($productId, $variationOptionId, $qty, $city, $pincode);
-        return $c[0] ?? null;
+        $candidates = $this->candidatesFor($productId, $variationOptionId, $qty, $city, $pincode);
+        if (empty($candidates)) {
+            return null;
+        }
+        $strategy = \Marvel\Services\VendorSelection\VendorSelectionManager::make();
+        return $strategy->select($candidates, [
+            'product_id'          => $productId,
+            'variation_option_id' => $variationOptionId,
+            'qty'                 => $qty,
+            'city'                => $city,
+            'pincode'             => $pincode,
+        ]);
     }
 
     /**

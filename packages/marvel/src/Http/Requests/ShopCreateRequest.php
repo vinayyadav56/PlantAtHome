@@ -29,8 +29,13 @@ class ShopCreateRequest extends FormRequest
         $rules = [
             'name'                   => ['required', 'string', 'max:255'],
             'categories'             => ['array'],
+            'categories.*'           => ['integer', 'exists:categories,id'],
             'is_active'              => ['boolean'],
             'description'            => ['nullable', 'string', 'max:10000'],
+            // Vendor profile fields (validate format whenever provided).
+            'contact_person'         => ['nullable', 'string', 'max:191'],
+            'mobile'                 => ['nullable', 'string', 'regex:/^[0-9]{10}$/'],
+            'upi'                    => ['nullable', 'string', 'regex:/^[\w.\-]{2,256}@[a-zA-Z]{2,64}$/'],
             'admin_commission_rate'  => ['nullable', 'numeric'],
             'total_earnings'         => ['nullable', 'numeric'],
             'withdrawn_amount'       => ['nullable', 'numeric'],

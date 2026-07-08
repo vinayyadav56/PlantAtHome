@@ -374,6 +374,30 @@ class Product extends Model
     }
 
     /**
+     * Scout-ready index shape for the master catalog. Native MySQL FULLTEXT backs
+     * search today (see VendorInventoryController::catalogSearch). To move to
+     * Elastic/Meilisearch later, add `laravel/scout` + `use Laravel\Scout\Searchable;`
+     * on this model — this method already defines what gets indexed, so no call site
+     * changes. Kept as a plain method (no trait) so it adds no runtime dependency
+     * until Scout is installed.
+     *
+     * @return array<string, mixed>
+     */
+    public function toSearchableArray(): array
+    {
+        $pa = $this->plantAttribute;
+        return array_filter([
+            'id'              => $this->id,
+            'name'            => $this->name,
+            'sku'             => $this->sku,
+            'type_id'         => $this->type_id,
+            'scientific_name' => optional($pa)->scientific_name,
+            'hindi_name'      => optional($pa)->hindi_name,
+            'regional_names'  => optional($pa)->regional_names,
+        ], fn ($v) => $v !== null && $v !== '');
+    }
+
+    /**
      * @return BelongsTo
      */
     public function shop(): BelongsTo

@@ -16,8 +16,12 @@ class PlantAttribute extends Model
     protected $guarded = [];
 
     protected $casts = [
-        'air_purifying' => 'boolean',
-        'pet_friendly'  => 'boolean',
+        'air_purifying'  => 'boolean',
+        'pet_friendly'   => 'boolean',
+        'is_flowering'   => 'boolean',
+        'fruit_bearing'  => 'boolean',
+        'regional_names' => 'array',
+        'faqs'           => 'array',
     ];
 
     public function product(): BelongsTo

@@ -272,6 +272,11 @@ class ShopController extends CoreController
         // apply left a live shop with no commission row (corrupt earnings) or vice-versa.
         return DB::transaction(function () use ($shop, $id, $admin_commission_rate) {
             $shop->is_active = true;
+            // Explicit approval lifecycle alongside the legacy is_active flag.
+            if (\Illuminate\Support\Facades\Schema::hasColumn('shops', 'approval_status')) {
+                $shop->approval_status = 'approved';
+                $shop->approved_at = now();
+            }
             $shop->save();
 
             // Publish ONLY products awaiting approval — never republish items the vendor has
@@ -326,6 +331,9 @@ class ShopController extends CoreController
 
         return DB::transaction(function () use ($shop, $id) {
             $shop->is_active = false;
+            if (\Illuminate\Support\Facades\Schema::hasColumn('shops', 'approval_status')) {
+                $shop->approval_status = 'rejected';
+            }
             $shop->save();
 
             // Hide only currently-live products (send them back to review); leave the vendor's
