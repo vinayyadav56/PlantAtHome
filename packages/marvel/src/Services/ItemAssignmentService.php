@@ -170,6 +170,7 @@ class ItemAssignmentService
                 continue; // cannot reach this customer
             }
             $mode = $area['mode']; // 'local' | 'courier'
+            $cityMatched = !empty($area['city_matched']) || !empty($area['pincode_covered']);
 
             $shop = $shops[$shopId] ?? null;
             $rating = $shop && $shop->vendor_rating !== null ? (float) $shop->vendor_rating : null;
@@ -191,6 +192,7 @@ class ItemAssignmentService
                 // overwritten below with the UNIFORM city price (max rate + margin).
                 'vendor_rate'             => isset($v['vendor_rate']) ? (float) $v['vendor_rate'] : null,
                 'selling_price'           => $v['selling_price'] ?? null,
+                '_city_matched'           => $cityMatched,
                 'available_qty'    => $availQty,
                 'stock_tracked'    => $trackStock,
                 'fulfillment_mode' => $mode,
@@ -218,8 +220,16 @@ class ItemAssignmentService
         // fulfillable candidates × (1 + margin(city, vertical)). Every candidate carries
         // the SAME price — the vendor choice changes the platform's margin, never the
         // customer's price. margin_percent rides along for order snapshots.
+        // The rate pool mirrors PricingService::coveredRows exactly: vendors whose
+        // service area COVERS the city define the price; national-courier fallback
+        // candidates only price the line when nobody covers the city (otherwise one
+        // expensive courier-anywhere vendor would inflate every city's price).
+        $ratePool = array_filter($candidates, fn ($c) => !empty($c['_city_matched']));
+        if (empty($ratePool)) {
+            $ratePool = $candidates;
+        }
         $rates = array_values(array_filter(
-            array_map(fn ($c) => $c['vendor_rate'], $candidates),
+            array_map(fn ($c) => $c['vendor_rate'], $ratePool),
             fn ($r) => $r !== null
         ));
         $sellingPrice = null;
@@ -231,8 +241,11 @@ class ItemAssignmentService
         }
 
         $maxShipping = max(array_map(fn ($c) => $c['shipping_cost'], $candidates)) ?: 0.0;
-        $minRate = !empty($rates) ? min($rates) : 0.0;
-        $maxRate = !empty($rates) ? max($rates) : 0.0;
+        // Rate-normalization bounds span ALL candidates (a pricey courier-fallback
+        // vendor must still score worse), independent of the selling-price pool.
+        $allRates = array_values(array_filter(array_map(fn ($c) => $c['vendor_rate'], $candidates), fn ($r) => $r !== null));
+        $minRate = !empty($allRates) ? min($allRates) : 0.0;
+        $maxRate = !empty($allRates) ? max($allRates) : 0.0;
         foreach ($candidates as &$c) {
             $c['selling_price']  = $sellingPrice ?? ($c['selling_price'] ?? null);
             $c['margin_percent'] = $marginPercent;
@@ -240,7 +253,7 @@ class ItemAssignmentService
             // Normalize the rate within THIS candidate set (0 = cheapest, 1 = priciest)
             // and subtract like shipping — a cheaper vendor rate scores higher.
             $rateNorm = ($maxRate > $minRate && $c['vendor_rate'] !== null)
-                ? ($c['vendor_rate'] - $minRate) / ($maxRate - $minRate)
+                ? $this->clamp(($c['vendor_rate'] - $minRate) / ($maxRate - $minRate), 0, 1)
                 : 0.0;
             $c['score'] = round(
                 $this->weights['inv'] * $c['_inv']
@@ -252,7 +265,7 @@ class ItemAssignmentService
                 - $this->weights['rate'] * $rateNorm,
                 4
             );
-            unset($c['_inv'], $c['_pincode'], $c['_sla'], $c['_rating'], $c['_priority']);
+            unset($c['_inv'], $c['_pincode'], $c['_sla'], $c['_rating'], $c['_priority'], $c['_city_matched']);
         }
         unset($c);
 
@@ -286,7 +299,9 @@ class ItemAssignmentService
 
     /**
      * Best service-area match: exact pincode > city (local) > city (courier) > national courier.
-     * @return array{mode: ?string, eta_days: ?int, pincode_covered: bool}
+     * `city_matched` distinguishes a declared city/pincode area from the national-courier
+     * fallback — the uniform selling price is derived from city-covering vendors only.
+     * @return array{mode: ?string, eta_days: ?int, pincode_covered: bool, city_matched: bool}
      */
     private function matchArea($areas, string $cityN, ?string $pincode): array
     {
@@ -302,7 +317,7 @@ class ItemAssignmentService
 
             if ($pinMatch) {
                 $m = in_array($mode, ['local', 'both'], true) ? 'local' : 'courier';
-                return ['mode' => $m, 'eta_days' => $a->eta_days, 'pincode_covered' => true];
+                return ['mode' => $m, 'eta_days' => $a->eta_days, 'pincode_covered' => true, 'city_matched' => true];
             }
             if ($cityMatch && in_array($mode, ['local', 'both'], true) && $localCity === null) {
                 $localCity = $a;
@@ -316,15 +331,15 @@ class ItemAssignmentService
         }
 
         if ($localCity) {
-            return ['mode' => 'local', 'eta_days' => $localCity->eta_days, 'pincode_covered' => false];
+            return ['mode' => 'local', 'eta_days' => $localCity->eta_days, 'pincode_covered' => false, 'city_matched' => true];
         }
         if ($courierCity) {
-            return ['mode' => 'courier', 'eta_days' => $courierCity->eta_days, 'pincode_covered' => false];
+            return ['mode' => 'courier', 'eta_days' => $courierCity->eta_days, 'pincode_covered' => false, 'city_matched' => true];
         }
         if ($courierAny) {
-            return ['mode' => 'courier', 'eta_days' => $courierAny->eta_days, 'pincode_covered' => false];
+            return ['mode' => 'courier', 'eta_days' => $courierAny->eta_days, 'pincode_covered' => false, 'city_matched' => false];
         }
-        return ['mode' => null, 'eta_days' => null, 'pincode_covered' => false];
+        return ['mode' => null, 'eta_days' => null, 'pincode_covered' => false, 'city_matched' => false];
     }
 
     /** Shipping cost for a mode from the vendor's rate rows (zone by locality), else 0. */
