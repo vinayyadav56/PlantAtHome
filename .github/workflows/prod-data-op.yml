@@ -42,6 +42,7 @@ on:
           - tools-seed
           - sku-gen
           - recompute-availability
+          - company-address
         default: dry-run
 
 jobs:
@@ -77,7 +78,7 @@ jobs:
             img-limit10)   ARGS="plantathome:repair-plant-images --limit=10" ;;
             img-full)      ARGS="plantathome:repair-plant-images" ;;
             img-rollback)  ARGS="plantathome:repair-plant-images --rollback" ;;
-            cat-backup|cat-restore|cat-seed|tools-seed|sku-gen|recompute-availability) ARGS="" ;;
+            cat-backup|cat-restore|cat-seed|tools-seed|sku-gen|recompute-availability|company-address) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             *) echo "Unknown mode"; exit 1 ;;
@@ -116,6 +117,15 @@ jobs:
             CATALOG_TABLES="products plant_attributes variation_options product_inclusions attribute_product category_product categories attributes attribute_values types"
 
             case "$OP_MODE" in
+              company-address)
+                echo "==> Setting company address in settings.options.contactDetails.location (all language rows)..."
+                echo "JGxvYyA9IFsKICAgICd6aXAnICAgICAgICAgICAgICA9PiAnMTIzMTAyJywKICAgICdjaXR5JyAgICAgICAgICAgICA9PiAnUmV3YXJpJywKICAgICdzdGF0ZScgICAgICAgICAgICA9PiAnSGFyeWFuYScsCiAgICAnY291bnRyeScgICAgICAgICAgPT4gJ0luZGlhJywKICAgICdzdHJlZXRfYWRkcmVzcycgICA9PiAnQy9PIENIT1RURUxBTCwgREhBTkkgU0hPQkhBIEJVUk9MSSwgQWhyb2QsIFBvbGljZSBzdGF0aW9uIEtob2wsIEFocm9kJywKICAgICdmb3JtYXR0ZWRBZGRyZXNzJyA9PiAnQy9PIENIT1RURUxBTCwgREhBTkkgU0hPQkhBIEJVUk9MSSwgQWhyb2QsIFBvbGljZSBzdGF0aW9uIEtob2wsIEFocm9kLCBSZXdhcmktMTIzMTAyLCBIYXJ5YW5hLCBJbmRpYScsCl07CiRyb3dzID0gXE1hcnZlbFxEYXRhYmFzZVxNb2RlbHNcU2V0dGluZ3M6OmFsbCgpOwpmb3JlYWNoICgkcm93cyBhcyAkcykgewogICAgJG9wdHMgPSAkcy0+b3B0aW9ucyA/PyBbXTsKICAgIGVjaG8gJ0JFRk9SRSBbJyAuICgkcy0+bGFuZ3VhZ2UgPz8gJz8nKSAuICddOiAnIC4ganNvbl9lbmNvZGUoJG9wdHNbJ2NvbnRhY3REZXRhaWxzJ11bJ2xvY2F0aW9uJ10gPz8gbnVsbCkgLiAiXG4iOwogICAgJGNkID0gJG9wdHNbJ2NvbnRhY3REZXRhaWxzJ10gPz8gW107CiAgICAkY2RbJ2xvY2F0aW9uJ10gPSAkbG9jOwogICAgJG9wdHNbJ2NvbnRhY3REZXRhaWxzJ10gPSAkY2Q7CiAgICAkcy0+b3B0aW9ucyA9ICRvcHRzOwogICAgJHMtPnNhdmUoKTsKICAgIGVjaG8gJ0FGVEVSICBbJyAuICgkcy0+bGFuZ3VhZ2UgPz8gJz8nKSAuICddOiAnIC4ganNvbl9lbmNvZGUoJHMtPmZyZXNoKCktPm9wdGlvbnNbJ2NvbnRhY3REZXRhaWxzJ11bJ2xvY2F0aW9uJ10gPz8gbnVsbCkgLiAiXG4iOwp9CmVjaG8gJ0RPTkU6ICcgLiBjb3VudCgkcm93cykgLiAiIHNldHRpbmdzIHJvdyhzKSB1cGRhdGVkXG4iOwo=" | base64 -d > /tmp/set-company-address.php
+                php artisan tinker --execute="$(cat /tmp/set-company-address.php)"
+                rm -f /tmp/set-company-address.php
+                php artisan cache:clear 2>/dev/null || true
+                echo "==> COMPANY-ADDRESS COMPLETE"
+                ;;
+
               cat-backup)
                 DBHOST=$(getenv DB_HOST); DBNAME=$(getenv DB_DATABASE); DBUSER=$(getenv DB_USERNAME); DBPASS=$(getenv DB_PASSWORD)
                 mkdir -p storage/app/backups
