@@ -72,9 +72,14 @@ ENVEOF
 cd /var/www/html
 
 echo "==> Ensuring storage directories exist with correct permissions..."
-mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs storage/app/public /tmp/nginx_client_body
+# /tmp/nginx_fastcgi_temp: spillover dir for the fastcgi_temp_path in nginx.conf
+# (large PHP-FPM responses beyond the in-memory fastcgi_buffers land here instead
+# of being truncated). World-writable like the existing client_body temp dir since
+# the nginx worker (www-data) must be able to create files here.
+mkdir -p storage/framework/cache/data storage/framework/sessions storage/framework/views storage/logs storage/app/public /tmp/nginx_client_body /tmp/nginx_fastcgi_temp
 chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
 chmod -R 775 storage bootstrap/cache 2>/dev/null || true
+chmod -R 777 /tmp/nginx_client_body /tmp/nginx_fastcgi_temp 2>/dev/null || true
 
 echo "==> Creating public/storage symlink for media file access..."
 php artisan storage:link --force || true
