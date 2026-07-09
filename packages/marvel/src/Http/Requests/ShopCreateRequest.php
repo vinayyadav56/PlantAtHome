@@ -7,6 +7,7 @@ use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Validation\Rule;
 use Marvel\Enums\Permission;
+use Marvel\Http\Rules\EmailInUse;
 use Marvel\Http\Rules\UniqueBankAccount;
 use Marvel\Http\Rules\UniquePhone;
 
@@ -47,12 +48,15 @@ class ShopCreateRequest extends FormRequest
             // created without a login; self-serve store owners never send owner_*.
             'owner_email'            => [
                 Rule::requiredIf(fn () => (bool) $this->user()?->hasPermissionTo(Permission::SUPER_ADMIN)),
-                'nullable', 'email', 'max:191', Rule::unique('users', 'email'),
+                // EmailInUse checks users.email PLUS the JSON email paths of
+                // existing vendors (payment_info.email, notifications.email).
+                'nullable', 'email', 'max:191', new EmailInUse(null),
             ],
             'owner_name'             => ['nullable', 'string', 'max:191'],
             'owner_password'         => ['required_with:owner_email', 'nullable', 'string', 'min:8'],
             // Bank account number lives in the balances.payment_info JSON — one vendor only.
             'balance.payment_info.account' => ['nullable', new UniqueBankAccount(null)],
+            'balance.payment_info.email'   => ['nullable', 'email', new EmailInUse(null)],
             'admin_commission_rate'  => ['nullable', 'numeric'],
             'total_earnings'         => ['nullable', 'numeric'],
             'withdrawn_amount'       => ['nullable', 'numeric'],

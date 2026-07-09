@@ -13,6 +13,9 @@ use Marvel\Enums\Permission;
 use Marvel\Http\Requests\ShopCreateRequest;
 use Marvel\Http\Requests\ShopUpdateRequest;
 use Marvel\Http\Resources\VendorResource;
+use Marvel\Http\Rules\EmailInUse;
+use Marvel\Http\Rules\UniqueBankAccount;
+use Marvel\Http\Rules\UniquePhone;
 use Marvel\Mail\VendorCredentials;
 
 /**
@@ -97,5 +100,52 @@ class VendorController extends ShopController
             $sent = false;
         }
         return ['success' => true, 'credentials_email_sent' => $sent];
+    }
+
+    /**
+     * GET /vendors/check-unique?field=…&value=…&exclude_shop_id=… (super-admin).
+     * Instant duplicate feedback for the vendor form — runs the SAME rules the
+     * create/update requests enforce, so the live hint and the submit-time 422
+     * can never disagree. Returns { available, message }.
+     */
+    public function checkUnique(Request $request)
+    {
+        if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
+            throw new AuthorizationException(NOT_AUTHORIZED);
+        }
+        $request->validate([
+            'field'           => 'required|in:email,mobile,bank_account,gst',
+            'value'           => 'required|string|max:191',
+            'exclude_shop_id' => 'nullable|integer',
+        ]);
+        $exclude = $request->filled('exclude_shop_id') ? (int) $request->exclude_shop_id : null;
+        $value = trim((string) $request->value);
+
+        $message = null;
+        $fail = function (string $msg) use (&$message) {
+            $message = $msg;
+        };
+
+        switch ($request->field) {
+            case 'email':
+                (new EmailInUse($exclude))->validate('email', $value, $fail);
+                break;
+            case 'mobile':
+                (new UniquePhone($exclude))->validate('mobile', $value, $fail);
+                break;
+            case 'bank_account':
+                (new UniqueBankAccount($exclude))->validate('bank_account', $value, $fail);
+                break;
+            case 'gst':
+                $dup = Shop::whereRaw('UPPER(gst_number) = ?', [strtoupper($value)])
+                    ->when($exclude !== null, fn ($q) => $q->where('id', '!=', $exclude))
+                    ->exists();
+                if ($dup) {
+                    $message = 'This GSTIN is already registered to another vendor.';
+                }
+                break;
+        }
+
+        return ['available' => $message === null, 'message' => $message];
     }
 }

@@ -285,7 +285,10 @@ Route::apiResource('shops', ShopController::class, [
 // (UserController@vendors, registered later in a super-admin group).
 Route::apiResource('vendors', VendorController::class, [
     'only' => ['index', 'show'],
-])->where(['vendor' => '(?!list$)[A-Za-z0-9._-]+']);
+    // Exclude literal sub-routes registered elsewhere (UserController@vendors'
+    // /vendors/list and the super-admin /vendors/check-unique) from being
+    // captured by the {vendor} show param — routes match in registration order.
+])->where(['vendor' => '(?!list$|check-unique$)[A-Za-z0-9._-]+']);
 Route::get('master-products', [ProductController::class, 'index'])->middleware('throttle:120,1');
 Route::get('pricing', [LocationPriceController::class, 'show'])->middleware('throttle:120,1');
 Route::post('pricing/batch', [LocationPriceController::class, 'batch'])->middleware('throttle:60,1');
@@ -805,6 +808,9 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('disapprove-shop', [ShopController::class, 'disApproveShop']);
     // Reset a vendor owner's password (admin-typed) + re-send credentials email.
     Route::post('vendors/{id}/reset-owner-password', [VendorController::class, 'resetOwnerPassword']);
+    // Instant duplicate check for the vendor form (email/mobile/bank_account/gst) —
+    // runs the same rules the create/update requests enforce.
+    Route::get('vendors/check-unique', [VendorController::class, 'checkUnique']);
     // F3a — vendor document review (approve/reject/pending), stored in shop settings.
     Route::post('shops/{id}/documents/status', [ShopController::class, 'setDocumentStatus']);
     Route::post('approve-withdraw', [WithdrawController::class, 'approveWithdraw']);

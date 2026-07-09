@@ -6,6 +6,7 @@ use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Validation\Rule;
+use Marvel\Http\Rules\EmailInUse;
 use Marvel\Http\Rules\UniqueBankAccount;
 use Marvel\Http\Rules\UniquePhone;
 
@@ -47,6 +48,7 @@ class ShopUpdateRequest extends FormRequest
             'balance'                => ['array'],
             // Bank account number lives in the balances.payment_info JSON — one vendor only.
             'balance.payment_info.account' => ['nullable', new UniqueBankAccount((int) $shopId)],
+            'balance.payment_info.email'   => ['nullable', 'email', new EmailInUse((int) $shopId)],
             'image'                  => ['nullable', 'array'],
             'cover_image'            => ['nullable', 'array'],
             'settings'               => ['array'],
