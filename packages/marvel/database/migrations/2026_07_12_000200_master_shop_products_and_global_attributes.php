@@ -37,7 +37,17 @@ return new class extends Migration
                     ->where('model_has_permissions.model_type', 'Marvel\\Database\\Models\\User')
                     ->value('model_has_permissions.model_id');
             } catch (\Throwable $e) {
-                // permissions tables absent on a bare install — owner stays null
+                // permissions tables absent on a bare install — fall through
+            }
+            // shops.owner_id is NOT NULL, so a bare install (fresh CI database,
+            // migrations run before any seeder creates users) cannot host the
+            // master shop yet. Fall back to any existing user; if there are no
+            // users at all, skip creation entirely — steps 2/3 below are no-ops
+            // on an empty database, and the master shop is created on real
+            // environments (which always have users) or by the seeders.
+            $ownerId = $ownerId ?: DB::table('users')->value('id');
+            if (!$ownerId) {
+                return;
             }
             $masterId = DB::table('shops')->insertGetId([
                 'name'       => 'PlantAtHome',
