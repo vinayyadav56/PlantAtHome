@@ -7,6 +7,7 @@ use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Validation\Rule;
 use Marvel\Http\Rules\UniqueBankAccount;
+use Marvel\Http\Rules\UniquePhone;
 
 class ShopUpdateRequest extends FormRequest
 {
@@ -39,7 +40,9 @@ class ShopUpdateRequest extends FormRequest
             'is_active'              => ['boolean'],
             'description'            => ['nullable', 'string', 'max:10000'],
             'contact_person'         => ['nullable', 'string', 'max:191'],
-            'mobile'                 => ['nullable', 'string', 'regex:/^[0-9]{10}$/', Rule::unique('shops', 'mobile')->ignore($shopId)],
+            // Phone must be unique across vendors — checked against BOTH the
+            // mobile column and the legacy settings->contact JSON path.
+            'mobile'                 => ['nullable', 'string', 'regex:/^[0-9]{10}$/', new UniquePhone((int) $shopId)],
             'upi'                    => ['nullable', 'string', 'regex:/^[\w.\-]{2,256}@[a-zA-Z]{2,64}$/'],
             'balance'                => ['array'],
             // Bank account number lives in the balances.payment_info JSON — one vendor only.

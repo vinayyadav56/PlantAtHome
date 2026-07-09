@@ -84,6 +84,9 @@ class ProductUpdateRequest extends FormRequest
             'bundle_items'                 => ['nullable', 'array'],
             'bundle_items.*.id'            => ['required_with:bundle_items', 'integer', 'exists:Marvel\Database\Models\Product,id'],
             'bundle_items.*.quantity'      => ['nullable', 'integer', 'min:1'],
+            // Curated botanical text (plants only; see ProductRepository::syncPlantAttributeFromRequest).
+            'plant_attribute'              => ['nullable', 'array'],
+            'plant_attribute.hindi_name'   => ['nullable', 'string', 'max:191'],
         ];
     }
 

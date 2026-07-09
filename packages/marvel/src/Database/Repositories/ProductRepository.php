@@ -325,6 +325,7 @@ class ProductRepository extends BaseRepository
             // plant photo library (product_images) on create. Plants only.
             if (optional($product->type)->slug === 'plants') {
                 $product->reconcilePlantImages($data['image'] ?? null, $data['gallery'] ?? null);
+                $this->syncPlantAttributeFromRequest($product, $request);
             }
 
             // PlantAtHome: bundle items + buy-together add-ons.
@@ -336,6 +337,36 @@ class ProductRepository extends BaseRepository
         } catch (Exception $e) {
             throw $e;
         }
+    }
+
+    /**
+     * Upsert curated botanical text from a product create/update payload.
+     * Only a WHITELIST of keys is written — PlantAttribute is $guarded = []
+     * so the raw request must never be mass-assigned. hindi_name is the
+     * canonical editor field (already indexed for search); regional_names.hi
+     * is kept in sync for future multi-language regional names.
+     */
+    private function syncPlantAttributeFromRequest($product, $request): void
+    {
+        $payload = $request['plant_attribute'] ?? null;
+        if (!is_array($payload) || !array_key_exists('hindi_name', $payload)) {
+            return;
+        }
+        $hindi = trim((string) ($payload['hindi_name'] ?? ''));
+        $existing = $product->plantAttribute()->first();
+        $regional = (array) ($existing->regional_names ?? []);
+        if ($hindi !== '') {
+            $regional['hi'] = $hindi;
+        } else {
+            unset($regional['hi']);
+        }
+        $product->plantAttribute()->updateOrCreate(
+            ['product_id' => $product->id],
+            [
+                'hindi_name'     => $hindi !== '' ? $hindi : null,
+                'regional_names' => $regional ?: null,
+            ]
+        );
     }
 
     public function checkProductForPublish($request, $product)
@@ -541,6 +572,7 @@ class ProductRepository extends BaseRepository
             // the curated Featured/Gallery the editor submitted. Plants only.
             if (optional($product->type)->slug === 'plants') {
                 $product->reconcilePlantImages($data['image'] ?? null, $data['gallery'] ?? null);
+                $this->syncPlantAttributeFromRequest($product, $request);
             }
 
             // PlantAtHome: bundle items + buy-together add-ons.

@@ -8,6 +8,7 @@ use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Validation\Rule;
 use Marvel\Enums\Permission;
 use Marvel\Http\Rules\UniqueBankAccount;
+use Marvel\Http\Rules\UniquePhone;
 
 
 class ShopCreateRequest extends FormRequest
@@ -37,7 +38,9 @@ class ShopCreateRequest extends FormRequest
             'description'            => ['nullable', 'string', 'max:10000'],
             // Vendor profile fields (validate format whenever provided).
             'contact_person'         => ['nullable', 'string', 'max:191'],
-            'mobile'                 => ['nullable', 'string', 'regex:/^[0-9]{10}$/', Rule::unique('shops', 'mobile')],
+            // Phone must be unique across vendors — checked against BOTH the
+            // mobile column and the legacy settings->contact JSON path.
+            'mobile'                 => ['nullable', 'string', 'regex:/^[0-9]{10}$/', new UniquePhone(null)],
             'upi'                    => ['nullable', 'string', 'regex:/^[\w.\-]{2,256}@[a-zA-Z]{2,64}$/'],
             // Vendor owner credentials — an admin-created vendor gets a dedicated login
             // (see ShopRepository::storeShop). Required for super-admins so no vendor is
