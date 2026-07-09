@@ -5,6 +5,9 @@ namespace Marvel\Http\Requests;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Validation\Rule;
+use Marvel\Enums\Permission;
+use Marvel\Http\Rules\UniqueBankAccount;
 
 
 class ShopCreateRequest extends FormRequest
@@ -34,8 +37,19 @@ class ShopCreateRequest extends FormRequest
             'description'            => ['nullable', 'string', 'max:10000'],
             // Vendor profile fields (validate format whenever provided).
             'contact_person'         => ['nullable', 'string', 'max:191'],
-            'mobile'                 => ['nullable', 'string', 'regex:/^[0-9]{10}$/'],
+            'mobile'                 => ['nullable', 'string', 'regex:/^[0-9]{10}$/', Rule::unique('shops', 'mobile')],
             'upi'                    => ['nullable', 'string', 'regex:/^[\w.\-]{2,256}@[a-zA-Z]{2,64}$/'],
+            // Vendor owner credentials — an admin-created vendor gets a dedicated login
+            // (see ShopRepository::storeShop). Required for super-admins so no vendor is
+            // created without a login; self-serve store owners never send owner_*.
+            'owner_email'            => [
+                Rule::requiredIf(fn () => (bool) $this->user()?->hasPermissionTo(Permission::SUPER_ADMIN)),
+                'nullable', 'email', 'max:191', Rule::unique('users', 'email'),
+            ],
+            'owner_name'             => ['nullable', 'string', 'max:191'],
+            'owner_password'         => ['required_with:owner_email', 'nullable', 'string', 'min:8'],
+            // Bank account number lives in the balances.payment_info JSON — one vendor only.
+            'balance.payment_info.account' => ['nullable', new UniqueBankAccount(null)],
             'admin_commission_rate'  => ['nullable', 'numeric'],
             'total_earnings'         => ['nullable', 'numeric'],
             'withdrawn_amount'       => ['nullable', 'numeric'],
@@ -52,7 +66,9 @@ class ShopCreateRequest extends FormRequest
             'service_areas.*.fulfillment_mode' => ['nullable', 'in:local,courier,both'],
             'service_areas.*.eta_days'         => ['nullable', 'integer', 'min:0', 'max:60'],
             // Compliance / banking identifiers — validate format whenever provided.
-            'settings.compliance.gst'  => ['nullable', 'string', 'regex:/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]{3}$/'],
+            // The GST value is mirrored into the shops.gst_number column, so uniqueness
+            // is checked against that column.
+            'settings.compliance.gst'  => ['nullable', 'string', 'regex:/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]{3}$/', Rule::unique('shops', 'gst_number')],
             'settings.compliance.pan'  => ['nullable', 'string', 'regex:/^[A-Z]{5}[0-9]{4}[A-Z]$/'],
             'settings.banking.ifsc'    => ['nullable', 'string', 'regex:/^[A-Z]{4}0[A-Z0-9]{6}$/'],
             // KYC documents are optional at creation so onboarding is never blocked — a shop is
@@ -64,6 +80,22 @@ class ShopCreateRequest extends FormRequest
         ];
 
         return $rules;
+    }
+
+    /**
+     * Friendly copy for the uniqueness / owner-credential rules.
+     *
+     * @return array
+     */
+    public function messages()
+    {
+        return [
+            'owner_email.unique'           => 'A user with this email already exists — use a different login email or transfer ownership instead.',
+            'owner_email.required'         => 'Owner login email is required.',
+            'owner_password.required_with' => 'Set a login password for the vendor.',
+            'mobile.unique'                => 'Another vendor is already registered with this mobile number.',
+            'settings.compliance.gst.unique' => 'This GSTIN is already registered to another vendor.',
+        ];
     }
 
     public function failedValidation(Validator $validator)

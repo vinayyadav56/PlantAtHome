@@ -5,6 +5,8 @@ namespace Marvel\Http\Requests;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Validation\Rule;
+use Marvel\Http\Rules\UniqueBankAccount;
 
 class ShopUpdateRequest extends FormRequest
 {
@@ -25,6 +27,11 @@ class ShopUpdateRequest extends FormRequest
      */
     public function rules()
     {
+        // The update route is registered both as /shops/{shop} and /vendors/{vendor}
+        // (canonical Vendor API alias) — resolve whichever param the route carries so
+        // the uniqueness checks exclude the shop being edited.
+        $shopId = $this->route('shop') ?? $this->route('vendor');
+
         return [
             'name'                   => ['required', 'string', 'max:255'],
             'categories'             => ['array'],
@@ -32,9 +39,11 @@ class ShopUpdateRequest extends FormRequest
             'is_active'              => ['boolean'],
             'description'            => ['nullable', 'string', 'max:10000'],
             'contact_person'         => ['nullable', 'string', 'max:191'],
-            'mobile'                 => ['nullable', 'string', 'regex:/^[0-9]{10}$/'],
+            'mobile'                 => ['nullable', 'string', 'regex:/^[0-9]{10}$/', Rule::unique('shops', 'mobile')->ignore($shopId)],
             'upi'                    => ['nullable', 'string', 'regex:/^[\w.\-]{2,256}@[a-zA-Z]{2,64}$/'],
             'balance'                => ['array'],
+            // Bank account number lives in the balances.payment_info JSON — one vendor only.
+            'balance.payment_info.account' => ['nullable', new UniqueBankAccount((int) $shopId)],
             'image'                  => ['nullable', 'array'],
             'cover_image'            => ['nullable', 'array'],
             'settings'               => ['array'],
@@ -48,9 +57,23 @@ class ShopUpdateRequest extends FormRequest
             'service_areas.*.eta_days'         => ['nullable', 'integer', 'min:0', 'max:60'],
             // Compliance / banking identifiers — validate format whenever provided. Documents are
             // not re-required on update (they may already be on file from onboarding).
-            'settings.compliance.gst'  => ['nullable', 'string', 'regex:/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]{3}$/'],
+            // GST is mirrored into shops.gst_number, so uniqueness checks that column.
+            'settings.compliance.gst'  => ['nullable', 'string', 'regex:/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]{3}$/', Rule::unique('shops', 'gst_number')->ignore($shopId)],
             'settings.compliance.pan'  => ['nullable', 'string', 'regex:/^[A-Z]{5}[0-9]{4}[A-Z]$/'],
             'settings.banking.ifsc'    => ['nullable', 'string', 'regex:/^[A-Z]{4}0[A-Z0-9]{6}$/'],
+        ];
+    }
+
+    /**
+     * Friendly copy for the uniqueness rules.
+     *
+     * @return array
+     */
+    public function messages()
+    {
+        return [
+            'mobile.unique'                  => 'Another vendor is already registered with this mobile number.',
+            'settings.compliance.gst.unique' => 'This GSTIN is already registered to another vendor.',
         ];
     }
 
