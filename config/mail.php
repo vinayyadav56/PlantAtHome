@@ -41,7 +41,12 @@ return [
             'encryption' => env('MAIL_ENCRYPTION', 'tls'),
             'username' => env('MAIL_USERNAME'),
             'password' => env('MAIL_PASSWORD'),
-            'timeout' => null,
+            // Mail sends run synchronously (QUEUE_CONNECTION=sync) inside web
+            // requests. With no timeout, a host that blocks/blackholes the
+            // SMTP port makes the request hang until the proxy 504s (bit us
+            // on vendor creation). Fail fast instead — senders treat a mail
+            // failure as non-fatal and fall back to manual credential sharing.
+            'timeout' => (int) env('MAIL_TIMEOUT', 10),
             'auth_mode' => null,
         ],
 
