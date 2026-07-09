@@ -30,7 +30,11 @@ return [
 
     'stripe_api_key' => env('STRIPE_API_KEY'),
 
-    'app_notice_domain' => env('APP_NOTICE_DOMAIN', 'MARVEL_'),
+    // Error/message translation-key prefix (e.g. PLANTATHOME_ERROR.NOT_FOUND).
+    // MUST match the keys the admin/shop locale files define — the old MARVEL_
+    // default emitted keys the frontends never had, so users saw raw
+    // "MARVEL_ERROR.*" strings in toasts.
+    'app_notice_domain' => env('APP_NOTICE_DOMAIN', 'PLANTATHOME_'),
 
     'dummy_data_path' => env('DUMMY_DATA_PATH', 'plantathome'),
 

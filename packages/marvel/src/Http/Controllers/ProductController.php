@@ -827,7 +827,7 @@ class ProductController extends CoreController
 
             foreach ($products as $key => $product) {
                 if (!isset($product['type_id'])) {
-                    throw new MarvelException("MARVEL_ERROR.WRONG_CSV");
+                    throw new MarvelException("PLANTATHOME_ERROR.WRONG_CSV");
                 }
                 unset($product['id']);
                 $product['shop_id'] = $shop_id;
@@ -899,7 +899,7 @@ class ProductController extends CoreController
 
             foreach ($attributes as $key => $attribute) {
                 if (!isset($attribute['title']) || !isset($attribute['price'])) {
-                    throw new MarvelException("MARVEL_ERROR.WRONG_CSV");
+                    throw new MarvelException("PLANTATHOME_ERROR.WRONG_CSV");
                 }
                 unset($attribute['id']);
                 $attribute['options'] = json_decode($attribute['options'], true);

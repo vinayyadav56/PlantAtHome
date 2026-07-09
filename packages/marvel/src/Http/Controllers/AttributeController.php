@@ -219,7 +219,7 @@ class AttributeController extends CoreController
 
             foreach ($attributes as $key => $attribute) {
                 if (!isset($attribute['name'])) {
-                    throw new MarvelException("MARVEL_ERROR.WRONG_CSV");
+                    throw new MarvelException("PLANTATHOME_ERROR.WRONG_CSV");
                 }
                 unset($attribute['id']);
                 $attribute['shop_id'] = $shop_id;
