@@ -32,7 +32,7 @@ class VendorController extends ShopController
     {
         $limit = $request->limit ? $request->limit : 15;
         $paginator = $this->fetchShops($request)
-            ->with(['categories'])
+            ->with(['categories', 'owner'])
             ->paginate($limit)
             ->withQueryString();
         return VendorResource::collection($paginator);
@@ -42,6 +42,9 @@ class VendorController extends ShopController
     public function show($slug, Request $request)
     {
         $vendor = parent::show($slug, $request);
+        // parent::show eager-loads owner; loadMissing keeps owner_email serializing
+        // even if that with() list ever changes.
+        $vendor->loadMissing('owner');
         return new VendorResource($vendor);
     }
 

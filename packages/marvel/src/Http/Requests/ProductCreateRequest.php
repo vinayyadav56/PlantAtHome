@@ -93,6 +93,18 @@ class ProductCreateRequest extends FormRequest
             // Curated botanical text (plants only; see ProductRepository::syncPlantAttributeFromRequest).
             'plant_attribute'              => ['nullable', 'array'],
             'plant_attribute.hindi_name'   => ['nullable', 'string', 'max:191'],
+            'plant_attribute.scientific_name'        => ['nullable', 'string', 'max:191'],
+            'plant_attribute.difficulty_level'       => ['nullable', 'string', 'max:191'],
+            'plant_attribute.season'                 => ['nullable', 'string', 'max:191'],
+            'plant_attribute.life_cycle'             => ['nullable', 'string', 'max:191'],
+            'plant_attribute.soil_type'              => ['nullable', 'string', 'max:191'],
+            'plant_attribute.humidity'               => ['nullable', 'string', 'max:191'],
+            'plant_attribute.fertilizer_requirement' => ['nullable', 'string', 'max:191'],
+            'plant_attribute.width_range'            => ['nullable', 'string', 'max:191'],
+            'plant_attribute.is_flowering'           => ['nullable', 'boolean'],
+            'plant_attribute.fruit_bearing'          => ['nullable', 'boolean'],
+            'plant_attribute.care_guide'             => ['nullable', 'string', 'max:10000'],
+            'plant_attribute.planting_guide'         => ['nullable', 'string', 'max:10000'],
         ];
     }
 

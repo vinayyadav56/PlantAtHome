@@ -349,23 +349,62 @@ class ProductRepository extends BaseRepository
     private function syncPlantAttributeFromRequest($product, $request): void
     {
         $payload = $request['plant_attribute'] ?? null;
-        if (!is_array($payload) || !array_key_exists('hindi_name', $payload)) {
+        if (!is_array($payload)) {
             return;
         }
-        $hindi = trim((string) ($payload['hindi_name'] ?? ''));
-        $existing = $product->plantAttribute()->first();
-        $regional = (array) ($existing->regional_names ?? []);
-        if ($hindi !== '') {
-            $regional['hi'] = $hindi;
-        } else {
-            unset($regional['hi']);
+
+        $attributes = [];
+
+        // hindi_name is the canonical editor field; regional_names.hi mirrors it.
+        if (array_key_exists('hindi_name', $payload)) {
+            $hindi = trim((string) ($payload['hindi_name'] ?? ''));
+            $existing = $product->plantAttribute()->first();
+            $regional = (array) ($existing->regional_names ?? []);
+            if ($hindi !== '') {
+                $regional['hi'] = $hindi;
+            } else {
+                unset($regional['hi']);
+            }
+            $attributes['hindi_name'] = $hindi !== '' ? $hindi : null;
+            $attributes['regional_names'] = $regional ?: null;
         }
+
+        // Curated botanical strings — only keys PRESENT in the payload are written
+        // so partial edits never null-out other columns.
+        $stringKeys = [
+            'scientific_name',
+            'difficulty_level',
+            'season',
+            'life_cycle',
+            'soil_type',
+            'humidity',
+            'fertilizer_requirement',
+            'width_range',
+            'care_guide',
+            'planting_guide',
+        ];
+        foreach ($stringKeys as $key) {
+            if (array_key_exists($key, $payload)) {
+                $value = trim((string) ($payload[$key] ?? ''));
+                $attributes[$key] = $value !== '' ? $value : null;
+            }
+        }
+
+        foreach (['is_flowering', 'fruit_bearing'] as $key) {
+            if (array_key_exists($key, $payload)) {
+                $attributes[$key] = $payload[$key] === null
+                    ? null
+                    : filter_var($payload[$key], FILTER_VALIDATE_BOOLEAN);
+            }
+        }
+
+        if (empty($attributes)) {
+            return;
+        }
+
         $product->plantAttribute()->updateOrCreate(
             ['product_id' => $product->id],
-            [
-                'hindi_name'     => $hindi !== '' ? $hindi : null,
-                'regional_names' => $regional ?: null,
-            ]
+            $attributes
         );
     }
 
