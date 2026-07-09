@@ -14,16 +14,17 @@
         "doctrine/dbal": "3.7.1",
         "guzzlehttp/guzzle": "7.8.0",
         "karim007/laravel-bkash-tokenize": "dev-main",
+        "kingflamez/laravelrave": "dev-master",
         "laravel/framework": "10.30.1",
         "laravel/socialite": "5.10.0",
         "laravel/tinker": "2.8.2",
-        "marvel/shop": "dev-master",
+        "marvel/shop": "*",
         "messagebird/php-rest-api": "3.1.4",
         "psr/log": "3.0.0",
         "stevebauman/purify": "6.0.2",
         "symfony/http-client": "6.3.7",
         "symfony/mailgun-mailer": "6.3.6",
-        "kingflamez/laravelrave": "dev-master"
+        "symfony/sendgrid-mailer": "6.3.*"
     },
     "require-dev": {
         "fakerphp/faker": "1.21.0",

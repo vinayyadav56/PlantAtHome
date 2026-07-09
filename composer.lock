@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "99bf17669d2abad79b8c84dd1466f690",
+    "content-hash": "075d049410462b25cb5832c8408c5bad",
     "packages": [
         {
             "name": "aws/aws-crt-php",
@@ -4530,7 +4530,7 @@
         },
         {
             "name": "marvel/shop",
-            "version": "dev-master",
+            "version": "dev-staging",
             "dist": {
                 "type": "path",
                 "url": "packages/marvel",
@@ -10594,6 +10594,74 @@
             "time": "2024-01-30T13:55:02+00:00"
         },
         {
+            "name": "symfony/sendgrid-mailer",
+            "version": "v6.3.12",
+            "source": {
+                "type": "git",
+                "url": "https://github.com/symfony/sendgrid-mailer.git",
+                "reference": "c4af771f1111a857b06e344fc9390a00af680897"
+            },
+            "dist": {
+                "type": "zip",
+                "url": "https://api.github.com/repos/symfony/sendgrid-mailer/zipball/c4af771f1111a857b06e344fc9390a00af680897",
+                "reference": "c4af771f1111a857b06e344fc9390a00af680897",
+                "shasum": ""
+            },
+            "require": {
+                "php": ">=8.1",
+                "symfony/mailer": "^5.4.21|^6.2.7"
+            },
+            "conflict": {
+                "symfony/mime": "<6.2"
+            },
+            "require-dev": {
+                "symfony/http-client": "^5.4|^6.0"
+            },
+            "type": "symfony-mailer-bridge",
+            "autoload": {
+                "psr-4": {
+                    "Symfony\\Component\\Mailer\\Bridge\\Sendgrid\\": ""
+                },
+                "exclude-from-classmap": [
+                    "/Tests/"
+                ]
+            },
+            "notification-url": "https://packagist.org/downloads/",
+            "license": [
+                "MIT"
+            ],
+            "authors": [
+                {
+                    "name": "Fabien Potencier",
+                    "email": "fabien@symfony.com"
+                },
+                {
+                    "name": "Symfony Community",
+                    "homepage": "https://symfony.com/contributors"
+                }
+            ],
+            "description": "Symfony Sendgrid Mailer Bridge",
+            "homepage": "https://symfony.com",
+            "support": {
+                "source": "https://github.com/symfony/sendgrid-mailer/tree/v6.3.12"
+            },
+            "funding": [
+                {
+                    "url": "https://symfony.com/sponsor",
+                    "type": "custom"
+                },
+                {
+                    "url": "https://github.com/fabpot",
+                    "type": "github"
+                },
+                {
+                    "url": "https://tidelift.com/funding/github/packagist/symfony/symfony",
+                    "type": "tidelift"
+                }
+            ],
+            "time": "2024-01-23T14:35:58+00:00"
+        },
+        {
             "name": "symfony/service-contracts",
             "version": "v3.4.1",
             "source": {
@@ -14177,7 +14245,6 @@
     "minimum-stability": "dev",
     "stability-flags": {
         "karim007/laravel-bkash-tokenize": 20,
-        "marvel/shop": 20,
         "kingflamez/laravelrave": 20
     },
     "prefer-stable": true,
@@ -14185,6 +14252,6 @@
     "platform": {
         "php": "^8.0|^8.1"
     },
-    "platform-dev": [],
+    "platform-dev": {},
     "plugin-api-version": "2.6.0"
 }

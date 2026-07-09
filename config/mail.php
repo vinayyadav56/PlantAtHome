@@ -34,6 +34,14 @@ return [
     */
 
     'mailers' => [
+        // SendGrid over HTTPS (v3 API, port 443) — Railway blackholes outbound
+        // SMTP (both 587 and 2525 hang), so staging must send via HTTP. The
+        // transport is registered in AppServiceProvider (Mail::extend).
+        'sendgrid' => [
+            'transport' => 'sendgrid',
+            'key' => env('SENDGRID_API_KEY'),
+        ],
+
         'smtp' => [
             'transport' => 'smtp',
             'host' => env('MAIL_HOST', 'smtp.mailgun.org'),
