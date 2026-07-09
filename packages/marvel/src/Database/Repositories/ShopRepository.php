@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
 use Marvel\Database\Models\Balance;
+use Marvel\Database\Models\City;
 use Marvel\Database\Models\OwnershipTransfer;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Shop;
@@ -103,6 +104,36 @@ class ShopRepository extends BaseRepository
         if (VendorProductPrice::where('shop_id', $shop->id)->exists()) {
             (new AvailabilityService())->recomputeForShop((int) $shop->id);
         }
+
+        // Onboarding a vendor in a city must surface that city in the storefront
+        // picker automatically ("create a vendor in Delhi → Delhi shows up") —
+        // include the vendor's own address city alongside the served areas.
+        $this->activateServedCities(array_merge(
+            array_map(fn ($k) => explode('|', (string) $k)[0], array_keys($seen)),
+            [(string) data_get($request, 'address.city', '')]
+        ));
+    }
+
+    /**
+     * Flip is_serviceable on for the given city names so they appear in the
+     * storefront city picker (which lists is_serviceable + active/maintenance
+     * cities). Master-city rows already exist for ~1,650 Indian cities (seeded
+     * serviceable=false). Deliberately DISABLED cities (ops kill switch) are
+     * never overridden, and nothing is ever auto-deactivated here.
+     */
+    private function activateServedCities(array $cityNames): void
+    {
+        $names = array_values(array_unique(array_filter(array_map(
+            fn ($n) => mb_strtolower(trim((string) $n)),
+            $cityNames
+        ))));
+        if (!$names) {
+            return;
+        }
+        City::whereIn(DB::raw('LOWER(name)'), $names)
+            ->where('status', '!=', City::STATUS_DISABLED)
+            ->where('is_serviceable', false)
+            ->update(['is_serviceable' => true]);
     }
 
 
