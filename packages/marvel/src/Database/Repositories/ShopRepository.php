@@ -7,6 +7,8 @@ use Exception;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Mail;
 use Marvel\Database\Models\Balance;
 use Marvel\Database\Models\OwnershipTransfer;
 use Marvel\Database\Models\Product;
@@ -18,8 +20,10 @@ use Marvel\Services\AvailabilityService;
 use Marvel\Enums\DefaultStatusType;
 use Marvel\Enums\Permission;
 use Marvel\Enums\ProductVisibilityStatus;
+use Marvel\Enums\Role;
 use Marvel\Events\ProcessOwnershipTransition;
 use Marvel\Events\ShopMaintenance;
+use Marvel\Mail\VendorCredentials;
 use Marvel\Http\Requests\TransferShopOwnerShipRequest;
 use Prettus\Repository\Criteria\RequestCriteria;
 use Prettus\Repository\Exceptions\RepositoryException;
@@ -133,13 +137,30 @@ class ShopRepository extends BaseRepository
 
     public function storeShop($request)
     {
+        // Vendor owner created inside the transaction (when an admin supplies owner_*
+        // credentials); captured here so the credentials email goes out post-commit.
+        $owner = null;
         try {
             // Shop insert + category attach + balance row + service areas must be all-or-nothing;
             // a partial failure previously left an orphan shop with no balance/areas.
-            return DB::transaction(function () use ($request) {
+            $shop = DB::transaction(function () use ($request, &$owner) {
                 $data = $request->only($this->dataArray);
                 $data['slug'] = $this->makeSlug($request);
-                $data['owner_id'] = $request->user()->id;
+                // Admin-created vendor login: a super-admin may supply owner_email/owner_password
+                // so the vendor gets a dedicated account (owner_* is validated in ShopCreateRequest
+                // and is never part of $dataArray, so it never touches the shops table).
+                if ($request->user()->hasPermissionTo(Permission::SUPER_ADMIN) && $request->filled('owner_email')) {
+                    $owner = User::create([
+                        'name'     => $request->owner_name ?: $request->contact_person ?: $request->name,
+                        'email'    => $request->owner_email,
+                        'password' => Hash::make($request->owner_password),
+                    ]);
+                    $owner->givePermissionTo([Permission::CUSTOMER, Permission::STORE_OWNER]);
+                    $owner->assignRole(Role::STORE_OWNER);
+                    $data['owner_id'] = $owner->id;
+                } else {
+                    $data['owner_id'] = $request->user()->id;
+                }
                 // SECURITY: a newly-created shop is inactive until a super-admin approves it; a store
                 // owner cannot self-activate by passing is_active=true.
                 if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
@@ -164,6 +185,28 @@ class ShopRepository extends BaseRepository
 
                 return $shop;
             });
+
+            // Credentials email model: the admin typed the password, so we mail it to the new
+            // owner AFTER commit (never inside the transaction — a mail failure must not roll
+            // back the shop). Email failure is non-fatal because the admin UI shows the
+            // credentials for manual sharing; credentials_email_sent tells it whether to.
+            if ($owner) {
+                try {
+                    Mail::to($owner->email)->send(new VendorCredentials(
+                        $owner->email,
+                        $request->owner_password,
+                        $shop->name,
+                        $owner->name,
+                        rtrim(config('shop.dashboard_url') ?: '', '/')
+                    ));
+                    $sent = true;
+                } catch (\Exception $e) {
+                    $sent = false;
+                }
+                $shop->setAttribute('credentials_email_sent', $sent);
+            }
+
+            return $shop;
         } catch (Exception $e) {
             throw new HttpException(400, COULD_NOT_CREATE_THE_RESOURCE);
         }

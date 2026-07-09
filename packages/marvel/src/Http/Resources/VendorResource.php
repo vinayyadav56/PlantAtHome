@@ -30,6 +30,13 @@ class VendorResource extends Resource
             'logo'             => $this->logo,
             'cover_image'      => $this->cover_image,
 
+            // Owner login (admin-created vendor account; see ShopRepository::storeShop).
+            // credentials_email_sent is a transient flag set right after create/reset so
+            // the admin UI knows whether to show the credentials for manual sharing.
+            'owner_id'         => $this->owner_id ?? null,
+            'owner_email'      => $this->when($this->relationLoaded('owner'), fn () => optional($this->owner)->email),
+            'credentials_email_sent' => $this->when(isset($this->credentials_email_sent), fn () => (bool) $this->credentials_email_sent),
+
             // Contact
             'contact_person'   => $this->contact_person ?? null,
             'mobile'           => $this->mobile ?? ($settings['contact'] ?? null),

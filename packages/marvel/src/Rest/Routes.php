@@ -803,6 +803,8 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::apiResource('shippings', ShippingController::class);
     Route::post('approve-shop', [ShopController::class, 'approveShop']);
     Route::post('disapprove-shop', [ShopController::class, 'disApproveShop']);
+    // Reset a vendor owner's password (admin-typed) + re-send credentials email.
+    Route::post('vendors/{id}/reset-owner-password', [VendorController::class, 'resetOwnerPassword']);
     // F3a — vendor document review (approve/reject/pending), stored in shop settings.
     Route::post('shops/{id}/documents/status', [ShopController::class, 'setDocumentStatus']);
     Route::post('approve-withdraw', [WithdrawController::class, 'approveWithdraw']);

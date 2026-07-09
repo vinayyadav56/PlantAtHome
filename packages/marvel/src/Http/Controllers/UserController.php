@@ -669,6 +669,10 @@ class UserController extends CoreController
                 return ['message' => NOT_FOUND, 'success' => false];
             }
             $user->password = Hash::make($request->password);
+            // Completing an emailed-token reset proves mailbox ownership — mark verified.
+            if (is_null($user->email_verified_at)) {
+                $user->email_verified_at = now();
+            }
             $user->save();
 
             // Single-use: invalidate the token after a successful reset.
