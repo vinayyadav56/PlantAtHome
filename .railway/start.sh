@@ -398,6 +398,19 @@ echo "==> Starting nginx + php-fpm via supervisord on port ${PORT:-80}..."
 /usr/bin/supervisord -c /etc/supervisord.conf &
 SUPERVISORD_PID=$!
 
+# Laravel scheduler loop (single container, no system cron). Drives the v2 async
+# pipeline: outbox:relay (deliver domain events), inventory:release-expired
+# (return abandoned-checkout stock), search:reindex, plus the legacy jobs in
+# Console/Kernel::schedule(). Runs schedule:run once a minute, forever.
+echo "==> Starting Laravel scheduler loop (schedule:run every 60s)..."
+(
+  cd /var/www/html
+  while true; do
+    php artisan schedule:run >> /dev/null 2>&1 || true
+    sleep 60
+  done
+) &
+
 # Warm up settings cache so Railway health check + first ISR revalidation never see a cold 404
 echo "==> Waiting for API to respond before warming settings cache..."
 for i in $(seq 1 40); do
