@@ -17,6 +17,9 @@ final class Permission
     public const RULES_MANAGE       = 'rules.manage';      // author data-driven rules (Phase 4)
     public const INVENTORY_MANAGE   = 'inventory.manage';  // stock + reservations (Phase 5)
     public const SERVICEABILITY_MANAGE = 'serviceability.manage'; // cities + coverage (Phase 7)
+    public const PROMOTIONS_MANAGE  = 'promotions.manage';  // coupons + campaigns (Phase 10)
+    public const CMS_MANAGE         = 'cms.manage';         // pages + banners (Phase 10)
+    public const ANALYTICS_VIEW     = 'analytics.view';     // KPI dashboards (Phase 10)
     public const PRICING_MANAGE     = 'pricing.manage';    // pricing policies (Phase 6)
     public const ORDERS_VIEW_ALL    = 'orders.view_all';   // see every vendor's orders
     public const USERS_MANAGE       = 'users.manage';      // manage identity users
@@ -40,6 +43,9 @@ final class Permission
             self::RULES_MANAGE,
             self::INVENTORY_MANAGE,
             self::SERVICEABILITY_MANAGE,
+            self::PROMOTIONS_MANAGE,
+            self::CMS_MANAGE,
+            self::ANALYTICS_VIEW,
             self::PRICING_MANAGE,
             self::ORDERS_VIEW_ALL,
             self::USERS_MANAGE,

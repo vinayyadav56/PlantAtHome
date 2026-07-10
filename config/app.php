@@ -186,6 +186,10 @@ return [
         App\Modules\Serviceability\Providers\ServiceabilityServiceProvider::class,
         App\Modules\Sales\Providers\SalesServiceProvider::class,
         App\Modules\Search\Providers\SearchServiceProvider::class,
+        App\Modules\Promotions\Providers\PromotionsServiceProvider::class,
+        App\Modules\Notifications\Providers\NotificationsServiceProvider::class,
+        App\Modules\Cms\Providers\CmsServiceProvider::class,
+        App\Modules\Analytics\Providers\AnalyticsServiceProvider::class,
     ],
 
     /*

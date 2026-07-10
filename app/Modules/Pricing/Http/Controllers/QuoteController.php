@@ -20,6 +20,11 @@ final class QuoteController extends ApiController
     /** POST /api/v1/pricing/quote */
     public function quote(QuoteRequest $request): JsonResponse
     {
-        return $this->ok($this->pricing->priceLine($request->validated()));
+        $req = $request->validated();
+        // customer identity comes from the token, never the body (per-customer
+        // coupon limits must not be spoofable).
+        $req['customer_uuid'] = $request->user()?->uuid;
+
+        return $this->ok($this->pricing->priceLine($req));
     }
 }

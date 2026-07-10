@@ -182,7 +182,7 @@ class CheckoutService
                     'qty'              => $item->qty,
                 ]);
             }
-            $subSummaries[] = ['uuid' => $sub->uuid, 'nursery_id' => $nurseryId];
+            $subSummaries[] = ['uuid' => $sub->uuid, 'nursery_id' => $nurseryId, 'subtotal_minor' => $subtotal];
         }
 
         $cart->update(['status' => 'checked_out']);

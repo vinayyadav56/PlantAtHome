@@ -5,6 +5,7 @@ namespace App\Modules\Pricing\Application;
 use App\Modules\Pricing\Infrastructure\Models\BasePrice;
 use App\Modules\Pricing\Infrastructure\Models\TaxRule;
 use App\Modules\Pricing\Infrastructure\Models\VendorOverride;
+use App\Modules\Promotions\Application\PromotionService;
 use App\Modules\Rules\Application\RulesEngine;
 use App\Modules\Rules\Domain\ActionType;
 use App\Modules\Rules\Domain\RuleContext;
@@ -26,9 +27,12 @@ use Illuminate\Support\Facades\Schema;
 class PricingService
 {
     private ?bool $rulesReady = null;
+    private ?bool $promoReady = null;
 
-    public function __construct(private readonly RulesEngine $rules)
-    {
+    public function __construct(
+        private readonly RulesEngine $rules,
+        private readonly PromotionService $promotions,
+    ) {
     }
 
     /**
@@ -63,7 +67,15 @@ class PricingService
         // 4: data-driven pricing rules (discounts / conditional-free).
         [$discountTotal, $discounts] = $this->applyPricingRules($subtotal, $req, $optionLines, $qty, $currency);
 
-        // 5: promotions (Phase 10) — stub, no effect yet.
+        // 5: promotions — apply a coupon against the subtotal (Section 7 step 5).
+        if (! empty($req['coupon']) && $this->promoAvailable()) {
+            $eval = $this->promotions->evaluate((string) $req['coupon'], $subtotal->amountMinor(), $req['customer_uuid'] ?? null);
+            if ($eval['valid'] && $eval['discount_minor'] > 0) {
+                $couponDiscount = Money::fromMinor($eval['discount_minor'], $currency);
+                $discountTotal = $discountTotal->add($couponDiscount);
+                $discounts[] = ['type' => 'coupon', 'code' => $eval['code'], 'amount' => $this->present($couponDiscount)];
+            }
+        }
 
         // 6: taxable = subtotal − discounts (never negative).
         $taxable = $subtotal->subtract($discountTotal);
@@ -233,5 +245,14 @@ class PricingService
         }
 
         return $this->rulesReady;
+    }
+
+    private function promoAvailable(): bool
+    {
+        if ($this->promoReady === null) {
+            $this->promoReady = Schema::hasTable('promo_coupons');
+        }
+
+        return $this->promoReady;
     }
 }

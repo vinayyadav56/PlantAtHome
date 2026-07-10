@@ -28,6 +28,7 @@ class QuoteRequest extends FormRequest
             'options'       => ['nullable', 'array'],
             'options.*'     => ['uuid'],
             'facts'         => ['nullable', 'array'],
+            'coupon'        => ['nullable', 'string', 'max:64'],
         ];
     }
 }

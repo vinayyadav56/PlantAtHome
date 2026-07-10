@@ -313,6 +313,11 @@ try {
   echo "==> [bg] Reindexing v2 search projection..."
   php artisan search:reindex || echo "[bg] WARNING: search:reindex failed"
 
+  # v2 Notifications (Phase 10) — default templates for the key domain events.
+  echo "==> [bg] Seeding v2 notification templates..."
+  php artisan db:seed --class="App\\Modules\\Notifications\\Database\\Seeders\\NotificationTemplateSeeder" --force \
+    || echo "[bg] WARNING: NotificationTemplateSeeder failed"
+
   # ── PlantAtHome data seed — enterprise three-tier approach ──────────────────
   # Tier 2: type + categories — updateOrCreate, safe for ALL environments
   # Tier 3: demo products    — truncate+insert, STAGING only (guarded in seeder)
