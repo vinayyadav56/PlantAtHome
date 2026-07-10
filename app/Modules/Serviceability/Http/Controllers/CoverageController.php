@@ -48,10 +48,19 @@ final class CoverageController extends ApiController
             }
         }
 
-        return $this->ok($this->coverage->productAvailability(
+        $result = $this->coverage->productAvailability(
             (string) $request->query('product'),
             (string) $request->query('city'),
-        ));
+        );
+
+        // Public endpoint: expose only whether it's available + how many vendors —
+        // never the raw internal supplier nursery_id UUIDs / per-vendor stock.
+        return $this->ok([
+            'available'             => $result['available'],
+            'reason'                => $result['reason'],
+            'serving_vendor_count'  => count($result['serving_vendors']),
+            'in_stock_vendor_count' => count($result['in_stock_vendors']),
+        ]);
     }
 
     /** POST /api/v1/serviceability/delivery-check — public radius eligibility. */

@@ -94,6 +94,9 @@ class MysqlSearchIndex implements SearchIndex
 
     public function suggest(string $prefix, int $limit): array
     {
+        // Builder::limit() silently ignores negatives → an unbounded scan. Floor it.
+        $limit = max(1, min($limit, 25));
+
         return SearchProduct::where('status', 'published')
             ->where('name', 'like', $prefix.'%')
             ->orderBy('name')

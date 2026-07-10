@@ -10,6 +10,7 @@ use App\Modules\Rules\Application\RulesEngine;
 use App\Modules\Rules\Domain\ActionType;
 use App\Modules\Rules\Domain\RuleContext;
 use App\Modules\Rules\Domain\RuleScope;
+use App\Shared\Application\DomainActionException;
 use App\Shared\Domain\ValueObject\Money;
 use Illuminate\Support\Facades\Schema;
 
@@ -47,6 +48,12 @@ class PricingService
     public function priceLine(array $req): array
     {
         $currency = $req['currency'] ?? 'INR';
+        // The platform prices in INR only (paise, GST, Razorpay). A foreign request
+        // currency would mix with the INR-stored prices and make Money::add throw an
+        // InvalidArgumentException (bare 500) — reject it as a clean 422 instead.
+        if ($currency !== 'INR') {
+            throw DomainActionException::unprocessable('Only INR pricing is supported.', 'UNSUPPORTED_CURRENCY', 'currency');
+        }
         $qty = max(1, (int) ($req['qty'] ?? 1));
         $nursery = (string) $req['nursery_id'];
 

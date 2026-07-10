@@ -187,6 +187,18 @@ class ConfigurationTest extends ConfigurationTestCase
         $this->assertContains('UNKNOWN_GROUP', $codes);
     }
 
+    public function test_a_scalar_selection_value_does_not_500(): void
+    {
+        // A client may send a scalar instead of an array for a group value; it must
+        // be coerced (→ 200), not crash array_unique() with a TypeError (bare 500).
+        $res = $this->postJson("/api/v1/config/products/{$this->ids['productUuid']}/validate-selection", [
+            'variant'   => $this->ids['variantS'],
+            'selection' => ['pot' => $this->ids['smallPot']], // scalar string, not [smallPot]
+        ])->assertStatus(200);
+
+        $this->assertTrue($res->json('data.valid'));
+    }
+
     public function test_a_valid_selection_passes(): void
     {
         $res = $this->postJson("/api/v1/config/products/{$this->ids['productUuid']}/validate-selection", [

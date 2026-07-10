@@ -74,7 +74,20 @@ class ServiceabilityTest extends ServiceabilityTestCase
         $this->stock(5);
 
         $res = $this->availability()->assertStatus(200)->assertJsonPath('data.available', true);
-        $this->assertContains(IdentityAccessSeeder::NURSERY_A, $res->json('data.in_stock_vendors'));
+        $this->assertSame(1, $res->json('data.in_stock_vendor_count'));
+    }
+
+    public function test_public_availability_does_not_leak_supplier_uuids(): void
+    {
+        $this->setCoverage();
+        $this->stock(5);
+
+        $data = $this->availability()->assertStatus(200)->json('data');
+        // Public endpoint exposes booleans + counts only — never raw nursery_id UUIDs.
+        $this->assertArrayNotHasKey('serving_vendors', $data);
+        $this->assertArrayNotHasKey('in_stock_vendors', $data);
+        $this->assertSame(1, $data['serving_vendor_count']);
+        $this->assertSame(1, $data['in_stock_vendor_count']);
     }
 
     public function test_a_product_hides_when_the_serving_vendor_is_out_of_stock(): void

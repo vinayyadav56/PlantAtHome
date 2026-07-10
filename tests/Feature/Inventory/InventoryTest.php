@@ -131,6 +131,39 @@ class InventoryTest extends InventoryTestCase
         $this->assertSame(5, $this->service()->ledgerBalance($item)); // 5 + 3 − 3
     }
 
+    public function test_commit_ledger_reconciles_when_on_hand_dropped_below_reserved(): void
+    {
+        // Reserve 3 of 5, then an admin adjustment drops on-hand below the reserved
+        // qty. commit() must log only the APPLIED delta (2), not the full reserved
+        // qty (3) — otherwise the ledger diverges from on-hand and goes negative.
+        $this->setStock(5);
+        $session = (string) Str::uuid();
+        $this->reserve(3, $session)->assertStatus(201);
+        $this->service()->upsertStock(SellableType::VARIANT, $this->sku, $this->nurseryA, 2); // on_hand 2, reserved 3
+
+        $this->service()->commit($session);
+
+        $item = InventoryItem::where('sellable_uuid', $this->sku)->first();
+        $this->assertSame(0, (int) $item->qty_on_hand);
+        $this->assertSame(0, $this->service()->ledgerBalance($item)); // reconciles, never negative
+    }
+
+    public function test_committing_a_session_twice_deducts_once(): void
+    {
+        // The CAS claim (UPDATE ... WHERE status='active') means a re-commit finds
+        // no ACTIVE reservation and is a no-op — stock is never double-deducted.
+        $this->setStock(5);
+        $session = (string) Str::uuid();
+        $this->reserve(2, $session)->assertStatus(201);
+
+        $this->assertSame(1, $this->service()->commit($session)); // committed 1 reservation
+        $this->assertSame(0, $this->service()->commit($session)); // nothing left to commit
+
+        $item = InventoryItem::where('sellable_uuid', $this->sku)->first();
+        $this->assertSame(3, (int) $item->qty_on_hand); // 5 − 2, not 5 − 4
+        $this->assertSame(3, $this->service()->ledgerBalance($item));
+    }
+
     public function test_reserve_is_all_or_nothing_across_lines(): void
     {
         $this->setStock(5); // this SKU has stock

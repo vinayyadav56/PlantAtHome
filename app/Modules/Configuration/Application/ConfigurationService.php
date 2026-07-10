@@ -117,7 +117,9 @@ class ConfigurationService
         // 2) Per assigned group: required, cardinality, and per-option validity.
         foreach ($allowed as $code => $data) {
             $group = $data['group'];
-            $chosen = array_values(array_unique($selection[$code] ?? []));
+            // (array) coercion: a client may send a scalar for a group value; without
+            // it array_unique(string) throws a TypeError → bare 500. Mirrors snapshot().
+            $chosen = array_values(array_unique((array) ($selection[$code] ?? [])));
 
             if ($group['required'] && $chosen === []) {
                 $result->addViolation('REQUIRED', "Group '{$group['name']}' requires a selection.", $code);

@@ -33,6 +33,22 @@ class RuleIntegrationTest extends RulesTestCase
             ->assertStatus(403);
     }
 
+    public function test_an_in_operator_requires_an_array_value(): void
+    {
+        $admin = $this->admin();
+        $base = ['name' => 'in-rule', 'scope' => 'visibility', 'actions' => [['type' => 'hide_option', 'params' => ['group' => 'gift']]]];
+
+        // A scalar value for `in` would silently never fire → rejected at authoring.
+        $this->postJson('/api/v1/rules', $base + [
+            'conditions' => [['fact' => 'variant.size', 'operator' => 'in', 'value' => 'large']],
+        ], $admin)->assertStatus(422);
+
+        // The correct array value is accepted.
+        $this->postJson('/api/v1/rules', $base + [
+            'conditions' => [['fact' => 'variant.size', 'operator' => 'in', 'value' => ['large', 'xl']]],
+        ], $admin)->assertStatus(201);
+    }
+
     public function test_a_visibility_rule_hides_an_option_and_removing_it_restores(): void
     {
         $admin = $this->admin();

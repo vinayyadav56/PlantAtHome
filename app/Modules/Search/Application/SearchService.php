@@ -87,8 +87,18 @@ class SearchService
         if ($city && $this->serviceabilityReady()) {
             $result['hits'] = array_values(array_filter(
                 $result['hits'],
-                fn ($hit) => $this->coverage->productAvailability($hit['product_uuid'], $city)['available'] ?? false,
+                function ($hit) use ($city) {
+                    try {
+                        return $this->coverage->productAvailability($hit['product_uuid'], $city)['available'] ?? false;
+                    } catch (\Throwable $e) {
+                        // A stale projection row or bad city must never abort the whole
+                        // search — treat an un-answerable hit as not available.
+                        return false;
+                    }
+                },
             ));
+            // Facets + total must reflect only the servable set, not the pre-filter matches.
+            $result['facets'] = $this->facetsFromHits($result['hits']);
             $result['total'] = count($result['hits']);
             $cityFiltered = true;
         }
@@ -96,6 +106,23 @@ class SearchService
         $result['hits'] = array_slice($result['hits'], 0, $limit);
 
         return array_merge($result, ['backend' => $backend, 'city_filtered' => $cityFiltered]);
+    }
+
+    /** Recompute the category facet from an already-filtered hit set. */
+    private function facetsFromHits(array $hits): array
+    {
+        $byCat = [];
+        foreach ($hits as $hit) {
+            $cat = $hit['category'] ?? null;
+            if (! $cat || empty($cat['uuid'])) {
+                continue;
+            }
+            $uuid = $cat['uuid'];
+            $byCat[$uuid] ??= ['uuid' => $uuid, 'name' => $cat['name'] ?? null, 'count' => 0];
+            $byCat[$uuid]['count']++;
+        }
+
+        return ['category' => array_values($byCat)];
     }
 
     public function suggest(string $prefix, int $limit = 10): array

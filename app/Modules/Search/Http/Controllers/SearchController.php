@@ -23,7 +23,7 @@ final class SearchController extends ApiController
             (string) $request->query('q', ''),
             $filters,
             $request->query('city'),
-            min((int) $request->query('limit', 20), 100),
+            max(1, min((int) $request->query('limit', 20), 100)),
         );
 
         return $this->ok($result['hits'], [
@@ -42,6 +42,6 @@ final class SearchController extends ApiController
             return $this->ok([]);
         }
 
-        return $this->ok($this->search->suggest($prefix, min((int) $request->query('limit', 10), 25)));
+        return $this->ok($this->search->suggest($prefix, max(1, min((int) $request->query('limit', 10), 25))));
     }
 }

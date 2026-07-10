@@ -39,12 +39,9 @@ class RulesExampleSeeder extends Seeder
                 'conditions' => [['plant.is_fragile', Operator::EQ, true]],
                 'actions'    => [[ActionType::HIDE_OPTION, ['group' => 'gift', 'code' => 'wrap']]],
             ],
-            [
-                'name' => 'Repotting only in serviced cities', 'scope' => RuleScope::SERVICEABILITY, 'priority' => 10,
-                'combinator' => 'all',
-                'conditions' => [['service.code', Operator::EQ, 'repotting']],
-                'actions'    => [[ActionType::RESTRICT_CITY, ['message' => 'Repotting is not available in your city.']]],
-            ],
+            // NOTE: no SERVICEABILITY/restrict_city example is seeded — no module
+            // consumes those scopes/actions yet, so an enabled rule using them would
+            // silently do nothing (misleading). Seed only rules that actually fire.
             [
                 'name' => 'Free premium packaging over 2000', 'scope' => RuleScope::PRICING, 'priority' => 10,
                 'combinator' => 'all',

@@ -113,4 +113,26 @@ class SearchTest extends SearchTestCase
         $this->assertContains('Monstera Deliciosa', $names);   // available in city
         $this->assertNotContains('Snake Plant', $names);       // not available there
     }
+
+    public function test_a_stale_projection_row_does_not_abort_city_search(): void
+    {
+        $admin = $this->admin();
+        // A city with a serving, stocked vendor for the real (Monstera) product.
+        $city = $this->postJson('/api/v1/serviceability/cities', ['name' => 'Nagpur'], $admin)->json('data.uuid');
+        $this->putJson('/api/v1/inventory/stock', ['sellable_type' => 'variant', 'sellable_uuid' => $this->ids['variant'], 'nursery_id' => IdentityAccessSeeder::NURSERY_A, 'qty_on_hand' => 3], $admin)->assertStatus(200);
+        $this->putJson('/api/v1/serviceability/coverage', ['nursery_id' => IdentityAccessSeeder::NURSERY_A, 'city_uuid' => $city, 'delivery_radius_km' => 0], $admin)->assertStatus(200);
+
+        // A STALE projection row whose product no longer exists in the catalog:
+        // productAvailability() throws PRODUCT_NOT_FOUND for it. City search must
+        // filter it out, not 500 on the whole query.
+        \App\Modules\Search\Infrastructure\Models\SearchProduct::create([
+            'product_uuid' => (string) \Illuminate\Support\Str::uuid(),
+            'name' => 'Monstera Ghost', 'slug' => 'ghost', 'keywords' => 'Monstera Ghost', 'status' => 'published',
+        ]);
+
+        $res = $this->getJson("/api/v1/search?q=Monstera&city={$city}")->assertStatus(200);
+        $names = array_column($res->json('data'), 'name');
+        $this->assertContains('Monstera Deliciosa', $names);
+        $this->assertNotContains('Monstera Ghost', $names);
+    }
 }

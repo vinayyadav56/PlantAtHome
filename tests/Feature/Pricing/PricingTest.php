@@ -125,6 +125,15 @@ class PricingTest extends PricingTestCase
         $this->assertSame(10000, $res->json('data.taxable.amount_minor'));
     }
 
+    public function test_a_foreign_currency_is_rejected_cleanly(): void
+    {
+        $this->base('variant', $this->variant, 100);
+        // A non-INR currency would make Money::add throw (bare 500) — reject as 422.
+        $this->quote(['variant_uuid' => $this->variant, 'currency' => 'USD'])
+            ->assertStatus(422)
+            ->assertJsonPath('errors.0.code', 'UNSUPPORTED_CURRENCY');
+    }
+
     public function test_a_client_posted_price_is_ignored(): void
     {
         $this->base('variant', $this->variant, 100);

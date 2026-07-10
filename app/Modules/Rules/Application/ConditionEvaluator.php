@@ -38,6 +38,12 @@ class ConditionEvaluator
         if (is_bool($value) || is_bool($actual)) {
             return $this->toBool($actual) === $this->toBool($value);
         }
+        // Arrays/objects can't be loosely-equal to a scalar — casting them to string
+        // raises an "Array to string conversion" warning that Laravel escalates to an
+        // ErrorException (bare 500). Compare structurally instead.
+        if (is_array($actual) || is_object($actual) || is_array($value) || is_object($value)) {
+            return $actual === $value;
+        }
 
         return (string) $actual === (string) $value;
     }

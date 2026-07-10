@@ -143,7 +143,11 @@ class InventoryService
      */
     public function reservationsAllActive(string $checkoutSessionId): bool
     {
-        $all = Reservation::where('checkout_session_id', $checkoutSessionId)->get();
+        // Locking read: without FOR UPDATE this returns the caller-txn snapshot and
+        // cannot observe a concurrent release-expired sweep that already flipped a
+        // reservation to EXPIRED — the guard would wrongly pass. The lock also
+        // serializes this check against the sweep so the subsequent commit is safe.
+        $all = Reservation::where('checkout_session_id', $checkoutSessionId)->lockForUpdate()->get();
 
         return $all->isNotEmpty() && $all->every(fn (Reservation $r) => $r->status === ReservationStatus::ACTIVE);
     }
@@ -159,15 +163,29 @@ class InventoryService
 
             $committed = 0;
             foreach ($reservations as $reservation) {
+                // Atomically CLAIM the reservation: a conditional UPDATE guarded on
+                // status='active' means only one transaction can transition it. A
+                // concurrent commit / release / expiry sweep that already moved it
+                // affects 0 rows here → we skip it instead of double-deducting stock.
+                $claimed = Reservation::whereKey($reservation->id)
+                    ->where('status', ReservationStatus::ACTIVE)
+                    ->update(['status' => ReservationStatus::COMMITTED]);
+                if ($claimed === 0) {
+                    continue;
+                }
+
                 $item = InventoryItem::whereKey($reservation->inventory_item_id)->lockForUpdate()->first();
-                if ($item->track) {
-                    $item->qty_on_hand = max(0, $item->qty_on_hand - $reservation->qty);
-                    $item->qty_reserved = max(0, $item->qty_reserved - $reservation->qty);
+                if ($item && $item->track) {
+                    $newOnHand = max(0, (int) $item->qty_on_hand - (int) $reservation->qty);
+                    $applied = (int) $item->qty_on_hand - $newOnHand; // real delta → ledger stays reconciled
+                    $item->qty_on_hand = $newOnHand;
+                    $item->qty_reserved = max(0, (int) $item->qty_reserved - (int) $reservation->qty);
                     $item->save();
-                    $this->logMovement($item, -$reservation->qty, 'sale', 'reservation', $reservation->uuid);
+                    if ($applied > 0) {
+                        $this->logMovement($item, -$applied, 'sale', 'reservation', $reservation->uuid);
+                    }
                     $this->emitStockChanged($item, 'sale');
                 }
-                $reservation->update(['status' => ReservationStatus::COMMITTED]);
                 $committed++;
             }
 
@@ -238,12 +256,21 @@ class InventoryService
     {
         $count = 0;
         foreach ($reservations as $reservation) {
+            // Same CAS claim as commit(): only the txn that flips active→$status
+            // returns the held stock, so a reservation is never double-released
+            // (or released after it was already committed by a racing pay()).
+            $claimed = Reservation::whereKey($reservation->id)
+                ->where('status', ReservationStatus::ACTIVE)
+                ->update(['status' => $status]);
+            if ($claimed === 0) {
+                continue;
+            }
+
             $item = InventoryItem::whereKey($reservation->inventory_item_id)->lockForUpdate()->first();
             if ($item && $item->track) {
-                $item->qty_reserved = max(0, $item->qty_reserved - $reservation->qty);
+                $item->qty_reserved = max(0, (int) $item->qty_reserved - (int) $reservation->qty);
                 $item->save();
             }
-            $reservation->update(['status' => $status]);
             $count++;
         }
 
