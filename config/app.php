@@ -185,6 +185,7 @@ return [
         App\Modules\Pricing\Providers\PricingServiceProvider::class,
         App\Modules\Serviceability\Providers\ServiceabilityServiceProvider::class,
         App\Modules\Sales\Providers\SalesServiceProvider::class,
+        App\Modules\Search\Providers\SearchServiceProvider::class,
     ],
 
     /*

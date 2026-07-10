@@ -308,6 +308,11 @@ try {
   php artisan db:seed --class="App\\Modules\\Rules\\Database\\Seeders\\RulesExampleSeeder" --force \
     || echo "[bg] WARNING: RulesExampleSeeder failed"
 
+  # v2 Search (Phase 9) — rebuild the search projection from the current catalog
+  # (events keep it fresh going forward; this catches products created earlier).
+  echo "==> [bg] Reindexing v2 search projection..."
+  php artisan search:reindex || echo "[bg] WARNING: search:reindex failed"
+
   # ── PlantAtHome data seed — enterprise three-tier approach ──────────────────
   # Tier 2: type + categories — updateOrCreate, safe for ALL environments
   # Tier 3: demo products    — truncate+insert, STAGING only (guarded in seeder)
