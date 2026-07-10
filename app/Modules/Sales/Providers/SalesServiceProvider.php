@@ -4,6 +4,7 @@ namespace App\Modules\Sales\Providers;
 
 use App\Modules\Configuration\Application\ConfigurationService;
 use App\Modules\Inventory\Application\InventoryService;
+use App\Modules\Promotions\Application\PromotionService;
 use App\Modules\Sales\Application\CheckoutService;
 use App\Modules\Sales\Application\OrderService;
 use App\Shared\Events\EventPublisher;
@@ -25,6 +26,7 @@ class SalesServiceProvider extends ServiceProvider
             $app->make(ConfigurationService::class),
             $app->make(InventoryService::class),
             $app->make(EventPublisher::class),
+            $app->make(PromotionService::class),
         ));
 
         $this->app->bind(OrderService::class, fn ($app) => new OrderService(

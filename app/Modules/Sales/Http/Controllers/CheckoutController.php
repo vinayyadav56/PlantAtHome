@@ -23,12 +23,19 @@ final class CheckoutController extends ApiController
     public function start(Request $request): JsonResponse
     {
         $cart = $this->carts->forCustomer($request->user()->uuid);
-        $session = $this->checkout->start($cart, $request->user()->uuid, (array) $request->input('address', []));
+        $coupon = $request->input('coupon');
+        $session = $this->checkout->start(
+            $cart,
+            $request->user()->uuid,
+            (array) $request->input('address', []),
+            is_string($coupon) && $coupon !== '' ? $coupon : null,
+        );
 
         return $this->created([
             'checkout_uuid' => $session->uuid,
             'status'        => $session->status,
             'totals'        => $session->totals,
+            'coupon'        => $session->coupon_code,
         ]);
     }
 

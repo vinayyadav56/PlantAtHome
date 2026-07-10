@@ -19,9 +19,9 @@ class CheckoutSession extends Model
 
     protected $table = 'sales_checkout_sessions';
 
-    protected $fillable = ['uuid', 'cart_id', 'customer_uuid', 'status', 'address_snapshot', 'totals', 'inventory_session'];
+    protected $fillable = ['uuid', 'cart_id', 'customer_uuid', 'status', 'address_snapshot', 'totals', 'inventory_session', 'coupon_code', 'coupon_discount'];
 
-    protected $casts = ['address_snapshot' => 'array', 'totals' => 'array'];
+    protected $casts = ['address_snapshot' => 'array', 'totals' => 'array', 'coupon_discount' => 'integer'];
 
     public function cart(): BelongsTo
     {

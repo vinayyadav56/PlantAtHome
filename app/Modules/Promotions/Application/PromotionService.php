@@ -70,13 +70,29 @@ class PromotionService
         return ['valid' => true, 'discount_minor' => $discount, 'reason' => null, 'code' => $coupon->code];
     }
 
-    /** Record a redemption + increment usage (called on order placement). */
+    /**
+     * Record a redemption + increment usage (called inside the order-placement
+     * transaction). The coupon row is locked FOR UPDATE and its limits are
+     * re-asserted under that lock — evaluate() was only a non-locking preview, so
+     * without this a concurrent redeem could overshoot usage_limit / per-customer.
+     * Throwing here rolls the whole order back (fail-closed): no order is created
+     * on a coupon that just hit its cap.
+     */
     public function redeem(string $code, int $amountMinor, ?string $customerUuid, ?string $orderUuid): void
     {
         DB::transaction(function () use ($code, $amountMinor, $customerUuid, $orderUuid) {
             $coupon = Coupon::where('code', strtoupper($code))->lockForUpdate()->first();
             if (! $coupon) {
                 throw DomainActionException::unprocessable('Unknown coupon.', 'UNKNOWN_COUPON', 'coupon');
+            }
+            if ($coupon->usage_limit !== null && $coupon->used_count >= $coupon->usage_limit) {
+                throw DomainActionException::conflict('This coupon has reached its usage limit.', 'USAGE_LIMIT_REACHED');
+            }
+            if ($coupon->per_customer_limit !== null && $customerUuid !== null) {
+                $used = Redemption::where('coupon_id', $coupon->id)->where('customer_uuid', $customerUuid)->count();
+                if ($used >= $coupon->per_customer_limit) {
+                    throw DomainActionException::conflict('You have already used this coupon.', 'PER_CUSTOMER_LIMIT_REACHED');
+                }
             }
             Redemption::create([
                 'coupon_id' => $coupon->id, 'customer_uuid' => $customerUuid,

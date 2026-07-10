@@ -3,6 +3,8 @@
 namespace Tests\Feature\Marketing;
 
 use App\Modules\Identity\Database\Seeders\IdentityAccessSeeder;
+use App\Modules\Promotions\Infrastructure\Models\Coupon;
+use App\Modules\Promotions\Infrastructure\Models\Redemption;
 use App\Shared\Events\OutboxRelay;
 use Illuminate\Support\Str;
 
@@ -56,6 +58,68 @@ class MarketingTest extends MarketingTestCase
         // Unknown code.
         $this->postJson('/api/v1/promotions/validate', ['code' => 'NOPE', 'subtotal_minor' => 20000])
             ->assertJsonPath('data.valid', false)->assertJsonPath('data.reason', 'UNKNOWN_COUPON');
+    }
+
+    /**
+     * A coupon must actually discount a REAL order (not only the Quote preview)
+     * AND record a redemption so usage_limit / per_customer_limit are enforceable.
+     */
+    public function test_a_coupon_discounts_a_real_order_and_records_redemption(): void
+    {
+        $admin = $this->admin();
+        $this->postJson('/api/v1/promotions/coupons', ['code' => 'ORDER10', 'type' => 'percentage', 'value' => 10], $admin)->assertStatus(201);
+        $variant = $this->seedStockedVariant('Coupon Palm', 200);
+
+        // Checkout WITH the coupon → payable total is 10% off (20000 → 18000).
+        $this->postJson('/api/v1/cart/items', ['variant_uuid' => $variant, 'nursery_id' => self::NA, 'qty' => 1], $this->customer())->assertStatus(201);
+        $checkout = $this->postJson('/api/v1/checkout', ['coupon' => 'ORDER10'], $this->customer())
+            ->assertStatus(201)
+            ->assertJsonPath('data.coupon', 'ORDER10')
+            ->assertJsonPath('data.totals.discount.amount_minor', 2000)
+            ->assertJsonPath('data.totals.grand_total.amount_minor', 18000)
+            ->json('data.checkout_uuid');
+
+        $order = $this->postJson("/api/v1/checkout/{$checkout}/pay", ['success' => true], $this->customer())->assertStatus(200);
+        $this->assertSame(18000, $order->json('data.order.totals.grand_total.amount_minor'));
+
+        // Redemption recorded + usage incremented (the enforcement hook).
+        $coupon = Coupon::where('code', 'ORDER10')->first();
+        $this->assertSame(1, (int) $coupon->used_count);
+        $this->assertSame(1, Redemption::where('coupon_id', $coupon->id)->count());
+    }
+
+    /** An exhausted usage_limit blocks a second order that tries the coupon. */
+    public function test_coupon_usage_limit_is_enforced_across_orders(): void
+    {
+        $admin = $this->admin();
+        $this->postJson('/api/v1/promotions/coupons', ['code' => 'ONCE', 'type' => 'fixed', 'value' => 10, 'usage_limit' => 1], $admin)->assertStatus(201);
+        $variant = $this->seedStockedVariant('Once Palm', 200);
+
+        // First order redeems it.
+        $this->postJson('/api/v1/cart/items', ['variant_uuid' => $variant, 'nursery_id' => self::NA, 'qty' => 1], $this->customer())->assertStatus(201);
+        $c1 = $this->postJson('/api/v1/checkout', ['coupon' => 'ONCE'], $this->customer())->assertStatus(201)->json('data.checkout_uuid');
+        $this->postJson("/api/v1/checkout/{$c1}/pay", ['success' => true], $this->customer())->assertStatus(200);
+        $this->assertSame(1, (int) Coupon::where('code', 'ONCE')->first()->used_count);
+
+        // Second checkout with the now-exhausted coupon is rejected up front.
+        $this->postJson('/api/v1/cart/items', ['variant_uuid' => $variant, 'nursery_id' => self::NA, 'qty' => 1], $this->customer())->assertStatus(201);
+        $this->postJson('/api/v1/checkout', ['coupon' => 'ONCE'], $this->customer())
+            ->assertStatus(422)->assertJsonPath('errors.0.code', 'USAGE_LIMIT_REACHED');
+
+        // used_count never moved past its cap.
+        $this->assertSame(1, (int) Coupon::where('code', 'ONCE')->first()->used_count);
+    }
+
+    /** A published, priced (INR), stocked-for-nursery-A variant. */
+    private function seedStockedVariant(string $name, int $price): string
+    {
+        $admin = $this->admin();
+        $p = $this->postJson('/api/v1/catalog/products', ['name' => $name, 'status' => 'published', 'variants' => [['size_code' => 'M']]], $admin);
+        $variant = $p->json('data.variants.0.uuid');
+        $this->postJson('/api/v1/pricing/base-prices', ['sellable_type' => 'variant', 'sellable_uuid' => $variant, 'amount' => $price], $admin)->assertStatus(201);
+        $this->putJson('/api/v1/inventory/stock', ['sellable_type' => 'variant', 'sellable_uuid' => $variant, 'nursery_id' => self::NA, 'qty_on_hand' => 5], $admin)->assertStatus(200);
+
+        return $variant;
     }
 
     /* ── Notifications + Analytics: driven by the order event ───────────────── */

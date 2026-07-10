@@ -169,4 +169,74 @@ class SalesFlowTest extends SalesTestCase
         $this->postJson('/api/v1/checkout', [], $this->customer())
             ->assertStatus(409)->assertJsonPath('errors.0.code', 'INSUFFICIENT_STOCK');
     }
+
+    /* ── hardening regressions (adversarial-review round) ──────────────────── */
+
+    /**
+     * A checkout paid after its reservation TTL lapsed (and the sweep returned
+     * the stock to the pool) must FAIL CLOSED — never mint a paid order on stock
+     * we no longer hold (would oversell).
+     */
+    public function test_pay_after_reservation_expiry_fails_closed(): void
+    {
+        $this->addToCart($this->s['vA'], self::NA);
+        $checkout = $this->postJson('/api/v1/checkout', [], $this->customer())->json('data.checkout_uuid');
+        $this->assertSame(4, $this->available($this->s['vA'], self::NA)); // reserved
+
+        // Simulate the TTL lapsing, then run the release-expired sweep.
+        \App\Modules\Inventory\Infrastructure\Models\Reservation::where('checkout_session_id', $checkout)
+            ->update(['expires_at' => now()->subMinutes(20)]);
+        $released = $this->app->make(InventoryService::class)->releaseExpired();
+        $this->assertGreaterThan(0, $released);
+        $this->assertSame(5, $this->available($this->s['vA'], self::NA)); // returned to pool
+
+        // Paying now must fail — no paid order, no re-deduction.
+        $this->postJson("/api/v1/checkout/{$checkout}/pay", ['success' => true], $this->customer())
+            ->assertStatus(402);
+        $this->assertSame(5, $this->available($this->s['vA'], self::NA)); // never committed
+    }
+
+    /**
+     * The generic transition endpoint must NOT be a back door to 'refunded' —
+     * that path skips the restock + OrderRefunded event that only the refund
+     * action performs. Callers are forced through /refund.
+     */
+    public function test_transition_directly_to_refunded_is_rejected(): void
+    {
+        $this->addToCart($this->s['vA'], self::NA);
+        $checkout = $this->postJson('/api/v1/checkout', [], $this->customer())->json('data.checkout_uuid');
+        $order = $this->postJson("/api/v1/checkout/{$checkout}/pay", ['success' => true], $this->customer())->assertStatus(200);
+        $subUuid = $order->json('data.order.sub_orders.0.uuid');
+        $ownerA = $this->bearer($this->accessToken('owner.a@plantathome.test'));
+
+        // Cancel first so 'refunded' would be a legal state-machine edge…
+        $this->postJson("/api/v1/nursery/sub-orders/{$subUuid}/transition", ['to' => 'cancelled'], $ownerA)->assertStatus(200);
+        // …but the generic transition still refuses it.
+        $this->postJson("/api/v1/nursery/sub-orders/{$subUuid}/transition", ['to' => 'refunded'], $ownerA)
+            ->assertStatus(422)->assertJsonPath('errors.0.code', 'USE_REFUND_ACTION');
+
+        $this->assertSame(4, $this->available($this->s['vA'], self::NA)); // NOT restocked
+    }
+
+    /**
+     * A second refund on an already-refunded sub-order is rejected (refunded has
+     * no outgoing edge), so inventory is restocked exactly once — the sequential
+     * guard behind the concurrency lock fix.
+     */
+    public function test_a_second_refund_is_rejected_and_restocks_once(): void
+    {
+        $this->addToCart($this->s['vA'], self::NA);
+        $checkout = $this->postJson('/api/v1/checkout', [], $this->customer())->json('data.checkout_uuid');
+        $order = $this->postJson("/api/v1/checkout/{$checkout}/pay", ['success' => true], $this->customer())->assertStatus(200);
+        $subUuid = $order->json('data.order.sub_orders.0.uuid');
+        $ownerA = $this->bearer($this->accessToken('owner.a@plantathome.test'));
+
+        $this->postJson("/api/v1/nursery/sub-orders/{$subUuid}/transition", ['to' => 'cancelled'], $ownerA)->assertStatus(200);
+        $this->postJson("/api/v1/nursery/sub-orders/{$subUuid}/refund", [], $ownerA)->assertStatus(200);
+        $this->assertSame(5, $this->available($this->s['vA'], self::NA)); // restocked once
+
+        $this->postJson("/api/v1/nursery/sub-orders/{$subUuid}/refund", [], $ownerA)
+            ->assertStatus(409)->assertJsonPath('errors.0.code', 'ILLEGAL_TRANSITION');
+        $this->assertSame(5, $this->available($this->s['vA'], self::NA)); // still 5, not 6
+    }
 }

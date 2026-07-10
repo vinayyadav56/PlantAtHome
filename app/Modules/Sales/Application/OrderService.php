@@ -64,6 +64,20 @@ class OrderService
     public function transitionSubOrder(SubOrder $sub, string $to, ?string $actor): SubOrder
     {
         return $this->db->transaction(function () use ($sub, $to, $actor) {
+            // Re-read under a row lock so concurrent transitions serialize and the
+            // assert runs against the committed status (not a stale in-memory read).
+            $sub = SubOrder::whereKey($sub->id)->lockForUpdate()->first();
+
+            // SUB_REFUNDED is reachable here as a legal edge, but refunding has side
+            // effects (restock + OrderRefunded) that ONLY refundSubOrder performs.
+            // Force callers through that path so a refund can never skip them.
+            if ($to === Status::SUB_REFUNDED) {
+                throw DomainActionException::unprocessable(
+                    'Refund a sub-order via the refund action so stock is restocked and the refund is issued.',
+                    'USE_REFUND_ACTION', 'to',
+                );
+            }
+
             StateMachine::assert('sub_order', $sub->status, $to);
             $from = $sub->status;
             $sub->status = $to;
@@ -79,6 +93,11 @@ class OrderService
     public function refundSubOrder(SubOrder $sub, ?string $actor): SubOrder
     {
         return $this->db->transaction(function () use ($sub, $actor) {
+            // Re-read the row FOR UPDATE and re-assert against the freshly-locked
+            // status — two concurrent refunds would otherwise both pass the guard
+            // and each restock (phantom stock + double refund). The second now hits
+            // ILLEGAL_TRANSITION (refunded has no outgoing edge).
+            $sub = SubOrder::whereKey($sub->id)->with('items')->lockForUpdate()->first();
             StateMachine::assert('sub_order', $sub->status, Status::SUB_REFUNDED);
 
             foreach ($sub->items as $item) {

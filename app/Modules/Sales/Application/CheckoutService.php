@@ -7,6 +7,7 @@ use App\Modules\Catalog\Infrastructure\Models\ProductVariant as CatalogVariant;
 use App\Modules\Configuration\Application\ConfigurationService;
 use App\Modules\Inventory\Application\InventoryService;
 use App\Modules\Inventory\Domain\SellableType;
+use App\Modules\Promotions\Application\PromotionService;
 use App\Modules\Sales\Domain\Events\OrderPlaced;
 use App\Modules\Sales\Domain\StateMachine;
 use App\Modules\Sales\Domain\Status;
@@ -19,6 +20,7 @@ use App\Shared\Application\DomainActionException;
 use App\Shared\Events\EventPublisher;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * Checkout orchestration (Section 8). Runs the state machine:
@@ -30,22 +32,25 @@ use Illuminate\Support\Carbon;
  */
 class CheckoutService
 {
+    private ?bool $promoReady = null;
+
     public function __construct(
         private readonly ConnectionInterface $db,
         private readonly ConfigurationService $config,
         private readonly InventoryService $inventory,
         private readonly EventPublisher $events,
+        private readonly PromotionService $promotions,
     ) {
     }
 
-    /** Start checkout: validate → reserve → create payment intent. */
-    public function start(Cart $cart, ?string $customerUuid, array $address = []): CheckoutSession
+    /** Start checkout: validate → reserve → apply coupon → create payment intent. */
+    public function start(Cart $cart, ?string $customerUuid, array $address = [], ?string $couponCode = null): CheckoutSession
     {
         if ($cart->items()->count() === 0) {
             throw DomainActionException::unprocessable('Cannot checkout an empty cart.', 'EMPTY_CART');
         }
 
-        return $this->db->transaction(function () use ($cart, $customerUuid, $address) {
+        return $this->db->transaction(function () use ($cart, $customerUuid, $address, $couponCode) {
             $session = CheckoutSession::create([
                 'cart_id'          => $cart->id,
                 'customer_uuid'    => $customerUuid,
@@ -82,15 +87,41 @@ class CheckoutService
             $session->save();
             $this->transition($session, Status::CHECKOUT_RESERVED);
 
-            // 3) re-price + totals snapshot (frozen at order creation).
-            $totalMinor = (int) $cart->items->sum(fn ($i) => (int) ($i->price_snapshot['total']['amount_minor'] ?? 0));
-            $session->totals = ['grand_total' => ['amount_minor' => $totalMinor, 'currency' => 'INR']];
+            // 3) re-price + totals snapshot (frozen at order creation). An
+            //    order-level coupon is applied against the cart subtotal here, so
+            //    the amount actually charged reflects it (not just the Quote
+            //    preview). An invalid coupon fails the whole checkout (this rolls
+            //    back the reservation above), so no stock is held on a bad code.
+            $subtotalMinor = (int) $cart->items->sum(fn ($i) => (int) ($i->price_snapshot['total']['amount_minor'] ?? 0));
+
+            $discountMinor = 0;
+            $appliedCoupon = null;
+            if ($couponCode !== null && $couponCode !== '' && $this->promoAvailable()) {
+                $eval = $this->promotions->evaluate($couponCode, $subtotalMinor, $customerUuid);
+                if (! $eval['valid']) {
+                    throw DomainActionException::unprocessable(
+                        'This coupon cannot be applied to your order.',
+                        $eval['reason'] ?? 'COUPON_INVALID', 'coupon',
+                    );
+                }
+                $discountMinor = max(0, min((int) $eval['discount_minor'], $subtotalMinor));
+                $appliedCoupon = $eval['code'];
+            }
+            $grandMinor = max(0, $subtotalMinor - $discountMinor);
+
+            $session->coupon_code = $appliedCoupon;
+            $session->coupon_discount = $discountMinor;
+            $session->totals = [
+                'subtotal'    => ['amount_minor' => $subtotalMinor, 'currency' => 'INR'],
+                'discount'    => ['amount_minor' => $discountMinor, 'currency' => 'INR'],
+                'grand_total' => ['amount_minor' => $grandMinor, 'currency' => 'INR'],
+            ];
             $session->save();
 
-            // 4) create the payment intent.
+            // 4) create the payment intent for the (discounted) amount payable.
             PaymentIntent::create([
                 'checkout_id' => $session->id,
-                'amount'      => $totalMinor / 100,
+                'amount'      => $grandMinor / 100,
                 'currency'    => 'INR',
                 'status'      => Status::PAY_CREATED,
             ]);
@@ -106,19 +137,38 @@ class CheckoutService
      */
     public function pay(CheckoutSession $session, bool $success, ?string $idempotencyKey = null): ?Order
     {
-        // Idempotency: already completed ⇒ return the existing order.
-        if ($session->status === Status::CHECKOUT_DONE) {
-            return Order::where('checkout_id', $session->id)->first();
-        }
-        if ($session->status !== Status::CHECKOUT_PAYMENT_PENDING) {
-            throw DomainActionException::conflict('Checkout is not awaiting payment.', 'NOT_PAYABLE');
-        }
-
         return $this->db->transaction(function () use ($session, $success, $idempotencyKey) {
+            // Serialize concurrent pays: re-read the session FOR UPDATE so a
+            // double-submit can't both pass the payable check and each mint an
+            // order (lost update). The idempotency + payability guards run INSIDE
+            // the lock against the freshly-committed status.
+            $session = CheckoutSession::whereKey($session->id)->lockForUpdate()->first();
+
+            // Idempotency: already completed ⇒ return the existing order.
+            if ($session->status === Status::CHECKOUT_DONE) {
+                return Order::where('checkout_id', $session->id)->first();
+            }
+            if ($session->status !== Status::CHECKOUT_PAYMENT_PENDING) {
+                throw DomainActionException::conflict('Checkout is not awaiting payment.', 'NOT_PAYABLE');
+            }
+
             $intent = PaymentIntent::where('checkout_id', $session->id)->latest('id')->first();
             $this->transitionEntity('payment', $intent, Status::PAY_PROCESSING);
 
             if (! $success) {
+                $this->transitionEntity('payment', $intent, Status::PAY_FAILED);
+                $this->inventory->release((string) $session->inventory_session);
+                $this->transition($session, Status::CHECKOUT_FAILED);
+
+                return null;
+            }
+
+            // The reservation must still hold the stock. If the checkout sat in
+            // payment_pending past its TTL, the release-expired sweep returned the
+            // stock to the pool (and it may already be resold); committing now
+            // would mint a paid order on inventory we no longer hold → oversell.
+            // Fail closed instead.
+            if (! $this->inventory->reservationsAllActive((string) $session->inventory_session)) {
                 $this->transitionEntity('payment', $intent, Status::PAY_FAILED);
                 $this->inventory->release((string) $session->inventory_session);
                 $this->transition($session, Status::CHECKOUT_FAILED);
@@ -137,6 +187,17 @@ class CheckoutService
             // Deduct reserved stock, then split into parent + per-vendor sub-orders.
             $this->inventory->commit((string) $session->inventory_session);
             $order = $this->splitOrders($session);
+
+            // Record the coupon redemption atomically (re-asserts usage limits
+            // under a row lock; throwing rolls the whole order back — fail-closed).
+            if ($session->coupon_code && $this->promoAvailable()) {
+                $this->promotions->redeem(
+                    (string) $session->coupon_code,
+                    (int) ($session->coupon_discount ?? 0),
+                    $session->customer_uuid,
+                    $order->uuid,
+                );
+            }
 
             $this->transition($session, Status::CHECKOUT_ORDERS_CREATED);
             $this->transition($session, Status::CHECKOUT_DONE);
@@ -218,5 +279,15 @@ class CheckoutService
             'entity_type' => $entityType, 'entity_uuid' => $uuid,
             'from_status' => $from, 'to_status' => $to, 'actor' => $actor, 'at' => Carbon::now(),
         ]);
+    }
+
+    /** Promotions tables present? (graceful degrade during a deploy window.) */
+    private function promoAvailable(): bool
+    {
+        if ($this->promoReady === null) {
+            $this->promoReady = Schema::hasTable('promo_coupons');
+        }
+
+        return $this->promoReady;
     }
 }

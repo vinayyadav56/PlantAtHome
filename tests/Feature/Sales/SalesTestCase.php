@@ -18,5 +18,6 @@ abstract class SalesTestCase extends PricingTestCase
         (require base_path('app/Modules/Inventory/Database/Migrations/2026_07_21_000000_create_inventory_tables.php'))->up();
         (require base_path('app/Modules/Sales/Database/Migrations/2026_07_24_000000_create_sales_cart_checkout_tables.php'))->up();
         (require base_path('app/Modules/Sales/Database/Migrations/2026_07_24_000001_create_sales_order_tables.php'))->up();
+        (require base_path('app/Modules/Sales/Database/Migrations/2026_07_27_000000_harden_sales_orders_and_coupons.php'))->up();
     }
 }

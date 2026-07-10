@@ -135,6 +135,19 @@ class InventoryService
         });
     }
 
+    /**
+     * True only if the checkout has at least one reservation and EVERY one is
+     * still ACTIVE (none expired/released/committed). Checkout uses this before
+     * committing so a payment completed after the TTL sweep returned the stock to
+     * the pool cannot mint a paid order on inventory we no longer hold.
+     */
+    public function reservationsAllActive(string $checkoutSessionId): bool
+    {
+        $all = Reservation::where('checkout_session_id', $checkoutSessionId)->get();
+
+        return $all->isNotEmpty() && $all->every(fn (Reservation $r) => $r->status === ReservationStatus::ACTIVE);
+    }
+
     /** Commit a checkout's reservations: deduct on-hand, log sales. */
     public function commit(string $checkoutSessionId): int
     {
