@@ -9,6 +9,7 @@ use Illuminate\Validation\Rule;
 use Marvel\Enums\ProductStatus;
 use Marvel\Enums\ProductType;
 
+// deploy-marker: numeric-normalize fix
 class ProductCreateRequest extends FormRequest
 {
     /**
