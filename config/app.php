@@ -183,6 +183,7 @@ return [
         App\Modules\Rules\Providers\RulesServiceProvider::class,
         App\Modules\Inventory\Providers\InventoryServiceProvider::class,
         App\Modules\Pricing\Providers\PricingServiceProvider::class,
+        App\Modules\Serviceability\Providers\ServiceabilityServiceProvider::class,
     ],
 
     /*

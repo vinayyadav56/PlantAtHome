@@ -16,6 +16,7 @@ final class Permission
     public const CONFIG_MANAGE      = 'config.manage';     // configuration groups/options (Phase 3)
     public const RULES_MANAGE       = 'rules.manage';      // author data-driven rules (Phase 4)
     public const INVENTORY_MANAGE   = 'inventory.manage';  // stock + reservations (Phase 5)
+    public const SERVICEABILITY_MANAGE = 'serviceability.manage'; // cities + coverage (Phase 7)
     public const PRICING_MANAGE     = 'pricing.manage';    // pricing policies (Phase 6)
     public const ORDERS_VIEW_ALL    = 'orders.view_all';   // see every vendor's orders
     public const USERS_MANAGE       = 'users.manage';      // manage identity users
@@ -38,6 +39,7 @@ final class Permission
             self::CONFIG_MANAGE,
             self::RULES_MANAGE,
             self::INVENTORY_MANAGE,
+            self::SERVICEABILITY_MANAGE,
             self::PRICING_MANAGE,
             self::ORDERS_VIEW_ALL,
             self::USERS_MANAGE,

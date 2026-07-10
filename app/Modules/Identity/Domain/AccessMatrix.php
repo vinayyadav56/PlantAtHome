@@ -32,6 +32,7 @@ final class AccessMatrix
                 Permission::CONFIG_MANAGE,
                 Permission::RULES_MANAGE,
                 Permission::INVENTORY_MANAGE,
+                Permission::SERVICEABILITY_MANAGE,
                 Permission::PRICING_MANAGE,
                 Permission::ORDERS_VIEW_ALL,
             ],
