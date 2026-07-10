@@ -35,6 +35,13 @@ class Kernel extends ConsoleKernel
         // Re-track open courier shipments + re-apply status (recovers missed/failed webhooks).
         // No-op unless courier is enabled, so it's safe to always schedule.
         $schedule->command('marvel:courier-reconcile')->hourly()->withoutOverlapping();
+
+        // v2 Inventory (Phase 5): return stock held by abandoned checkouts whose
+        // reservation TTL has lapsed. No-op when nothing is expired.
+        $schedule->command('inventory:release-expired')->everyMinute()->withoutOverlapping();
+
+        // v2 outbox relay (Phase 0): drain pending domain events to subscribers.
+        $schedule->command('outbox:relay --once')->everyMinute()->withoutOverlapping();
     }
 
     /**

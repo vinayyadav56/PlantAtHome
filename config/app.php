@@ -181,6 +181,7 @@ return [
         App\Modules\Catalog\Providers\CatalogServiceProvider::class,
         App\Modules\Configuration\Providers\ConfigurationServiceProvider::class,
         App\Modules\Rules\Providers\RulesServiceProvider::class,
+        App\Modules\Inventory\Providers\InventoryServiceProvider::class,
     ],
 
     /*

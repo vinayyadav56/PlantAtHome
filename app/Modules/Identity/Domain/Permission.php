@@ -15,6 +15,7 @@ final class Permission
     public const CATALOG_MANAGE     = 'catalog.manage';    // create/edit master catalog (Phase 2)
     public const CONFIG_MANAGE      = 'config.manage';     // configuration groups/options (Phase 3)
     public const RULES_MANAGE       = 'rules.manage';      // author data-driven rules (Phase 4)
+    public const INVENTORY_MANAGE   = 'inventory.manage';  // stock + reservations (Phase 5)
     public const PRICING_MANAGE     = 'pricing.manage';    // pricing policies (Phase 6)
     public const ORDERS_VIEW_ALL    = 'orders.view_all';   // see every vendor's orders
     public const USERS_MANAGE       = 'users.manage';      // manage identity users
@@ -36,6 +37,7 @@ final class Permission
             self::CATALOG_MANAGE,
             self::CONFIG_MANAGE,
             self::RULES_MANAGE,
+            self::INVENTORY_MANAGE,
             self::PRICING_MANAGE,
             self::ORDERS_VIEW_ALL,
             self::USERS_MANAGE,
