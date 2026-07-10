@@ -174,6 +174,8 @@ return [
         App\Providers\BroadcastServiceProvider::class,
         App\Providers\EventServiceProvider::class,
         App\Providers\RouteServiceProvider::class,
+        // v2 modular-monolith shared kernel (outbox event bus + /api/v1 routes).
+        App\Providers\SharedKernelServiceProvider::class,
     ],
 
     /*
