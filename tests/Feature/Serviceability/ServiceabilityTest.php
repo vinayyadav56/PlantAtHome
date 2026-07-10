@@ -123,6 +123,40 @@ class ServiceabilityTest extends ServiceabilityTestCase
         $this->assertSame(1, $data['serving_vendor_count']);
     }
 
+    public function test_cheapest_fulfilling_nursery_picks_cheapest_in_stock_serving_vendor(): void
+    {
+        $variant = $this->ctx['variantUuid'];
+        $product = $this->ctx['productUuid'];
+        $city = $this->ctx['city'];
+        $A = IdentityAccessSeeder::NURSERY_A;
+        $B = IdentityAccessSeeder::NURSERY_B;
+        $T = \App\Modules\Inventory\Domain\SellableType::VARIANT;
+
+        $pricing = $this->app->make(\App\Modules\Pricing\Application\PricingService::class);
+        $inv = $this->app->make(\App\Modules\Inventory\Application\InventoryService::class);
+        $coverage = $this->app->make(\App\Modules\Serviceability\Application\CoverageService::class);
+
+        // Base 200; A→180, B→150 (B cheaper). Both stocked + both serve the city.
+        $pricing->setBasePrice('variant', $variant, 200, 'INR', null);
+        $pricing->setVendorOverride($A, 'variant', $variant, 180, 'INR', null);
+        $pricing->setVendorOverride($B, 'variant', $variant, 150, 'INR', null);
+        $inv->upsertStock($T, $variant, $A, 5);
+        $inv->upsertStock($T, $variant, $B, 5);
+        $coverage->setCoverage($A, $city, 0, null, null);
+        $coverage->setCoverage($B, $city, 0, null, null);
+
+        // Cheapest (B) wins.
+        $this->assertSame($B, $coverage->cheapestFulfillingNursery($product, $variant, $city));
+
+        // Drain B's stock → only A serves AND stocks it → A wins despite being pricier.
+        $inv->upsertStock($T, $variant, $B, 0);
+        $this->assertSame($A, $coverage->cheapestFulfillingNursery($product, $variant, $city));
+
+        // A city nobody covers → null (no vendor to fulfil).
+        $empty = $coverage->createCity('Nowhere')->uuid;
+        $this->assertNull($coverage->cheapestFulfillingNursery($product, $variant, $empty));
+    }
+
     /* ── radius eligibility ────────────────────────────────────────────────── */
 
     public function test_local_delivery_eligibility_resolves_by_radius(): void

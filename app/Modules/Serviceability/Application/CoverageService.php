@@ -5,6 +5,7 @@ namespace App\Modules\Serviceability\Application;
 use App\Modules\Catalog\Infrastructure\Models\Product as CatalogProduct;
 use App\Modules\Inventory\Application\InventoryService;
 use App\Modules\Inventory\Domain\SellableType;
+use App\Modules\Pricing\Application\PricingService;
 use App\Modules\Serviceability\Domain\Events\VendorCoverageChanged;
 use App\Modules\Serviceability\Infrastructure\Models\City;
 use App\Modules\Serviceability\Infrastructure\Models\VendorArea;
@@ -24,7 +25,33 @@ class CoverageService
     public function __construct(
         private readonly EventPublisher $events,
         private readonly InventoryService $inventory,
+        private readonly PricingService $pricing,
     ) {
+    }
+
+    /**
+     * The nursery that should fulfil a (product, variant) in a city: among vendors
+     * actively serving the city that have THIS variant in stock, the cheapest by
+     * variant unit price (deterministic tie-break: nursery_id asc). Null when no
+     * vendor serves + stocks it. This is how the storefront resolves nursery_id
+     * without the customer knowing internal supplier ids.
+     */
+    public function cheapestFulfillingNursery(string $productUuid, string $variantUuid, string $cityUuid): ?string
+    {
+        $best = null;
+        $bestPrice = null;
+        foreach ($this->vendorsServingCity($cityUuid) as $nurseryId) {
+            if ($this->inventory->available(SellableType::VARIANT, $variantUuid, $nurseryId) <= 0) {
+                continue;
+            }
+            $price = $this->pricing->unitPriceMinor(SellableType::VARIANT, $variantUuid, $nurseryId);
+            if ($bestPrice === null || $price < $bestPrice || ($price === $bestPrice && $nurseryId < $best)) {
+                $best = $nurseryId;
+                $bestPrice = $price;
+            }
+        }
+
+        return $best;
     }
 
     public function createCity(string $name, ?string $state = null): City

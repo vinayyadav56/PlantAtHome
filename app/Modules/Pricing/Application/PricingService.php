@@ -155,6 +155,15 @@ class PricingService
         );
     }
 
+    /**
+     * Resolved unit price (vendorOverride ?? base ?? 0) in minor units — a focused
+     * read used by vendor selection (cheapest fulfilling nursery). Not a full quote.
+     */
+    public function unitPriceMinor(string $type, string $sellableUuid, string $nurseryId, string $currency = 'INR'): int
+    {
+        return $this->resolvePrice($type, $sellableUuid, $nurseryId, $currency)->amountMinor();
+    }
+
     /* ── internals ─────────────────────────────────────────────────────────── */
 
     /** vendorOverride(nursery) ?? base ?? 0. */

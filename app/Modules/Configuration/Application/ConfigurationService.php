@@ -14,6 +14,7 @@ use App\Modules\Rules\Application\RulesEngine;
 use App\Modules\Rules\Domain\ActionType;
 use App\Modules\Rules\Domain\RuleContext;
 use App\Modules\Rules\Domain\RuleScope;
+use App\Modules\Serviceability\Application\CoverageService;
 use App\Shared\Application\DomainActionException;
 use App\Shared\Domain\ValueObject\Money;
 use Illuminate\Support\Facades\Cache;
@@ -42,8 +43,10 @@ class ConfigurationService
 
     private ?bool $rulesReady = null;
 
-    public function __construct(private readonly RulesEngine $rules)
-    {
+    public function __construct(
+        private readonly RulesEngine $rules,
+        private readonly CoverageService $coverage,
+    ) {
     }
 
     /**
@@ -54,6 +57,18 @@ class ConfigurationService
     public function resolveForProduct(string $productUuid, string $variantUuid, ?string $city, ?string $nurseryId): array
     {
         [$product, $variant] = $this->resolveCatalog($productUuid, $variantUuid);
+
+        // Storefront case: a city but no nursery → resolve the fulfilling nursery
+        // (cheapest vendor serving that city with this variant in stock) so meta +
+        // option enablement reflect a real vendor and the client can price/cart.
+        // Best-effort: an unknown/uncovered city leaves it null (unchanged behaviour).
+        if ($nurseryId === null && $city !== null && $city !== '') {
+            try {
+                $nurseryId = $this->coverage->cheapestFulfillingNursery($product->uuid, $variant->uuid, $city);
+            } catch (\Throwable $e) {
+                $nurseryId = null;
+            }
+        }
 
         $key = sprintf(
             'config:resolve:%d:%d:%s:%s:v%d',

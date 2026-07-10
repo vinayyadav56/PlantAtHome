@@ -17,5 +17,7 @@ abstract class ServiceabilityTestCase extends CatalogTestCase
 
         (require base_path('app/Modules/Inventory/Database/Migrations/2026_07_21_000000_create_inventory_tables.php'))->up();
         (require base_path('app/Modules/Serviceability/Database/Migrations/2026_07_23_000000_create_serviceability_tables.php'))->up();
+        // Pricing tables: CoverageService::cheapestFulfillingNursery ranks vendors by price.
+        (require base_path('app/Modules/Pricing/Database/Migrations/2026_07_22_000000_create_pricing_tables.php'))->up();
     }
 }
