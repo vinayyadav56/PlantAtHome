@@ -218,10 +218,27 @@ class ProductRepository extends BaseRepository
      * @param  mixed $setting
      * @return void
      */
+    /**
+     * Coerce empty-string values on numeric/decimal columns to null before an
+     * insert/update. The admin form submits "" for an untouched delivery_charge
+     * (a decimal(10,2) column), and "" -> decimal is a hard DB cast error under
+     * MySQL strict mode -> uncaught 500 on EVERY UI product-create without an
+     * explicit delivery charge. This normalizes the whole numeric column set.
+     */
+    private function normalizeNumericFields(array $data): array
+    {
+        foreach (['price', 'sale_price', 'min_price', 'max_price', 'quantity', 'delivery_charge', 'sold_quantity'] as $col) {
+            if (array_key_exists($col, $data) && (is_string($data[$col]) && trim($data[$col]) === '')) {
+                $data[$col] = null;
+            }
+        }
+        return $data;
+    }
+
     public function storeProduct($request, $setting)
     {
         try {
-            $data = $request->only($this->dataArray);
+            $data = $this->normalizeNumericFields($request->only($this->dataArray));
             $data['slug'] = $this->makeSlug($request);
 
             if ($setting->options["isProductReview"]) {
@@ -572,8 +589,8 @@ class ProductRepository extends BaseRepository
                     }
                 }
             }
-            $data = $request->only($this->dataArray);
-            $data['sale_price'] = isset($request['sale_price']) ? $request['sale_price'] : null;
+            $data = $this->normalizeNumericFields($request->only($this->dataArray));
+            $data['sale_price'] = isset($request['sale_price']) && $request['sale_price'] !== '' ? $request['sale_price'] : null;
 
             if ($setting->options["isProductReview"]) {
                 $data['status'] = $this->checkProductForPublish($request, $product);

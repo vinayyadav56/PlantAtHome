@@ -22,6 +22,23 @@ class ProductUpdateRequest extends FormRequest
     }
 
     /**
+     * Normalize empty-string numeric inputs to null (see ProductCreateRequest).
+     */
+    protected function prepareForValidation()
+    {
+        $numeric = ['price', 'sale_price', 'min_price', 'max_price', 'quantity', 'delivery_charge'];
+        $patch = [];
+        foreach ($numeric as $col) {
+            if ($this->has($col) && is_string($this->input($col)) && trim($this->input($col)) === '') {
+                $patch[$col] = null;
+            }
+        }
+        if ($patch) {
+            $this->merge($patch);
+        }
+    }
+
+    /**
      * Get the validation rules that apply to the request.
      *
      * @return array
@@ -45,6 +62,7 @@ class ProductUpdateRequest extends FormRequest
         return [
             'name'                         => ['string', 'max:255'],
             'price'                        => ['nullable', 'numeric'],
+            'delivery_charge'              => ['nullable', 'numeric'],
             'sale_price'                   => ['nullable', 'lte:price'],
             'type_id'                      => ['exists:Marvel\Database\Models\Type,id'],
             'shop_id'                      => ['exists:Marvel\Database\Models\Shop,id'],

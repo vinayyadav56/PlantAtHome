@@ -21,6 +21,24 @@ class ProductCreateRequest extends FormRequest
         return true;
     }
 
+    /**
+     * Normalize empty-string numeric inputs to null so a blank field (e.g. the
+     * admin form's untouched delivery_charge) passes `nullable|numeric` and is
+     * stored as null instead of 422-ing or crashing the decimal cast.
+     */
+    protected function prepareForValidation()
+    {
+        $numeric = ['price', 'sale_price', 'min_price', 'max_price', 'quantity', 'delivery_charge'];
+        $patch = [];
+        foreach ($numeric as $col) {
+            if ($this->has($col) && is_string($this->input($col)) && trim($this->input($col)) === '') {
+                $patch[$col] = null;
+            }
+        }
+        if ($patch) {
+            $this->merge($patch);
+        }
+    }
 
     /**
      * Get the validation rules that apply to the request.
@@ -48,6 +66,7 @@ class ProductCreateRequest extends FormRequest
             'name'                         => ['required', 'string', 'max:255'],
             'slug'                         => ['nullable', 'string'],
             'price'                        => ['nullable', 'numeric'],
+            'delivery_charge'              => ['nullable', 'numeric'],
             'sale_price'                   => ['nullable', 'lte:price'],
             'type_id'                      => ['required', 'exists:Marvel\Database\Models\Type,id'],
             'shop_id'                      => ['required', 'exists:Marvel\Database\Models\Shop,id'],
