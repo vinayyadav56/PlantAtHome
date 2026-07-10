@@ -54,7 +54,8 @@ class InventoryTest extends InventoryTestCase
 
     private function available(): int
     {
-        return $this->getJson("/api/v1/inventory/availability?sellable_type=variant&sellable_uuid={$this->sku}&nursery_id={$this->nurseryA}")
+        // Admin token → the endpoint returns the exact quantity (hidden from the public).
+        return $this->getJson("/api/v1/inventory/availability?sellable_type=variant&sellable_uuid={$this->sku}&nursery_id={$this->nurseryA}", $this->admin())
             ->json('data.available');
     }
 
@@ -181,6 +182,24 @@ class InventoryTest extends InventoryTestCase
         // The in-stock line's reserved count was rolled back — nothing held.
         $this->assertSame(5, $this->available());
         $this->assertDatabaseCount('inv_reservations', 0);
+    }
+
+    public function test_availability_hides_exact_qty_from_public_and_competitors(): void
+    {
+        $this->setStock(5);
+        $url = "/api/v1/inventory/availability?sellable_type=variant&sellable_uuid={$this->sku}&nursery_id={$this->nurseryA}";
+
+        // Guest: coarse in-stock signal only — NO exact quantity (competitor intel).
+        $guest = $this->getJson($url)->assertStatus(200);
+        $this->assertTrue($guest->json('data.in_stock'));
+        $this->assertNull($guest->json('data.available'));
+
+        // A competing nursery owner is likewise denied the exact quantity.
+        $ownerB = $this->bearer($this->accessToken('owner.b@plantathome.test'));
+        $this->assertNull($this->getJson($url, $ownerB)->assertStatus(200)->json('data.available'));
+
+        // Platform admin (and the owning nursery) may see the exact quantity.
+        $this->assertSame(5, $this->getJson($url, $this->admin())->assertStatus(200)->json('data.available'));
     }
 
     /* ── authorization ─────────────────────────────────────────────────────── */

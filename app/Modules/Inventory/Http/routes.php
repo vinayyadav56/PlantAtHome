@@ -14,8 +14,9 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::prefix('inventory')->group(function () {
-    // Public availability
-    Route::get('availability', [InventoryController::class, 'availability']);
+    // Public coarse in-stock signal; exact per-vendor qty only for owner/admin
+    // (optional auth so a token identifies the owning nursery / platform admin).
+    Route::get('availability', [InventoryController::class, 'availability'])->middleware('v1.auth.optional');
 
     // Stock management — vendor's own or admin
     Route::put('stock', [InventoryController::class, 'setStock'])

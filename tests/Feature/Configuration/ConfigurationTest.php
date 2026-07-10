@@ -187,6 +187,24 @@ class ConfigurationTest extends ConfigurationTestCase
         $this->assertContains('UNKNOWN_GROUP', $codes);
     }
 
+    public function test_a_draft_products_configuration_is_hidden_from_guests(): void
+    {
+        $admin = $this->admin();
+        $draft = $this->postJson('/api/v1/catalog/products', [
+            'name' => 'Secret Config', 'status' => 'draft', 'variants' => [['size_code' => 'M']],
+        ], $admin);
+        $productUuid = $draft->json('data.uuid');
+        $variant = $draft->json('data.variants.0.uuid');
+
+        // Guest: a draft product's configuration is invisible (no unreleased-plan leak).
+        $this->getJson("/api/v1/config/products/{$productUuid}/configuration?variant={$variant}")
+            ->assertStatus(404);
+
+        // Catalog manager: can preview it.
+        $this->getJson("/api/v1/config/products/{$productUuid}/configuration?variant={$variant}", $admin)
+            ->assertStatus(200);
+    }
+
     public function test_a_scalar_selection_value_does_not_500(): void
     {
         // A client may send a scalar instead of an array for a group value; it must

@@ -213,4 +213,24 @@ class CatalogTest extends CatalogTestCase
         $this->patchJson("/api/v1/catalog/categories/{$uuid}", ['parent_uuid' => '11111111-1111-1111-1111-111111111111'], $this->admin())
             ->assertStatus(422);
     }
+
+    public function test_an_inactive_category_is_hidden_from_guests(): void
+    {
+        $admin = $this->admin();
+        $this->postJson('/api/v1/catalog/categories', ['name' => 'Visible Cat', 'status' => 'active'], $admin)->assertStatus(201);
+        $hidden = $this->postJson('/api/v1/catalog/categories', ['name' => 'Hidden Cat', 'status' => 'inactive'], $admin)
+            ->assertStatus(201)->json('data.uuid');
+
+        // Guest list: only active — even when explicitly asking for inactive.
+        $names = array_column($this->getJson('/api/v1/catalog/categories?status=inactive')->json('data'), 'name');
+        $this->assertNotContains('Hidden Cat', $names);
+        $this->assertContains('Visible Cat', $names);
+        // Guest show: an inactive category is a 404 (no admin-hidden-plan leak).
+        $this->getJson("/api/v1/catalog/categories/{$hidden}")->assertStatus(404);
+
+        // A catalog manager sees inactive categories.
+        $adminNames = array_column($this->getJson('/api/v1/catalog/categories?status=inactive', $admin)->json('data'), 'name');
+        $this->assertContains('Hidden Cat', $adminNames);
+        $this->getJson("/api/v1/catalog/categories/{$hidden}", $admin)->assertStatus(200);
+    }
 }

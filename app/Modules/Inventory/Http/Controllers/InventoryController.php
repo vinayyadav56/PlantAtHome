@@ -53,17 +53,29 @@ final class InventoryController extends ApiController
             }
         }
 
+        $nurseryId = (string) $request->query('nursery_id');
         $available = $this->inventory->available(
             (string) $request->query('sellable_type'),
             (string) $request->query('sellable_uuid'),
-            (string) $request->query('nursery_id'),
+            $nurseryId,
         );
 
-        return $this->ok([
+        // Public callers get only a coarse in-stock signal — the EXACT per-vendor
+        // quantity is competitor-sensitive intel, so it's disclosed only to the
+        // owning nursery or a platform admin (mirrors the setStock scope check).
+        $user = $request->user();
+        $exactAllowed = $user !== null && ($user->isPlatformAdmin() || (string) $user->nursery_id === $nurseryId);
+
+        $payload = [
             'sellable_type' => $request->query('sellable_type'),
             'sellable_uuid' => $request->query('sellable_uuid'),
-            'nursery_id'    => $request->query('nursery_id'),
-            'available'     => $available,
-        ]);
+            'nursery_id'    => $nurseryId,
+            'in_stock'      => $available > 0,
+        ];
+        if ($exactAllowed) {
+            $payload['available'] = $available;
+        }
+
+        return $this->ok($payload);
     }
 }

@@ -11,10 +11,10 @@ use Illuminate\Support\Facades\Route;
 |--------------------------------------------------------------------------
 */
 
-// Public authentication
+// Public authentication (tight per-email+IP throttle to blunt brute-force)
 Route::prefix('auth')->group(function () {
-    Route::post('login', [AuthController::class, 'login']);
-    Route::post('refresh', [AuthController::class, 'refresh']);
+    Route::post('login', [AuthController::class, 'login'])->middleware('throttle:auth');
+    Route::post('refresh', [AuthController::class, 'refresh'])->middleware('throttle:auth');
 
     // Authenticated session actions
     Route::middleware('v1.auth')->group(function () {

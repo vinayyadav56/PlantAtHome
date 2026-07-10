@@ -59,5 +59,16 @@ class RouteServiceProvider extends ServiceProvider
         RateLimiter::for('api', function (Request $request) {
             return Limit::perMinute(60)->by(optional($request->user())->id ?: $request->ip());
         });
+
+        // Tight limiter for credential endpoints (login/refresh) to blunt brute-
+        // force / token-guessing — keyed by email+IP. Disabled under testing so the
+        // suite's many logins don't trip it.
+        RateLimiter::for('auth', function (Request $request) {
+            if (app()->environment('testing')) {
+                return Limit::none();
+            }
+
+            return Limit::perMinute(10)->by(((string) $request->input('email')).'|'.$request->ip());
+        });
     }
 }

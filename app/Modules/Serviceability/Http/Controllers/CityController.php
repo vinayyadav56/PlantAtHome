@@ -38,10 +38,12 @@ final class CityController extends ApiController
     {
         $vendors = $this->coverage->vendorsServingCity($city->uuid);
 
+        // Public endpoint: never expose the raw supplier nursery_id UUIDs — only
+        // whether the city is serviceable + how many vendors (mirrors availability).
         return $this->ok([
-            'city_uuid'       => $city->uuid,
-            'serviceable'     => $vendors !== [],
-            'serving_vendors' => $vendors,
+            'city_uuid'            => $city->uuid,
+            'serviceable'         => $vendors !== [],
+            'serving_vendor_count' => count($vendors),
         ]);
     }
 }

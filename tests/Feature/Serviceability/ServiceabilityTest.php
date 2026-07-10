@@ -112,6 +112,17 @@ class ServiceabilityTest extends ServiceabilityTestCase
             ->assertStatus(200)->assertJsonPath('data.serviceable', true);
     }
 
+    public function test_public_serviceable_does_not_leak_supplier_uuids(): void
+    {
+        $this->setCoverage();
+        $data = $this->getJson("/api/v1/serviceability/cities/{$this->ctx['city']}/serviceable")
+            ->assertStatus(200)->json('data');
+
+        $this->assertTrue($data['serviceable']);
+        $this->assertArrayNotHasKey('serving_vendors', $data); // no raw nursery_id UUIDs
+        $this->assertSame(1, $data['serving_vendor_count']);
+    }
+
     /* ── radius eligibility ────────────────────────────────────────────────── */
 
     public function test_local_delivery_eligibility_resolves_by_radius(): void
