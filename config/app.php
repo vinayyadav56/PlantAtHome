@@ -176,6 +176,8 @@ return [
         App\Providers\RouteServiceProvider::class,
         // v2 modular-monolith shared kernel (outbox event bus + /api/v1 routes).
         App\Providers\SharedKernelServiceProvider::class,
+        // v2 bounded-context modules.
+        App\Modules\Identity\Providers\IdentityServiceProvider::class,
     ],
 
     /*

@@ -295,6 +295,13 @@ try {
   php artisan db:seed --class="Marvel\\Database\\Seeders\\LocationSeeder" --force \
     || echo "[bg] WARNING: LocationSeeder failed"
 
+  # v2 modular-monolith Identity (Phase 1) — RBAC roles/permissions grants
+  # (idempotent, all envs) + demo users (non-production only). Additive; does
+  # not touch the legacy marvel auth stack.
+  echo "==> [bg] Seeding v2 Identity access (roles/permissions)..."
+  php artisan db:seed --class="App\\Modules\\Identity\\Database\\Seeders\\IdentityAccessSeeder" --force \
+    || echo "[bg] WARNING: IdentityAccessSeeder failed"
+
   # ── PlantAtHome data seed — enterprise three-tier approach ──────────────────
   # Tier 2: type + categories — updateOrCreate, safe for ALL environments
   # Tier 3: demo products    — truncate+insert, STAGING only (guarded in seeder)
