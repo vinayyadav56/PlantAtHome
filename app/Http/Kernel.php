@@ -66,4 +66,30 @@ class Kernel extends HttpKernel
         // transactional routes in Phase 2). service.available[:orders|deliveries]
         'service.available' => \Marvel\Http\Middleware\CheckServiceAvailability::class,
     ];
+
+    /**
+     * The priority-sorted list of middleware.
+     *
+     * Framework default, with the v2 Identity auth middlewares inserted BEFORE
+     * SubstituteBindings so authentication runs before route-model binding —
+     * a gated /api/v1 route rejects with 401/403 rather than leaking resource
+     * existence via a 404 from binding an unknown UUID.
+     *
+     * @var array
+     */
+    protected $middlewarePriority = [
+        \Illuminate\Foundation\Http\Middleware\HandlePrecognitiveRequests::class,
+        \Illuminate\Cookie\Middleware\EncryptCookies::class,
+        \Illuminate\Cookie\Middleware\AddQueuedCookiesToResponse::class,
+        \Illuminate\Session\Middleware\StartSession::class,
+        \Illuminate\View\Middleware\ShareErrorsFromSession::class,
+        \Illuminate\Contracts\Auth\Middleware\AuthenticatesRequests::class,
+        \Illuminate\Routing\Middleware\ThrottleRequests::class,
+        \Illuminate\Routing\Middleware\ThrottleRequestsWithRedis::class,
+        \Illuminate\Contracts\Session\Middleware\AuthenticatesSessions::class,
+        \App\Modules\Identity\Http\Middleware\AuthenticateV1::class,
+        \App\Modules\Identity\Http\Middleware\AuthenticateV1Optional::class,
+        \Illuminate\Routing\Middleware\SubstituteBindings::class,
+        \Illuminate\Auth\Middleware\Authorize::class,
+    ];
 }

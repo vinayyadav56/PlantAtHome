@@ -2,6 +2,7 @@
 
 namespace App\Shared\Http;
 
+use App\Shared\Application\DomainActionException;
 use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Auth\AuthenticationException;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
@@ -31,6 +32,11 @@ final class ApiExceptionRenderer
         // respect it rather than re-wrapping.
         if ($e instanceof HttpResponseException) {
             return null;
+        }
+
+        // Application-level expected failures map to their declared 4xx.
+        if ($e instanceof DomainActionException) {
+            return ApiResponse::message($e->errorCode(), $e->getMessage(), $e->httpStatus(), $e->field());
         }
 
         if ($e instanceof ValidationException) {

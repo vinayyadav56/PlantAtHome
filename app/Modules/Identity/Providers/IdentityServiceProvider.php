@@ -5,7 +5,9 @@ namespace App\Modules\Identity\Providers;
 use App\Modules\Identity\Application\AuthService;
 use App\Modules\Identity\Application\Subscribers\RecordLoginAudit;
 use App\Modules\Identity\Http\Middleware\AuthenticateV1;
+use App\Modules\Identity\Http\Middleware\AuthenticateV1Optional;
 use App\Modules\Identity\Http\Middleware\EnsureNurseryScope;
+use App\Modules\Identity\Http\Middleware\EnsurePermission;
 use App\Modules\Identity\Http\Middleware\EnsureRole;
 use App\Modules\Identity\Infrastructure\Jwt\JwtCodec;
 use App\Modules\Identity\Infrastructure\TokenIssuer;
@@ -47,8 +49,10 @@ class IdentityServiceProvider extends ServiceProvider
         $this->loadMigrationsFrom(__DIR__.'/../Database/Migrations');
 
         $router->aliasMiddleware('v1.auth', AuthenticateV1::class);
+        $router->aliasMiddleware('v1.auth.optional', AuthenticateV1Optional::class);
         $router->aliasMiddleware('v1.role', EnsureRole::class);
         $router->aliasMiddleware('v1.nursery', EnsureNurseryScope::class);
+        $router->aliasMiddleware('v1.can', EnsurePermission::class);
 
         Route::prefix('api/v1')
             ->middleware(['api', ForceJsonResponse::class])
