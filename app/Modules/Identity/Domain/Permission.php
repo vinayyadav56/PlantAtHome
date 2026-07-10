@@ -13,6 +13,7 @@ final class Permission
     // Platform administration
     public const ADMIN_ACCESS      = 'admin.access';       // reach the admin surface at all
     public const CATALOG_MANAGE     = 'catalog.manage';    // create/edit master catalog (Phase 2)
+    public const CONFIG_MANAGE      = 'config.manage';     // configuration groups/options (Phase 3)
     public const RULES_MANAGE       = 'rules.manage';      // author data-driven rules (Phase 4)
     public const PRICING_MANAGE     = 'pricing.manage';    // pricing policies (Phase 6)
     public const ORDERS_VIEW_ALL    = 'orders.view_all';   // see every vendor's orders
@@ -33,6 +34,7 @@ final class Permission
         return [
             self::ADMIN_ACCESS,
             self::CATALOG_MANAGE,
+            self::CONFIG_MANAGE,
             self::RULES_MANAGE,
             self::PRICING_MANAGE,
             self::ORDERS_VIEW_ALL,

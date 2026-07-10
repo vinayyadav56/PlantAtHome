@@ -29,6 +29,7 @@ final class AccessMatrix
             RoleName::ADMIN => [
                 Permission::ADMIN_ACCESS,
                 Permission::CATALOG_MANAGE,
+                Permission::CONFIG_MANAGE,
                 Permission::RULES_MANAGE,
                 Permission::PRICING_MANAGE,
                 Permission::ORDERS_VIEW_ALL,
