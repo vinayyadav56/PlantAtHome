@@ -227,9 +227,19 @@ class ProductRepository extends BaseRepository
      */
     private function normalizeNumericFields(array $data): array
     {
-        foreach (['price', 'sale_price', 'min_price', 'max_price', 'quantity', 'delivery_charge', 'sold_quantity'] as $col) {
-            if (array_key_exists($col, $data) && (is_string($data[$col]) && trim($data[$col]) === '')) {
+        // Nullable numeric columns: a blank string becomes null.
+        foreach (['price', 'sale_price', 'min_price', 'max_price', 'quantity', 'sold_quantity'] as $col) {
+            if (array_key_exists($col, $data) && is_string($data[$col]) && trim($data[$col]) === '') {
                 $data[$col] = null;
+            }
+        }
+        // delivery_charge is decimal(10,2) NOT NULL default 0.00 — a blank OR null
+        // (a form field left untouched) must become 0 ("no delivery charge"),
+        // never null (constraint violation) and never "" (decimal cast error).
+        if (array_key_exists('delivery_charge', $data)) {
+            $dc = $data['delivery_charge'];
+            if ($dc === null || (is_string($dc) && trim($dc) === '')) {
+                $data['delivery_charge'] = 0;
             }
         }
         return $data;
