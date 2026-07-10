@@ -34,9 +34,16 @@ final class ApiExceptionRenderer
             return null;
         }
 
-        // Application-level expected failures map to their declared 4xx.
+        // Application-level expected failures map to their declared 4xx. If the
+        // exception carries itemized violations, surface them in `data`.
         if ($e instanceof DomainActionException) {
-            return ApiResponse::message($e->errorCode(), $e->getMessage(), $e->httpStatus(), $e->field());
+            $data = method_exists($e, 'violations') ? ['violations' => $e->violations()] : null;
+            $error = ['code' => $e->errorCode(), 'message' => $e->getMessage()];
+            if ($e->field() !== null) {
+                $error['field'] = $e->field();
+            }
+
+            return ApiResponse::error([$error], $e->httpStatus(), $data);
         }
 
         if ($e instanceof ValidationException) {

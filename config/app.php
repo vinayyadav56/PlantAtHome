@@ -184,6 +184,7 @@ return [
         App\Modules\Inventory\Providers\InventoryServiceProvider::class,
         App\Modules\Pricing\Providers\PricingServiceProvider::class,
         App\Modules\Serviceability\Providers\ServiceabilityServiceProvider::class,
+        App\Modules\Sales\Providers\SalesServiceProvider::class,
     ],
 
     /*

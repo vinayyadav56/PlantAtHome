@@ -162,6 +162,29 @@ class InventoryService
         });
     }
 
+    /** Return sold stock to on-hand (e.g. a refund/return), logging the movement. */
+    public function restock(string $type, string $sellableUuid, string $nurseryId, int $qty, ?string $refType = null, ?string $refId = null): void
+    {
+        if ($qty <= 0) {
+            return;
+        }
+
+        $this->db->transaction(function () use ($type, $sellableUuid, $nurseryId, $qty, $refType, $refId) {
+            $item = InventoryItem::where('sellable_type', $type)
+                ->where('sellable_uuid', $sellableUuid)
+                ->where('nursery_id', $nurseryId)
+                ->lockForUpdate()
+                ->first();
+            if (! $item) {
+                return; // not tracked — nothing to restock
+            }
+            $item->qty_on_hand += $qty;
+            $item->save();
+            $this->logMovement($item, $qty, 'restock', $refType, $refId);
+            $this->emitStockChanged($item, 'restock');
+        });
+    }
+
     /** Release a checkout's active reservations back to available. */
     public function release(string $checkoutSessionId): int
     {
