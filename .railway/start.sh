@@ -302,6 +302,12 @@ try {
   php artisan db:seed --class="App\\Modules\\Identity\\Database\\Seeders\\IdentityAccessSeeder" --force \
     || echo "[bg] WARNING: IdentityAccessSeeder failed"
 
+  # v2 Rules Engine (Phase 4) — the five Section-6 worked examples as DATA rows
+  # (idempotent by name). Proof that behaviour is data, not code.
+  echo "==> [bg] Seeding v2 Rules Engine examples..."
+  php artisan db:seed --class="App\\Modules\\Rules\\Database\\Seeders\\RulesExampleSeeder" --force \
+    || echo "[bg] WARNING: RulesExampleSeeder failed"
+
   # ── PlantAtHome data seed — enterprise three-tier approach ──────────────────
   # Tier 2: type + categories — updateOrCreate, safe for ALL environments
   # Tier 3: demo products    — truncate+insert, STAGING only (guarded in seeder)

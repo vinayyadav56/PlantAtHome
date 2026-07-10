@@ -10,9 +10,14 @@ use App\Modules\Configuration\Infrastructure\Models\ConfigOption;
 use App\Modules\Configuration\Infrastructure\Models\NurseryEnablement;
 use App\Modules\Configuration\Infrastructure\Models\OptionCompatibility;
 use App\Modules\Configuration\Infrastructure\Models\ProductAssignment;
+use App\Modules\Rules\Application\RulesEngine;
+use App\Modules\Rules\Domain\ActionType;
+use App\Modules\Rules\Domain\RuleContext;
+use App\Modules\Rules\Domain\RuleScope;
 use App\Shared\Application\DomainActionException;
 use App\Shared\Domain\ValueObject\Money;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * The Configuration Engine (Section 5). Given a product + variant + city +
@@ -35,6 +40,12 @@ class ConfigurationService
     private const CACHE_TTL = 300; // seconds
     private const VERSION_KEY = 'config:cache:version';
 
+    private ?bool $rulesReady = null;
+
+    public function __construct(private readonly RulesEngine $rules)
+    {
+    }
+
     /**
      * Resolve the configuration to render on a product page.
      *
@@ -54,6 +65,10 @@ class ConfigurationService
         );
 
         return Cache::remember($key, self::CACHE_TTL, function () use ($product, $variant, $city, $nurseryId) {
+            $groups = $this->buildGroups($product->id, $variant->id, $variant->size_code, $nurseryId);
+            // Step 5 (Section 5): apply Rules Engine visibility rules.
+            $groups = $this->applyVisibilityRules($groups, $product, $variant, $nurseryId, $city);
+
             return [
                 'meta' => [
                     'product_uuid' => $product->uuid,
@@ -62,7 +77,7 @@ class ConfigurationService
                     'city'         => $city,
                     'nursery_id'   => $nurseryId,
                 ],
-                'groups' => $this->buildGroups($product->id, $variant->id, $variant->size_code, $nurseryId),
+                'groups' => $groups,
             ];
         });
     }
@@ -118,6 +133,10 @@ class ConfigurationService
                 }
             }
         }
+
+        // 3) Data-driven compatibility rules (Section 6): block_selection /
+        //    require_option, evaluated against the chosen options.
+        $this->applyCompatibilityRules($result, $product, $variant, $selection, $city, $nurseryId);
 
         return $result;
     }
@@ -300,5 +319,113 @@ class ConfigurationService
         }
 
         return $enablement->has($optionId) ? (bool) $enablement->get($optionId) : true;
+    }
+
+    /* ── rules integration (Section 5 step 5 + Section 6) ──────────────────── */
+
+    /** Rules are optional infra; degrade gracefully if not migrated yet. */
+    private function rulesAvailable(): bool
+    {
+        if ($this->rulesReady === null) {
+            $this->rulesReady = Schema::hasTable('rule_definitions');
+        }
+
+        return $this->rulesReady;
+    }
+
+    /**
+     * Assemble the fact bag rules evaluate against. Data-driven — no fact is
+     * special-cased in the pipeline; rules reference these paths declaratively.
+     */
+    private function assembleContext(CatalogProduct $product, CatalogVariant $variant, ?string $nurseryId, ?string $city, array $selection): RuleContext
+    {
+        $product->loadMissing('category');
+
+        $fragile = $product->attributeValues()
+            ->whereHas('attribute', fn ($q) => $q->where('code', 'is_fragile'))
+            ->first();
+        $isFragile = $fragile && filter_var(
+            is_array($fragile->value) ? ($fragile->value['value'] ?? false) : $fragile->value,
+            FILTER_VALIDATE_BOOLEAN,
+        );
+
+        return new RuleContext([
+            'product'   => ['category' => $product->category?->slug, 'slug' => $product->slug],
+            'variant'   => ['size' => $variant->size_code, 'uuid' => $variant->uuid],
+            'plant'     => ['is_fragile' => $isFragile],
+            'nursery'   => ['id' => $nurseryId],
+            'city'      => ['id' => $city],
+            'selection' => ['options' => collect($selection)->flatten()->values()->all(), 'by_group' => $selection],
+        ]);
+    }
+
+    /** @param array<int,array> $groups */
+    private function applyVisibilityRules(array $groups, CatalogProduct $product, CatalogVariant $variant, ?string $nurseryId, ?string $city): array
+    {
+        if (! $this->rulesAvailable()) {
+            return $groups;
+        }
+
+        $hideActions = $this->rules
+            ->evaluate(RuleScope::VISIBILITY, $this->assembleContext($product, $variant, $nurseryId, $city, []))
+            ->ofType(ActionType::HIDE_OPTION);
+
+        if ($hideActions === []) {
+            return $groups;
+        }
+
+        foreach ($groups as &$group) {
+            $group['options'] = array_values(array_filter(
+                $group['options'],
+                fn ($option) => ! $this->isHidden($option, $group['code'], $hideActions),
+            ));
+        }
+
+        return $groups;
+    }
+
+    /** @param array<int,array{params:array}> $hideActions */
+    private function isHidden(array $option, string $groupCode, array $hideActions): bool
+    {
+        foreach ($hideActions as $action) {
+            $p = $action['params'] ?? [];
+            $groupMatch = ! isset($p['group']) || $p['group'] === $groupCode;
+            $optRef = $p['option'] ?? $p['code'] ?? null;
+            $optMatch = $optRef === null || in_array($optRef, [$option['uuid'], $option['sku'], $option['name']], true);
+            if ($groupMatch && $optMatch) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function applyCompatibilityRules(ValidationResult $result, CatalogProduct $product, CatalogVariant $variant, array $selection, ?string $city, ?string $nurseryId): void
+    {
+        if (! $this->rulesAvailable()) {
+            return;
+        }
+
+        $ctx = $this->assembleContext($product, $variant, $nurseryId, $city, $selection);
+        $outcome = $this->rules->evaluate(RuleScope::COMPATIBILITY, $ctx);
+
+        foreach ($outcome->ofType(ActionType::BLOCK_SELECTION) as $action) {
+            $p = $action['params'] ?? [];
+            $result->addViolation('RULE_BLOCKED', $p['reason'] ?? 'This combination of options is not allowed.', $p['group'] ?? null);
+        }
+
+        foreach ($outcome->ofType(ActionType::REQUIRE_OPTION) as $action) {
+            $p = $action['params'] ?? [];
+            $group = $p['group'] ?? null;
+            $selectedInGroup = $group ? ($selection[$group] ?? []) : [];
+            $requiredOption = $p['option'] ?? null;
+
+            $missing = $group && $selectedInGroup === []
+                || ($requiredOption !== null && ! in_array($requiredOption, collect($selection)->flatten()->all(), true));
+
+            if ($missing) {
+                $result->addViolation('RULE_REQUIRED', $p['message'] ?? 'A required option is missing.', $group);
+            }
+        }
     }
 }
