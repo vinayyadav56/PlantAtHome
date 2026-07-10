@@ -3,17 +3,20 @@
 namespace App\Shared\Events;
 
 use Illuminate\Contracts\Container\Container;
+use RuntimeException;
 
 /**
  * Maps an event name to the subscriber classes that react to it. Modules
  * register their subscribers here (in their service providers) — the producer
  * never knows who consumes. Subscribers are resolved from the container and
- * invoked with an IntegrationMessage; each MUST be idempotent (dedupe on
- * eventId) because delivery is at-least-once (Section 9).
+ * invoked with an IntegrationMessage.
  *
  * A subscriber is any class with a `handle(IntegrationMessage $message): void`
- * method (or an __invoke). This is the in-process bus; swapping it for RabbitMQ
- * later means changing only the relay's transport, not this registry.
+ * method (or an __invoke). Per-subscriber isolation and idempotency (exactly-
+ * once processing per event) are enforced by the OutboxRelay via a durable
+ * processed-events ledger — subscribers no longer need their own dedupe. This
+ * is the in-process bus; swapping it for RabbitMQ later means changing only the
+ * relay's transport, not this registry.
  */
 final class SubscriberRegistry
 {
@@ -29,22 +32,37 @@ final class SubscriberRegistry
         $this->subscribers[$eventName][] = $subscriberClass;
     }
 
-    /** @return string[] */
+    /** @return string[] distinct subscriber class names for an event, in registration order */
     public function subscribersFor(string $eventName): array
     {
         return array_values(array_unique($this->subscribers[$eventName] ?? []));
     }
 
-    /** Deliver a message to every subscriber registered for its event name. */
-    public function dispatch(IntegrationMessage $message): void
+    /**
+     * Resolve a subscriber and deliver one message to it. Fails loudly on a
+     * misregistration (a class exposing neither handle() nor __invoke) rather
+     * than silently dropping the event.
+     */
+    public function invoke(string $subscriberClass, IntegrationMessage $message): void
     {
-        foreach ($this->subscribersFor($message->eventName) as $subscriberClass) {
-            $subscriber = $this->container->make($subscriberClass);
-            if (method_exists($subscriber, 'handle')) {
-                $subscriber->handle($message);
-            } elseif (is_callable($subscriber)) {
-                $subscriber($message);
-            }
+        $subscriber = $this->container->make($subscriberClass);
+
+        if (method_exists($subscriber, 'handle')) {
+            $subscriber->handle($message);
+
+            return;
         }
+
+        if (is_callable($subscriber)) {
+            $subscriber($message);
+
+            return;
+        }
+
+        throw new RuntimeException(sprintf(
+            'Subscriber [%s] for event [%s] exposes neither handle() nor __invoke().',
+            $subscriberClass,
+            $message->eventName,
+        ));
     }
 }

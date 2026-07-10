@@ -25,25 +25,29 @@ final class ApiResponse
 
     /**
      * @param array<int, array{code?: string, field?: string, message: string}> $errors
+     * @param array<string, string|array<string>> $headers extra response headers (e.g. Allow, Retry-After)
      */
-    public static function error(array $errors, int $status = 400, mixed $data = null, array $meta = []): JsonResponse
+    public static function error(array $errors, int $status = 400, mixed $data = null, array $meta = [], array $headers = []): JsonResponse
     {
         return new JsonResponse([
             'success' => false,
             'data'    => $data,
             'meta'    => (object) $meta,
             'errors'  => array_values($errors),
-        ], $status);
+        ], $status, $headers);
     }
 
-    public static function message(string $code, string $message, int $status = 400, ?string $field = null): JsonResponse
+    /**
+     * @param array<string, string|array<string>> $headers extra response headers
+     */
+    public static function message(string $code, string $message, int $status = 400, ?string $field = null, array $headers = []): JsonResponse
     {
         $error = ['code' => $code, 'message' => $message];
         if ($field !== null) {
             $error['field'] = $field;
         }
 
-        return self::error([$error], $status);
+        return self::error([$error], $status, null, [], $headers);
     }
 
     /** Wrap a Laravel paginator, moving pagination into meta.pagination. */

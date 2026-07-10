@@ -11,6 +11,7 @@ use App\Modules\Identity\Infrastructure\Jwt\JwtCodec;
 use App\Modules\Identity\Infrastructure\TokenIssuer;
 use App\Shared\Events\EventPublisher;
 use App\Shared\Events\SubscriberRegistry;
+use App\Shared\Http\Middleware\ForceJsonResponse;
 use Illuminate\Routing\Router;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\ServiceProvider;
@@ -30,6 +31,7 @@ class IdentityServiceProvider extends ServiceProvider
         $this->app->singleton(TokenIssuer::class, fn ($app) => new TokenIssuer(
             $app->make(JwtCodec::class),
             (int) config('identity.jwt.refresh_ttl'),
+            $app->make(\Psr\Log\LoggerInterface::class),
         ));
 
         $this->app->singleton(AuthService::class, fn ($app) => new AuthService(
@@ -49,7 +51,7 @@ class IdentityServiceProvider extends ServiceProvider
         $router->aliasMiddleware('v1.nursery', EnsureNurseryScope::class);
 
         Route::prefix('api/v1')
-            ->middleware('api')
+            ->middleware(['api', ForceJsonResponse::class])
             ->group(__DIR__.'/../Http/routes.php');
 
         $this->app->make(SubscriberRegistry::class)

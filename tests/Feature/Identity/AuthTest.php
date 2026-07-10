@@ -50,10 +50,27 @@ class AuthTest extends IdentityTestCase
         ])->assertStatus(401)->assertJsonPath('errors.0.code', 'INVALID_CREDENTIALS');
     }
 
-    public function test_login_validates_input(): void
+    public function test_login_validation_error_uses_the_standard_envelope(): void
     {
-        $this->postJson('/api/v1/auth/login', ['email' => 'not-an-email'])
-            ->assertStatus(422);
+        $res = $this->postJson('/api/v1/auth/login', ['email' => 'not-an-email']);
+
+        $res->assertStatus(422)
+            ->assertJson(['success' => false, 'data' => null])
+            ->assertJsonStructure(['success', 'data', 'meta', 'errors' => [['code', 'field', 'message']]])
+            ->assertJsonPath('errors.0.code', 'VALIDATION_ERROR');
+
+        // password is required → a field-scoped error object is present.
+        $fields = array_column($res->json('errors'), 'field');
+        $this->assertContains('password', $fields);
+    }
+
+    public function test_validation_error_returns_json_without_an_accept_header(): void
+    {
+        // ForceJsonResponse must prevent the default 302-redirect for non-JSON
+        // clients; the response is still the JSON envelope, never a redirect.
+        $res = $this->post('/api/v1/auth/login', ['email' => 'x'], ['Accept' => 'text/html']);
+
+        $res->assertStatus(422)->assertJsonPath('errors.0.code', 'VALIDATION_ERROR');
     }
 
     public function test_me_requires_a_token(): void
@@ -80,27 +97,41 @@ class AuthTest extends IdentityTestCase
             ->assertJsonPath('errors.0.code', 'TOKEN_INVALID');
     }
 
-    public function test_refresh_rotates_tokens_and_single_uses_the_old_one(): void
+    public function test_refresh_rotates_the_token_pair(): void
     {
         $data = $this->loginData('owner.a@plantathome.test');
-        $oldRefresh = $data['tokens']['refresh_token'];
+        $t1 = $data['tokens']['refresh_token'];
 
-        // First refresh succeeds and returns a new pair.
-        $refreshed = $this->postJson('/api/v1/auth/refresh', ['refresh_token' => $oldRefresh]);
-        $refreshed->assertStatus(200)
+        // T1 -> T2
+        $r2 = $this->postJson('/api/v1/auth/refresh', ['refresh_token' => $t1]);
+        $r2->assertStatus(200)
             ->assertJsonStructure(['data' => ['tokens' => ['access_token', 'refresh_token']]]);
+        $t2 = $r2->json('data.tokens.refresh_token');
+        $this->assertNotSame($t1, $t2);
 
-        $newRefresh = $refreshed->json('data.tokens.refresh_token');
-        $this->assertNotSame($oldRefresh, $newRefresh);
-
-        // Re-using the OLD refresh token is rejected (rotation = single use).
-        $this->postJson('/api/v1/auth/refresh', ['refresh_token' => $oldRefresh])
-            ->assertStatus(401)
-            ->assertJsonPath('errors.0.code', 'REFRESH_INVALID');
-
-        // The NEW refresh token still works.
-        $this->postJson('/api/v1/auth/refresh', ['refresh_token' => $newRefresh])
+        // T2 (the current, un-reused token) still works and rotates to T3.
+        $this->postJson('/api/v1/auth/refresh', ['refresh_token' => $t2])
             ->assertStatus(200);
+    }
+
+    public function test_reusing_a_rotated_refresh_token_revokes_the_whole_family(): void
+    {
+        $data = $this->loginData('owner.b@plantathome.test');
+        $t1 = $data['tokens']['refresh_token'];
+
+        $t2 = $this->postJson('/api/v1/auth/refresh', ['refresh_token' => $t1])
+            ->assertStatus(200)
+            ->json('data.tokens.refresh_token');
+
+        // Replaying the already-rotated T1 is detected as reuse (single-use).
+        $this->postJson('/api/v1/auth/refresh', ['refresh_token' => $t1])
+            ->assertStatus(401)
+            ->assertJsonPath('errors.0.code', 'REFRESH_REUSED');
+
+        // Reuse detection revokes the ENTIRE family — the otherwise-valid
+        // successor T2 is now dead too (stolen-lineage containment).
+        $this->postJson('/api/v1/auth/refresh', ['refresh_token' => $t2])
+            ->assertStatus(401);
     }
 
     public function test_logout_revokes_refresh_tokens(): void

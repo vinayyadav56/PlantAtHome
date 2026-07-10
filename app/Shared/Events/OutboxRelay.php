@@ -8,14 +8,19 @@ use Psr\Log\LoggerInterface;
 use Throwable;
 
 /**
- * Drains the transactional outbox: claims a batch of pending rows, delivers
- * each to its subscribers (the in-process bus today; a network bus later), and
- * marks the row published — or, on failure, records the error and retries up to
- * MAX_ATTEMPTS before parking the row as failed. Delivery is at-least-once, so
- * subscribers must be idempotent (dedupe on event_id).
+ * Drains the transactional outbox: claims a batch of pending rows, delivers each
+ * to its subscribers (the in-process bus today; a network bus later), and marks
+ * the row published — or, on failure, records the error and retries up to
+ * MAX_ATTEMPTS before parking the row as failed.
  *
- * Each row is claimed inside a short transaction with a row lock so multiple
- * relay workers never process the same event twice.
+ * Delivery is per-subscriber isolated and idempotent: each subscriber runs in
+ * its own savepoint and its success is recorded in the processed_events ledger,
+ * so (a) one failing subscriber never blocks its siblings, and (b) a retry (or a
+ * second worker, or a restart) never re-runs a subscriber that already
+ * succeeded. A row is published only once every subscriber has succeeded.
+ *
+ * Each row is claimed FOR UPDATE SKIP LOCKED so multiple relay workers run in
+ * parallel without convoying or double-processing.
  */
 final class OutboxRelay
 {
@@ -29,8 +34,8 @@ final class OutboxRelay
     }
 
     /**
-     * Deliver up to $limit pending events. Returns the number successfully
-     * published this pass.
+     * Deliver up to $limit pending events. Returns the number of rows fully
+     * published this pass. A failure on one row never aborts the batch.
      */
     public function relay(int $limit = 100): int
     {
@@ -44,8 +49,17 @@ final class OutboxRelay
             ->get();
 
         foreach ($rows as $row) {
-            if ($this->deliver($row)) {
-                $published++;
+            try {
+                if ($this->deliver($row)) {
+                    $published++;
+                }
+            } catch (Throwable $e) {
+                // Per-row isolation: a claim/DB error on one row must not abort
+                // the whole pass. The row stays pending and is retried next time.
+                $this->logger->error('[outbox] row delivery aborted', [
+                    'outbox_id' => $row->id ?? null,
+                    'error'     => $e->getMessage(),
+                ]);
             }
         }
 
@@ -54,52 +68,109 @@ final class OutboxRelay
 
     private function deliver(object $row): bool
     {
-        // Claim the row: re-read FOR UPDATE and skip if another worker already
-        // moved it out of pending. lockForUpdate is a no-op on sqlite (tests)
-        // but real on MySQL.
         return (bool) $this->db->transaction(function () use ($row) {
-            $claimed = $this->db->table('outbox')
-                ->where('id', $row->id)
-                ->where('status', OutboxStatus::PENDING)
-                ->lockForUpdate()
-                ->first();
-
+            $claimed = $this->claim($row->id);
             if (! $claimed) {
-                return false; // already handled by another worker
+                return false; // another worker holds/handled it
             }
 
-            try {
-                $this->registry->dispatch(IntegrationMessage::fromOutboxRow($claimed));
+            $message = IntegrationMessage::fromOutboxRow($claimed);
+            $failures = [];
 
+            foreach ($this->registry->subscribersFor($message->eventName) as $subscriberClass) {
+                if ($this->alreadyProcessed($message->eventId, $subscriberClass)) {
+                    continue; // idempotent: this subscriber already ran for this event
+                }
+
+                try {
+                    // Own savepoint: the subscriber's side effect and the ledger
+                    // row commit together, or roll back together on failure.
+                    $this->db->transaction(function () use ($subscriberClass, $message) {
+                        $this->registry->invoke($subscriberClass, $message);
+                        $this->recordProcessed($message->eventId, $subscriberClass);
+                    });
+                } catch (Throwable $e) {
+                    $failures[$subscriberClass] = $e->getMessage();
+                    $this->logger->error('[outbox] subscriber failed', [
+                        'event_id'   => $message->eventId,
+                        'event_name' => $message->eventName,
+                        'subscriber' => $subscriberClass,
+                        'error'      => $e->getMessage(),
+                    ]);
+                }
+            }
+
+            $attempts = (int) $claimed->attempts + 1;
+
+            if ($failures === []) {
                 $this->db->table('outbox')->where('id', $claimed->id)->update([
                     'status'       => OutboxStatus::PUBLISHED,
-                    'attempts'     => $claimed->attempts + 1,
+                    'attempts'     => $attempts,
                     'published_at' => Carbon::now(),
                     'last_error'   => null,
                     'updated_at'   => Carbon::now(),
                 ]);
 
                 return true;
-            } catch (Throwable $e) {
-                $attempts = $claimed->attempts + 1;
-                $this->logger->error('[outbox] delivery failed', [
-                    'event_id'   => $claimed->event_id,
-                    'event_name' => $claimed->event_name,
-                    'attempts'   => $attempts,
-                    'error'      => $e->getMessage(),
-                ]);
-
-                $this->db->table('outbox')->where('id', $claimed->id)->update([
-                    // exhausted → park as failed (needs manual/ops intervention);
-                    // otherwise leave pending for the next pass.
-                    'status'     => $attempts >= self::MAX_ATTEMPTS ? OutboxStatus::FAILED : OutboxStatus::PENDING,
-                    'attempts'   => $attempts,
-                    'last_error' => mb_substr($e->getMessage(), 0, 1000),
-                    'updated_at' => Carbon::now(),
-                ]);
-
-                return false;
             }
+
+            // Some subscriber(s) failed — succeeded ones are recorded and won't
+            // re-run; the row stays pending (or is parked as failed if exhausted).
+            $this->db->table('outbox')->where('id', $claimed->id)->update([
+                'status'     => $attempts >= self::MAX_ATTEMPTS ? OutboxStatus::FAILED : OutboxStatus::PENDING,
+                'attempts'   => $attempts,
+                'last_error' => mb_substr($this->summarize($failures), 0, 1000),
+                'updated_at' => Carbon::now(),
+            ]);
+
+            return false;
         });
+    }
+
+    /** Claim a pending row for this worker, skipping rows another worker holds. */
+    private function claim(int $id): ?object
+    {
+        $query = $this->db->table('outbox')
+            ->where('id', $id)
+            ->where('status', OutboxStatus::PENDING);
+
+        // SKIP LOCKED (MySQL 8+) lets a second worker skip a row this worker is
+        // handling instead of convoying behind it. Other drivers (sqlite tests)
+        // ignore the lock clause harmlessly.
+        if ($this->db->getDriverName() === 'mysql') {
+            $query->lock('for update skip locked');
+        } else {
+            $query->lockForUpdate();
+        }
+
+        return $query->first();
+    }
+
+    private function alreadyProcessed(string $eventId, string $subscriber): bool
+    {
+        return $this->db->table('processed_events')
+            ->where('event_id', $eventId)
+            ->where('subscriber', $subscriber)
+            ->exists();
+    }
+
+    private function recordProcessed(string $eventId, string $subscriber): void
+    {
+        $this->db->table('processed_events')->insertOrIgnore([
+            'event_id'     => $eventId,
+            'subscriber'   => $subscriber,
+            'processed_at' => Carbon::now(),
+        ]);
+    }
+
+    /** @param array<string,string> $failures subscriber => error */
+    private function summarize(array $failures): string
+    {
+        $parts = [];
+        foreach ($failures as $subscriber => $error) {
+            $parts[] = class_basename($subscriber).': '.$error;
+        }
+
+        return implode(' | ', $parts);
     }
 }

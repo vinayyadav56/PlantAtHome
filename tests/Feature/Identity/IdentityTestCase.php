@@ -71,6 +71,15 @@ abstract class IdentityTestCase extends TestCase
             $t->timestamps();
         });
 
+        // Idempotency ledger for outbox delivery.
+        Schema::create('processed_events', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->uuid('event_id');
+            $t->string('subscriber', 191);
+            $t->timestamp('processed_at')->nullable();
+            $t->unique(['event_id', 'subscriber']);
+        });
+
         $dir = base_path('app/Modules/Identity/Database/Migrations');
         foreach ([
             '2026_07_16_000000_create_identity_roles_permissions_tables.php',

@@ -70,7 +70,10 @@ class AuthService
      */
     public function refresh(string $refreshToken): array
     {
-        return $this->db->transaction(fn () => $this->tokens->rotate($refreshToken));
+        // No outer transaction here: rotate() manages its own atomicity. On a
+        // reuse (theft) signal it must COMMIT the family revocation and then
+        // throw — wrapping it in a transaction would roll that revocation back.
+        return $this->tokens->rotate($refreshToken);
     }
 
     public function logout(IdentityUser $user): void

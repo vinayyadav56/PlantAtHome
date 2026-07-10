@@ -10,7 +10,6 @@ use App\Modules\Identity\Infrastructure\Models\IdentityRole;
 use App\Modules\Identity\Infrastructure\Models\IdentityUser;
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\Hash;
-use Illuminate\Support\Str;
 
 /**
  * Seeds the RBAC baseline (roles, permissions, and their default grants from
@@ -90,10 +89,12 @@ class IdentityAccessSeeder extends Seeder
         ];
 
         foreach ($demo as $d) {
+            // uuid is NOT set here: the IdentityUser `creating` hook assigns it
+            // once on insert, so re-running the seeder keeps each user's stable
+            // uuid (regenerating it would invalidate previously-issued tokens).
             IdentityUser::updateOrCreate(
                 ['email' => $d['email']],
                 [
-                    'uuid'              => (string) Str::uuid(),
                     'name'              => $d['name'],
                     'password'          => Hash::make($password),
                     'role_id'           => $roles[$d['role']]->id,

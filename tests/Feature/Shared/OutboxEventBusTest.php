@@ -52,6 +52,14 @@ class OutboxEventBusTest extends TestCase
             $table->timestamps();
         });
 
+        Schema::create('processed_events', function (Blueprint $table) {
+            $table->bigIncrements('id');
+            $table->uuid('event_id');
+            $table->string('subscriber', 191);
+            $table->timestamp('processed_at')->nullable();
+            $table->unique(['event_id', 'subscriber']);
+        });
+
         SpySubscriber::$received = [];
         FlakySubscriber::$calls = 0;
     }
@@ -130,6 +138,54 @@ class OutboxEventBusTest extends TestCase
         $this->assertSame(1, $relay->relay());
         $this->assertDatabaseHas('outbox', ['event_id' => $event->eventId(), 'status' => OutboxStatus::PUBLISHED]);
     }
+
+    public function test_a_failing_subscriber_does_not_block_siblings_and_succeeded_ones_never_re_run(): void
+    {
+        // Two subscribers on one event; one is flaky (fails the first pass).
+        $this->registry()->listen('test.multi', SpySubscriber::class);
+        $this->registry()->listen('test.multi', FlakySubscriber::class);
+        $publisher = new OutboxEventPublisher(DB::connection());
+        $event = new TestMultiEvent();
+
+        DB::transaction(fn () => $publisher->publish($event));
+
+        $relay = new OutboxRelay(DB::connection(), $this->registry(), logger());
+
+        // Pass 1: Spy succeeds (isolated from the failing sibling); Flaky throws.
+        $this->assertSame(0, $relay->relay()); // row not fully published yet
+        $this->assertSame([$event->eventId()], SpySubscriber::$received);
+        $this->assertDatabaseHas('outbox', ['event_id' => $event->eventId(), 'status' => OutboxStatus::PENDING, 'attempts' => 1]);
+        // The succeeded subscriber is recorded in the idempotency ledger.
+        $this->assertDatabaseHas('processed_events', [
+            'event_id'   => $event->eventId(),
+            'subscriber' => SpySubscriber::class,
+        ]);
+        $this->assertDatabaseMissing('processed_events', [
+            'event_id'   => $event->eventId(),
+            'subscriber' => FlakySubscriber::class,
+        ]);
+
+        // Pass 2: Spy is SKIPPED (already processed — never re-runs); Flaky now succeeds.
+        $this->assertSame(1, $relay->relay());
+        $this->assertSame([$event->eventId()], SpySubscriber::$received); // still exactly one — not re-run
+        $this->assertSame(2, FlakySubscriber::$calls);
+        $this->assertDatabaseHas('outbox', ['event_id' => $event->eventId(), 'status' => OutboxStatus::PUBLISHED]);
+    }
+
+    public function test_a_subscriber_without_a_handler_fails_loudly_and_the_event_is_not_published(): void
+    {
+        $this->registry()->listen('test.badsub', NoHandlerSubscriber::class);
+        $publisher = new OutboxEventPublisher(DB::connection());
+        $event = new TestBadEvent();
+
+        DB::transaction(fn () => $publisher->publish($event));
+
+        $relay = new OutboxRelay(DB::connection(), $this->registry(), logger());
+        // A misregistered subscriber throws → recorded as a failure, NOT silently published.
+        $this->assertSame(0, $relay->relay());
+        $this->assertDatabaseHas('outbox', ['event_id' => $event->eventId(), 'status' => OutboxStatus::PENDING, 'attempts' => 1]);
+        $this->assertDatabaseMissing('outbox', ['event_id' => $event->eventId(), 'status' => OutboxStatus::PUBLISHED]);
+    }
 }
 
 /* ── test doubles ─────────────────────────────────────────────────────────── */
@@ -163,6 +219,37 @@ class TestFlakyEvent extends AbstractDomainEvent
     {
         return [];
     }
+}
+
+class TestMultiEvent extends AbstractDomainEvent
+{
+    public function eventName(): string
+    {
+        return 'test.multi';
+    }
+
+    public function payload(): array
+    {
+        return [];
+    }
+}
+
+class TestBadEvent extends AbstractDomainEvent
+{
+    public function eventName(): string
+    {
+        return 'test.badsub';
+    }
+
+    public function payload(): array
+    {
+        return [];
+    }
+}
+
+/** A misregistered subscriber: no handle() and not invokable. */
+class NoHandlerSubscriber
+{
 }
 
 class SpySubscriber
