@@ -226,6 +226,10 @@ jobs:
             set_env MEDIA_DISK s3
             set_env FILESYSTEM_DISK s3
             set_env QUEUE_CONNECTION database
+            # Shared/persistent cache so RateLimiter (throttle:auth) actually
+            # counts across requests — the cache table is migrated above.
+            set_env CACHE_DRIVER database
+            set_env CACHE_STORE database
             set_env AWS_ACCESS_KEY_ID "${{ secrets.AWS_ACCESS_KEY_ID }}"
             set_env AWS_SECRET_ACCESS_KEY "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
             set_env AWS_DEFAULT_REGION "${{ secrets.AWS_REGION }}"
