@@ -60,15 +60,28 @@ class RouteServiceProvider extends ServiceProvider
             return Limit::perMinute(60)->by(optional($request->user())->id ?: $request->ip());
         });
 
-        // Tight limiter for credential endpoints (login/refresh) to blunt brute-
-        // force / token-guessing — keyed by email+IP. Disabled under testing so the
-        // suite's many logins don't trip it.
+        // Tight limiter for credential endpoints (login/refresh/reset) to blunt
+        // brute-force / token-guessing. Disabled under testing so the suite's
+        // many logins don't trip it.
+        //
+        // TWO independent limits so the control holds behind any proxy topology:
+        //  - by EMAIL (credential): 10/min per account, IP-INDEPENDENT — this is
+        //    what actually stops credential-stuffing an account, and it works
+        //    even when the client IP rotates across proxy hops (e.g. Railway's
+        //    edge resolves varying $request->ip(), which silently defeated the
+        //    old email|ip key — the counter never accumulated on one key).
+        //  - by IP: 30/min per source to blunt spray across many accounts.
         RateLimiter::for('auth', function (Request $request) {
             if (app()->environment('testing')) {
                 return Limit::none();
             }
 
-            return Limit::perMinute(10)->by(((string) $request->input('email')).'|'.$request->ip());
+            $email = strtolower(trim((string) $request->input('email')));
+
+            return [
+                Limit::perMinute(10)->by('auth-email:'.($email ?: 'none')),
+                Limit::perMinute(30)->by('auth-ip:'.$request->ip()),
+            ];
         });
     }
 }
