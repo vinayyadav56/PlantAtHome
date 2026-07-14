@@ -243,16 +243,18 @@ jobs:
             echo "==> v2 async machinery: scheduler cron + queue workers (idempotent)..."
             # Everything runs AS www-data — storage/ is www-data-owned, so an
             # ubuntu-run artisan would die on log/cache writes (known gotcha).
-            # 1) schedule:run every minute (outbox relay, inventory release,
-            #    marvel settlements/reconcile, platform heartbeat).
-            if ! sudo crontab -l -u www-data 2>/dev/null | grep -q 'schedule:run'; then
-              ( sudo crontab -l -u www-data 2>/dev/null; \
-                echo '* * * * * cd /var/www/plantathome/api && /usr/bin/php artisan schedule:run >> /dev/null 2>&1' ) \
-                | sudo crontab -u www-data -
-              echo "    installed www-data crontab entry"
-            else
-              echo "    crontab entry already present"
-            fi
+            # 1) schedule:run every minute via /etc/cron.d (system crontab —
+            #    immune to per-user cron.allow/deny quirks). Logs to a file so
+            #    failures are diagnosable.
+            sudo tee /etc/cron.d/plantathome-api-scheduler > /dev/null <<'CRON'
+            * * * * * www-data cd /var/www/plantathome/api && /usr/bin/php artisan schedule:run >> /var/www/plantathome/api/storage/logs/schedule.log 2>&1
+            CRON
+            sudo chmod 644 /etc/cron.d/plantathome-api-scheduler
+            # drop the older per-user entry if a previous deploy installed it
+            sudo crontab -l -u www-data 2>/dev/null | grep -v 'schedule:run' | sudo crontab -u www-data - 2>/dev/null || true
+            pgrep -x cron >/dev/null && echo "    cron daemon: running" || echo "    WARNING: cron daemon NOT running"
+            echo "==> one-shot schedule:run as www-data (proves the cron command works; output below)"
+            sudo -u www-data /usr/bin/php artisan schedule:run 2>&1 | tail -20 || echo "    WARNING: one-shot schedule:run FAILED"
             # 2) queue workers as templated systemd units (default + careplans).
             sudo tee /etc/systemd/system/plantathome-queue@.service > /dev/null <<'UNIT'
             [Unit]
