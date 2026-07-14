@@ -105,8 +105,9 @@ jobs:
           extensions: mbstring, pdo_mysql, exif, gd, intl, zip, bcmath, opcache
           coverage: none
 
-      - name: Install dependencies (no-dev)
-        run: composer install --no-dev --optimize-autoloader --no-interaction
+      # Dev deps included — this job actually RUNS the test suite (PHPUnit).
+      - name: Install dependencies
+        run: composer install --optimize-autoloader --no-interaction
 
       - name: Copy staging env
         run: cp .env.staging.example .env
@@ -121,6 +122,15 @@ jobs:
           DB_USERNAME: root
           DB_PASSWORD: root
         run: php artisan migrate --force
+
+      # The full V2 suite (~132 tests, MySQL-e2e) gates the production deploy.
+      - name: Run test suite
+        env:
+          DB_HOST: 127.0.0.1
+          DB_DATABASE: plantathome_test
+          DB_USERNAME: root
+          DB_PASSWORD: root
+        run: php artisan test --without-tty
 
   # ── 3. Deploy to AWS EC2 ──────────────────────────────────────────────────────
   deploy:
@@ -211,6 +221,7 @@ jobs:
             }
             set_env MEDIA_DISK s3
             set_env FILESYSTEM_DISK s3
+            set_env QUEUE_CONNECTION database
             set_env AWS_ACCESS_KEY_ID "${{ secrets.AWS_ACCESS_KEY_ID }}"
             set_env AWS_SECRET_ACCESS_KEY "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
             set_env AWS_DEFAULT_REGION "${{ secrets.AWS_REGION }}"
@@ -224,6 +235,42 @@ jobs:
             echo "==> Restoring www-data ownership for PHP-FPM..."
             sudo chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
             chmod -R 775 storage bootstrap/cache 2>/dev/null || true
+
+            echo "==> v2 async machinery: scheduler cron + queue workers (idempotent)..."
+            # Everything runs AS www-data — storage/ is www-data-owned, so an
+            # ubuntu-run artisan would die on log/cache writes (known gotcha).
+            # 1) schedule:run every minute (outbox relay, inventory release,
+            #    marvel settlements/reconcile, platform heartbeat).
+            if ! sudo crontab -l -u www-data 2>/dev/null | grep -q 'schedule:run'; then
+              ( sudo crontab -l -u www-data 2>/dev/null; \
+                echo '* * * * * cd /var/www/plantathome/api && /usr/bin/php artisan schedule:run >> /dev/null 2>&1' ) \
+                | sudo crontab -u www-data -
+              echo "    installed www-data crontab entry"
+            else
+              echo "    crontab entry already present"
+            fi
+            # 2) queue workers as templated systemd units (default + careplans).
+            sudo tee /etc/systemd/system/plantathome-queue@.service > /dev/null <<'UNIT'
+            [Unit]
+            Description=PlantAtHome API queue worker (%i)
+            After=network.target mysql.service
+
+            [Service]
+            User=www-data
+            Group=www-data
+            WorkingDirectory=/var/www/plantathome/api
+            ExecStart=/usr/bin/php /var/www/plantathome/api/artisan queue:work database --queue=%i --sleep=3 --tries=3 --max-time=3600
+            Restart=always
+            RestartSec=5
+
+            [Install]
+            WantedBy=multi-user.target
+            UNIT
+            sudo systemctl daemon-reload
+            sudo systemctl enable --now plantathome-queue@default plantathome-queue@careplans
+            # restart so workers pick up the NEW code from this deploy
+            sudo systemctl restart 'plantathome-queue@default' 'plantathome-queue@careplans'
+            sudo systemctl is-active plantathome-queue@default plantathome-queue@careplans
 
             echo "==> Reloading PHP-FPM..."
             sudo systemctl reload php8.1-fpm

@@ -42,6 +42,21 @@ class Kernel extends ConsoleKernel
 
         // v2 outbox relay (Phase 0): drain pending domain events to subscribers.
         $schedule->command('outbox:relay --once')->everyMinute()->withoutOverlapping();
+
+        // v2 Phase 12 observability: keyed heartbeat proving this cron loop is
+        // alive — GET /api/v1/platform/status reports its staleness. DB-backed
+        // (cache is not cross-process on every environment); guarded so a
+        // pre-migration deploy window cannot error the scheduler.
+        $schedule->call(function () {
+            try {
+                \Illuminate\Support\Facades\DB::table('platform_heartbeats')->updateOrInsert(
+                    ['name' => 'scheduler'],
+                    ['beat_at' => now()],
+                );
+            } catch (\Throwable $e) {
+                // platform_heartbeats not migrated yet — skip silently
+            }
+        })->name('platform-heartbeat')->everyMinute();
     }
 
     /**

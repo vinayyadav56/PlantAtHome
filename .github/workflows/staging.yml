@@ -96,8 +96,9 @@ jobs:
           extensions: mbstring, pdo_mysql, exif, gd, intl, zip, bcmath, opcache
           coverage: none
 
-      - name: Install dependencies (no-dev)
-        run: composer install --no-dev --optimize-autoloader --no-interaction
+      # Dev deps included — this job actually RUNS the test suite (PHPUnit).
+      - name: Install dependencies
+        run: composer install --optimize-autoloader --no-interaction
 
       - name: Copy staging env
         run: cp .env.staging.example .env
@@ -112,6 +113,16 @@ jobs:
           DB_USERNAME: root
           DB_PASSWORD: root
         run: php artisan migrate --force
+
+      # The full V2 suite (~132 tests, MySQL-e2e) gates every deploy — red
+      # tests block the deploy instead of reaching an environment.
+      - name: Run test suite
+        env:
+          DB_HOST: 127.0.0.1
+          DB_DATABASE: plantathome_test
+          DB_USERNAME: root
+          DB_PASSWORD: root
+        run: php artisan test --without-tty
 
   # ── 3. Verify Railway deploy ──────────────────────────────────────────────────
   # Railway auto-deploys when a push lands on staging (GitHub integration).
