@@ -30,12 +30,24 @@ final class HealthController extends ApiController
             $db = 'unavailable';
         }
 
+        // Coarse, PUBLIC scheduler liveness (age in seconds only — no data
+        // leak): production v2 has no seeded users, so the admin-gated
+        // /platform/status can't be the only way to see a dead cron loop.
+        $beatAge = null;
+        try {
+            $beatAt = DB::table('platform_heartbeats')->where('name', 'scheduler')->value('beat_at');
+            $beatAge = $beatAt ? Carbon::now()->diffInSeconds(Carbon::parse($beatAt)) : null;
+        } catch (\Throwable $e) {
+            // table not migrated yet
+        }
+
         return $this->ok([
             'status'  => 'ok',
             'service' => 'plantathome-api (v2 modular)',
             'db'      => $db,
             'env'     => config('app.env'),
             'time'    => Carbon::now()->toIso8601String(),
+            'scheduler_beat_age_seconds' => $beatAge,
         ]);
     }
 

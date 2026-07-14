@@ -205,6 +205,10 @@ jobs:
             php artisan db:seed --class="Marvel\\Database\\Seeders\\LocationSeeder" --force \
               || echo "WARNING: LocationSeeder failed"
 
+            echo "==> Seeding v2 Identity RBAC baseline (roles/permissions; NO demo users on production)..."
+            php artisan db:seed --class="App\\Modules\\Identity\\Database\\Seeders\\IdentityAccessSeeder" --force \
+              || echo "WARNING: IdentityAccessSeeder failed"
+
             echo "==> Forcing license trust ON (prevents recurring 'credentials was wrong')..."
             php artisan plantathome:ensure-trust || echo "WARNING: ensure-trust failed (env MARVEL_FORCE_TRUST still applies)"
 

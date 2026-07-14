@@ -21,7 +21,7 @@ tag group); release history in **Version Documentation**.
 
 | Endpoint | Auth | Purpose |
 |---|---|---|
-| `GET /api/v1/health` | public | DB connectivity + env — load-balancer probe |
+| `GET /api/v1/health` | public | DB connectivity + env + coarse `scheduler_beat_age_seconds` — load-balancer probe that also exposes a dead cron loop |
 | `GET /api/v1/platform/status` | admin/super_admin JWT | outbox backlog + oldest-pending age, queue depth, failed jobs (24 h), scheduler heartbeat staleness, single `healthy` verdict |
 | `POST /api/v1/platform/ping` | public | writes a demo event through the transactional outbox — end-to-end async smoke |
 
@@ -54,6 +54,16 @@ Prod worker ops (SSH): `sudo systemctl status plantathome-queue@default`,
   → same gates → SSH deploy (composer, `migrate --force`, idempotent seeders,
   cron/worker provisioning, config cache, php-fpm reload) → health check.
 - CI runs the test suite since v2.1.0; a red suite blocks both environments.
+
+## Users on production
+
+Production seeds the v2 RBAC baseline only — **no demo users** and no public
+registration. Mint the first real admin on the box:
+
+```bash
+php artisan v2:make-admin ops@plantathome.in --role=super_admin
+# generated password is printed once; login via POST /api/v1/auth/login
+```
 
 ## Environment variables
 

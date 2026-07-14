@@ -60,5 +60,11 @@ class IdentityServiceProvider extends ServiceProvider
 
         $this->app->make(SubscriberRegistry::class)
             ->listen('identity.user_logged_in', RecordLoginAudit::class);
+
+        // Console-only admin minting — production has no v2 demo users and no
+        // public registration, so this is the sanctioned bootstrap path.
+        if ($this->app->runningInConsole()) {
+            $this->commands([\App\Modules\Identity\Console\MakeAdminCommand::class]);
+        }
     }
 }
