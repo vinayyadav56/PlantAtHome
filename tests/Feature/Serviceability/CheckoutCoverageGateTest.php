@@ -112,13 +112,16 @@ class CheckoutCoverageGateTest extends ServiceabilityTestCase
     {
         $this->setFlag(true);
         $this->coverage->addCoverage(1, 'district', ['district_id' => $this->geo['gurgaon']]);
+        // Shop 2 opts into coverage with a rule that does NOT reach 122001.
+        $this->coverage->addCoverage(2, 'pincode_include', ['pincode' => '302001']);
 
         // Product 11 (shop 1) ships to 122001 — covered, no blocks.
         $ok = $this->repo->gate($this->lines(11), '122001');
         $this->assertSame([], $ok['blocked']);
         $this->assertNull($ok['coverage']);
 
-        // Product 22 (shop 2, no coverage) is blocked; product 11 is not.
+        // Product 22 (shop 2, configured but not covering 122001) blocks;
+        // product 11 does not.
         $mixed = $this->repo->gate($this->lines(11, 22), '122001');
         $this->assertSame([22], $mixed['blocked']);
         $this->assertSame('122001', $mixed['coverage']['pincode']);
@@ -126,17 +129,33 @@ class CheckoutCoverageGateTest extends ServiceabilityTestCase
         $this->assertSame('pincode_not_covered', $mixed['coverage']['reason']);
         $this->assertSame("Some items can't be delivered to 122001.", $mixed['coverage']['message']);
 
-        // Shop 1 does not cover Jaipur — its own line blocks there (coverage
-        // still configured platform-wide, so no fail-open).
+        // Shop 1 does not cover Jaipur — its own line blocks there.
         $jaipur = $this->repo->gate($this->lines(11), '302001');
         $this->assertSame([11], $jaipur['blocked']);
     }
 
-    public function test_rule_deleted_between_carts_starts_blocking(): void
+    public function test_vendor_without_rules_fails_open_per_vendor(): void
+    {
+        // Enforcement is PER-VENDOR opt-in (single-shop master catalog: the
+        // master shop and unmigrated vendors carry no rules and must never
+        // block). Coverage is "configured" platform-wide via shop 1, but
+        // shop 2 has no rules → its line passes anywhere.
+        $this->setFlag(true);
+        $this->coverage->addCoverage(1, 'district', ['district_id' => $this->geo['gurgaon']]);
+
+        $result = $this->repo->gate($this->lines(22), '999999');
+        $this->assertSame([], $result['blocked']);
+        $this->assertNull($result['coverage']);
+    }
+
+    public function test_rule_change_between_carts_starts_blocking(): void
     {
         $this->setFlag(true);
         $rule = $this->coverage->addCoverage(1, 'district', ['district_id' => $this->geo['gurgaon']]);
-        $this->coverage->addCoverage(2, 'pincode_include', ['pincode' => '302001']); // keeps coverage "configured"
+        // A second shop-1 rule keeps the vendor coverage-configured after the
+        // district rule is removed (removing the LAST rule = vendor opts out
+        // of enforcement entirely, by design).
+        $this->coverage->addCoverage(1, 'pincode_include', ['pincode' => '302001']);
 
         $this->assertSame([], $this->repo->gate($this->lines(11), '122001')['blocked']);
 

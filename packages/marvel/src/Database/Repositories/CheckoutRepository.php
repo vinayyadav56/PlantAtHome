@@ -166,9 +166,15 @@ class CheckoutRepository
      * silently (fail open): settings flag `coverageCheckoutGate` truthy, a
      * >= 6-digit shipping pincode, the V2 coverage service resolvable via
      * CoverageBridge, and at least one active coverage rule configured.
-     * A line blocks when its product's shop is not among the vendors covering
-     * the pincode. Deterministic by design: the candidate shop for a line is
-     * the product's own shop_id (assignment-engine alternatives are ignored).
+     *
+     * Vendor semantics (single-shop master catalog!): a line's candidate
+     * vendors are the SUPPLYING shops from the assignment engine — the
+     * product's own shop is the master catalog shop, which never carries
+     * coverage rules. Enforcement is PER-VENDOR opt-in: a candidate only
+     * counts against the line when it has coverage rules configured; vendors
+     * without rules fail open (not yet migrated). A line blocks only when it
+     * has candidates, every candidate is coverage-configured, and none of
+     * them covers the pincode.
      *
      * @param  array<int, array>  $lines  cart lines ({product_id, ...})
      * @return array{blocked: int[], coverage: ?array}
@@ -192,21 +198,66 @@ class CheckoutRepository
             $coveredShopIds = array_map('intval', $service->getAvailableNurseryIds($zip));
             $covered = array_flip($coveredShopIds);
 
-            $ids = collect($lines)->pluck('product_id')->filter()->unique()->map(fn ($id) => (int) $id)->values()->all();
-            if (empty($ids)) {
+            $lineList = collect($lines)
+                ->filter(fn ($l) => !empty($l['product_id']))
+                ->values();
+            if ($lineList->isEmpty()) {
                 return $none;
             }
-            // Raw read (no model scopes/casts) — we only need id → shop_id.
+
+            $assigner = app(\Marvel\Services\ItemAssignmentService::class);
+
+            // Candidate supplying vendors per line via the assignment engine;
+            // fall back to the product's own shop when no candidates exist.
+            $ids = $lineList->pluck('product_id')->unique()->map(fn ($id) => (int) $id)->values()->all();
             $shopByProduct = \Illuminate\Support\Facades\DB::table('products')
                 ->whereIn('id', $ids)->pluck('shop_id', 'id');
 
-            $blocked = [];
-            foreach ($ids as $pid) {
-                $shopId = $shopByProduct[$pid] ?? null;
-                if ($shopId === null) {
-                    continue; // unknown product line — leave it to the stock/city gates
+            $candidatesByProduct = [];
+            $allCandidateShops = [];
+            foreach ($lineList as $line) {
+                $pid = (int) $line['product_id'];
+                $vo = isset($line['variation_option_id']) ? (int) $line['variation_option_id'] : null;
+                $qty = max(1, (int) ($line['order_quantity'] ?? $line['quantity'] ?? 1));
+                $shops = [];
+                try {
+                    $cands = $assigner->candidatesFor($pid, $vo, $qty, null, $zip);
+                    $shops = collect($cands)->pluck('shop_id')->filter()->map(fn ($s) => (int) $s)->unique()->values()->all();
+                } catch (\Throwable $e) {
+                    // assignment engine unavailable → fall through to own shop
                 }
-                if (!isset($covered[(int) $shopId])) {
+                if ($shops === [] && isset($shopByProduct[$pid])) {
+                    $shops = [(int) $shopByProduct[$pid]];
+                }
+                $candidatesByProduct[$pid] = $shops;
+                foreach ($shops as $s) {
+                    $allCandidateShops[$s] = true;
+                }
+            }
+
+            // Per-vendor opt-in: only vendors WITH active rules are enforced.
+            $configured = array_flip(
+                \Illuminate\Support\Facades\DB::table('vendor_coverage_rules')
+                    ->whereIn('shop_id', array_keys($allCandidateShops))
+                    ->where('is_active', 1)
+                    ->distinct()->pluck('shop_id')
+                    ->map(fn ($s) => (int) $s)->all()
+            );
+
+            $blocked = [];
+            foreach ($candidatesByProduct as $pid => $shops) {
+                if ($shops === []) {
+                    continue; // no known vendor — leave to stock/city gates
+                }
+                $anyPasses = false;
+                foreach ($shops as $s) {
+                    // Covered, or not coverage-configured (fail open) → passes.
+                    if (isset($covered[$s]) || !isset($configured[$s])) {
+                        $anyPasses = true;
+                        break;
+                    }
+                }
+                if (!$anyPasses) {
                     $blocked[] = $pid;
                 }
             }
