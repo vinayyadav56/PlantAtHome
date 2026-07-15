@@ -23,6 +23,8 @@ final class Permission
     public const PRICING_MANAGE     = 'pricing.manage';    // pricing policies (Phase 6)
     public const ORDERS_VIEW_ALL    = 'orders.view_all';   // see every vendor's orders
     public const USERS_MANAGE       = 'users.manage';      // manage identity users
+    public const NURSERIES_MANAGE   = 'nurseries.manage';  // vendor lifecycle (Nursery module)
+    public const WITHDRAWALS_MANAGE = 'withdrawals.manage'; // decide vendor payouts
 
     // Nursery (vendor) self-service — always scoped to the caller's own nursery
     public const NURSERY_MANAGE_OWN = 'nursery.manage_own'; // own stock/pricing/sub-orders
@@ -49,6 +51,8 @@ final class Permission
             self::PRICING_MANAGE,
             self::ORDERS_VIEW_ALL,
             self::USERS_MANAGE,
+            self::NURSERIES_MANAGE,
+            self::WITHDRAWALS_MANAGE,
             self::NURSERY_MANAGE_OWN,
             self::NURSERY_VIEW_OWN,
             self::CATALOG_PROPOSE,

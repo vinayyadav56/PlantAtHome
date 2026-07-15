@@ -178,6 +178,7 @@ return [
         App\Providers\SharedKernelServiceProvider::class,
         // v2 bounded-context modules.
         App\Modules\Identity\Providers\IdentityServiceProvider::class,
+        App\Modules\Nursery\Providers\NurseryServiceProvider::class,
         App\Modules\Catalog\Providers\CatalogServiceProvider::class,
         App\Modules\Configuration\Providers\ConfigurationServiceProvider::class,
         App\Modules\Rules\Providers\RulesServiceProvider::class,
