@@ -33,6 +33,12 @@ class DeliveryCoverageController extends CoreController
         return $service;
     }
 
+    /** Public endpoints fail open (empty results) instead of 503ing. */
+    private function serviceOrNull()
+    {
+        return \Marvel\Services\CoverageBridge::service();
+    }
+
     /**
      * A use-case failure thrown by the V2 service (duck-typed so the V2 class
      * is never named here) → marvel-style JSON error; anything else rethrows.
@@ -46,6 +52,36 @@ class DeliveryCoverageController extends CoreController
             );
         }
         throw $e;
+    }
+
+    /* ── Public ────────────────────────────────────────────────────────── */
+
+    /**
+     * GET delivery-nurseries?pincode= — vendors able to deliver to a pincode.
+     * Sanitized public fields only (no balances, owners or internals).
+     */
+    public function nurseries(Request $request)
+    {
+        $request->validate(['pincode' => 'required|digits:6']);
+        $svc = $this->serviceOrNull();
+        if ($svc === null || ! $svc->anyCoverageConfigured()) {
+            return ['pincode' => (string) $request->pincode, 'nurseries' => [], 'unconfigured' => true];
+        }
+
+        $shopIds = $svc->getAvailableNurseryIds((string) $request->pincode);
+        $shops = $shopIds === [] ? collect() : \Illuminate\Support\Facades\DB::table('shops')
+            ->whereIn('id', $shopIds)->where('is_active', 1)
+            ->get(['id', 'name', 'slug', 'logo']);
+
+        return [
+            'pincode' => (string) $request->pincode,
+            'nurseries' => $shops->map(fn ($s) => [
+                'id' => (int) $s->id,
+                'name' => $s->name,
+                'slug' => $s->slug,
+                'logo' => is_string($s->logo) ? json_decode($s->logo, true) : $s->logo,
+            ])->values(),
+        ];
     }
 
     /* ── Admin ─────────────────────────────────────────────────────────── */

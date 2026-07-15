@@ -208,6 +208,9 @@ Route::get('delivery-pincodes/check', [DeliveryPincodeController::class, 'check'
 // (shown when the check above comes back unserviceable). Rate-limited.
 Route::post('delivery-notify', [DeliveryNotifyController::class, 'store'])
     ->middleware('throttle:20,1');
+// Nurseries able to deliver to a pincode (sanitized public fields only).
+Route::get('delivery-nurseries', [DeliveryCoverageController::class, 'nurseries'])
+    ->middleware('throttle:60,1');
 
 // Master Location System (Phase 2) — public lookups for the State→City address
 // dropdowns (storefront + admin). Read-only, rate-limited.
