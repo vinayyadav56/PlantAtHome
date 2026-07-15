@@ -252,10 +252,11 @@ class ProductRepository extends BaseRepository
             $data['slug'] = $this->makeSlug($request);
 
             if ($setting->options["isProductReview"]) {
-                if ($request->status == ProductStatus::DRAFT) {
-                    $data['status'] = ProductStatus::DRAFT;
-                } elseif ($request->status == ProductStatus::UNDER_REVIEW) {
-                    $data['status'] = ProductStatus::UNDER_REVIEW;
+                // Master-catalog model: both admins and vendors may create a
+                // product that goes live immediately, so PUBLISH is a valid
+                // create status alongside draft/under_review.
+                if (in_array($request->status, [ProductStatus::DRAFT, ProductStatus::UNDER_REVIEW, ProductStatus::PUBLISH], true)) {
+                    $data['status'] = $request->status;
                 } else {
                     throw new HttpException(406, 'The selected status is invalid.');
                 }
@@ -438,6 +439,21 @@ class ProductRepository extends BaseRepository
     public function checkProductForPublish($request, $product)
     {
         $status = '';
+        // Master-catalog vendor: the product belongs to the master shop, so the
+        // owner-id check below never matches a store owner. A vendor who created
+        // this product (proposed_by_shop_id) controls its status directly —
+        // honor the requested publish/unpublish/draft.
+        $user = $request->user();
+        if ($user && $product->proposed_by_shop_id && $user->hasPermissionTo(Permission::STORE_OWNER)) {
+            $ownsProposal = \Marvel\Database\Models\Shop::where('owner_id', $user->id)
+                ->where('id', (int) $product->proposed_by_shop_id)
+                ->exists();
+            if ($ownsProposal) {
+                return in_array($request->status, [ProductStatus::PUBLISH, ProductStatus::UNPUBLISH, ProductStatus::DRAFT], true)
+                    ? $request->status
+                    : ProductStatus::PUBLISH;
+            }
+        }
         if ($product->shop['owner']['id'] == $request->user()->id) {
             if ($product->status == ProductStatus::DRAFT || $product->status == ProductStatus::UNDER_REVIEW || $product->status == ProductStatus::REJECTED) {
                 if ($request->status == ProductStatus::DRAFT) {

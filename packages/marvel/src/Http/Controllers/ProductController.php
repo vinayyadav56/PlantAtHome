@@ -242,10 +242,11 @@ class ProductController extends CoreController
     public function ProductStore(Request $request)
     {
         // ── Single-shop master catalog ─────────────────────────────────────────
-        // Every product belongs to THE master PlantAtHome shop. A super admin
-        // creates directly; a store owner (vendor) PROPOSES — the product enters
-        // the master catalog as UNDER_REVIEW, attributed to their shop, and goes
-        // live only after admin approval (update-product-status).
+        // Every product belongs to THE master PlantAtHome shop. Both a super admin
+        // and a store owner (vendor) create directly into the master catalog and
+        // the product goes LIVE immediately (no review gate). A vendor create is
+        // still attributed to their shop via proposed_by_shop_id so they retain
+        // edit/delete rights over their own products.
         $user = $request->user();
         $isSuperAdmin = $user && $user->hasPermissionTo(Permission::SUPER_ADMIN);
         $vendorShopId = null;
@@ -273,8 +274,11 @@ class ProductController extends CoreController
         }
 
         $request->merge(['shop_id' => \Marvel\Database\Models\Shop::masterId()]);
-        if (!$isSuperAdmin) {
-            $request->merge(['status' => \Marvel\Enums\ProductStatus::UNDER_REVIEW]);
+        // Vendors publish straight to the live catalog like admins. If the form
+        // didn't send a status, default a vendor create to PUBLISH (go live);
+        // an explicit status (e.g. Draft) is honored.
+        if (!$isSuperAdmin && !$request->filled('status')) {
+            $request->merge(['status' => \Marvel\Enums\ProductStatus::PUBLISH]);
         }
 
         try {
@@ -525,13 +529,26 @@ class ProductController extends CoreController
     {
         $setting = $this->settings->first();
         if ($this->canManageProduct($request->user(), $request->id)) {
-            // Master-catalog invariants a vendor edit must not break: ownership stays
-            // with the master shop, and a pending proposal stays pending.
+            // Master-catalog invariant a vendor edit must not break: ownership stays
+            // with the master shop. The vendor keeps control of the product status
+            // (publish / unpublish / draft) — edits no longer force a re-review.
             $user = $request->user();
             if (!($user && $user->hasPermissionTo(Permission::SUPER_ADMIN))) {
+                // A vendor may edit their live product, but not hide (unpublish/
+                // draft/reject) one that other vendors are already supplying.
+                $product = Product::find((int) $request->id);
+                $hidingStatuses = [
+                    \Marvel\Enums\ProductStatus::UNPUBLISH,
+                    \Marvel\Enums\ProductStatus::DRAFT,
+                    \Marvel\Enums\ProductStatus::REJECTED,
+                ];
+                if ($product
+                    && in_array($request->status, $hidingStatuses, true)
+                    && $this->vendorBlockedOnSharedLive($user, $product)) {
+                    throw new AuthorizationException('This product is being sold by other vendors — ask an admin to unpublish or remove it.');
+                }
                 $request->merge([
                     'shop_id' => \Marvel\Database\Models\Shop::masterId(),
-                    'status'  => \Marvel\Enums\ProductStatus::UNDER_REVIEW,
                 ]);
             }
             $id = $request->id;
@@ -545,8 +562,8 @@ class ProductController extends CoreController
 
     /**
      * Single-shop management gate: super admin manages everything; a store owner
-     * may only touch their OWN pending proposal (under_review / draft / rejected —
-     * never a live catalog product).
+     * may manage the products THEY created (matched via proposed_by_shop_id) at
+     * any status, including live — but never admin-created or other vendors' products.
      */
     private function canManageProduct($user, $productId): bool
     {
@@ -560,14 +577,30 @@ class ProductController extends CoreController
         if (!$product || !$product->proposed_by_shop_id) {
             return false;
         }
-        $ownsProposal = \Marvel\Database\Models\Shop::where('owner_id', $user->id)
+        return \Marvel\Database\Models\Shop::where('owner_id', $user->id)
             ->where('id', (int) $product->proposed_by_shop_id)
             ->exists();
-        return $ownsProposal && in_array($product->status, [
-            \Marvel\Enums\ProductStatus::UNDER_REVIEW,
-            \Marvel\Enums\ProductStatus::DRAFT,
-            \Marvel\Enums\ProductStatus::REJECTED,
-        ], true);
+    }
+
+    /**
+     * Shared-catalog integrity: a vendor may create and edit their products, but
+     * must NOT unilaterally delete or hide (unpublish/draft/reject) a LIVE product
+     * that OTHER vendors are already supplying — that would take a shared, revenue-
+     * generating SKU off the storefront for everyone. Those actions are admin-only.
+     * Returns true when the action must be blocked for this store owner.
+     */
+    private function vendorBlockedOnSharedLive($user, Product $product): bool
+    {
+        if (!$user || $user->hasPermissionTo(Permission::SUPER_ADMIN)) {
+            return false; // admins may manage any catalog product
+        }
+        if ($product->status !== \Marvel\Enums\ProductStatus::PUBLISH) {
+            return false; // only live products are shared on the storefront
+        }
+        $vendorShopId = $this->vendorActiveShopId($user);
+        return \Marvel\Database\Models\VendorProductPrice::where('product_id', $product->id)
+            ->when($vendorShopId, fn ($q) => $q->where('shop_id', '!=', $vendorShopId))
+            ->exists();
     }
 
     /**
@@ -620,9 +653,12 @@ class ProductController extends CoreController
     {
         try {
             $product = $this->repository->findOrFail($request->id);
-            // Single-shop gate: super admin, or a vendor withdrawing their OWN
-            // pending proposal (never a live catalog product).
+            // Single-shop gate: super admin, or a vendor managing their OWN product.
             if ($this->canManageProduct($request->user(), $product->id)) {
+                // ...but a vendor may not delete a live product other vendors sell.
+                if ($this->vendorBlockedOnSharedLive($request->user(), $product)) {
+                    throw new AuthorizationException('This product is being sold by other vendors — ask an admin to remove it.');
+                }
                 $product->delete();
                 $this->bustResponseCache('products'); // refresh storefront list/PDP caches
                 return $product;
