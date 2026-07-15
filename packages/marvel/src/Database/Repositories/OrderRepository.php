@@ -59,6 +59,7 @@ class OrderRepository extends BaseRepository
         'order_status',   // enables vendor "rejected orders" (cancelled/refunded) filtering
         'delivery_mode',  // enables vendor/admin "courier orders" filtering
         'is_pinned',      // F3: allows filtering pinned orders if ever needed
+        'payment_status', // admin transactions page: payment-lifecycle filter
     ];
     /**
      * @var string[]
