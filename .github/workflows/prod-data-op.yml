@@ -44,6 +44,9 @@ on:
           - recompute-availability
           - cities-seed
           - company-address
+          - v2-backfill-dry
+          - v2-backfill
+          - v2-backfill-verify
         default: dry-run
 
 jobs:
@@ -79,7 +82,7 @@ jobs:
             img-limit10)   ARGS="plantathome:repair-plant-images --limit=10" ;;
             img-full)      ARGS="plantathome:repair-plant-images" ;;
             img-rollback)  ARGS="plantathome:repair-plant-images --rollback" ;;
-            cat-backup|cat-restore|cat-seed|tools-seed|sku-gen|recompute-availability|cities-seed|company-address) ARGS="" ;;
+            cat-backup|cat-restore|cat-seed|tools-seed|sku-gen|recompute-availability|cities-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             *) echo "Unknown mode"; exit 1 ;;
@@ -216,6 +219,23 @@ jobs:
                 php artisan plantathome:assign-shop || true
                 php artisan cache:clear 2>/dev/null || true
                 echo "==> TOOLS-SEED COMPLETE"
+                ;;
+
+              v2-backfill-dry|v2-backfill|v2-backfill-verify)
+                # Legacy -> V2 backfill (strangler-fig migration). Reads legacy
+                # tables, upserts V2 tables keyed on legacy_id — idempotent, no
+                # legacy rows are modified. Requires the production.yml deploy
+                # (new code + migrations) to have run first.
+                case "$OP_MODE" in
+                  v2-backfill-dry)    FLAG="--dry-run" ;;
+                  v2-backfill)        FLAG="" ;;
+                  v2-backfill-verify) FLAG="--verify" ;;
+                esac
+                echo "==> php artisan v2:backfill-users $FLAG"
+                php artisan v2:backfill-users $FLAG
+                echo "==> php artisan v2:backfill-nurseries $FLAG"
+                php artisan v2:backfill-nurseries $FLAG
+                echo "==> V2-BACKFILL ($OP_MODE) COMPLETE"
                 ;;
 
               cat-seed)
