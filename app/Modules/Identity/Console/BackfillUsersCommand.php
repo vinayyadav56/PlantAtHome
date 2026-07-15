@@ -28,6 +28,9 @@ class BackfillUsersCommand extends BackfillCommand
     /** @var array<int,string>|null legacy user id -> legacy permission names */
     private ?array $permissionNames = null;
 
+    /** @var array<int,int>|null legacy owner user id -> first owned shop id */
+    private ?array $ownedShopIds = null;
+
     protected function steps(): array
     {
         return [[
@@ -37,6 +40,14 @@ class BackfillUsersCommand extends BackfillCommand
             'map' => function (object $row): ?array {
                 $role = $this->roleForLegacyUser($row);
 
+                // Owners are linked via shops.owner_id (users.shop_id is only
+                // set for staff), so scope owners to the shop they own.
+                $scopeShopId = match ($role) {
+                    RoleName::NURSERY_OWNER => $this->ownedShopIds()[$row->id] ?? ($row->shop_id ?: null),
+                    RoleName::NURSERY_STAFF => $row->shop_id ?: null,
+                    default => null,
+                };
+
                 return [
                     'uuid' => LegacyUuid::for('users', $row->id),
                     'legacy_id' => $row->id,
@@ -44,9 +55,7 @@ class BackfillUsersCommand extends BackfillCommand
                     'email' => $row->email,
                     'password' => $row->password,
                     'role_id' => $this->roleId($role),
-                    'nursery_id' => $role === RoleName::NURSERY_OWNER || $role === RoleName::NURSERY_STAFF
-                        ? ($row->shop_id ? LegacyUuid::for('shops', $row->shop_id) : null)
-                        : null,
+                    'nursery_id' => $scopeShopId ? LegacyUuid::for('shops', $scopeShopId) : null,
                     'is_active' => (bool) ($row->is_active ?? true),
                     'email_verified_at' => $row->email_verified_at,
                     'created_at' => $row->created_at,
@@ -69,7 +78,9 @@ class BackfillUsersCommand extends BackfillCommand
             return RoleName::ADMIN;
         }
 
-        if (in_array('store_owner', $permissions, true) && ! empty($row->shop_id)) {
+        // Owners are recognized by the store_owner permission alone — their
+        // shop link is shops.owner_id, NOT users.shop_id (staff-only column).
+        if (in_array('store_owner', $permissions, true)) {
             return RoleName::NURSERY_OWNER;
         }
 
@@ -78,6 +89,19 @@ class BackfillUsersCommand extends BackfillCommand
         }
 
         return RoleName::CUSTOMER;
+    }
+
+    /** @return array<int,int> owner user id -> first owned shop id */
+    private function ownedShopIds(): array
+    {
+        if ($this->ownedShopIds === null) {
+            $this->ownedShopIds = [];
+            DB::table('shops')->orderBy('id')->select('id', 'owner_id')->each(function (object $shop) {
+                $this->ownedShopIds[(int) $shop->owner_id] ??= (int) $shop->id;
+            });
+        }
+
+        return $this->ownedShopIds;
     }
 
     /** @return array<string,int> */
