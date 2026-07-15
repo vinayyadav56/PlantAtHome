@@ -53,8 +53,15 @@ class CoverageBackfillCommandTest extends ServiceabilityTestCase
             ->expectsOutputToContain('INVARIANT PASS')
             ->assertExitCode(0);
 
-        // Rules: two city rules + one include.
-        $expected = collect(['city:' . $this->geo['faridabad_c'], 'city:' . $this->geo['gurugram_c'], 'pincode_include:302001'])->sort()->values()->all();
+        // Rules: three city rules + one include — a row carrying BOTH a city
+        // and a pincode contributes BOTH (dropping the city half shrank
+        // coverage and failed the invariant on staging).
+        $expected = collect([
+            'city:' . $this->geo['faridabad_c'],
+            'city:' . $this->geo['gurugram_c'],
+            'city:' . $this->geo['jaipur_c'],
+            'pincode_include:302001',
+        ])->sort()->values()->all();
         $this->assertSame(
             $expected,
             DB::table('vendor_coverage_rules')->where('shop_id', 1)->orderBy('target_key')->pluck('target_key')->all()
@@ -80,7 +87,7 @@ class CoverageBackfillCommandTest extends ServiceabilityTestCase
 
         // Idempotent: a re-run creates nothing new.
         $this->artisan('plantathome:coverage-backfill', ['--shop' => 1])->assertExitCode(0);
-        $this->assertSame(3, DB::table('vendor_coverage_rules')->where('shop_id', 1)->count());
+        $this->assertSame(4, DB::table('vendor_coverage_rules')->where('shop_id', 1)->count());
     }
 
     public function test_unresolvable_city_fails_the_invariant_and_the_command(): void

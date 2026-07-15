@@ -86,6 +86,20 @@ class GeoMasterSeeder extends Seeder
      *
      * @return array{0:int, 1:int} [matched, unmatched]
      */
+    /**
+     * The storefront's canonical city aliases (mirrors
+     * Marvel\Services\AvailabilityService::normalizeCityKey) so e.g. a
+     * "Bangalore" city row still matches the "Bengaluru" district.
+     */
+    private const CITY_ALIASES = [
+        'gurgaon' => 'gurugram',
+        'bangalore' => 'bengaluru',
+        'bombay' => 'mumbai',
+        'calcutta' => 'kolkata',
+        'madras' => 'chennai',
+        'new delhi' => 'delhi',
+    ];
+
     private function rollupCities(): array
     {
         if (! DB::getSchemaBuilder()->hasTable('cities')) {
@@ -93,15 +107,45 @@ class GeoMasterSeeder extends Seeder
         }
 
         foreach (DB::table('districts')->get(['id', 'state_id', 'name']) as $district) {
+            $districtKey = mb_strtolower(trim($district->name));
+            $names = [$districtKey];
+            // Alias keys whose canonical form is this district also match.
+            foreach (self::CITY_ALIASES as $alias => $canonical) {
+                if ($canonical === $districtKey) {
+                    $names[] = $alias;
+                }
+            }
             DB::table('cities')
                 ->where('state_id', $district->state_id)
-                ->whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower(trim($district->name))])
+                ->whereIn(DB::raw('LOWER(TRIM(name))'), $names)
                 ->update(['district_id' => $district->id]);
         }
 
         $matchedCities = DB::table('cities')->whereNotNull('district_id')->get(['id', 'district_id']);
         foreach ($matchedCities as $city) {
             DB::table('postal_codes')->where('district_id', $city->district_id)->update(['city_id' => $city->id]);
+        }
+
+        // Metro city-states (Delhi, Chandigarh…): a city named exactly like its
+        // STATE spans every district of that state ("North Delhi" etc.), so no
+        // single district matches. Map all the state's pins to that city.
+        $states = DB::table('states')->get(['id', 'name']);
+        foreach ($states as $state) {
+            $stateKey = mb_strtolower(trim($state->name));
+            $cityStates = DB::table('cities')
+                ->where('state_id', $state->id)
+                ->whereNull('district_id')
+                ->whereIn(DB::raw('LOWER(TRIM(name))'), array_merge(
+                    [$stateKey],
+                    array_keys(array_filter(self::CITY_ALIASES, fn ($c) => $c === $stateKey)),
+                ))
+                ->get(['id']);
+            foreach ($cityStates as $cityState) {
+                DB::table('postal_codes')
+                    ->where('state_id', $state->id)
+                    ->whereNull('city_id')
+                    ->update(['city_id' => $cityState->id]);
+            }
         }
 
         // Remaining pins: a city name appearing inside the delivery office name.

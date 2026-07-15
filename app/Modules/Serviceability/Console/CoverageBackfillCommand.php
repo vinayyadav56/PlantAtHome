@@ -89,11 +89,13 @@ class CoverageBackfillCommand extends Command
                     // Pincode-specific row → include rule (must exist in the master).
                     if (!preg_match('/^\d{6}$/', $pin) || !DB::table('postal_codes')->where('pincode', $pin)->exists()) {
                         $unresolved[] = "pincode {$pin} not in postal master";
-                        continue;
+                    } else {
+                        $key = VendorCoverageRule::targetKey(VendorCoverageRule::TYPE_PINCODE_INCLUDE, $pin);
+                        $rules[$key] = ['rule_type' => VendorCoverageRule::TYPE_PINCODE_INCLUDE, 'pincode' => $pin];
                     }
-                    $key = VendorCoverageRule::targetKey(VendorCoverageRule::TYPE_PINCODE_INCLUDE, $pin);
-                    $rules[$key] = ['rule_type' => VendorCoverageRule::TYPE_PINCODE_INCLUDE, 'pincode' => $pin];
-                    continue;
+                    // A row can carry BOTH a pincode and a city — the city half
+                    // still contributes coverage (dropping it shrank vendors'
+                    // reach and failed the superset invariant on staging).
                 }
 
                 $cityName = trim((string) $area->city);
