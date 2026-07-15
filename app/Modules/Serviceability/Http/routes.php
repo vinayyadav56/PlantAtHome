@@ -2,6 +2,7 @@
 
 use App\Modules\Serviceability\Http\Controllers\CityController;
 use App\Modules\Serviceability\Http\Controllers\CoverageController;
+use App\Modules\Serviceability\Http\Controllers\GeoController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -18,6 +19,14 @@ Route::prefix('serviceability')->group(function () {
     Route::get('cities/{city}/serviceable', [CityController::class, 'serviceable']);
     Route::get('availability', [CoverageController::class, 'availability']);
     Route::post('delivery-check', [CoverageController::class, 'deliveryCheck']);
+
+    // Public geo master lookups (address forms + coverage pickers)
+    Route::prefix('geo')->middleware('v1.auth.optional')->group(function () {
+        Route::get('states', [GeoController::class, 'states']);
+        Route::get('districts', [GeoController::class, 'districts']);
+        Route::get('cities', [GeoController::class, 'cities']);
+        Route::get('postal-codes', [GeoController::class, 'postalCodes']);
+    });
 
     // Admin: cities
     Route::post('cities', [CityController::class, 'store'])

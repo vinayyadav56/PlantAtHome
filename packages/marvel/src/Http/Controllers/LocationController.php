@@ -26,13 +26,69 @@ class LocationController extends CoreController
 
     public function cities(Request $request)
     {
+        // Delivery Coverage — cities can be filtered by their district once the
+        // geo-master migration has landed (guarded: the column arrives with the
+        // Serviceability module's migrations, which can lag the code deploy).
+        $hasDistrict = \Illuminate\Support\Facades\Schema::hasColumn('cities', 'district_id');
+
         $query = City::query()
             ->when($request->filled('state_id'), fn ($q) => $q->where('state_id', $request->state_id))
             ->when($request->filled('state'), fn ($q) => $q->where('state_name', $request->state))
+            ->when($hasDistrict && $request->filled('district_id'), fn ($q) => $q->where('district_id', $request->district_id))
             ->when($request->boolean('serviceable'), fn ($q) => $q->where('is_serviceable', true)->whereIn('status', [City::STATUS_ACTIVE, City::STATUS_MAINTENANCE]));
 
-        return $query->orderBy('name')
-            ->get(['id', 'name', 'state_id', 'state_name', 'status', 'is_serviceable', 'lat', 'lng']);
+        $columns = ['id', 'name', 'state_id', 'state_name', 'status', 'is_serviceable', 'lat', 'lng'];
+        if ($hasDistrict) {
+            $columns[] = 'district_id';
+        }
+
+        return $query->orderBy('name')->get($columns);
+    }
+
+    /**
+     * Public: active districts for a state (coverage pickers + address forms).
+     * Cached under the geo master version (bumped by any geo admin write).
+     */
+    public function districts(Request $request)
+    {
+        if (!\Illuminate\Support\Facades\Schema::hasTable('districts')) {
+            return [];
+        }
+        $stateId = (int) $request->query('state_id', 0);
+        $ver = (int) \Illuminate\Support\Facades\Cache::get('geo:ver', 0);
+
+        return \Illuminate\Support\Facades\Cache::remember(
+            "locations:districts:v{$ver}:{$stateId}",
+            3600,
+            fn () => \Illuminate\Support\Facades\DB::table('districts')
+                ->where('is_active', true)
+                ->when($stateId > 0, fn ($q) => $q->where('state_id', $stateId))
+                ->orderBy('name')
+                ->get(['id', 'state_id', 'name', 'code'])
+                ->all()
+        );
+    }
+
+    /**
+     * Public: postal-code lookup (paginated) by district, city or free-text
+     * pincode/office search — powers the coverage pickers.
+     */
+    public function postalCodes(Request $request)
+    {
+        if (!\Illuminate\Support\Facades\Schema::hasTable('postal_codes')) {
+            return response()->json(['data' => []]);
+        }
+        $search = trim((string) $request->query('search', ''));
+
+        return \Illuminate\Support\Facades\DB::table('postal_codes')
+            ->where('status', 'active')
+            ->when($request->filled('district_id'), fn ($q) => $q->where('district_id', (int) $request->district_id))
+            ->when($request->filled('city_id'), fn ($q) => $q->where('city_id', (int) $request->city_id))
+            ->when($search !== '', fn ($q) => $q->where(fn ($w) => $w
+                ->where('pincode', 'like', $search . '%')
+                ->orWhere('office_name', 'like', '%' . $search . '%')))
+            ->orderBy('pincode')
+            ->paginate(min(100, max(1, (int) ($request->limit ?? 50))));
     }
 
     // ── Admin: states ───────────────────────────────────────────────────────
@@ -156,6 +212,106 @@ class LocationController extends CoreController
             'settings'       => 'nullable|array',
             'display_order'  => 'nullable|integer',
         ]);
+    }
+
+    // ── Admin: districts + postal-code remap (Delivery Coverage geo master) ─
+    // Raw-table access (module-owned tables); geo:ver bump invalidates the
+    // cached public lookups here and in the V2 geo endpoints.
+
+    public function districtIndex(Request $request)
+    {
+        return \Illuminate\Support\Facades\DB::table('districts as d')
+            ->leftJoin('states as s', 's.id', '=', 'd.state_id')
+            ->when($request->filled('state_id'), fn ($q) => $q->where('d.state_id', (int) $request->state_id))
+            ->when($request->filled('search'), fn ($q) => $q->where('d.name', 'like', "%{$request->search}%"))
+            ->orderBy('d.name')
+            ->select('d.*', 's.name as state_name')
+            ->paginate((int) ($request->limit ?? 50));
+    }
+
+    public function districtStore(Request $request)
+    {
+        $data = $request->validate([
+            'state_id'  => 'required|integer|exists:states,id',
+            'name'      => 'required|string|max:255',
+            'code'      => 'nullable|string|max:16',
+            'is_active' => 'nullable|boolean',
+        ]);
+        $exists = \Illuminate\Support\Facades\DB::table('districts')
+            ->where('state_id', $data['state_id'])
+            ->whereRaw('LOWER(name) = ?', [strtolower($data['name'])])
+            ->exists();
+        if ($exists) {
+            return response()->json(['message' => 'A district with this name already exists in the state.'], 422);
+        }
+        $now = now();
+        $id = \Illuminate\Support\Facades\DB::table('districts')->insertGetId([
+            'state_id'   => (int) $data['state_id'],
+            'name'       => $data['name'],
+            'code'       => $data['code'] ?? null,
+            'is_active'  => (bool) ($data['is_active'] ?? true),
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        $this->bumpGeoVersion();
+        return \Illuminate\Support\Facades\DB::table('districts')->where('id', $id)->first();
+    }
+
+    public function districtUpdate(Request $request, $id)
+    {
+        $table = \Illuminate\Support\Facades\DB::table('districts');
+        $district = (clone $table)->where('id', (int) $id)->first();
+        if (!$district) {
+            return response()->json(['message' => 'District not found.'], 404);
+        }
+        $data = $request->validate([
+            'state_id'  => 'sometimes|integer|exists:states,id',
+            'name'      => 'sometimes|string|max:255',
+            'code'      => 'nullable|string|max:16',
+            'is_active' => 'nullable|boolean',
+        ]);
+        $update = array_intersect_key($data, array_flip(['state_id', 'name', 'code', 'is_active']));
+        if ($update !== []) {
+            (clone $table)->where('id', (int) $id)->update($update + ['updated_at' => now()]);
+            $this->bumpGeoVersion();
+        }
+        return (clone $table)->where('id', (int) $id)->first();
+    }
+
+    /** PUT postal-codes/{id} — remap a pin's city (projection city bridge) or flip its status. */
+    public function postalCodeUpdate(Request $request, $id)
+    {
+        $table = \Illuminate\Support\Facades\DB::table('postal_codes');
+        $row = (clone $table)->where('id', (int) $id)->first();
+        if (!$row) {
+            return response()->json(['message' => 'Postal code not found.'], 404);
+        }
+        $data = $request->validate([
+            'city_id' => 'nullable|integer|exists:cities,id',
+            'status'  => ['sometimes', Rule::in(['active', 'inactive'])],
+        ]);
+        $update = [];
+        if ($request->exists('city_id')) {
+            $update['city_id'] = $data['city_id'] ?? null;
+        }
+        if (array_key_exists('status', $data)) {
+            $update['status'] = $data['status'];
+        }
+        if ($update !== []) {
+            (clone $table)->where('id', (int) $id)->update($update + ['updated_at' => now()]);
+            $this->bumpGeoVersion();
+        }
+        return (clone $table)->where('id', (int) $id)->first();
+    }
+
+    /** Invalidate cached geo lookups (public districts/postal endpoints key off geo:ver). */
+    protected function bumpGeoVersion(): void
+    {
+        try {
+            \Illuminate\Support\Facades\Cache::increment('geo:ver');
+        } catch (\Throwable $e) {
+            // cache driver hiccup — stale lookups expire via TTL
+        }
     }
 
     // ── Admin: warehouses ───────────────────────────────────────────────────

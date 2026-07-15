@@ -94,6 +94,9 @@ class OrderRepository extends BaseRepository
         'is_non_serviceable_order',
         'detected_city',
         'serviceable_city',
+        // Delivery Coverage snapshot ({pincode, shop_id, source, geo names,
+        // coverage_ver, checked_at}) — computed server-side in storeOrder().
+        'delivery_coverage',
     ];
 
     public function boot()
@@ -213,6 +216,13 @@ class OrderRepository extends BaseRepository
         // Snapshot the expected vendor payout (lowest covering rate) for true-profit
         // reporting. Hidden from customers; persisted on the parent + split across suborders.
         $request['vendor_cost_total'] = $this->computeVendorCostTotal($request['products'], $custLatLng, $custCity);
+
+        // Delivery Coverage snapshot — how the shipping pincode resolved at order
+        // time (audit/debug; never gates). Best-effort: null on any miss/fault.
+        $coverageSnapshot = $this->deliveryCoverageSnapshot($request);
+        if ($coverageSnapshot !== null) {
+            $request['delivery_coverage'] = $coverageSnapshot;
+        }
 
         // H8 — block oversell at order creation. The atomic decrement keeps the
         // stock column from going negative, but without this the order would still
@@ -830,6 +840,70 @@ class OrderRepository extends BaseRepository
         $addr = $request['shipping_address'] ?? null;
         $city = is_array($addr) ? ($addr['city'] ?? null) : null;
         return ($city !== null && trim((string) $city) !== '') ? (string) $city : null;
+    }
+
+    /**
+     * Delivery Coverage snapshot for the order being created: the shipping
+     * pincode, the first line's shop and the coverage tier that covered it
+     * (state|district|city|manual|null), the pin's geo names from the postal
+     * master, and the coverage projection version — enough to answer "why
+     * was/wasn't this deliverable?" long after rules change. Best-effort and
+     * additive: ANY missing precondition or fault returns null (no snapshot).
+     */
+    protected function deliveryCoverageSnapshot($request): ?array
+    {
+        try {
+            if (!\Illuminate\Support\Facades\Schema::hasColumn('orders', 'delivery_coverage')) {
+                return null; // migration lag — column not landed yet
+            }
+            $addr = $request['shipping_address'] ?? null;
+            $a = is_array($addr) ? (array) ($addr['address'] ?? $addr) : [];
+            $zip = preg_replace('/\D+/', '', (string) ($a['zip'] ?? $a['pincode'] ?? $a['postal_code'] ?? (is_array($addr) ? ($addr['zip'] ?? '') : '')));
+            if (strlen($zip) < 6) {
+                return null;
+            }
+            $service = \Marvel\Services\CoverageBridge::service();
+            if ($service === null) {
+                return null;
+            }
+
+            // First cart line's shop — the deterministic "who fulfils this" candidate.
+            $shopId = null;
+            foreach ((array) $request['products'] as $line) {
+                $pid = (int) ($line['product_id'] ?? 0);
+                if ($pid > 0) {
+                    $sid = \Illuminate\Support\Facades\DB::table('products')->where('id', $pid)->value('shop_id');
+                    if ($sid !== null) {
+                        $shopId = (int) $sid;
+                    }
+                    break;
+                }
+            }
+
+            $geo = \Illuminate\Support\Facades\DB::table('postal_codes')
+                ->leftJoin('states', 'states.id', '=', 'postal_codes.state_id')
+                ->leftJoin('districts', 'districts.id', '=', 'postal_codes.district_id')
+                ->leftJoin('cities', 'cities.id', '=', 'postal_codes.city_id')
+                ->where('postal_codes.pincode', $zip)
+                ->first([
+                    'states.name as state_name',
+                    'districts.name as district_name',
+                    'cities.name as city_name',
+                ]);
+
+            return [
+                'pincode'      => $zip,
+                'shop_id'      => $shopId,
+                'source'       => $shopId !== null ? $service->resolveSource($shopId, $zip) : null,
+                'state'        => $geo->state_name ?? null,
+                'district'     => $geo->district_name ?? null,
+                'city'         => $geo->city_name ?? null,
+                'coverage_ver' => (int) \Illuminate\Support\Facades\Cache::get('coverage:ver', 0),
+                'checked_at'   => now()->toIso8601String(),
+            ];
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /**

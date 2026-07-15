@@ -27,6 +27,8 @@ class Order extends Model
         'payment_intent_info' => 'json',
         'is_pinned'           => 'boolean',
         'pinned_at'           => 'datetime',
+        // Delivery Coverage snapshot at order time (see OrderRepository).
+        'delivery_coverage'   => 'json',
     ];
 
     /**

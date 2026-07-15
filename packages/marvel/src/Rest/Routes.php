@@ -57,6 +57,8 @@ use Marvel\Http\Controllers\PlantDoctorController;
 use Marvel\Http\Controllers\CarePlanController;
 use Marvel\Http\Controllers\AiChatController;
 use Marvel\Http\Controllers\DeliveryPincodeController;
+use Marvel\Http\Controllers\DeliveryCoverageController;
+use Marvel\Http\Controllers\DeliveryNotifyController;
 use Marvel\Http\Controllers\DeliveryPartnerController;
 use Marvel\Http\Controllers\PriceSheetController;
 use Marvel\Http\Controllers\VendorInventoryController;
@@ -202,10 +204,18 @@ Route::post('webhooks/razorpay-garden', [GardenController::class, 'razorpayWebho
 Route::get('delivery-pincodes/check', [DeliveryPincodeController::class, 'check'])
     ->middleware('throttle:60,1');
 
+// Delivery Coverage — "notify me when you deliver to my pincode" lead capture
+// (shown when the check above comes back unserviceable). Rate-limited.
+Route::post('delivery-notify', [DeliveryNotifyController::class, 'store'])
+    ->middleware('throttle:20,1');
+
 // Master Location System (Phase 2) — public lookups for the State→City address
 // dropdowns (storefront + admin). Read-only, rate-limited.
 Route::get('locations/states', [LocationController::class, 'states'])->middleware('throttle:120,1');
 Route::get('locations/cities', [LocationController::class, 'cities'])->middleware('throttle:120,1');
+// Delivery Coverage geo master — districts + postal-code lookups (coverage pickers).
+Route::get('locations/districts', [LocationController::class, 'districts'])->middleware('throttle:120,1');
+Route::get('locations/postal-codes', [LocationController::class, 'postalCodes'])->middleware('throttle:120,1');
 
 // Visitor / Live Activity NOC (Phase 3) — public, fire-and-forget storefront
 // event ingest. Fail-safe (always 204); generous throttle for active browsing.
@@ -574,6 +584,13 @@ Route::group(
         Route::post('vendor/service-areas', [VendorInventoryController::class, 'addServiceArea']);
         Route::delete('vendor/service-areas/{id}', [VendorInventoryController::class, 'deleteServiceArea']);
 
+        // Delivery Coverage — vendor self-serve rule management (own shop only;
+        // a super admin may act on any shop — same ownership rule as above).
+        Route::get('my-coverage/{shop_id}', [DeliveryCoverageController::class, 'myCoverage'])->whereNumber('shop_id');
+        Route::get('my-coverage/{shop_id}/summary', [DeliveryCoverageController::class, 'mySummary'])->whereNumber('shop_id');
+        Route::put('my-coverage/{shop_id}/rules', [DeliveryCoverageController::class, 'mySyncRules'])->whereNumber('shop_id');
+        Route::post('my-coverage/{shop_id}/preview', [DeliveryCoverageController::class, 'myPreview'])->whereNumber('shop_id');
+
         // Vendor ledger + settlements (own shop only; read-only earnings breakdown).
         Route::get('vendor/ledger', [SettlementController::class, 'myLedger']);
         Route::get('vendor/settlements', [SettlementController::class, 'mySettlements']);
@@ -882,6 +899,26 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('delivery-pincodes', [DeliveryPincodeController::class, 'store']);
     Route::put('delivery-pincodes/{id}', [DeliveryPincodeController::class, 'update']);
     Route::delete('delivery-pincodes/{id}', [DeliveryPincodeController::class, 'destroy']);
+
+    // Delivery Coverage — vendor pincode-coverage rules over the geo master
+    // (projected by the Serviceability module; 503 when the module is absent).
+    // Literal paths BEFORE the {id}/{shop_id} params (routes match in order).
+    Route::get('coverage/summary', [DeliveryCoverageController::class, 'summary']);
+    Route::get('coverage/pincodes', [DeliveryCoverageController::class, 'pincodes']);
+    Route::get('coverage/export', [DeliveryCoverageController::class, 'export']);
+    Route::get('coverage/audit', [DeliveryCoverageController::class, 'audit']);
+    Route::get('coverage', [DeliveryCoverageController::class, 'index']);
+    Route::post('coverage/preview', [DeliveryCoverageController::class, 'preview']);
+    Route::post('coverage/import', [DeliveryCoverageController::class, 'import']);
+    Route::post('coverage/{shop_id}/sync', [DeliveryCoverageController::class, 'sync'])->whereNumber('shop_id');
+    Route::post('coverage', [DeliveryCoverageController::class, 'store']);
+    Route::delete('coverage/{id}', [DeliveryCoverageController::class, 'destroy'])->whereNumber('id');
+
+    // Delivery Coverage geo master — districts admin CRUD + postal-code remap.
+    Route::get('districts', [LocationController::class, 'districtIndex']);
+    Route::post('districts', [LocationController::class, 'districtStore']);
+    Route::put('districts/{id}', [LocationController::class, 'districtUpdate']);
+    Route::put('postal-codes/{id}', [LocationController::class, 'postalCodeUpdate']);
 
     // Master Location System (Phase 2) — states / cities / warehouses + the
     // City Activation Engine (super-admin only).

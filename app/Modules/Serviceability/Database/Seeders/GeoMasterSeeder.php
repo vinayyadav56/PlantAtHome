@@ -1,0 +1,126 @@
+<?php
+
+namespace App\Modules\Serviceability\Database\Seeders;
+
+use App\Modules\Serviceability\Application\PostalCodeImporter;
+use App\Modules\Serviceability\Infrastructure\Models\Country;
+use Illuminate\Database\Seeder;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Log;
+
+/**
+ * Seeds the India geo master for Delivery Coverage: the country row, the
+ * states→country rollup, all districts, the full pincode master (via the same
+ * PostalCodeImporter the artisan command uses), then a best-effort rollup of
+ * legacy cities to districts + postal codes to cities by name match.
+ * Idempotent — safe to re-run on every deploy. Standalone (DatabaseSeeder does
+ * not chain module seeders): php artisan db:seed --class="App\\Modules\\Serviceability\\Database\\Seeders\\GeoMasterSeeder"
+ */
+class GeoMasterSeeder extends Seeder
+{
+    /** Overridable in tests to seed from a small fixture CSV. */
+    public ?string $postalCsvPath = null;
+
+    /**
+     * @return array{states_mapped:int, districts:int, pincodes:int, cities_matched:int, cities_unmatched:int}
+     */
+    public function run(): array
+    {
+        $importer = new PostalCodeImporter(DB::connection());
+
+        // 1. Country + states rollup (the whole legacy states table is India).
+        $india = Country::firstOrCreate(
+            ['iso2' => 'IN'],
+            ['name' => 'India', 'iso3' => 'IND', 'phone_code' => '+91', 'is_active' => true],
+        );
+        DB::table('states')->update(['country_id' => $india->id]);
+        $statesMapped = (int) DB::table('states')->where('country_id', $india->id)->count();
+
+        // 2. Districts from the bundled master list (aborts on unmapped states).
+        $now = now();
+        $handle = fopen(__DIR__.'/../data/india_districts.csv', 'rb');
+        $header = null;
+        while (($fields = fgetcsv($handle, 0, ',', '"', '\\')) !== false) {
+            if ($header === null) {
+                $header = $fields;
+                continue;
+            }
+            [$state, $district] = [trim((string) $fields[0]), trim((string) $fields[1])];
+            if ($district === '') {
+                continue;
+            }
+            $stateId = $importer->resolveStateId($state);
+            DB::table('districts')->updateOrInsert(
+                ['state_id' => $stateId, 'name' => $district],
+                ['is_active' => true, 'updated_at' => $now, 'created_at' => $now],
+            );
+        }
+        fclose($handle);
+
+        // 3. Pincode master — same code path as plantathome:pincodes-import.
+        $import = $importer->import($this->postalCsvPath);
+
+        // 4. Best-effort rollups by name match (districts-as-cities pollution
+        //    makes cities.name = districts.name the right cheap heuristic).
+        [$citiesMatched, $citiesUnmatched] = $this->rollupCities();
+
+        $report = [
+            'states_mapped'     => $statesMapped,
+            'districts'         => (int) DB::table('districts')->count(),
+            'pincodes'          => $import['unique_pincodes'],
+            'cities_matched'    => $citiesMatched,
+            'cities_unmatched'  => $citiesUnmatched,
+        ];
+        Log::info('GeoMasterSeeder complete', $report + ['import' => $import]);
+        if ($this->command) {
+            $this->command->info('GeoMasterSeeder: '.json_encode($report));
+        }
+
+        return $report;
+    }
+
+    /**
+     * cities.district_id where lower(city name) = lower(district name) in the
+     * same state; then postal_codes.city_id for that district's pins, plus an
+     * office-name contains match for the rest.
+     *
+     * @return array{0:int, 1:int} [matched, unmatched]
+     */
+    private function rollupCities(): array
+    {
+        if (! DB::getSchemaBuilder()->hasTable('cities')) {
+            return [0, 0];
+        }
+
+        foreach (DB::table('districts')->get(['id', 'state_id', 'name']) as $district) {
+            DB::table('cities')
+                ->where('state_id', $district->state_id)
+                ->whereRaw('LOWER(TRIM(name)) = ?', [mb_strtolower(trim($district->name))])
+                ->update(['district_id' => $district->id]);
+        }
+
+        $matchedCities = DB::table('cities')->whereNotNull('district_id')->get(['id', 'district_id']);
+        foreach ($matchedCities as $city) {
+            DB::table('postal_codes')->where('district_id', $city->district_id)->update(['city_id' => $city->id]);
+        }
+
+        // Remaining pins: a city name appearing inside the delivery office name.
+        $unrolled = DB::table('cities')->whereNull('district_id')->whereNotNull('state_id')->get(['id', 'state_id', 'name']);
+        foreach ($unrolled as $city) {
+            $name = mb_strtolower(trim((string) $city->name));
+            if ($name === '') {
+                continue;
+            }
+            DB::table('postal_codes')
+                ->where('state_id', $city->state_id)
+                ->whereNull('city_id')
+                ->whereRaw('LOWER(office_name) LIKE ?', ['%'.$name.'%'])
+                ->update(['city_id' => $city->id]);
+        }
+
+        return [
+            (int) DB::table('cities')->whereNotNull('district_id')->count(),
+            (int) DB::table('cities')->whereNull('district_id')->count(),
+        ];
+    }
+}

@@ -75,7 +75,17 @@ class ShopRepository extends BaseRepository
         if (!is_array($areas)) {
             return;
         }
-        VendorServiceArea::where('shop_id', $shop->id)->delete();
+        // Replace only the vendor's MANUAL rows (source NULL). Rows written by
+        // the Delivery Coverage bridge (source='coverage_sync') are derived from
+        // coverage rules and must survive an onboarding-form save — the
+        // projector owns their lifecycle. (Recreated rows below get source=NULL
+        // implicitly, keeping them in the manual bucket.)
+        VendorServiceArea::where('shop_id', $shop->id)
+            ->when(
+                \Illuminate\Support\Facades\Schema::hasColumn('vendor_service_areas', 'source'),
+                fn ($q) => $q->whereNull('source')
+            )
+            ->delete();
         $seen = [];
         foreach ($areas as $area) {
             $city = trim((string) ($area['city'] ?? ''));

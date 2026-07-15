@@ -19,5 +19,12 @@ class ServiceabilityServiceProvider extends ServiceProvider
         Route::prefix('api/v1')
             ->middleware(['api', ForceJsonResponse::class])
             ->group(__DIR__.'/../Http/routes.php');
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                \App\Modules\Serviceability\Console\ImportPostalCodesCommand::class,
+                \App\Modules\Serviceability\Console\CoverageBackfillCommand::class,
+            ]);
+        }
     }
 }

@@ -84,6 +84,20 @@ class CheckoutRepository
             }
         }
 
+        // Delivery Coverage hard gate (pincode-level, flag-gated OFF by default):
+        // when `coverageCheckoutGate` is on and vendors have coverage rules, a cart
+        // line whose shop does not cover the shipping pincode is unavailable.
+        // FAIL OPEN on any missing precondition or fault (see applyCoverageGate).
+        $coverage = null;
+        $gate = $this->applyCoverageGate((array) ($request['products'] ?? []), $this->shippingZip($request));
+        if (!empty($gate['blocked'])) {
+            $unavailable_products = array_values(array_unique(array_merge(
+                array_map('intval', $unavailable_products),
+                $gate['blocked']
+            )));
+            $coverage = $gate['coverage'];
+        }
+
         // Server-authoritative pricing: reprice vendor-supplied products to the city
         // selling price (max vendor rate + PlantAtHome margin) so the previewed total
         // matches what the order will charge (products without vendor inventory are
@@ -106,7 +120,7 @@ class CheckoutRepository
         if (empty($unavailable_products) && $total < $minimumOrderAmount) {
             throw new HttpException(400, 'Minimum order amount is ' . $minimumOrderAmount);
         }
-        return [
+        $response = [
             'total_tax'            => $tax,
             'shipping_charge'      => $shipping_charge,
             // Delivery Optimizer (additive, flag-gated): FIRM consolidated shipments at
@@ -129,6 +143,90 @@ class CheckoutRepository
             'wallet_amount' => isset($wallet->available_points) ? $wallet->available_points : 0,
             'wallet_currency' => isset($wallet->available_points) ? $this->walletPointsToCurrency($wallet->available_points) : 0
         ];
+        // Additive: only present when the coverage gate actually blocked lines,
+        // so existing consumers of the verify payload never see a new key otherwise.
+        if (!empty($coverage)) {
+            $response['coverage'] = $coverage;
+        }
+        return $response;
+    }
+
+    /** Shipping pincode from the verify payload (zip | pincode | postal_code, possibly nested under address). */
+    protected function shippingZip($request): ?string
+    {
+        $ship = is_array($request['shipping_address'] ?? null) ? $request['shipping_address'] : [];
+        $addr = (array) ($ship['address'] ?? $ship);
+        $zip = $addr['zip'] ?? $addr['pincode'] ?? $addr['postal_code'] ?? ($ship['zip'] ?? null);
+        $zip = preg_replace('/\D+/', '', (string) $zip);
+        return $zip !== '' ? $zip : null;
+    }
+
+    /**
+     * Delivery Coverage checkout gate. Guard chain — each miss skips the gate
+     * silently (fail open): settings flag `coverageCheckoutGate` truthy, a
+     * >= 6-digit shipping pincode, the V2 coverage service resolvable via
+     * CoverageBridge, and at least one active coverage rule configured.
+     * A line blocks when its product's shop is not among the vendors covering
+     * the pincode. Deterministic by design: the candidate shop for a line is
+     * the product's own shop_id (assignment-engine alternatives are ignored).
+     *
+     * @param  array<int, array>  $lines  cart lines ({product_id, ...})
+     * @return array{blocked: int[], coverage: ?array}
+     */
+    protected function applyCoverageGate(array $lines, ?string $zip): array
+    {
+        $none = ['blocked' => [], 'coverage' => null];
+        try {
+            $settings = Settings::getData();
+            if (empty($settings['options']['coverageCheckoutGate'])) {
+                return $none;
+            }
+            if ($zip === null || strlen($zip) < 6) {
+                return $none;
+            }
+            $service = \Marvel\Services\CoverageBridge::service();
+            if ($service === null || !$service->anyCoverageConfigured()) {
+                return $none;
+            }
+
+            $coveredShopIds = array_map('intval', $service->getAvailableNurseryIds($zip));
+            $covered = array_flip($coveredShopIds);
+
+            $ids = collect($lines)->pluck('product_id')->filter()->unique()->map(fn ($id) => (int) $id)->values()->all();
+            if (empty($ids)) {
+                return $none;
+            }
+            // Raw read (no model scopes/casts) — we only need id → shop_id.
+            $shopByProduct = \Illuminate\Support\Facades\DB::table('products')
+                ->whereIn('id', $ids)->pluck('shop_id', 'id');
+
+            $blocked = [];
+            foreach ($ids as $pid) {
+                $shopId = $shopByProduct[$pid] ?? null;
+                if ($shopId === null) {
+                    continue; // unknown product line — leave it to the stock/city gates
+                }
+                if (!isset($covered[(int) $shopId])) {
+                    $blocked[] = $pid;
+                }
+            }
+            if (empty($blocked)) {
+                return $none;
+            }
+
+            return [
+                'blocked'  => $blocked,
+                'coverage' => [
+                    'pincode'          => $zip,
+                    'blocked_products' => $blocked,
+                    'reason'           => 'pincode_not_covered',
+                    'message'          => "Some items can't be delivered to {$zip}.",
+                ],
+            ];
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('coverage checkout gate failed open', ['error' => $e->getMessage()]);
+            return $none;
+        }
     }
 
     /**
