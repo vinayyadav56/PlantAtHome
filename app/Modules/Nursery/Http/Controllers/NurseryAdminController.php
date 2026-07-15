@@ -55,7 +55,10 @@ final class NurseryAdminController extends ApiController
     {
         $nursery = $this->nurseries->create($request->validated(), $request->user()?->uuid);
 
-        return $this->created(NurseryResource::make($nursery, withDetails: true));
+        $data = NurseryResource::make($nursery->load(['balance', 'documents']), withDetails: true);
+        $data['credentials_email_sent'] = (bool) $nursery->getAttribute('credentials_email_sent');
+
+        return $this->created($data);
     }
 
     /** GET /api/v1/nurseries/{nursery} (admin) — accepts uuid or slug */
