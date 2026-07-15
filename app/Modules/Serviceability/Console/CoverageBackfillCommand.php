@@ -48,6 +48,17 @@ class CoverageBackfillCommand extends Command
             ->when($onlyShop !== null, fn ($q) => $q->where('shop_id', $onlyShop))
             ->distinct()->orderBy('shop_id')->pluck('shop_id')->map(fn ($id) => (int) $id);
 
+        // Orphaned service-area rows (their shop was deleted; the legacy table
+        // has no FK) would violate vendor_coverage_rules' shops FK — skip and
+        // report them instead of aborting the whole backfill.
+        $existingShopIds = DB::table('shops')->whereIn('id', $shopIds)->pluck('id')
+            ->map(fn ($id) => (int) $id)->all();
+        $orphans = $shopIds->reject(fn (int $id) => in_array($id, $existingShopIds, true));
+        foreach ($orphans as $orphanId) {
+            $this->warn(sprintf('shop %d: SKIPPED — service-area rows exist but the shop was deleted (orphaned rows).', $orphanId));
+        }
+        $shopIds = $shopIds->filter(fn (int $id) => in_array($id, $existingShopIds, true))->values();
+
         if ($shopIds->isEmpty()) {
             $this->info('No shops with manual service areas found — nothing to backfill.');
 
