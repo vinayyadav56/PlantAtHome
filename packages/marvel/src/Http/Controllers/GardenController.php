@@ -70,10 +70,14 @@ class GardenController extends CoreController
         return response()->json(['data' => $rows]);
     }
 
-    /** Admin — full template list. */
-    public function allTemplates(): JsonResponse
+    /** Admin — full template list, optionally scoped to one service (garden|gifting). */
+    public function allTemplates(Request $request): JsonResponse
     {
-        return response()->json(['data' => GardenPackageTemplate::orderBy('sort')->get()]);
+        $q = GardenPackageTemplate::orderBy('sort')->orderBy('suggested_price');
+        if ($service = $request->query('service')) {
+            $q->where('service', $service);
+        }
+        return response()->json(['data' => $q->get()]);
     }
 
     public function storeTemplate(Request $request): JsonResponse
@@ -101,6 +105,7 @@ class GardenController extends CoreController
         $v = $request->validate([
             'name' => 'required|string|max:191',
             'tagline' => 'nullable|string|max:191',
+            'badge' => 'nullable|string|max:50',
             'description' => 'nullable|string',
             'items' => 'nullable|array',
             'suggested_visits' => 'nullable|integer',
@@ -108,8 +113,12 @@ class GardenController extends CoreController
             'duration_days' => 'nullable|integer',
             'is_active' => 'nullable|boolean',
             'sort' => 'nullable|integer',
+            'service' => 'nullable|string|in:garden,gifting',
         ]);
         $v['items'] = $request->input('items', []);
+        // Default to gifting when the admin B2B section creates a tier; the
+        // garden CRUD passes service explicitly.
+        $v['service'] = $v['service'] ?? $request->input('service', 'gifting');
         return $v;
     }
 
@@ -224,7 +233,11 @@ class GardenController extends CoreController
     public function giftingCheckout(Request $request): JsonResponse
     {
         $data = $request->validate(['template_id' => 'required|integer']);
-        $tpl = GardenPackageTemplate::where('service', 'gifting')->findOrFail($data['template_id']);
+        // Only active tiers are purchasable — a hidden/retired tier must not be
+        // buyable by id enumeration (mirrors the public templates() invariant).
+        $tpl = GardenPackageTemplate::where('service', 'gifting')
+            ->where('is_active', true)
+            ->findOrFail($data['template_id']);
         $user = $request->user();
 
         $pkg = GardenPackage::create([

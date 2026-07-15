@@ -8,7 +8,7 @@ class GardenPackageTemplate extends Model
 {
     protected $table = 'garden_package_templates';
     protected $fillable = [
-        'name', 'tagline', 'description', 'items',
+        'name', 'tagline', 'badge', 'description', 'items',
         'suggested_visits', 'suggested_price', 'duration_days', 'is_active', 'sort', 'service',
     ];
     protected $casts = [
