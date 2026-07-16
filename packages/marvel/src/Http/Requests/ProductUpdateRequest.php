@@ -80,6 +80,7 @@ class ProductUpdateRequest extends FormRequest
             'quantity'                     => ['nullable', 'integer'],
             'sku'                          => ['string', Rule::unique('variation_options')->where(fn ($query) => $query->whereSku($this->sku))],
             'image'                        => ['array'],
+            'size_guide'                   => ['nullable', 'array'],
             'gallery'                      => ['array'],
             'video'                        => ['array'],
             'status'                       => ['string', Rule::in($productStatus)],

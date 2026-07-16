@@ -82,6 +82,7 @@ class ProductRepository extends BaseRepository
         'description',
         'sku',
         'image',
+        'size_guide',
         'gallery',
         'video',
         'status',

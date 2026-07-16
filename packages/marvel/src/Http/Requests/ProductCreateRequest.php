@@ -86,6 +86,7 @@ class ProductCreateRequest extends FormRequest
             'description'                  => ['nullable', 'string', 'max:10000'],
             'sku'                          => ['string', 'unique:variation_options,sku'],
             'image'                        => ['array'],
+            'size_guide'                   => ['nullable', 'array'],
             'gallery'                      => ['array'],
             'video'                        => ['array'],
             'status'                       => ['string', Rule::in($productStatus)],

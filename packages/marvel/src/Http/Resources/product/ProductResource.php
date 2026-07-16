@@ -28,6 +28,7 @@ class ProductResource extends Resource
             'max_price'            => $this->max_price,
             'min_price'            => $this->min_price,
             'image'                => $this->image,
+            'size_guide'           => $this->size_guide,
             'status'               => $this->status,
             // Single-shop model: who proposed this catalog product (review queue).
             'proposed_by_shop_id'  => $this->proposed_by_shop_id ?? null,

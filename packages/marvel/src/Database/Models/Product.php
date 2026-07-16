@@ -38,6 +38,7 @@ class Product extends Model
 
     protected $casts = [
         'image' => 'json',
+        'size_guide' => 'json',
         'gallery' => 'json',
         'video' => 'json',
         'bundle_config' => 'array',

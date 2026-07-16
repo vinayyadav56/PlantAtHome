@@ -53,6 +53,7 @@ class GetSingleProductResource extends Resource
             'sku'                          => $this->sku,
             'gallery'                      => $this->gallery,
             'image'                        => $this->image,
+            'size_guide'                   => $this->size_guide,
             'plant_attribute'              => $this->plantAttribute,
             'images'                       => $this->images,
             // PlantAtHome — bundle items + buy-together add-ons
