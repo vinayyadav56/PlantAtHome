@@ -40,6 +40,7 @@ on:
           - cat-prune
           - trust
           - tools-seed
+          - pots-seed
           - sku-gen
           - recompute-availability
           - cities-seed
@@ -82,7 +83,7 @@ jobs:
             img-limit10)   ARGS="plantathome:repair-plant-images --limit=10" ;;
             img-full)      ARGS="plantathome:repair-plant-images" ;;
             img-rollback)  ARGS="plantathome:repair-plant-images --rollback" ;;
-            cat-backup|cat-restore|cat-seed|tools-seed|sku-gen|recompute-availability|cities-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify) ARGS="" ;;
+            cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             *) echo "Unknown mode"; exit 1 ;;
@@ -219,6 +220,22 @@ jobs:
                 php artisan plantathome:assign-shop || true
                 php artisan cache:clear 2>/dev/null || true
                 echo "==> TOOLS-SEED COMPLETE"
+                ;;
+
+              pots-seed)
+                echo "==> Ensuring latest code on EC2..."
+                git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || true
+                echo "==> diag: seeder + data present in packages/marvel?"
+                ls -la packages/marvel/src/Database/Seeders/PlantAtHomePotSeeder.php packages/marvel/data/pots.json 2>&1 || true
+                echo "==> Re-syncing marvel path package + autoloader (new seeder + bundled data)..."
+                composer reinstall marvel/shop --no-interaction 2>&1 | tail -3 || true
+                composer dump-autoload -o 2>/dev/null || true
+                echo "==> Seeding Pots & Planters vertical (type + material categories + 9 pots, size-priced, idempotent)..."
+                php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomePotSeeder" --force
+                echo "==> Assigning shop to any shop-less products..."
+                php artisan plantathome:assign-shop || true
+                php artisan cache:clear 2>/dev/null || true
+                echo "==> POTS-SEED COMPLETE"
                 ;;
 
               v2-backfill-dry|v2-backfill|v2-backfill-verify)
