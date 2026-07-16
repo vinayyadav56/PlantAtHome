@@ -54,6 +54,7 @@ use Marvel\Http\Controllers\RefundReasonController;
 use Marvel\Http\Controllers\VoiceSearchController;
 use Marvel\Http\Controllers\GardenController;
 use Marvel\Http\Controllers\CartController;
+use Marvel\Http\Controllers\ContactController;
 use Marvel\Http\Controllers\PlantDoctorController;
 use Marvel\Http\Controllers\CarePlanController;
 use Marvel\Http\Controllers\AiChatController;
@@ -376,6 +377,11 @@ Route::group(['middleware' => ['auth:sanctum', 'can:' . Permission::CUSTOMER, 'e
     // Server-side account cart (cross-device sync: Android / iOS / web).
     Route::get('me/cart', [CartController::class, 'show']);
     Route::put('me/cart', [CartController::class, 'update']);
+    // Profile contacts: up to 2 phones + 2 emails; emails verified via email OTP.
+    Route::get('me/contacts', [ContactController::class, 'show']);
+    Route::put('me/contacts', [ContactController::class, 'updateContacts']);
+    Route::post('me/email-otp/send', [ContactController::class, 'sendEmailOtp'])->middleware('throttle:6,1');
+    Route::post('me/email-otp/verify', [ContactController::class, 'verifyEmailOtp'])->middleware('throttle:10,1');
     Route::apiResource('orders', OrderController::class, [
         'only' => ['index'],
     ]);

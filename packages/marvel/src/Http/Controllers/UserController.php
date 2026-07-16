@@ -1091,6 +1091,12 @@ class UserController extends CoreController
         if ($validator->fails()) {
             throw new MarvelException($validator->errors()->first());
         }
+        // A user's primary email is immutable once set — it's established at
+        // signup and can only be verified (via email OTP), never changed.
+        $user = $request->user();
+        if ($user && $user->email && strtolower(trim($request->email)) !== strtolower($user->email)) {
+            throw new MarvelException('Your email is already set and cannot be changed.');
+        }
         return $this->repository->updateEmail($request);
     }
 

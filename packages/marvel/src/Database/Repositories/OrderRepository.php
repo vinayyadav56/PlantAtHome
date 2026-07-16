@@ -727,7 +727,8 @@ class OrderRepository extends BaseRepository
                 'customer_id'      => $request->customer_id,
                 'shipping_address' => $request->shipping_address,
                 'billing_address'  => $request->billing_address,
-                'customer_contact' => $request->customer_contact,
+                'customer_contact' => $request->customer_contact
+                    ?: optional(optional($request->user())->profile)->contact,
                 'customer_name'    => $request->customer_name,
                 'delivery_time'    => $request->delivery_time,
                 'delivery_fee'     => $delivery,
