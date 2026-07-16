@@ -53,6 +53,7 @@ use Marvel\Http\Controllers\RefundPolicyController;
 use Marvel\Http\Controllers\RefundReasonController;
 use Marvel\Http\Controllers\VoiceSearchController;
 use Marvel\Http\Controllers\GardenController;
+use Marvel\Http\Controllers\CartController;
 use Marvel\Http\Controllers\PlantDoctorController;
 use Marvel\Http\Controllers\CarePlanController;
 use Marvel\Http\Controllers\AiChatController;
@@ -372,6 +373,9 @@ Route::post('shop-maintenance-event', [ShopController::class, 'shopMaintenanceEv
 Route::group(['middleware' => ['auth:sanctum', 'can:' . Permission::CUSTOMER, 'email.verified']], function () {
     Route::post('/update-email', [UserController::class, 'updateUserEmail']);
     Route::get('me', [UserController::class, 'me']);
+    // Server-side account cart (cross-device sync: Android / iOS / web).
+    Route::get('me/cart', [CartController::class, 'show']);
+    Route::put('me/cart', [CartController::class, 'update']);
     Route::apiResource('orders', OrderController::class, [
         'only' => ['index'],
     ]);
