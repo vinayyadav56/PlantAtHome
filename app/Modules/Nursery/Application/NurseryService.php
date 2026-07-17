@@ -75,7 +75,7 @@ class NurseryService
                 [$owner, $ownerCreated] = $this->upsertIdentityOwner($nursery, $data);
             }
 
-            $legacyId = $this->projectCreateToLegacyShop($nursery, $data, $owner, $actorUuid);
+            $legacyId = $this->projectNurseryToLegacyShop($nursery, $actorUuid);
             if ($legacyId !== null) {
                 $nursery->legacy_id = $legacyId;
                 $nursery->save();
@@ -209,14 +209,24 @@ class NurseryService
     }
 
     /**
-     * Inline legacy projection (same DB, additive inserts): `users` (+ spatie
-     * grants), `shops`, `balances`, `category_shop`, `vendor_service_areas` —
-     * so the storefront sees the vendor immediately. Column/table existence is
-     * checked (staging/prod schema drift); returns the new shops.id, or null
-     * when the legacy tables are absent.
+     * Project a PERSISTED nursery onto the legacy `shops` (+ `users` w/ spatie
+     * grants, `balances`, `category_shop`, `vendor_service_areas`) so the legacy
+     * storefront + vendor tooling (which key on a numeric `shops.id` owned via
+     * `shops.owner_id`) see it. One source of truth for BOTH create() and the
+     * `v2:project-nurseries-to-shops` backfill of orphaned v2-native nurseries.
+     *
+     * Idempotent: returns the existing legacy_id if already linked, adopts an
+     * existing (slug, owner) shop instead of double-inserting, and returns null
+     * (skips) when the legacy tables are absent or no legacy owner can be
+     * resolved (shops.owner_id is NOT NULL). Column/table existence is guarded
+     * for staging/prod schema drift.
      */
-    private function projectCreateToLegacyShop(Nursery $nursery, array $data, ?object $owner, ?string $actorUuid): ?int
+    public function projectNurseryToLegacyShop(Nursery $nursery, ?string $actorUuid = null): ?int
     {
+        if ($nursery->legacy_id !== null) {
+            return $nursery->legacy_id;
+        }
+
         $schema = $this->db->getSchemaBuilder();
         if (! $schema->hasTable('shops')) {
             return null;
@@ -224,11 +234,16 @@ class NurseryService
 
         $now = Carbon::now();
 
+        // Owner from the nursery's identity owner (find-or-create the legacy
+        // `users` row by email — same bcrypt hash so one password everywhere).
+        $owner = $nursery->owner_user_uuid
+            ? $this->db->table('identity_users')->where('uuid', $nursery->owner_user_uuid)->first()
+            : null;
+
         $legacyOwnerId = null;
         if ($owner && $schema->hasTable('users')) {
             $legacyOwnerId = $this->db->table('users')->where('email', $owner->email)->value('id');
             if ($legacyOwnerId === null) {
-                // Same bcrypt hash as the identity user → one password everywhere.
                 $legacyOwnerId = $this->db->table('users')->insertGetId([
                     'name'              => $owner->name,
                     'email'             => $owner->email,
@@ -250,17 +265,38 @@ class NurseryService
             }
         }
 
+        // A legacy shop needs a (NOT NULL, FK) owner — skip rather than crash.
+        if ($legacyOwnerId === null) {
+            return null;
+        }
+
+        // Close the v2↔legacy user link (best-effort; UNIQUE-guarded).
+        if ($owner) {
+            $this->linkIdentityOwnerToLegacy($owner->uuid, (int) $legacyOwnerId);
+        }
+
+        // Re-run safety: adopt an existing unlinked shop for this owner + slug
+        // instead of inserting a duplicate (slug is not unique on `shops`).
+        $existing = $this->db->table('shops')
+            ->where('slug', $nursery->slug)
+            ->where('owner_id', $legacyOwnerId)
+            ->value('id');
+        if ($existing !== null) {
+            return (int) $existing;
+        }
+
+        $nursery->loadMissing('balance');
         $json = fn ($value) => $value !== null ? json_encode($value) : null;
         $shop = [
             'owner_id'    => $legacyOwnerId,
             'name'        => $nursery->name,
             'slug'        => $nursery->slug,
             'description' => $nursery->description,
-            'cover_image' => $json($data['cover_image'] ?? null),
-            'logo'        => $json($data['logo'] ?? null),
-            'is_active'   => 0,
-            'address'     => $json($data['address'] ?? null),
-            'settings'    => $json($data['settings'] ?? null),
+            'cover_image' => $json($nursery->cover_image),
+            'logo'        => $json($nursery->logo),
+            'is_active'   => $nursery->status === NurseryStatus::ACTIVE ? 1 : 0,
+            'address'     => $json($nursery->address),
+            'settings'    => $json($nursery->settings),
             'created_at'  => $now,
             'updated_at'  => $now,
         ];
@@ -271,27 +307,50 @@ class NurseryService
         }
         $shopId = $this->db->table('shops')->insertGetId($shop);
 
-        if (isset($data['balance']['payment_info']) && $schema->hasTable('balances')) {
+        $paymentInfo = optional($nursery->balance)->payment_info;
+        if ($paymentInfo !== null && $schema->hasTable('balances')) {
             $this->db->table('balances')->insert([
                 'shop_id'      => $shopId,
-                'payment_info' => json_encode($data['balance']['payment_info']),
+                'payment_info' => json_encode($paymentInfo),
                 'created_at'   => $now,
                 'updated_at'   => $now,
             ]);
         }
 
-        if (! empty($data['categories']) && $schema->hasTable('category_shop')) {
+        $categories = $nursery->category_ids;
+        if (! empty($categories) && $schema->hasTable('category_shop')) {
             $this->db->table('category_shop')->insert(array_map(
                 fn ($categoryId) => ['category_id' => (int) $categoryId, 'shop_id' => $shopId],
-                $data['categories'],
+                $categories,
             ));
         }
 
-        if (! empty($data['service_areas']) && $schema->hasTable('vendor_service_areas')) {
-            $this->insertLegacyServiceAreas($shopId, $data['service_areas'], $now);
+        $serviceAreas = $nursery->service_areas;
+        if (! empty($serviceAreas) && $schema->hasTable('vendor_service_areas')) {
+            $this->insertLegacyServiceAreas($shopId, $serviceAreas, $now);
         }
 
         return $shopId;
+    }
+
+    /** Close the v2↔legacy user link (identity_users.legacy_id is UNIQUE). */
+    private function linkIdentityOwnerToLegacy(?string $ownerUuid, int $legacyUserId): void
+    {
+        if (! $ownerUuid) {
+            return;
+        }
+        $schema = $this->db->getSchemaBuilder();
+        if (! $schema->hasColumn('identity_users', 'legacy_id')) {
+            return;
+        }
+        // UNIQUE column — skip if this legacy id is already claimed elsewhere.
+        if ($this->db->table('identity_users')->where('legacy_id', $legacyUserId)->exists()) {
+            return;
+        }
+        $this->db->table('identity_users')
+            ->where('uuid', $ownerUuid)
+            ->whereNull('legacy_id')
+            ->update(['legacy_id' => $legacyUserId]);
     }
 
     /** Spatie grants for a fresh vendor login; missing permission names are skipped. */

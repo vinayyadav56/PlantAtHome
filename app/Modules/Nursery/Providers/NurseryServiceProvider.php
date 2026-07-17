@@ -6,6 +6,7 @@ use App\Modules\Nursery\Application\NurseryService;
 use App\Modules\Nursery\Application\Subscribers\ProjectNurseryToLegacyShop;
 use App\Modules\Nursery\Application\WithdrawalService;
 use App\Modules\Nursery\Console\BackfillNurseriesCommand;
+use App\Modules\Nursery\Console\ProjectNurseriesToShopsCommand;
 use App\Shared\Events\EventPublisher;
 use App\Shared\Events\SubscriberRegistry;
 use App\Shared\Http\Middleware\ForceJsonResponse;
@@ -47,7 +48,7 @@ class NurseryServiceProvider extends ServiceProvider
         }
 
         if ($this->app->runningInConsole()) {
-            $this->commands([BackfillNurseriesCommand::class]);
+            $this->commands([BackfillNurseriesCommand::class, ProjectNurseriesToShopsCommand::class]);
         }
     }
 }

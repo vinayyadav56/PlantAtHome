@@ -383,6 +383,13 @@ try {
   php artisan plantathome:generate-skus \
     || echo "[bg] WARNING: generate-skus failed"
 
+  # Project orphaned v2-native nurseries (legacy_id null, no legacy shop) into
+  # legacy `shops` so the legacy vendor tooling (add-from-catalogue / inventory)
+  # can serve them. Idempotent + self-healing (skips already-linked nurseries).
+  echo "==> [bg] Projecting orphaned v2 nurseries to legacy shops..."
+  php artisan v2:project-nurseries-to-shops \
+    || echo "[bg] WARNING: project-nurseries-to-shops failed"
+
   # Force the license trust flag ON (prevents recurring "credentials was wrong"
   # if the redq license re-check flips it off). Idempotent.
   echo "==> [bg] Ensuring license trust flag..."
