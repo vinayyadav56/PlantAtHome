@@ -61,10 +61,22 @@ final class NurseryAdminController extends ApiController
         return $this->created($data);
     }
 
-    /** GET /api/v1/nurseries/{nursery} (admin) — accepts uuid or slug */
-    public function show(string $nursery): JsonResponse
+    /**
+     * GET /api/v1/nurseries/{nursery} — accepts uuid or slug.
+     *
+     * Admins (nurseries.manage) may read any nursery. A nursery owner may read
+     * ONLY their own: the admin V2-shops flag resolves a vendor's legacy
+     * shop_id via this endpoint, so the owner must be able to read their own
+     * detail — but never another vendor's (IDOR guard below).
+     */
+    public function show(Request $request, string $nursery): JsonResponse
     {
         $nursery = $this->resolveNursery($nursery)->load(['balance', 'documents']);
+
+        $user = $request->user();
+        if (! $user?->hasPermission('nurseries.manage') && $nursery->owner_user_uuid !== $user?->uuid) {
+            return $this->fail('NURSERY_FORBIDDEN', 'You do not have access to this nursery.', 403);
+        }
 
         return $this->ok(NurseryResource::make($nursery, withDetails: true));
     }

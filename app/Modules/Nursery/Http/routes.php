@@ -17,7 +17,6 @@ use Illuminate\Support\Facades\Route;
 Route::middleware(['v1.auth', 'v1.can:nurseries.manage'])->group(function () {
     Route::get('nurseries', [NurseryAdminController::class, 'index']);
     Route::post('nurseries', [NurseryAdminController::class, 'store']);
-    Route::get('nurseries/{nursery}', [NurseryAdminController::class, 'show']);
     Route::patch('nurseries/{nursery}', [NurseryAdminController::class, 'update']);
     Route::post('nurseries/{nursery}/approve', [NurseryAdminController::class, 'approve']);
     Route::post('nurseries/{nursery}/suspend', [NurseryAdminController::class, 'suspend']);
@@ -33,8 +32,13 @@ Route::middleware(['v1.auth', 'v1.can:withdrawals.manage'])->group(function () {
     Route::post('withdrawals/{withdrawal}/decide', [WithdrawalController::class, 'decide']);
 });
 
-// ── Owner-or-admin: file a request / read the balance (own nursery only) ─
+// ── Owner-or-admin: read own nursery / file a request / read the balance ─
+// The admin V2-shops flag resolves a vendor's legacy shop_id by reading their
+// nursery through the show endpoint, so an owner MUST be able to read their
+// own nursery. Cross-owner reads are blocked inside the controller (admins
+// read any; an owner reads only their own).
 Route::middleware(['v1.auth', 'v1.role:nursery_owner,admin,super_admin'])->group(function () {
+    Route::get('nurseries/{nursery}', [NurseryAdminController::class, 'show']);
     Route::post('nurseries/{nursery}/withdrawals', [WithdrawalController::class, 'request']);
     Route::get('nurseries/{nursery}/balance', [WithdrawalController::class, 'balance']);
 });
