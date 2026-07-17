@@ -9,6 +9,7 @@ use Marvel\Http\Controllers\AddressController;
 use Marvel\Http\Controllers\AiController;
 use Marvel\Http\Controllers\AnalyticsController;
 use Marvel\Http\Controllers\CommandCenterController;
+use Marvel\Http\Controllers\MarketIntelligenceController;
 use Marvel\Http\Controllers\LocationController;
 use Marvel\Http\Controllers\TrackingController;
 use Marvel\Http\Controllers\AttachmentController;
@@ -752,6 +753,16 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // Phase 4 — Inventory + Customer Intelligence.
     Route::get('command-center/inventory', [CommandCenterController::class, 'inventory']);
     Route::get('command-center/customer-intelligence', [CommandCenterController::class, 'customerIntelligence']);
+
+    // Market Intelligence — competitor-catalogue name import + price watchlist/snapshots.
+    Route::get('market/watchlist', [MarketIntelligenceController::class, 'index']);
+    Route::post('market/watchlist', [MarketIntelligenceController::class, 'store']);
+    Route::delete('market/watchlist/{id}', [MarketIntelligenceController::class, 'destroy']);
+    Route::get('market/search', [MarketIntelligenceController::class, 'search']);
+    Route::post('market/refresh', [MarketIntelligenceController::class, 'refresh']);
+    Route::get('market/price-history', [MarketIntelligenceController::class, 'priceHistory']);
+    Route::get('market/import-preview', [MarketIntelligenceController::class, 'importPreview']);
+    Route::post('market/import', [MarketIntelligenceController::class, 'importNames']);
 
     // Translation / Language Management (enterprise i18n engine).
     Route::get('translations/stats', [\Marvel\Http\Controllers\TranslationAdminController::class, 'stats']);

@@ -110,4 +110,13 @@ return [
         'timeout'      => (int) env('SHIPPING_SERVICE_TIMEOUT', 25),
     ],
 
+    // External competitor-catalogue intelligence service (NurseryLive + Ugaoo scrape).
+    // Read-only source for the admin Market Intelligence page: bulk plant-name import
+    // into the master catalogue + price watchlist/snapshots. Sent as X-Api-Key if set.
+    'market_intelligence' => [
+        'url'     => env('MARKET_INTEL_SERVICE_URL', 'https://plant-processings-production.up.railway.app'),
+        'api_key' => env('MARKET_INTEL_SERVICE_API_KEY'),
+        'timeout' => (int) env('MARKET_INTEL_SERVICE_TIMEOUT', 30),
+    ],
+
 ];
