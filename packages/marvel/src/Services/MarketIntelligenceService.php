@@ -87,16 +87,17 @@ class MarketIntelligenceService
         return is_array($data) && ! empty($data['id']) ? $this->normalize($data) : null;
     }
 
-    /** Every listing (paginated), for the name import. */
-    public function fetchAllListings(): array
+    /** Every listing (paginated), for the name import. Optionally scoped by source. */
+    public function fetchAllListings(?string $source = null): array
     {
         $all = [];
         $page = 1;
         do {
-            $resp = $this->http()->get($this->base().'/api/v1/plants', [
-                'page_size' => 200,
-                'page'      => $page,
-            ]);
+            $query = ['page_size' => 200, 'page' => $page];
+            if ($source) {
+                $query['source_site'] = $source;
+            }
+            $resp = $this->http()->get($this->base().'/api/v1/plants', $query);
             if (! $resp->successful()) {
                 break;
             }
@@ -153,19 +154,22 @@ class MarketIntelligenceService
 
     private function isCombo(array $it): bool
     {
-        if (mb_strtolower((string) ($it['plant_form'] ?? '')) === 'combo') {
-            return true;
-        }
-
-        return (bool) preg_match('/\b(bundle|combo|set of|pack of|collection)\b/i', (string) ($it['title'] ?? ''));
+        // NB: the upstream `plant_form` field is unreliable (it tags ~94% of
+        // listings "combo"), so detect bundles by TITLE only.
+        return (bool) preg_match('/\b(bundle|combo|set of|pack of|collection|top\s+\d+)\b/i', (string) ($it['title'] ?? ''));
     }
 
-    /** Cleaned, deduped, single-plant names from the upstream catalogue. */
-    private function candidateNames(): array
+    /**
+     * Cleaned, deduped plant names from the upstream catalogue.
+     *
+     * @param  string|null  $source        nurserylive | ugaoo | null (all)
+     * @param  bool         $includeCombos  keep bundles/combos too
+     */
+    private function candidateNames(?string $source = null, bool $includeCombos = false): array
     {
         $seen = [];
-        foreach ($this->fetchAllListings() as $it) {
-            if ($this->isCombo($it)) {
+        foreach ($this->fetchAllListings($source) as $it) {
+            if (! $includeCombos && $this->isCombo($it)) {
                 continue;
             }
             $name = $this->cleanName((string) ($it['title'] ?? ''));
@@ -186,9 +190,9 @@ class MarketIntelligenceService
     // ── Purpose 1: import names into the master catalogue as DRAFTS ────────────
 
     /** Dry run — what an import would do, without writing. */
-    public function importPreview(): array
+    public function importPreview(?string $source = null, bool $includeCombos = false): array
     {
-        $names = $this->candidateNames();
+        $names = $this->candidateNames($source, $includeCombos);
         $existing = 0;
         $new = [];
         foreach ($names as $name) {
@@ -212,13 +216,13 @@ class MarketIntelligenceService
     }
 
     /** Create DRAFT products for names not already in the master catalogue. */
-    public function importNames(): array
+    public function importNames(?string $source = null, bool $includeCombos = false): array
     {
         $shopId = Shop::masterId();
         $typeId = Type::where('slug', 'plants')->where('language', 'en')->value('id')
             ?? Type::where('language', 'en')->value('id');
 
-        $names = $this->candidateNames();
+        $names = $this->candidateNames($source, $includeCombos);
         $created = [];
         $skippedExisting = 0;
 

@@ -72,25 +72,37 @@ class MarketIntelligenceController extends CoreController
 
     // ── Catalogue name import ─────────────────────────────────────────────────
 
-    /** GET market/import-preview — dry run (counts + sample), no writes. */
-    public function importPreview(MarketIntelligenceService $service): JsonResponse
+    /** GET market/import-preview?source=&include_combos= — dry run, no writes. */
+    public function importPreview(Request $request, MarketIntelligenceService $service): JsonResponse
     {
+        [$source, $combos] = $this->importScope($request);
         try {
-            return response()->json($service->importPreview());
+            return response()->json($service->importPreview($source, $combos));
         } catch (\Throwable $e) {
             return response()->json(['message' => 'Could not reach the market service.'], 502);
         }
     }
 
     /** POST market/import — create DRAFT products for new competitor names. */
-    public function importNames(MarketIntelligenceService $service): JsonResponse
+    public function importNames(Request $request, MarketIntelligenceService $service): JsonResponse
     {
+        [$source, $combos] = $this->importScope($request);
         try {
-            $result = $service->importNames();
+            $result = $service->importNames($source, $combos);
         } catch (\Throwable $e) {
             return response()->json(['message' => 'Import failed: '.$e->getMessage()], 502);
         }
 
         return response()->json($result);
+    }
+
+    /** Resolve the optional source (nurserylive|ugaoo) + include-combos flag. */
+    private function importScope(Request $request): array
+    {
+        $source = $request->input('source');
+        $source = in_array($source, ['nurserylive', 'ugaoo'], true) ? $source : null;
+        $combos = filter_var($request->input('include_combos'), FILTER_VALIDATE_BOOLEAN);
+
+        return [$source, $combos];
     }
 }
