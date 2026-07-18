@@ -117,6 +117,9 @@ return [
         'url'     => env('MARKET_INTEL_SERVICE_URL', 'https://plant-processings-production.up.railway.app'),
         'api_key' => env('MARKET_INTEL_SERVICE_API_KEY'),
         'timeout' => (int) env('MARKET_INTEL_SERVICE_TIMEOUT', 30),
+        // Direct Shopify catalogue feeds (full product lists) for the name import —
+        // the intelligence service above only holds a partial scrape.
+        'nurserylive_url' => env('NURSERYLIVE_CATALOG_URL', 'https://nurserylive.com'),
     ],
 
 ];

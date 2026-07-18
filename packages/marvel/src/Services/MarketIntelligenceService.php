@@ -3,6 +3,7 @@
 namespace Marvel\Services;
 
 use Illuminate\Http\Client\PendingRequest;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Str;
@@ -110,6 +111,63 @@ class MarketIntelligenceService
         return $all;
     }
 
+    /**
+     * Full NurseryLive catalogue via its public Shopify products feed
+     * (/products.json). Unlike the partial intelligence scrape, this is the
+     * COMPLETE product list. Filtered to plant product-types.
+     *
+     * @return array<int,array{title:string,plant_form:string,price_current:?float,source_site:string}>
+     */
+    public function fetchNurseryLiveCatalog(bool $includeCombos = false): array
+    {
+        // Crawl once, cache 10 min — so import-preview + import don't double-crawl
+        // (the store rate-limits bursts). Cache holds plants AND plant-combos;
+        // combos are filtered out here unless requested.
+        $all = Cache::remember('market_intel:nurserylive_catalog', 600, fn () => $this->crawlNurseryLive());
+
+        return $includeCombos
+            ? $all
+            : array_values(array_filter($all, fn ($x) => ($x['plant_form'] ?? 'single') !== 'combo'));
+    }
+
+    /** Polite paged crawl of NurseryLive's Shopify products feed (plants + plant-combos). */
+    private function crawlNurseryLive(): array
+    {
+        $base = rtrim((string) config('services.market_intelligence.nurserylive_url', 'https://nurserylive.com'), '/');
+        $out = [];
+        for ($page = 1; $page <= 60; $page++) {
+            $resp = Http::timeout(30)
+                ->retry(3, 2500, throw: false)   // ride out 429/503 rate-limits
+                ->withHeaders(['User-Agent' => 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'])
+                ->get($base.'/products.json', ['limit' => 250, 'page' => $page]);
+            if (! $resp->successful()) {
+                break;
+            }
+            $products = $resp->json('products', []);
+            if (empty($products)) {
+                break;
+            }
+            foreach ($products as $p) {
+                $type = mb_strtolower((string) ($p['product_type'] ?? ''));
+                $isPlant = in_array($type, ['plants', 'nfs-plants'], true);
+                $isPlantCombo = $type === 'combo packs - plants';
+                if (! $isPlant && ! $isPlantCombo) {
+                    continue;   // skip seeds / planters / pebbles / tools / gifts …
+                }
+                $price = $p['variants'][0]['price'] ?? null;
+                $out[] = [
+                    'title'         => (string) ($p['title'] ?? ''),
+                    'plant_form'    => $isPlantCombo ? 'combo' : 'single',
+                    'price_current' => is_numeric($price) ? (float) $price : null,
+                    'source_site'   => 'nurserylive',
+                ];
+            }
+            usleep(350000);   // ~0.35s between pages — stay under the store's rate limit
+        }
+
+        return $out;
+    }
+
     private function normalize(array $it): array
     {
         return [
@@ -167,9 +225,16 @@ class MarketIntelligenceService
      */
     private function candidateNames(?string $source = null, bool $includeCombos = false): array
     {
+        // 'nurserylive_full' pulls the COMPLETE NurseryLive catalogue (Shopify feed),
+        // already filtered to plant types; every other source uses the intelligence API.
+        $fullCatalog = $source === 'nurserylive_full';
+        $items = $fullCatalog
+            ? $this->fetchNurseryLiveCatalog($includeCombos)
+            : $this->fetchAllListings($source);
+
         $seen = [];
-        foreach ($this->fetchAllListings($source) as $it) {
-            if (! $includeCombos && $this->isCombo($it)) {
+        foreach ($items as $it) {
+            if (! $fullCatalog && ! $includeCombos && $this->isCombo($it)) {
                 continue;
             }
             $name = $this->cleanName((string) ($it['title'] ?? ''));
@@ -189,82 +254,103 @@ class MarketIntelligenceService
 
     // ── Purpose 1: import names into the master catalogue as DRAFTS ────────────
 
-    /** Dry run — what an import would do, without writing. */
-    public function importPreview(?string $source = null, bool $includeCombos = false): array
+    /** slug => display-name map, deduped by slug, for a source/scope. */
+    private function candidateSlugMap(?string $source, bool $includeCombos): array
     {
-        $names = $this->candidateNames($source, $includeCombos);
-        $existing = 0;
-        $new = [];
-        foreach ($names as $name) {
+        $bySlug = [];
+        foreach ($this->candidateNames($source, $includeCombos) as $name) {
             $slug = Str::slug($name);
-            if ($slug === '') {
-                continue;
-            }
-            if (Product::withTrashed()->where('slug', $slug)->where('language', 'en')->exists()) {
-                $existing++;
-            } else {
-                $new[] = $name;
+            if ($slug !== '') {
+                $bySlug[$slug] ??= $name;
             }
         }
 
+        return $bySlug;
+    }
+
+    /** Which candidate slugs already exist in the catalogue (batched). */
+    private function existingSlugs(array $slugs): array
+    {
+        if (empty($slugs)) {
+            return [];
+        }
+
+        return Product::withTrashed()
+            ->whereIn('slug', $slugs)
+            ->where('language', 'en')
+            ->pluck('slug')
+            ->unique()
+            ->all();
+    }
+
+    /** Dry run — what an import would do, without writing. */
+    public function importPreview(?string $source = null, bool $includeCombos = false): array
+    {
+        $bySlug = $this->candidateSlugMap($source, $includeCombos);
+        $total = count($bySlug);
+        foreach ($this->existingSlugs(array_keys($bySlug)) as $slug) {
+            unset($bySlug[$slug]);
+        }
+
         return [
-            'total_candidates' => count($names),
-            'already_in_catalog' => $existing,
-            'to_create' => count($new),
-            'sample' => array_slice($new, 0, 40),
+            'total_candidates' => $total,
+            'already_in_catalog' => $total - count($bySlug),
+            'to_create' => count($bySlug),
+            'sample' => array_slice(array_values($bySlug), 0, 40),
         ];
     }
 
-    /** Create DRAFT products for names not already in the master catalogue. */
+    /**
+     * Create DRAFT products for names not already in the master catalogue.
+     * Bulk-inserts in chunks (handles the full ~2,600-plant catalogue quickly);
+     * never overwrites an existing product.
+     */
     public function importNames(?string $source = null, bool $includeCombos = false): array
     {
         $shopId = Shop::masterId();
         $typeId = Type::where('slug', 'plants')->where('language', 'en')->value('id')
             ?? Type::where('language', 'en')->value('id');
 
-        $names = $this->candidateNames($source, $includeCombos);
-        $created = [];
-        $skippedExisting = 0;
+        $bySlug = $this->candidateSlugMap($source, $includeCombos);
+        $total = count($bySlug);
+        foreach ($this->existingSlugs(array_keys($bySlug)) as $slug) {
+            unset($bySlug[$slug]);   // skip anything already in the catalogue
+        }
 
-        DB::transaction(function () use ($names, $shopId, $typeId, &$created, &$skippedExisting) {
-            foreach ($names as $name) {
-                $slug = Str::slug($name);
-                if ($slug === '') {
-                    continue;
-                }
-                // Never touch an existing product (would risk flipping a live one to draft).
-                if (Product::withTrashed()->where('slug', $slug)->where('language', 'en')->exists()) {
-                    $skippedExisting++;
+        $now = now();
+        $rows = [];
+        foreach ($bySlug as $slug => $name) {
+            $rows[] = [
+                'name'         => $name,
+                'slug'         => $slug,
+                'type_id'      => $typeId,
+                'shop_id'      => $shopId,
+                'unit'         => '1 Plant',
+                'status'       => 'draft',        // hidden: storefront queries status=publish
+                'product_type' => 'simple',
+                'language'     => 'en',
+                'price'        => 0,
+                'sale_price'   => 0,
+                'min_price'    => 0,
+                'max_price'    => 0,
+                'quantity'     => 0,
+                'in_stock'     => 0,
+                'is_taxable'   => 0,
+                'visibility'   => 'visibility_public',
+                'created_at'   => $now,
+                'updated_at'   => $now,
+            ];
+        }
 
-                    continue;
-                }
-                Product::create([
-                    'name'         => $name,
-                    'slug'         => $slug,
-                    'type_id'      => $typeId,
-                    'shop_id'      => $shopId,
-                    'unit'         => '1 Plant',
-                    'status'       => 'draft',        // hidden: storefront queries status=publish
-                    'product_type' => 'simple',
-                    'language'     => 'en',
-                    'price'        => 0,
-                    'sale_price'   => 0,
-                    'min_price'    => 0,
-                    'max_price'    => 0,
-                    'quantity'     => 0,
-                    'in_stock'     => false,
-                    'is_taxable'   => false,
-                    'visibility'   => 'visibility_public',
-                ]);
-                $created[] = $name;
-            }
-        });
+        foreach (array_chunk($rows, 500) as $chunk) {
+            DB::table('products')->insert($chunk);
+        }
 
         return [
-            'created' => count($created),
-            'skipped_existing' => $skippedExisting,
-            'total_candidates' => count($names),
-            'created_names' => $created,
+            'created' => count($rows),
+            'skipped_existing' => $total - count($rows),
+            'total_candidates' => $total,
+            'created_names' => array_values($bySlug),
         ];
     }
 

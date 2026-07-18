@@ -86,6 +86,8 @@ class MarketIntelligenceController extends CoreController
     /** POST market/import — create DRAFT products for new competitor names. */
     public function importNames(Request $request, MarketIntelligenceService $service): JsonResponse
     {
+        @set_time_limit(300);           // full NurseryLive catalogue = ~2,600 plants across ~21 feed pages
+        @ignore_user_abort(true);
         [$source, $combos] = $this->importScope($request);
         try {
             $result = $service->importNames($source, $combos);
@@ -100,7 +102,7 @@ class MarketIntelligenceController extends CoreController
     private function importScope(Request $request): array
     {
         $source = $request->input('source');
-        $source = in_array($source, ['nurserylive', 'ugaoo'], true) ? $source : null;
+        $source = in_array($source, ['nurserylive', 'ugaoo', 'nurserylive_full'], true) ? $source : null;
         $combos = filter_var($request->input('include_combos'), FILTER_VALIDATE_BOOLEAN);
 
         return [$source, $combos];
