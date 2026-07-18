@@ -118,6 +118,17 @@ class VendorInventoryController extends CoreController
         $mine = VendorProductPrice::where('shop_id', $shopId)->whereIn('product_id', $ids)
             ->get()->groupBy('product_id');
         $page->getCollection()->transform(function ($p) use ($mine) {
+            // Drop the Product model's default $appends (ratings, total_reviews,
+            // rating_count, my_review, in_wishlist, blocked_dates,
+            // translated_languages) — each is an accessor that runs a query PER ROW
+            // during JSON serialization (the real cost: ~76ms/row → ~2s for a page of
+            // 20). None are used by the vendor catalogue, which only needs name / sku /
+            // image / variants / my_inventory. Variations append availability too, so
+            // clear those as well (another `availabilities` query per variation row).
+            $p->setAppends([]);
+            if ($p->relationLoaded('variation_options')) {
+                $p->variation_options->each->setAppends([]);
+            }
             $rows = $mine[$p->id] ?? collect();
             $p->already_attached = $rows->isNotEmpty();
             $p->pending_approval = $p->status !== ProductStatus::PUBLISH;
@@ -173,7 +184,12 @@ class VendorInventoryController extends CoreController
             $term = trim((string) $request->search);
             $query->whereHas('product', fn ($p) => $p->where('name', 'like', "%{$term}%")->orWhere('sku', 'like', "%{$term}%"));
         }
-        return $query->paginate($limit);
+        $page = $query->paginate($limit);
+        // Drop the eager-loaded product's default $appends (ratings/reviews/
+        // availability accessors) — a query per row during serialization; not needed here.
+        $page->getCollection()->each(fn ($vpp) => optional($vpp->product)->setAppends([]));
+
+        return $page;
     }
 
     /**
