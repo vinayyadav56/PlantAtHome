@@ -61,17 +61,28 @@ class VendorInventoryController extends CoreController
         // (flagged pending_approval below), so a proposer can attach rate/stock
         // right away — the listing turns customer-visible only after admin approval.
         $hasProposalCol = \Illuminate\Support\Facades\Schema::hasColumn('products', 'proposed_by_shop_id');
+        // The status=publish OR (own pending proposals) condition defeats the
+        // (status, name) index → a filesort over the whole ~1,600-product catalogue
+        // (~2s/page). Only widen to that OR when this vendor ACTUALLY has pending
+        // proposals; otherwise query published-only, which the index serves ordered
+        // by name with no filesort.
+        $hasOwnProposals = $hasProposalCol && Product::query()
+            ->whereIn('status', [ProductStatus::UNDER_REVIEW, ProductStatus::DRAFT])
+            ->where('proposed_by_shop_id', $shopId)
+            ->exists();
         $query = Product::query()
-            ->where(function ($w) use ($shopId, $hasProposalCol) {
-                $w->where('status', ProductStatus::PUBLISH);
-                if ($hasProposalCol) {
-                    $w->orWhere(function ($own) use ($shopId) {
+            ->with(['variation_options:id,product_id,title,sku,price']);
+        if ($hasOwnProposals) {
+            $query->where(function ($w) use ($shopId) {
+                $w->where('status', ProductStatus::PUBLISH)
+                    ->orWhere(function ($own) use ($shopId) {
                         $own->whereIn('status', [ProductStatus::UNDER_REVIEW, ProductStatus::DRAFT])
                             ->where('proposed_by_shop_id', $shopId);
                     });
-                }
-            })
-            ->with(['variation_options:id,product_id,title,sku,price']);
+            });
+        } else {
+            $query->where('status', ProductStatus::PUBLISH);
+        }
 
         if ($request->filled('q')) {
             $term = trim((string) $request->q);
