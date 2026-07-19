@@ -763,6 +763,8 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('market/price-history', [MarketIntelligenceController::class, 'priceHistory']);
     Route::get('market/import-preview', [MarketIntelligenceController::class, 'importPreview']);
     Route::post('market/import', [MarketIntelligenceController::class, 'importNames']);
+    Route::get('market/dedupe-preview', [MarketIntelligenceController::class, 'dedupePreview']);
+    Route::post('market/dedupe', [MarketIntelligenceController::class, 'dedupe']);
 
     // Translation / Language Management (enterprise i18n engine).
     Route::get('translations/stats', [\Marvel\Http\Controllers\TranslationAdminController::class, 'stats']);

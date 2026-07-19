@@ -354,6 +354,112 @@ class MarketIntelligenceService
         ];
     }
 
+    // ── Draft de-duplication (imported drafts vs the pre-existing catalogue) ──
+
+    /**
+     * Normalize a product name for duplicate detection: lowercase, drop
+     * punctuation, and strip trailing qualifier tokens (plant/sapling/size/
+     * gift) so "Areca Palm Plant XL" == "Areca Palm". Both sides of every
+     * comparison go through this, so intrinsic names ("Money Plant") still
+     * match their own kind.
+     */
+    public function normalizeName(string $name): string
+    {
+        $t = mb_strtolower(trim($name));
+        $t = preg_replace('/[()\[\]{},.·\'"]+/u', ' ', $t);
+        $t = preg_replace('/\s+/u', ' ', trim((string) $t));
+        $tokens = ['plant', 'plants', 'sapling', 'saplings', 'xxl', 'xl', 'large', 'medium', 'small', 'mini', 'gift'];
+        do {
+            $before = $t;
+            foreach ($tokens as $tok) {
+                $t = preg_replace('/\s+'.preg_quote($tok, '/').'$/u', '', (string) $t);
+            }
+            $t = trim((string) $t, " \t-–,");
+        } while ($t !== $before && $t !== '');
+
+        return $t !== '' ? $t : mb_strtolower(trim($name));
+    }
+
+    /**
+     * Imported drafts that duplicate another plant. A draft is deletable only
+     * if it is an UNPRICED master-shop draft with no vendor rates attached
+     * (i.e. exactly what the importer creates — never a real product). It is a
+     * duplicate when its normalized name matches (a) any other live product
+     * (the pre-existing catalogue), or (b) an earlier draft in the same run.
+     *
+     * @return array<int,array{name:string,duplicate_of:string}> keyed by product id
+     */
+    private function duplicateDraftGroups(): array
+    {
+        $shopId = Shop::masterId();
+        $drafts = Product::query()
+            ->where('shop_id', $shopId)
+            ->where('status', 'draft')
+            ->where('language', 'en')
+            ->where(fn ($w) => $w->whereNull('price')->orWhere('price', 0))
+            ->whereNotExists(fn ($q) => $q->selectRaw('1')
+                ->from('vendor_product_prices')
+                ->whereColumn('vendor_product_prices.product_id', 'products.id'))
+            ->orderBy('id')
+            ->get(['id', 'name', 'slug']);
+
+        $others = Product::query()
+            ->whereNotIn('id', $drafts->pluck('id')->all())
+            ->where('language', 'en')
+            ->get(['id', 'name', 'status']);
+
+        $keepers = [];
+        foreach ($others as $p) {
+            $keepers[$this->normalizeName($p->name)] ??= $p->name;
+        }
+
+        $toDelete = [];
+        $firstDraft = [];
+        foreach ($drafts as $d) {
+            $key = $this->normalizeName($d->name);
+            if (isset($keepers[$key])) {
+                $toDelete[$d->id] = ['name' => $d->name, 'duplicate_of' => $keepers[$key]];
+            } elseif (isset($firstDraft[$key])) {
+                $toDelete[$d->id] = ['name' => $d->name, 'duplicate_of' => $firstDraft[$key].' (kept draft)'];
+            } else {
+                $firstDraft[$key] = $d->name;
+            }
+        }
+
+        return $toDelete;
+    }
+
+    /** Dry run — which imported drafts would be removed as duplicates. */
+    public function dedupePreview(): array
+    {
+        $dupes = $this->duplicateDraftGroups();
+
+        return [
+            'duplicates_found' => count($dupes),
+            'sample' => array_slice(array_map(
+                fn ($d) => $d['name'].'  →  keeping: '.$d['duplicate_of'],
+                array_values($dupes),
+            ), 0, 60),
+        ];
+    }
+
+    /** Soft-delete duplicate imported drafts (slug stays reserved, so a re-import won't recreate them). */
+    public function dedupeDrafts(): array
+    {
+        $dupes = $this->duplicateDraftGroups();
+        $removed = 0;
+        foreach (array_chunk(array_keys($dupes), 500) as $chunk) {
+            // Re-assert draft status in the delete itself — belt & braces.
+            $removed += Product::whereIn('id', $chunk)->where('status', 'draft')->delete();
+        }
+
+        return [
+            'removed' => $removed,
+            'remaining_drafts' => Product::where('shop_id', Shop::masterId())->where('status', 'draft')->count(),
+            'removed_names' => array_slice(array_map(fn ($d) => $d['name'], array_values($dupes)), 0, 200),
+        ];
+    }
+
     // ── Purpose 2: price watchlist + snapshots ────────────────────────────────
 
     public function addToWatchlist(string $docId, string $title, ?string $sourceSite): MarketWatchlistItem

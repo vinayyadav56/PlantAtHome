@@ -98,6 +98,20 @@ class MarketIntelligenceController extends CoreController
         return response()->json($result);
     }
 
+    /** GET market/dedupe-preview — dry run: which imported drafts duplicate existing plants. */
+    public function dedupePreview(MarketIntelligenceService $service): JsonResponse
+    {
+        return response()->json($service->dedupePreview());
+    }
+
+    /** POST market/dedupe — remove duplicate imported drafts (keep unique plants only). */
+    public function dedupe(MarketIntelligenceService $service): JsonResponse
+    {
+        @set_time_limit(120);
+
+        return response()->json($service->dedupeDrafts());
+    }
+
     /** Resolve the optional source (nurserylive|ugaoo) + include-combos flag. */
     private function importScope(Request $request): array
     {
