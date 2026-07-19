@@ -50,6 +50,8 @@ on:
           - v2-backfill-verify
           - v2-project-shops-dry
           - v2-project-shops
+          - market-sync-dry
+          - market-sync
         default: dry-run
 
 jobs:
@@ -85,7 +87,7 @@ jobs:
             img-limit10)   ARGS="plantathome:repair-plant-images --limit=10" ;;
             img-full)      ARGS="plantathome:repair-plant-images" ;;
             img-rollback)  ARGS="plantathome:repair-plant-images --rollback" ;;
-            cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops) ARGS="" ;;
+            cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             *) echo "Unknown mode"; exit 1 ;;
@@ -275,6 +277,24 @@ jobs:
                 php artisan v2:project-nurseries-to-shops $FLAG
                 php artisan cache:clear 2>/dev/null || true
                 echo "==> V2-PROJECT-SHOPS ($OP_MODE) COMPLETE"
+                ;;
+
+              market-sync-dry|market-sync)
+                # Competitor-catalogue sync: import plant NAMES as unpriced DRAFTS
+                # (full NurseryLive Shopify feed + intelligence sample) then
+                # de-duplicate vs the existing catalogue. Drafts are storefront-
+                # invisible; existing products never touched; fully idempotent.
+                echo "==> Ensuring latest code on EC2..."
+                git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || true
+                composer dump-autoload -o 2>/dev/null || true
+                case "$OP_MODE" in
+                  market-sync-dry) FLAG="--dry-run" ;;
+                  market-sync)     FLAG="" ;;
+                esac
+                echo "==> php artisan market:sync-catalog $FLAG"
+                php artisan market:sync-catalog $FLAG
+                php artisan cache:clear 2>/dev/null || true
+                echo "==> MARKET-SYNC ($OP_MODE) COMPLETE"
                 ;;
 
               cat-seed)
