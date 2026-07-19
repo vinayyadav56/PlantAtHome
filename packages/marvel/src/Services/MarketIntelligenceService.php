@@ -460,6 +460,40 @@ class MarketIntelligenceService
         ];
     }
 
+    // ── Draft approval (imported drafts → publish, the live status) ───────────
+
+    /**
+     * Publish the imported drafts so they enter the live master catalogue
+     * (vendor add-from-catalogue lists status=publish only; "approved" in the
+     * enum is wired to nothing). Scope mirrors the importer's footprint —
+     * master-shop, unpriced, language en — and NEVER touches vendor proposals
+     * (proposed_by_shop_id stays under admin review).
+     */
+    public function publishDrafts(bool $dryRun = false): array
+    {
+        $query = Product::query()
+            ->where('shop_id', Shop::masterId())
+            ->where('status', 'draft')
+            ->where('language', 'en')
+            ->where(fn ($w) => $w->whereNull('price')->orWhere('price', '<=', 0));
+        if (\Illuminate\Support\Facades\Schema::hasColumn('products', 'proposed_by_shop_id')) {
+            $query->whereNull('proposed_by_shop_id');
+        }
+
+        $matched = (clone $query)->count();
+        $published = 0;
+        if (! $dryRun && $matched > 0) {
+            $published = $query->update(['status' => 'publish']);
+        }
+
+        return [
+            'matched' => $matched,
+            'published' => $published,
+            'remaining_drafts' => Product::where('shop_id', Shop::masterId())->where('status', 'draft')->count(),
+            'total_published' => Product::where('status', 'publish')->where('language', 'en')->count(),
+        ];
+    }
+
     // ── Purpose 2: price watchlist + snapshots ────────────────────────────────
 
     public function addToWatchlist(string $docId, string $title, ?string $sourceSite): MarketWatchlistItem

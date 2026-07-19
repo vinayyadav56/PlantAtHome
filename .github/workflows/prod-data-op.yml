@@ -52,6 +52,8 @@ on:
           - v2-project-shops
           - market-sync-dry
           - market-sync
+          - market-publish-dry
+          - market-publish
         default: dry-run
 
 jobs:
@@ -87,7 +89,7 @@ jobs:
             img-limit10)   ARGS="plantathome:repair-plant-images --limit=10" ;;
             img-full)      ARGS="plantathome:repair-plant-images" ;;
             img-rollback)  ARGS="plantathome:repair-plant-images --rollback" ;;
-            cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync) ARGS="" ;;
+            cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             *) echo "Unknown mode"; exit 1 ;;
@@ -295,6 +297,24 @@ jobs:
                 php artisan market:sync-catalog $FLAG
                 php artisan cache:clear 2>/dev/null || true
                 echo "==> MARKET-SYNC ($OP_MODE) COMPLETE"
+                ;;
+
+              market-publish-dry|market-publish)
+                # Approve/publish the imported competitor-catalogue drafts so
+                # they enter the live master catalogue (vendors can attach
+                # rates). Scope: master-shop unpriced drafts only; vendor
+                # proposals stay under admin review. Idempotent.
+                echo "==> Ensuring latest code on EC2..."
+                git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || true
+                composer dump-autoload -o 2>/dev/null || true
+                case "$OP_MODE" in
+                  market-publish-dry) FLAG="--dry-run" ;;
+                  market-publish)     FLAG="" ;;
+                esac
+                echo "==> php artisan market:publish-drafts $FLAG"
+                php artisan market:publish-drafts $FLAG
+                php artisan cache:clear 2>/dev/null || true
+                echo "==> MARKET-PUBLISH ($OP_MODE) COMPLETE"
                 ;;
 
               cat-seed)

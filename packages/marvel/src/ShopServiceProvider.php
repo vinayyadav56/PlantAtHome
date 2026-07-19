@@ -104,6 +104,7 @@ class ShopServiceProvider extends ServiceProvider
         \Marvel\Console\ResetAdminCommand::class,
         \Marvel\Console\GenerateSkusCommand::class,
         \Marvel\Console\MarketSyncCatalogCommand::class,
+        \Marvel\Console\MarketPublishDraftsCommand::class,
         \Marvel\Console\ApplySizePricingCommand::class,
         \Marvel\Console\ApplyProdSizePricingCommand::class,
         \Marvel\Console\CreateDemoBundleCommand::class,

@@ -112,6 +112,15 @@ class MarketIntelligenceController extends CoreController
         return response()->json($service->dedupeDrafts());
     }
 
+    /** POST market/publish-drafts — approve/publish all imported drafts (live catalogue). */
+    public function publishDrafts(Request $request, MarketIntelligenceService $service): JsonResponse
+    {
+        @set_time_limit(120);
+        $dry = filter_var($request->input('dry_run'), FILTER_VALIDATE_BOOLEAN);
+
+        return response()->json($service->publishDrafts($dry));
+    }
+
     /** Resolve the optional source (nurserylive|ugaoo) + include-combos flag. */
     private function importScope(Request $request): array
     {
