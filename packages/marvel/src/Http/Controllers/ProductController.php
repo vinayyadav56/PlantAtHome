@@ -185,6 +185,18 @@ class ProductController extends CoreController
         }
         $products_query = $products_query->whereNotIn('id', $unavailableProducts);
 
+        // Customer surfaces (shop listings/search) pass hide_unpriced=1 so
+        // unpriced catalogue entries (imported names approved at ₹0, awaiting
+        // vendor rates) never render as buyable "₹0.00" cards. Opt-in param —
+        // admin/vendor tooling is unaffected.
+        if ($request->boolean('hide_unpriced')) {
+            $products_query = $products_query->where(function ($q) {
+                $q->where('products.price', '>', 0)
+                    ->orWhere('products.sale_price', '>', 0)
+                    ->orWhere('products.max_price', '>', 0);
+            });
+        }
+
         // City-first availability (single source of truth: AvailabilityService::cityScopeProductIds):
         //   - city has vendor inventory -> STRICT, only that inventory
         //   - serviceable + unmapped    -> full master catalog (never empty a live city)
