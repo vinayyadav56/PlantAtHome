@@ -43,8 +43,14 @@ abstract class AbstractSendBatchJob implements ShouldQueue
     public int $tries = 3;
     public int $timeout = 280; // < the worker's retry_after (960s)
 
-    public function __construct(public readonly int $batchId)
+    // Not readonly: a queued subclass (SendEmailJob…) is restored via reflection
+    // from the SUBCLASS scope, and PHP forbids initializing a parent-declared
+    // readonly property from there — which breaks job deserialization.
+    public int $batchId;
+
+    public function __construct(int $batchId)
     {
+        $this->batchId = $batchId;
     }
 
     /** @return int[] per-attempt backoff seconds */

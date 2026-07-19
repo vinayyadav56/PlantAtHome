@@ -30,8 +30,11 @@ final class GenerateCampaignBatchesJob implements ShouldQueue
     public int $tries = 1;
     public int $timeout = 600;
 
-    public function __construct(public readonly int $runId)
+    public int $runId;
+
+    public function __construct(int $runId)
     {
+        $this->runId = $runId;
     }
 
     public function handle(CampaignRunner $runner): void
