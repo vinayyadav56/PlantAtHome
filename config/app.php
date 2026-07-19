@@ -191,6 +191,7 @@ return [
         App\Modules\Notifications\Providers\NotificationsServiceProvider::class,
         App\Modules\Cms\Providers\CmsServiceProvider::class,
         App\Modules\Analytics\Providers\AnalyticsServiceProvider::class,
+        App\Modules\Marketing\Providers\MarketingServiceProvider::class,
     ],
 
     /*
