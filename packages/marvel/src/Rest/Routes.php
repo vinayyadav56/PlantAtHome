@@ -69,6 +69,7 @@ use Marvel\Http\Controllers\SettlementController;
 use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
+use Marvel\Http\Controllers\CourierPartnerProxyController;
 use Marvel\Http\Controllers\PricingMarginController;
 use Marvel\Http\Controllers\VendorController;
 use Marvel\Http\Controllers\RolePermissionController;
@@ -667,6 +668,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // credentials. GET returns masked status (never secret values); POST encrypt-saves.
     Route::get('courier-settings', [CourierConfigController::class, 'index']);
     Route::post('courier-settings', [CourierConfigController::class, 'update']);
+    // Runtime per-partner toggles proxied to the Go shipping-service (master switch + per-API cost
+    // switches, e.g. Porter's paid get_quote/track). No secrets — those stay env-only.
+    Route::get('courier/partners/{code}/config', [CourierPartnerProxyController::class, 'show']);
+    Route::put('courier/partners/{code}/config', [CourierPartnerProxyController::class, 'update']);
     // Route::get('messages/get-conversations/{shop_id}', [ConversationController::class, 'getConversationByShopId']);
     // Route::get('analytics', [AnalyticsController::class, 'analytics']);
     Route::apiResource('types', TypeController::class, [

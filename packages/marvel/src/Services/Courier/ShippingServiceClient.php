@@ -210,6 +210,25 @@ class ShippingServiceClient
         return $this->request('get', '/v1/shipments/' . rawurlencode((string) $shipment->id) . '/track');
     }
 
+    /**
+     * Read a partner's RUNTIME toggle config (master switch + per-API cost switches) — the admin
+     * Courier UI reads this to render Porter's on/off controls. Credentials are env-only and never
+     * returned by the service.
+     */
+    public function getPartnerConfig(string $code): array
+    {
+        return $this->request('get', '/v1/partners/' . rawurlencode($code) . '/config');
+    }
+
+    /**
+     * Write a partner's RUNTIME toggle config. $payload carries only the booleans the admin changed
+     * (partial merge on the service side): enabled / quote_enabled / track_enabled / cancel_enabled.
+     */
+    public function putPartnerConfig(string $code, array $payload): array
+    {
+        return $this->request('put', '/v1/partners/' . rawurlencode($code) . '/config', $payload);
+    }
+
     // ── request building ──────────────────────────────────────────
 
     private function buildRequest(Shipment $shipment, string $mode, bool $cod, float $codAmount): array
@@ -313,9 +332,11 @@ class ShippingServiceClient
                     ->withHeaders(['X-Api-Key' => $this->apiKey])
                     ->acceptJson();
             }
-            $resp = $method === 'get'
-                ? $http->get($this->baseUrl . $path)
-                : $http->post($this->baseUrl . $path, $body);
+            $resp = match ($method) {
+                'get'   => $http->get($this->baseUrl . $path),
+                'put'   => $http->put($this->baseUrl . $path, $body),
+                default => $http->post($this->baseUrl . $path, $body),
+            };
         } catch (\Throwable $e) {
             Log::warning('Shipping service request failed', ['path' => $path, 'error' => $e->getMessage()]); // no secret
             return ['ok' => false, 'status' => 0, 'data' => null, 'error' => 'Network error contacting shipping service.'];
