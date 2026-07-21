@@ -170,7 +170,12 @@ class OrderRepository extends BaseRepository
             );
         }
         if (!empty($request['shopping_city'])) {
-            $request['serviceable_city'] = trim((string) $request['shopping_city']);
+            // Stamp the CANONICAL city name (Gurgaon -> Gurugram), not the client's raw string.
+            $cityKey = app(\Marvel\Services\AvailabilityService::class)
+                ->normalizeCityKey((string) $request['shopping_city']);
+            $canonCity = \Marvel\Database\Models\City::query()
+                ->whereRaw('LOWER(name) = ?', [$cityKey])->value('name');
+            $request['serviceable_city'] = $canonCity ?: trim((string) $request['shopping_city']);
         }
         // Deliver-to-someone-else: a recipient must be identifiable for the courier.
         if (($request['deliver_to'] ?? null) === 'someone_else') {
