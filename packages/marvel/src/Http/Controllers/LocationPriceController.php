@@ -7,7 +7,6 @@ use Carbon\Carbon;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Shop;
 use Marvel\Services\AvailabilityService;
-use Marvel\Services\Courier\CourierService;
 use Marvel\Services\FulfillmentService;
 use Marvel\Services\ItemAssignmentService;
 use Marvel\Services\PricingService;
@@ -113,11 +112,7 @@ class LocationPriceController extends CoreController
 
         $pricing = new PricingService();
         $engine  = new ItemAssignmentService();
-        // Courier: live serviceability/rate from the provider for courier-mode lines (C2).
-        $courier   = new CourierService();
-        $courierOn = $courier->enabled() && $pincode;
-        $cod       = $request->boolean('cod');
-        $shopPins  = []; // memo: shop_id → pickup pincode
+        $cod     = $request->boolean('cod');
 
         $ids = collect($items)->pluck('product_id')->filter()->unique()->values();
         $products = Product::whereIn('id', $ids)->get()->keyBy('id');
@@ -167,24 +162,10 @@ class LocationPriceController extends CoreController
             $shipping = (float) ($best['shipping_cost'] ?? 0);
             $eta = $best['eta_days'] ?? null;
 
-            // Courier lines: override shipping/ETA with the cheapest live provider rate when
-            // available; on any failure keep the vendor_shipping_rates value (never errors).
+            // Shipping/ETA come from vendor_shipping_rates via the assignment engine. (The old
+            // in-process Shiprocket live-rate override was removed with the monolith partner stack;
+            // live rates now come from the Go shipping-service at dispatch/optimizer time.)
             $codAvailable = null;
-            if ($courierOn && (($best['fulfillment_mode'] ?? null) === 'courier') && ($best['shop_id'] ?? null)) {
-                $shopId = (int) $best['shop_id'];
-                if (!array_key_exists($shopId, $shopPins)) {
-                    $s = Shop::find($shopId);
-                    $addr = (array) ($s->address ?? []);
-                    $shopPins[$shopId] = (string) ($s->pickup_postcode ?? ($addr['zip'] ?? ''));
-                }
-                $weightG = max(1, (int) (($product->weight ?? 0) ?: $courier->defaultPackage()['weight'])) * $qty;
-                $svc = $courier->serviceability($shopPins[$shopId], (string) $pincode, $weightG, $cod);
-                if ($svc && !empty($svc['cheapest'])) {
-                    $shipping = (float) $svc['cheapest']['rate'];
-                    $eta = $svc['cheapest']['eta_days'] ?: $eta;
-                    $codAvailable = (bool) $svc['cheapest']['cod_available'];
-                }
-            }
 
             $subtotal += $unit * $qty;
             $shippingTotal += $shipping;

@@ -143,12 +143,8 @@ Route::post('webhooks/xendit', [WebHookController::class, 'xendit']);
 Route::post('webhooks/iyzico', [WebHookController::class, 'iyzico']);
 Route::post('webhooks/bkash', [WebHookController::class, 'bkash']);
 Route::post('webhooks/flutterwave', [WebHookController::class, 'flutterwave']);
-// Courier (Shiprocket) shipment-status webhook — token-verified inside the controller
-// (x-api-key), public (no auth:sanctum), throttled to blunt spoofing/retry storms.
-Route::post('webhooks/shiprocket', [WebHookController::class, 'shiprocket'])->middleware('throttle:120,1');
-// Borzo order/delivery callback — anti-spoof (only a signature-verified callback triggers the
-// authenticated re-fetch), idempotent, never-5xx; tightly throttled. Public; verified in-controller.
-Route::post('webhooks/borzo', [WebHookController::class, 'borzo'])->middleware('throttle:60,1');
+// Partner shipping webhooks (Borzo/Shiprocket/Porter) are received by the Go shipping-service
+// (/webhooks/{partner} there); the monolith gets status ONLY via shipping/callback below.
 // Dedicated shipping microservice → monolith callback (status/COD). Token-verified (x-api-key)
 // in-controller, idempotent, never-5xx. Public route; throttled.
 Route::post('shipping/callback', [WebHookController::class, 'shippingCallback'])->middleware('throttle:120,1');
