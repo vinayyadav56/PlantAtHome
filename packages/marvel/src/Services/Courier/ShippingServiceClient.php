@@ -10,7 +10,7 @@ use Marvel\Database\Models\Shipment;
 
 /**
  * Thin HTTP client to the dedicated Go shipping microservice. CourierService delegates to this
- * when services.shipping_service.enabled is on; the partner integration + COD accounting then live
+ * (the ONLY shipping path); the partner integration + COD accounting live
  * in the service, and status flows back via the POST /api/shipping/callback receiver. Mirrors the
  * AI-service client pattern: X-Api-Key header, structured ['ok','status','data','error'] returns,
  * never throws for an API-level failure. The shared secret travels only in the header (never logged).

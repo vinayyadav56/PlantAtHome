@@ -19,17 +19,17 @@ use Marvel\Enums\Permission;
  */
 class CourierConfigController extends CoreController
 {
-    /** Encrypted secret fields per partner — never serialized back to the client. */
+    /**
+     * Encrypted secret fields per partner — never serialized back to the client.
+     * Partner credentials (Borzo/Shiprocket/Porter) live ONLY in the Go shipping-service env
+     * now; the monolith stores nothing but the service link itself.
+     */
     private array $secretFields = [
-        'shiprocket'       => ['email', 'password', 'api_token', 'webhook_token'],
-        'borzo'            => ['token', 'callback_token'],
         'shipping_service' => ['url', 'api_key', 'callback_key'],
     ];
 
     /** Non-secret, admin-editable settings per partner (safe to return). */
     private array $nonSecretFields = [
-        'shiprocket'       => ['base_url'],
-        'borzo'            => ['base_url', 'vehicle_type_id', 'matter'],
         'shipping_service' => ['timeout'],
     ];
 
@@ -142,10 +142,6 @@ class CourierConfigController extends CoreController
     {
         $get = fn (string $f) => !empty($creds[$f] ?? null) || !empty(config("services.$code.$f"));
         switch ($code) {
-            case 'shiprocket':
-                return $get('api_token') || ($get('email') && $get('password'));
-            case 'borzo':
-                return $get('token');
             case 'shipping_service':
                 return $get('url') && $get('api_key');
         }

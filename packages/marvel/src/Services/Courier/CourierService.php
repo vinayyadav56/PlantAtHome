@@ -4,7 +4,6 @@ namespace Marvel\Services\Courier;
 
 use Carbon\Carbon;
 use Marvel\Database\Models\CourierPartnerConfig;
-use Marvel\Database\Models\DeliveryQuote;
 use Marvel\Database\Models\Settings;
 use Marvel\Database\Models\Shipment;
 use Marvel\Database\Models\Shop;
@@ -12,37 +11,23 @@ use Marvel\Database\Repositories\OrderRepository;
 use Marvel\Enums\PaymentGatewayType;
 
 /**
- * Provider-agnostic courier domain layer. Resolves the active provider from config and
- * translates between PlantAtHome models and the provider's payloads. Everything is gated by
- * enabled(): when off (no COURIER_PROVIDER / settings flag), every method is a safe no-op
- * and the system falls back to the manual courier behavior. Booking is idempotent (keyed on
- * the shipment's provider_order_id) and partial-failure aware.
+ * Courier DOMAIN layer. Every partner API call (Borzo / Shiprocket / Porter) lives exclusively
+ * in the dedicated Go shipping-service — the monolith only delegates (ShippingServiceClient),
+ * receives status callbacks (applyNormalizedStatus seam), and holds the admin master switch.
+ * When the service link isn't configured, every operation is a safe structured failure — there
+ * is deliberately NO in-process fallback anymore.
  */
 class CourierService
 {
-    private ?CourierProviderInterface $provider = null; // Shiprocket (intercity courier lane)
-    private ?BorzoAdapter $borzo = null;                // Borzo (instant / same-city lane)
-    private ?ShippingServiceClient $shippingClient = null; // dedicated Go service (when enabled)
+    private ?ShippingServiceClient $shippingClient = null; // the ONLY shipping path
     private array $opts;
 
     public function __construct()
     {
         $options = (array) (Settings::getData()->options ?? []);
         $this->opts = (array) ($options['courier'] ?? []);
-        // Admin-managed partner config (encrypted creds in DB) overrides config('services.*') so the
-        // existing adapters/clients transparently use the admin-entered values; env is the fallback.
-        // Runs BEFORE the adapters below (they read config at construction).
+        // Admin-managed shipping-service link config (encrypted in DB) overrides env.
         self::applyAdminPartnerConfig();
-        // A partner enters service only when wired AND credentialed (so quote and book share one
-        // eligibility rule — a half-configured partner is uniformly inert, never quotes-empty-but-books).
-        if (config('services.shiprocket.enabled')
-            && (!empty(config('services.shiprocket.api_token'))
-                || (!empty(config('services.shiprocket.email')) && !empty(config('services.shiprocket.password'))))) {
-            $this->provider = new ShiprocketClient();
-        }
-        if (config('services.borzo.enabled') && !empty(config('services.borzo.token'))) {
-            $this->borzo = new BorzoAdapter();
-        }
     }
 
     /**
@@ -69,26 +54,8 @@ class CourierService
             };
 
             switch ($row->partner_code) {
-                case 'shiprocket':
-                    config([
-                        'services.shiprocket.enabled'       => (bool) $row->enabled,
-                        'services.shiprocket.email'         => $pick($creds, 'email', 'services.shiprocket.email'),
-                        'services.shiprocket.password'      => $pick($creds, 'password', 'services.shiprocket.password'),
-                        'services.shiprocket.api_token'     => $pick($creds, 'api_token', 'services.shiprocket.api_token'),
-                        'services.shiprocket.webhook_token' => $pick($creds, 'webhook_token', 'services.shiprocket.webhook_token'),
-                        'services.shiprocket.base_url'      => $pick($settings, 'base_url', 'services.shiprocket.base_url'),
-                    ]);
-                    break;
-                case 'borzo':
-                    config([
-                        'services.borzo.enabled'         => (bool) $row->enabled,
-                        'services.borzo.token'           => $pick($creds, 'token', 'services.borzo.token'),
-                        'services.borzo.callback_token'  => $pick($creds, 'callback_token', 'services.borzo.callback_token'),
-                        'services.borzo.base_url'        => $pick($settings, 'base_url', 'services.borzo.base_url'),
-                        'services.borzo.vehicle_type_id' => $pick($settings, 'vehicle_type_id', 'services.borzo.vehicle_type_id'),
-                        'services.borzo.matter'          => $pick($settings, 'matter', 'services.borzo.matter'),
-                    ]);
-                    break;
+                // Partner credentials (Borzo/Shiprocket/Porter) live ONLY in the Go shipping-service
+                // env now — the monolith stores/overlays nothing but the service link itself.
                 case 'shipping_service':
                     $apiKey = $pick($creds, 'api_key', 'services.shipping_service.api_key');
                     // callback_key mirrors the env default's intent: DB callback_key, else the DB
@@ -97,7 +64,6 @@ class CourierService
                         ? $creds['callback_key']
                         : (!empty($creds['api_key']) ? $creds['api_key'] : config('services.shipping_service.callback_key'));
                     config([
-                        'services.shipping_service.enabled'      => (bool) $row->enabled,
                         'services.shipping_service.url'          => $pick($creds, 'url', 'services.shipping_service.url'),
                         'services.shipping_service.api_key'      => $apiKey,
                         'services.shipping_service.callback_key' => $callbackKey,
@@ -114,35 +80,32 @@ class CourierService
         return (bool) ($this->opts['enabled'] ?? false);
     }
 
-    /** Shiprocket lane: provider configured AND master on. (Existing callers rely on this.) */
+    /** Courier usable = master switch on AND the shipping service link configured. */
     public function enabled(): bool
     {
-        return $this->provider !== null && $this->master();
+        return $this->shippingServiceEnabled();
     }
 
-    /** Borzo lane: Borzo configured AND master on. */
+    /** @deprecated lanes are partner-agnostic now — kept for caller compatibility. */
     public function borzoEnabled(): bool
     {
-        return $this->borzo !== null && $this->master();
+        return $this->shippingServiceEnabled();
     }
 
-    /** Any partner lane usable (gates quote fan-out / dispatch). */
+    /** Any courier operation possible (same gate — the service is the only path). */
     public function anyEnabled(): bool
     {
-        return $this->master() && ($this->provider !== null || $this->borzo !== null);
+        return $this->shippingServiceEnabled();
     }
 
     /**
-     * When the dedicated shipping microservice is enabled (+ configured), book/quote/cancel/track
-     * delegate to it; status flows back via the callback. OFF → the in-process adapters run (this
-     * is the dual-run cutover seam). Still gated by the admin master switch.
+     * The ONLY shipping path: the Go shipping-service. Gated by the admin master switch +
+     * a configured service link (url + api key). No env cutover flag anymore — there is no
+     * in-process fallback left to cut over from.
      */
     public function shippingServiceEnabled(): bool
     {
-        if (!$this->master() || !config('services.shipping_service.enabled')) {
-            return false;
-        }
-        return $this->shippingClient()->configured();
+        return $this->master() && $this->shippingClient()->configured();
     }
 
     private function shippingClient(): ShippingServiceClient
@@ -153,7 +116,7 @@ class CourierService
     /**
      * Per-shipment COD to collect = the order's real customer payable (paid_total) apportioned by
      * this shipment's share of the goods subtotal. Single-shipment collects the full payable;
-     * degenerate splits evenly. Mirrors BorzoAdapter::codAmount so the service collects the same.
+     * degenerate splits evenly. The Go service collects the same amount.
      */
     public function shipmentCodAmount(Shipment $shipment, $order): float
     {
@@ -215,46 +178,32 @@ class CourierService
     }
 
     /**
-     * Dispatch a shipment to the correct partner for its mode: courier → Shiprocket (the proven
-     * create+AWB sequence), instant/same-city → Borzo. Each lane is idempotent on
-     * provider_order_id, so a retry never double-books. Safe no-op when the lane is disabled.
+     * Dispatch a shipment: the Go service routes it to the right partner for its mode
+     * (courier → Shiprocket; instant/same-city → cheapest of Borzo/Porter), idempotent on
+     * shipment_ref so a retry never double-books.
      */
     public function book(Shipment $shipment): array
     {
-        if ($this->shippingServiceEnabled()) {
-            $order = $shipment->order;
-            $cod = $order && $order->payment_gateway === PaymentGatewayType::CASH_ON_DELIVERY;
-            return $this->shippingClient()->book($shipment, $this->modeOf($shipment), (bool) $cod, $this->shipmentCodAmount($shipment, $order));
+        if (!$this->shippingServiceEnabled()) {
+            return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
         }
-        $mode = $this->modeOf($shipment);
-        if ($mode === 'courier') {
-            return $this->enabled()
-                ? $this->bookShipment($shipment)
-                : ['ok' => false, 'error' => 'Courier (Shiprocket) lane is not enabled.'];
-        }
-        if (!$this->borzoEnabled()) {
-            return ['ok' => false, 'error' => 'Instant (Borzo) lane is not enabled.'];
-        }
-        return $this->borzo->book($shipment);
+        $order = $shipment->order;
+        $cod = $order && $order->payment_gateway === PaymentGatewayType::CASH_ON_DELIVERY;
+        return $this->shippingClient()->book($shipment, $this->modeOf($shipment), (bool) $cod, $this->shipmentCodAmount($shipment, $order));
     }
 
-    /** Cancel a booked shipment via whichever partner placed it. */
+    /** Cancel a booked shipment (the service cancels at whichever partner placed it). */
     public function cancel(Shipment $shipment, ?string $reason = null): array
     {
-        if ($this->shippingServiceEnabled()) {
-            return $this->shippingClient()->cancel($shipment, $reason);
+        if (!$this->shippingServiceEnabled()) {
+            return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
         }
-        if (($shipment->provider ?? '') === 'borzo') {
-            return $this->borzoEnabled()
-                ? $this->borzo->cancel($shipment, $reason)
-                : ['ok' => false, 'error' => 'Borzo lane is not enabled.'];
-        }
-        return (new ShiprocketAdapter())->cancel($shipment, $reason);
+        return $this->shippingClient()->cancel($shipment, $reason);
     }
 
     /**
-     * Ranked delivery quotes across every partner that can serve this shipment's mode (+ COD).
-     * Each partner's quote() is isolated; a partner that errors/times out is simply dropped.
+     * Ranked delivery quotes for this shipment's mode (+ COD), from the Go service's
+     * partner fan-out (each partner isolated there; failures surface as partner_errors).
      */
     public function quoteShipment(Shipment $shipment, ?bool $cod = null): array
     {
@@ -262,97 +211,10 @@ class CourierService
         $cod = $cod ?? ($order && $order->payment_gateway === PaymentGatewayType::CASH_ON_DELIVERY);
         $mode = $this->modeOf($shipment);
 
-        if ($this->shippingServiceEnabled()) {
-            return $this->shippingClient()->quoteShipment($shipment, $mode, (bool) $cod, $this->shipmentCodAmount($shipment, $order));
+        if (!$this->shippingServiceEnabled()) {
+            return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
         }
-        if (!$this->anyEnabled()) {
-            return ['ok' => false, 'error' => 'Courier integration is not enabled.'];
-        }
-
-        $quotes = [];
-        $partnerErrors = [];
-        foreach (AdapterRegistry::candidatesForMode($mode, (bool) $cod) as $code => $adapter) {
-            $q = $adapter->quote($shipment, (bool) $cod);
-            if (empty($q['ok'])) {
-                // Keep the real reason (credential/network/serviceability) per partner so the
-                // caller can tell "no serviceable courier" from "auth failed / service down".
-                $partnerErrors[$code] = $q['error'] ?? 'no quote returned';
-                continue;
-            }
-            $quotes[] = [
-                'partner'       => $code,
-                'cost'          => $q['cost'] ?? null,
-                'eta_days'      => $q['eta_days'] ?? null,
-                'cod_available' => $q['cod_available'] ?? null,
-            ];
-            // Audit row (book-against-quote + analytics). Never let a persistence hiccup break
-            // the quote response.
-            try {
-                DeliveryQuote::create([
-                    'shipment_id'     => $shipment->id,
-                    'order_id'        => $shipment->order_id,
-                    'partner'         => $code,
-                    'mode'            => $mode,
-                    'cod'             => (bool) $cod,
-                    'cod_amount'      => $shipment->cod_amount,
-                    'quoted_cost'     => $q['cost'] ?? null,
-                    'quoted_eta_days' => $q['eta_days'] ?? null,
-                    'raw'             => $q['raw'] ?? null,
-                    'expires_at'      => Carbon::now()->addMinutes(15),
-                ]);
-            } catch (\Throwable $e) {
-                // audit-only; ignore
-            }
-        }
-        usort($quotes, fn ($a, $b) => ($a['cost'] ?? INF) <=> ($b['cost'] ?? INF));
-        $ok = !empty($quotes);
-        $out = ['ok' => $ok, 'mode' => $mode, 'cod' => (bool) $cod, 'quotes' => $quotes, 'cheapest' => $quotes[0] ?? null];
-        if (!$ok) {
-            // Surface WHY there's no quote instead of a blank result, so the admin sees a
-            // real failure (auth/network) rather than assuming the route is unserviceable.
-            $out['error'] = !empty($partnerErrors)
-                ? 'No courier quote — ' . implode('; ', array_map(fn ($k, $v) => "{$k}: {$v}", array_keys($partnerErrors), $partnerErrors))
-                : 'No courier partner serves this shipment in mode "' . $mode . '".';
-            $out['partner_errors'] = $partnerErrors;
-        }
-        return $out;
-    }
-
-    /** Apply a Borzo order/delivery status through the SHARED order-advance seam (idempotent). */
-    public function applyBorzoStatus(Shipment $shipment, string $orderStatus, string $deliveryStatus = ''): array
-    {
-        $adapter = $this->borzo ?? new BorzoAdapter();
-        return $this->applyNormalizedStatus($shipment, $adapter->mapBorzoStatus($orderStatus, $deliveryStatus));
-    }
-
-    /** Normalized serviceability {couriers:[{courier_id,name,rate,eta_days,cod_available}], cheapest, recommended}. */
-    public function serviceability(string $pickupPin, string $dropPin, int $weightGrams, bool $cod): ?array
-    {
-        if (!$this->enabled() || !$pickupPin || !$dropPin) {
-            return null;
-        }
-        $res = $this->provider->serviceability($pickupPin, $dropPin, max(1, $weightGrams), $cod);
-        if (empty($res['ok'])) {
-            return null;
-        }
-        $rows = (array) data_get($res, 'data.data.available_courier_companies', []);
-        if (empty($rows)) {
-            return null;
-        }
-        $couriers = array_map(fn ($c) => [
-            'courier_id'    => $c['courier_company_id'] ?? null,
-            'name'          => $c['courier_name'] ?? '',
-            'rate'          => round((float) ($c['rate'] ?? 0), 2),
-            'eta_days'      => (int) ($c['estimated_delivery_days'] ?? ($c['etd_hours'] ?? 0) / 24 ?: 0),
-            'cod_available' => (bool) ($c['cod'] ?? 0),
-        ], $rows);
-        usort($couriers, fn ($a, $b) => $a['rate'] <=> $b['rate']);
-
-        return [
-            'couriers'    => $couriers,
-            'cheapest'    => $couriers[0] ?? null,
-            'recommended' => $couriers[0] ?? null,
-        ];
+        return $this->shippingClient()->quoteShipment($shipment, $mode, (bool) $cod, $this->shipmentCodAmount($shipment, $order));
     }
 
     /** Default physical package when a product carries no weight/dims yet. */
@@ -368,150 +230,46 @@ class CourierService
     }
 
     /**
-     * Create the provider order + allocate an AWB for a courier shipment. Idempotent:
-     * if provider_order_id is already set we skip creation and (re)run only AWB allocation,
-     * so a retry after a partial failure never creates a duplicate provider order.
+     * @deprecated The Shiprocket create+AWB sequence runs inside the Go service at dispatch.
+     * Kept only so the legacy book-courier route fails cleanly instead of 404ing old clients.
      */
     public function bookShipment(Shipment $shipment): array
     {
-        // When the dedicated service owns shipping, the raw Shiprocket lane must NOT also create a
-        // provider order (that would double-book). Route operators to the service via dispatch.
-        if ($this->shippingServiceEnabled()) {
-            return ['ok' => false, 'error' => 'Booking is handled by the shipping service; use the dispatch endpoint.'];
-        }
-        if (!$this->enabled()) {
-            return ['ok' => false, 'error' => 'Courier integration is not enabled.'];
-        }
-        // This is the Shiprocket (courier) lane only. A Borzo shipment's normal booked state (order
-        // id, no provider_shipment_id) would otherwise be mis-read as a broken Shiprocket row and
-        // corrupted to book_failed — refuse it and point at the dispatch endpoint.
-        if (($shipment->provider ?? '') === 'borzo') {
-            return ['ok' => false, 'error' => 'This shipment is on the Borzo instant lane; use POST shipments/{id}/dispatch.'];
-        }
-        $order = $shipment->order;
-        $shop = $shipment->shop;
-        if (!$order || !$shop) {
-            return ['ok' => false, 'error' => 'Shipment is missing its order or vendor.'];
-        }
-        if (!$shop->pickup_location_name) {
-            return ['ok' => false, 'error' => 'Vendor has no registered pickup location — run sync-pickup first.'];
-        }
-
-        // Create the provider order ONCE. Guard on blank() (not falsy) and require BOTH ids
-        // back before persisting, so a 2xx-without-ids response never (a) saves an empty
-        // provider_order_id that a retry would treat as "not created" → DUPLICATE order, nor
-        // (b) wedges the shipment with an empty provider_shipment_id the AWB step can't use.
-        if (blank($shipment->provider_order_id)) {
-            $payload = $this->buildOrderPayload($shipment, $order, $shop);
-            $created = $this->provider->createOrder($payload);
-            $newOrderId    = (string) data_get($created, 'data.order_id');
-            $newShipmentId = (string) data_get($created, 'data.shipment_id');
-            if (empty($created['ok']) || $newOrderId === '' || $newShipmentId === '') {
-                $shipment->forceFill(['last_status' => 'book_failed'])->save();
-                return ['ok' => false, 'error' => $created['error'] ?? 'Courier order was not created (provider returned no order/shipment id).'];
-            }
-            $shipment->forceFill([
-                'provider'            => 'shiprocket',
-                'mode'                => $shipment->mode ?: 'courier',
-                'provider_order_id'   => $newOrderId,
-                'provider_shipment_id' => $newShipmentId,
-                'booked_revenue'      => $shipment->shipping_revenue,
-                'last_status'         => 'booked',
-                'last_status_at'      => Carbon::now(),
-            ])->save();
-        }
-
-        // Belt-and-suspenders for any legacy row with an order id but no shipment id.
-        if (blank($shipment->provider_shipment_id)) {
-            $shipment->forceFill(['last_status' => 'book_failed'])->save();
-            return ['ok' => false, 'error' => 'Courier order is missing its shipment id — clear provider_order_id and re-book.'];
-        }
-
-        // Allocate the AWB (idempotent — safe to re-run).
-        $awb = $this->provider->assignAwb($shipment->provider_shipment_id);
-        if (empty($awb['ok'])) {
-            $shipment->forceFill(['last_status' => 'awb_failed'])->save();
-            return ['ok' => false, 'error' => $awb['error'] ?? 'Courier order created but AWB allocation failed. Retry to allocate.', 'shipment' => $shipment->fresh()];
-        }
-        $d = (array) data_get($awb, 'data.response.data', data_get($awb, 'data', []));
-        $shipment->forceFill([
-            'awb_number'        => (string) ($d['awb_code'] ?? $shipment->awb_number),
-            'courier_name'      => (string) ($d['courier_name'] ?? $shipment->courier_name),
-            'courier_company_id' => $d['courier_company_id'] ?? $shipment->courier_company_id,
-            'status'            => 'shipped',
-            'last_status'       => 'awb_assigned',
-            'last_status_at'    => Carbon::now(),
-            'tracking_url'      => $this->trackingUrl((string) ($d['awb_code'] ?? $shipment->awb_number)),
-        ])->save();
-
-        return ['ok' => true, 'shipment' => $shipment->fresh()];
+        return $this->book($shipment);
     }
 
+    /** Label generation is a shipping-service concern now (label_url arrives via callbacks). */
     public function generateLabel(Shipment $shipment): array
     {
-        if (!$this->enabled() || !$shipment->provider_shipment_id) {
-            return ['ok' => false, 'error' => 'Nothing to label.'];
-        }
-        $res = $this->provider->generateLabel([$shipment->provider_shipment_id]);
-        if (!empty($res['ok'])) {
-            $shipment->forceFill(['label_url' => (string) data_get($res, 'data.label_url')])->save();
-        }
-        return ['ok' => !empty($res['ok']), 'label_url' => $shipment->label_url, 'error' => $res['error'] ?? null];
+        return ['ok' => false, 'error' => 'Label generation is handled by the shipping service.'];
     }
 
+    /** Pickup scheduling is a shipping-service concern now. */
     public function schedulePickup(Shipment $shipment): array
     {
-        if (!$this->enabled() || !$shipment->provider_shipment_id) {
-            return ['ok' => false, 'error' => 'Nothing to pick up.'];
-        }
-        $res = $this->provider->schedulePickup([$shipment->provider_shipment_id]);
-        return ['ok' => !empty($res['ok']), 'error' => $res['error'] ?? null, 'data' => $res['data'] ?? null];
+        return ['ok' => false, 'error' => 'Pickup scheduling is handled by the shipping service.'];
     }
 
     public function track(Shipment $shipment): array
     {
-        if ($this->shippingServiceEnabled()) {
-            return $this->shippingClient()->track($shipment);
+        if (!$this->shippingServiceEnabled()) {
+            return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
         }
-        // Borzo (same-city/instant) shipments aren't AWB-based — track via the Borzo adapter.
-        if (($shipment->provider ?? '') === 'borzo') {
-            return $this->borzoEnabled()
-                ? $this->borzo->track($shipment)
-                : ['ok' => false, 'error' => 'Borzo lane is not enabled.'];
-        }
-        if (!$this->enabled() || !$shipment->awb_number) {
-            return ['ok' => false, 'error' => 'No AWB to track.'];
-        }
-        return $this->provider->track($shipment->awb_number);
+        return $this->shippingClient()->track($shipment);
     }
 
-    /** Register the vendor's address as a provider pickup location (idempotent). */
+    /**
+     * Vendor pickup registration is a shipping-service concern now. We still stamp the local
+     * pickup nickname/postcode (domain data other flows read), but no partner API is called.
+     */
     public function syncPickupLocation(Shop $shop): array
     {
-        if (!$this->enabled()) {
-            return ['ok' => false, 'error' => 'Courier integration is not enabled.'];
-        }
         $addr = (array) ($shop->address ?? []);
-        $nickname = 'shop-' . $shop->id;
-        $payload = [
-            'pickup_location' => $nickname,
-            'name'            => (string) $shop->name,
-            'email'           => (string) ($shop->settings['contact'] ?? config('mail.from.address') ?? 'ops@plantathome.in'),
-            'phone'           => (string) ($addr['phone'] ?? $shop->settings['contact'] ?? ''),
-            'address'         => (string) ($addr['street_address'] ?? $addr['address'] ?? ''),
-            'city'            => (string) ($addr['city'] ?? ''),
-            'state'           => (string) ($addr['state'] ?? ''),
-            'country'         => (string) ($addr['country'] ?? 'India'),
-            'pin_code'        => (string) ($shop->pickup_postcode ?? $addr['zip'] ?? ''),
-        ];
-        $res = $this->provider->addPickupLocation($payload);
-        if (!empty($res['ok'])) {
-            $shop->forceFill([
-                'pickup_location_name' => $nickname,
-                'pickup_postcode'      => $shop->pickup_postcode ?: ($addr['zip'] ?? null),
-            ])->save();
-        }
-        return ['ok' => !empty($res['ok']), 'pickup_location_name' => $shop->pickup_location_name, 'error' => $res['error'] ?? null];
+        $shop->forceFill([
+            'pickup_location_name' => 'shop-' . $shop->id,
+            'pickup_postcode'      => $shop->pickup_postcode ?: ($addr['zip'] ?? null),
+        ])->save();
+        return ['ok' => true, 'pickup_location_name' => $shop->pickup_location_name, 'error' => null];
     }
 
     /**
@@ -625,65 +383,4 @@ class CourierService
         return $map;
     }
 
-    // ── payload helpers ───────────────────────────────────────────
-
-    private function buildOrderPayload(Shipment $shipment, $order, Shop $shop): array
-    {
-        $def = $this->defaultPackage();
-        $items = [];
-        $weight = 0;
-        $maxL = $def['length'];
-        $maxB = $def['breadth'];
-        $maxH = $def['height'];
-        foreach ($shipment->items as $it) {
-            $product = $it->product ?? null;
-            $qty = max(1, (int) ($it->order_quantity ?? 1));
-            $w = $product && (int) ($product->weight ?? 0) > 0 ? (int) $product->weight : $def['weight'];
-            $weight += $w * $qty;
-            if ($product) {
-                $maxL = max($maxL, (float) ($product->length ?? 0));
-                $maxB = max($maxB, (float) ($product->breadth ?? 0));
-                $maxH = max($maxH, (float) ($product->height ?? 0));
-            }
-            $items[] = [
-                'name'          => $product->name ?? ('Item #' . $it->product_id),
-                'sku'           => $product->sku ?? ('SKU-' . $it->product_id),
-                'units'         => $qty,
-                'selling_price' => (float) ($it->unit_price ?? 0),
-            ];
-        }
-
-        $ship = (array) ($order->shipping_address ?? []);
-        $a = (array) ($ship['address'] ?? $ship);
-        $isCod = $order->payment_gateway === PaymentGatewayType::CASH_ON_DELIVERY;
-
-        return [
-            'order_id'              => (string) ($order->tracking_number ?? $order->id) . '-S' . $shipment->id,
-            'order_date'            => Carbon::parse($order->created_at ?? now())->format('Y-m-d H:i'),
-            'pickup_location'       => $shop->pickup_location_name,
-            'channel_id'            => '',
-            'billing_customer_name' => (string) ($order->customer_name ?? $a['name'] ?? 'Customer'),
-            'billing_last_name'     => '',
-            'billing_address'       => (string) ($a['street_address'] ?? $a['address'] ?? ''),
-            'billing_city'          => (string) ($a['city'] ?? ''),
-            'billing_pincode'       => (string) ($a['zip'] ?? $a['pincode'] ?? ''),
-            'billing_state'         => (string) ($a['state'] ?? ''),
-            'billing_country'       => (string) ($a['country'] ?? 'India'),
-            'billing_email'         => (string) ($order->customer->email ?? 'customer@plantathome.in'),
-            'billing_phone'         => (string) ($order->customer_contact ?? $a['phone'] ?? ''),
-            'shipping_is_billing'   => true,
-            'order_items'           => $items,
-            'payment_method'        => $isCod ? 'COD' : 'Prepaid',
-            'sub_total'             => (float) ($order->amount ?? array_sum(array_map(fn ($i) => $i['selling_price'] * $i['units'], $items))),
-            'length'                => $maxL,
-            'breadth'               => $maxB,
-            'height'                => $maxH,
-            'weight'                => max(0.1, round($weight / 1000, 3)), // kg
-        ];
-    }
-
-    private function trackingUrl(string $awb): string
-    {
-        return $awb ? ('https://shiprocket.co/tracking/' . rawurlencode($awb)) : '';
-    }
 }

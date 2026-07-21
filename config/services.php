@@ -66,44 +66,13 @@ return [
         'redirect' => env('LINKEDIN_REDIRECT_URI'),
     ],
 
-    // PlantAtHome — multi-partner shipping. CourierService resolves EVERY partner whose code is
-    // listed in COURIER_PROVIDER (comma-separated, e.g. "shiprocket,borzo"). Each lane is inert
-    // until its code is listed AND its credentials are set; the admin master switch
-    // (settings.options.courier.enabled) gates them all. Secrets are env-only — never committed.
-    'courier' => [
-        // Which partners are wired this environment. CSV: shiprocket | borzo | porter | ...
-        'providers' => array_values(array_filter(array_map('trim', explode(',', (string) env('COURIER_PROVIDER', ''))))),
-    ],
+    // Partner credentials (Borzo / Shiprocket / Porter) live EXCLUSIVELY in the Go shipping-service
+    // env — the monolith holds only the service link below and never calls a partner API directly.
 
-    // Shiprocket — cross-city / intercity courier aggregator (+ COD).
-    'shiprocket' => [
-        'enabled'       => in_array('shiprocket', array_map('trim', explode(',', (string) env('COURIER_PROVIDER', ''))), true),
-        'email'         => env('SHIPROCKET_EMAIL'),
-        'password'      => env('SHIPROCKET_PASSWORD'),
-        // Optional: a permanent API token. When set, it is used directly as the bearer and the
-        // email/password login is skipped (handles cabinet "API token" style credentials).
-        'api_token'     => env('SHIPROCKET_API_TOKEN'),
-        'base_url'      => env('SHIPROCKET_BASE_URL', 'https://apiv2.shiprocket.in'),
-        'webhook_token' => env('SHIPROCKET_WEBHOOK_TOKEN'),
-    ],
-
-    // Borzo (ex-WeFast) — on-demand intra-city / same-city instant delivery (+ cash-on-delivery).
-    // Auth: X-DV-Auth-Token header. Test host robotapitest-in.*, prod host robot-in.* — set
-    // BORZO_BASE_URL per environment. Default vehicle 8 = bike (small parcels / plants).
-    'borzo' => [
-        'enabled'         => in_array('borzo', array_map('trim', explode(',', (string) env('COURIER_PROVIDER', ''))), true),
-        'token'           => env('BORZO_TOKEN'),
-        'base_url'        => env('BORZO_BASE_URL', 'https://robot-in.borzodelivery.com/api/business/1.8'),
-        'callback_token'  => env('BORZO_CALLBACK_TOKEN'),
-        'vehicle_type_id' => (int) env('BORZO_VEHICLE_TYPE_ID', 8),
-        'matter'          => env('BORZO_MATTER', 'Plants & garden supplies'),
-    ],
-
-    // Dedicated Go shipping microservice. When enabled, CourierService delegates quote/book/cancel/
-    // track to it (X-Api-Key); status/COD flow back via the POST /api/shipping/callback receiver.
-    // OFF by default → the monolith uses its in-process Borzo/Shiprocket adapters (dual-run cutover).
+    // Dedicated Go shipping microservice — the ONLY shipping path. CourierService delegates
+    // quote/book/cancel/track to it (X-Api-Key); status/COD flow back via POST /api/shipping/callback.
+    // Gated solely by the admin master switch (settings.options.courier.enabled) + this link.
     'shipping_service' => [
-        'enabled'      => (bool) env('SHIPPING_SERVICE_ENABLED', false),
         'url'          => env('SHIPPING_SERVICE_URL'),                                   // e.g. https://shipping-staging.up.railway.app
         'api_key'      => env('SHIPPING_SERVICE_API_KEY'),                               // sent as X-Api-Key when calling the service
         'callback_key' => env('SHIPPING_SERVICE_CALLBACK_KEY', env('SHIPPING_SERVICE_API_KEY')), // expected X-Api-Key on inbound callbacks
