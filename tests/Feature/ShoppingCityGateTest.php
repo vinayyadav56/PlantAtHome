@@ -153,6 +153,19 @@ final class ShoppingCityGateTest extends TestCase
         ]));
     }
 
+    public function test_delhi_postal_districts_normalize_to_delhi(): void
+    {
+        $norm = app(\Marvel\Services\AvailabilityService::class);
+        foreach (['West Delhi', 'North West Delhi', 'Shahdara', 'New Delhi'] as $sub) {
+            $this->assertSame('delhi', $norm->normalizeCityKey($sub), $sub);
+        }
+        // A Delhi-district address city must therefore pass the gate for a Delhi shopper.
+        $this->assertNull($this->gate([
+            'shopping_city'    => 'Delhi',
+            'shipping_address' => ['city' => 'West Delhi', 'zip' => '999998'],
+        ]));
+    }
+
     public function test_reverse_geocode_service_nearest_city_fallback(): void
     {
         // No Google key in tests → the service must fall back to the nearest canon city.
