@@ -163,9 +163,10 @@ class OrderRepository extends BaseRepository
         $checkoutGate = new CheckoutRepository();
         $mismatch = $checkoutGate->shoppingCityMismatch($request);
         if ($mismatch !== null) {
-            throw new \Symfony\Component\HttpKernel\Exception\HttpException(
-                422,
-                json_encode($mismatch)
+            // HttpResponseException so the structured payload reaches the client
+            // verbatim (the marvel handler masks HttpException messages in prod).
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(
+                response()->json($mismatch, 422)
             );
         }
         if (!empty($request['shopping_city'])) {
@@ -175,9 +176,11 @@ class OrderRepository extends BaseRepository
         if (($request['deliver_to'] ?? null) === 'someone_else') {
             $shipAddr = (array) ($request['shipping_address'] ?? []);
             if (empty($shipAddr['recipient_name']) || empty($shipAddr['recipient_phone'])) {
-                throw new \Symfony\Component\HttpKernel\Exception\HttpException(
-                    422,
-                    'Recipient name and phone are required when delivering to someone else.'
+                throw new \Illuminate\Http\Exceptions\HttpResponseException(
+                    response()->json([
+                        'code'    => 'RECIPIENT_REQUIRED',
+                        'message' => 'Recipient name and phone are required when delivering to someone else.',
+                    ], 422)
                 );
             }
         }
