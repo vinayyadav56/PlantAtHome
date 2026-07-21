@@ -253,6 +253,10 @@ class ShippingServiceClient
     private function addressFromShop($shop): array
     {
         $a = (array) ($shop->address ?? []);
+        // The nursery onboarding LocationPicker saves coordinates to settings.location
+        // {lat,lng}; the shops.lat/lng columns are the matching engine's copy. Read all
+        // three shapes so a pickup never degrades to 0,0 for the same-city partners.
+        $loc = (array) (is_array($shop->settings ?? null) ? ($shop->settings['location'] ?? []) : []);
         return [
             'name'    => (string) ($shop->name ?: 'Vendor'),
             'phone'   => $this->digits($a['phone'] ?? ($shop->settings['contact'] ?? '')),
@@ -260,8 +264,8 @@ class ShippingServiceClient
             'city'    => (string) ($a['city'] ?? ''),
             'state'   => (string) ($a['state'] ?? ''),
             'pincode' => (string) ($shop->pickup_postcode ?? $a['zip'] ?? $a['pincode'] ?? ''),
-            'lat'     => (float) ($a['lat'] ?? $a['latitude'] ?? $shop->lat ?? 0),
-            'lng'     => (float) ($a['lng'] ?? $a['longitude'] ?? $shop->lng ?? 0),
+            'lat'     => (float) ($a['lat'] ?? $a['latitude'] ?? $shop->lat ?? $loc['lat'] ?? 0),
+            'lng'     => (float) ($a['lng'] ?? $a['longitude'] ?? $shop->lng ?? $loc['lng'] ?? 0),
         ];
     }
 
@@ -269,6 +273,11 @@ class ShippingServiceClient
     {
         $ship = (array) ($order->shipping_address ?? []);
         $a = (array) ($ship['address'] ?? $ship);
+        // Checkout stores the customer's coordinates NESTED as shipping_address.location
+        // {lat,lng} (GPS share > address map-pick > stored prompt) — read that first, then
+        // any legacy flat keys. Same-city partners (Porter/Borzo) are lat/lng-driven, so a
+        // missed read here would quote/book against 0,0.
+        $loc = (array) ($a['location'] ?? $ship['location'] ?? []);
         return [
             'name'    => (string) ($order->customer_name ?? $a['name'] ?? 'Customer'),
             'phone'   => $this->digits($order->customer_contact ?? ($a['phone'] ?? '')),
@@ -276,8 +285,8 @@ class ShippingServiceClient
             'city'    => (string) ($a['city'] ?? ''),
             'state'   => (string) ($a['state'] ?? ''),
             'pincode' => (string) ($a['zip'] ?? $a['pincode'] ?? $a['postal_code'] ?? ''),
-            'lat'     => (float) ($a['lat'] ?? $a['latitude'] ?? 0),
-            'lng'     => (float) ($a['lng'] ?? $a['longitude'] ?? 0),
+            'lat'     => (float) ($loc['lat'] ?? $a['lat'] ?? $a['latitude'] ?? 0),
+            'lng'     => (float) ($loc['lng'] ?? $a['lng'] ?? $a['longitude'] ?? 0),
         ];
     }
 
