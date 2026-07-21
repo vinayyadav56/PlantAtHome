@@ -154,6 +154,33 @@ class OrderRepository extends BaseRepository
         // Operations Control Center — final guard: never create an order
         // containing a vertical that's unavailable in the shipping city.
         $this->assertVerticalsAvailable($request);
+
+        // Shopping-City hard gate (redesign): when the client declares its shopping city,
+        // the delivery address MUST belong to it — 422 otherwise (the storefront shows the
+        // choose-another-address / change-city dialog). Old clients that send no
+        // shopping_city are unaffected. On a match, the server stamps the canonical
+        // shopping city (never trusting the client's serviceable_city claim).
+        $checkoutGate = new CheckoutRepository();
+        $mismatch = $checkoutGate->shoppingCityMismatch($request);
+        if ($mismatch !== null) {
+            throw new \Symfony\Component\HttpKernel\Exception\HttpException(
+                422,
+                json_encode($mismatch)
+            );
+        }
+        if (!empty($request['shopping_city'])) {
+            $request['serviceable_city'] = trim((string) $request['shopping_city']);
+        }
+        // Deliver-to-someone-else: a recipient must be identifiable for the courier.
+        if (($request['deliver_to'] ?? null) === 'someone_else') {
+            $shipAddr = (array) ($request['shipping_address'] ?? []);
+            if (empty($shipAddr['recipient_name']) || empty($shipAddr['recipient_phone'])) {
+                throw new \Symfony\Component\HttpKernel\Exception\HttpException(
+                    422,
+                    'Recipient name and phone are required when delivering to someone else.'
+                );
+            }
+        }
         // $request->merge([
         //     'payable'         => $request['paid_total'], // amount to be paid through paymentGateway
         //     'wallet_currency' => 0

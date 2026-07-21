@@ -33,6 +33,17 @@ class AddressRequest extends FormRequest
             'address'     => ['required', 'array'],
             // Server-set from the authenticated user in the controller — never trusted from the client.
             'customer_id' => ['nullable', 'exists:Marvel\Database\Models\User,id'],
+            // Shopping-City redesign — map-pin coordinates (the draggable pin is the source
+            // of truth) + address kind + optional recipient (deliver-to-someone-else saves).
+            // rg_* fields are NOT accepted from the client: the server re-derives them from
+            // latitude/longitude via the geo/reverse logic in the controller.
+            'latitude'        => ['nullable', 'numeric', 'between:-90,90'],
+            'longitude'       => ['nullable', 'numeric', 'between:-180,180'],
+            'google_place_id' => ['nullable', 'string', 'max:255'],
+            'location'        => ['nullable', 'array'],
+            'address_type'    => ['nullable', 'string', 'in:home,office,other'],
+            'recipient_name'  => ['nullable', 'string', 'max:255'],
+            'recipient_phone' => ['nullable', 'string', 'max:32'],
         ];
     }
 

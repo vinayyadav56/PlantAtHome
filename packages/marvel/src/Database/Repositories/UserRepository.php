@@ -82,6 +82,30 @@ class UserRepository extends BaseRepository
         }
     }
 
+    /**
+     * Derive rg_* (reverse-geocoded city/district/state/pincode) server-side from the
+     * address's map-pin coordinates. Fail-open: faults leave rg_* absent and the
+     * checkout gate falls back to the postal master by pincode.
+     */
+    private function withReverseGeocode(array $fields): array
+    {
+        $lat = isset($fields['latitude']) ? (float) $fields['latitude'] : null;
+        $lng = isset($fields['longitude']) ? (float) $fields['longitude'] : null;
+        if (!$lat || !$lng) {
+            return $fields;
+        }
+        try {
+            $rg = app(\Marvel\Services\ReverseGeocodeService::class)->resolve($lat, $lng);
+            $fields['rg_city']     = $rg['city'] ?? null;
+            $fields['rg_district'] = $rg['district'] ?? null;
+            $fields['rg_state']    = $rg['state'] ?? null;
+            $fields['rg_pincode']  = $rg['pincode'] ?? null;
+        } catch (\Throwable $e) {
+            // fail-open
+        }
+        return $fields;
+    }
+
     public function updateUser($request, $user)
     {
         try {
@@ -90,7 +114,13 @@ class UserRepository extends BaseRepository
             // Address via a guessed id — an IDOR + mass-assignment hole).
             if (isset($request['address']) && count($request['address'])) {
                 foreach ($request['address'] as $address) {
-                    $fields = Arr::except((array) $address, ['id', 'customer_id', 'created_at', 'updated_at']);
+                    // rg_* are SERVER-derived from the map-pin coordinates (Shopping-City gate
+                    // trusts them) — never accept client values.
+                    $fields = Arr::except((array) $address, [
+                        'id', 'customer_id', 'created_at', 'updated_at',
+                        'rg_city', 'rg_district', 'rg_state', 'rg_pincode',
+                    ]);
+                    $fields = $this->withReverseGeocode($fields);
                     if (isset($address['id'])) {
                         $owned = Address::where('customer_id', $user->id)->find($address['id']);
                         if ($owned) {

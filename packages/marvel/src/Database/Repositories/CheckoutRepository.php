@@ -84,6 +84,18 @@ class CheckoutRepository
             }
         }
 
+        // Shopping-City gate (redesign): when the client declares its shopping city, the
+        // delivery address must belong to that city. Enforced ONLY when `shopping_city`
+        // is sent (old clients unaffected). verify() reports it structured so the UI can
+        // show the choose-another-address / change-city dialog; storeOrder() hard-blocks.
+        $city_mismatch = $this->shoppingCityMismatch($request);
+        if ($city_mismatch !== null) {
+            $unavailable_products = array_values(array_unique(array_merge(
+                array_map('intval', $unavailable_products),
+                collect($request['products'])->pluck('product_id')->filter()->map(fn ($i) => (int) $i)->all()
+            )));
+        }
+
         // Delivery Coverage hard gate (pincode-level, flag-gated OFF by default):
         // when `coverageCheckoutGate` is on and vendors have coverage rules, a cart
         // line whose shop does not cover the shipping pincode is unavailable.
@@ -135,6 +147,9 @@ class CheckoutRepository
             // an explicit cutover, so the charged total stays byte-identical. Never throws.
             'optimized'            => $this->optimizedCheckout($request, (float) $amount, (bool) ($request['isFullWalletPayment'] ?? false)),
             'unavailable_products' => $unavailable_products,
+            // Shopping-City gate: null when OK / not applicable; else
+            // { code, shopping_city, address_city } for the storefront mismatch dialog.
+            'city_mismatch'        => $city_mismatch,
             // Operations Control Center — { vertical_slug: message } for blocked
             // lines. Cast to object so the shape is stable (always {} when empty).
             'blocked_verticals'    => (object) $blocked_verticals,
@@ -166,6 +181,65 @@ class CheckoutRepository
         $zip = $addr['zip'] ?? $addr['pincode'] ?? $addr['postal_code'] ?? ($ship['zip'] ?? null);
         $zip = preg_replace('/\D+/', '', (string) $zip);
         return $zip !== '' ? $zip : null;
+    }
+
+    /**
+     * Shopping-City gate (redesign): the delivery address must belong to the declared
+     * shopping city. Returns null when OK or NOT APPLICABLE (no shopping_city sent —
+     * old clients unaffected), else the structured mismatch payload.
+     *
+     * Address-city resolution is SERVER-authoritative, most-trustworthy first:
+     *  1. postal master by shipping pincode (19k-pin canon; typed cities can lie),
+     *  2. the address's server-verified reverse-geocoded city (rg_city),
+     *  3. the typed shipping_address.city (legacy fallback).
+     * Both sides normalize through AvailabilityService::normalizeCityKey (aliases:
+     * Gurgaon→Gurugram etc.), so exonym/endonym never falsely blocks.
+     */
+    public function shoppingCityMismatch($request): ?array
+    {
+        try {
+            $shoppingCity = trim((string) ($request['shopping_city'] ?? ''));
+            if ($shoppingCity === '') {
+                return null; // gate applies only when the client declares a shopping city
+            }
+            $ship = (array) ($request['shipping_address'] ?? []);
+
+            $addressCity = null;
+            $zip = $this->shippingZip($request);
+            if ($zip) {
+                try {
+                    $geo = \Illuminate\Support\Facades\DB::table('postal_codes')
+                        ->leftJoin('cities', 'cities.id', '=', 'postal_codes.city_id')
+                        ->where('postal_codes.pincode', $zip)
+                        ->value('cities.name');
+                    $addressCity = $geo ?: null;
+                } catch (\Throwable $e) {
+                    // postal master unavailable — fall through
+                }
+            }
+            $addressCity = $addressCity ?: ($ship['rg_city'] ?? null) ?: ($ship['city'] ?? null);
+            if (!$addressCity) {
+                return null; // nothing to compare — other gates handle unserviceable cases
+            }
+
+            $norm = app(\Marvel\Services\AvailabilityService::class);
+            if ($norm->normalizeCityKey((string) $addressCity) === $norm->normalizeCityKey($shoppingCity)) {
+                return null;
+            }
+            return [
+                'code'          => 'SHOPPING_CITY_MISMATCH',
+                'shopping_city' => $shoppingCity,
+                'address_city'  => (string) $addressCity,
+                'message'       => sprintf(
+                    'The selected delivery address belongs to %s, but you are currently shopping in %s. Please select a %s address or change your shopping city.',
+                    $addressCity,
+                    $shoppingCity,
+                    $shoppingCity
+                ),
+            ];
+        } catch (\Throwable $e) {
+            return null; // never break checkout on a gate fault
+        }
     }
 
     /**
