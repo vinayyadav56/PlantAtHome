@@ -251,9 +251,10 @@ Route::post('checkout/estimate', [LocationPriceController::class, 'checkoutEstim
 Route::get('service-availability/check', [ServiceAvailabilityController::class, 'check'])
     ->middleware('throttle:120,1');
 
-// Public: live courier position for an order (only while out for delivery)
-Route::get('orders/{tracking}/courier-location', [OrderAssignmentController::class, 'courierLocation']);
-Route::get('orders/{tracking}/shipments', [OrderAssignmentController::class, 'trackingShipments']);
+// Public: live courier position for an order (only while out for delivery). Tracking numbers are
+// enumerable, so both routes are throttled and /shipments is token/owner-gated in the controller.
+Route::get('orders/{tracking}/courier-location', [OrderAssignmentController::class, 'courierLocation'])->middleware('throttle:120,1');
+Route::get('orders/{tracking}/shipments', [OrderAssignmentController::class, 'trackingShipments'])->middleware('throttle:60,1');
 
 Route::get('store-notices', [StoreNoticeController::class, 'index'])->name('store-notices.index');
 

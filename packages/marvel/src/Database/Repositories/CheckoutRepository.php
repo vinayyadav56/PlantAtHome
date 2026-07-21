@@ -108,6 +108,13 @@ class CheckoutRepository
 
         $amount = $this->getOrderAmount($request, $unavailable_products);
         $shipping_charge = !empty($settings['options']['freeShipping']) && $settings['options']['freeShippingAmount'] <= $amount ? 0 : $this->calculateShippingCharge($request, $amount);
+        // Fee cutover: when the Delivery Optimizer is enabled, the customer pays ONE
+        // consolidated flat fee (free above the same threshold) instead of the per-product
+        // sum. Null (flag off / any failure) keeps the legacy charge above, byte-identical.
+        $optimizerFee = $this->optimizerFlatFee((float) $amount);
+        if ($optimizerFee !== null) {
+            $shipping_charge = $optimizerFee;
+        }
         $tax = $this->calculateTax($request, $shipping_charge, $amount);
         $total = $amount + $tax + $shipping_charge;
         // Only enforce the minimum-order-amount on a fully-available cart. When
@@ -277,6 +284,32 @@ class CheckoutRepository
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning('coverage checkout gate failed open', ['error' => $e->getMessage()]);
             return $none;
+        }
+    }
+
+    /**
+     * The Delivery Optimizer's consolidated customer fee — the FEE CUTOVER seam. Returns null
+     * unless the optimizer is enabled (flag off ⇒ callers keep the legacy per-product charge,
+     * byte-identical) and on ANY failure (fail-open to legacy). The fee is a pure function of
+     * amount + settings (same freeShipping threshold keys as legacy), so verify and storeOrder
+     * compute the identical value with no quote calls and no shown-vs-charged drift.
+     */
+    public function optimizerFlatFee(float $amount): ?float
+    {
+        try {
+            $cfg = app(\Marvel\Services\DeliveryOptimizer\Contracts\OptimizerConfigInterface::class);
+            if (!$cfg->enabled()) {
+                return null;
+            }
+            // Mirrors DeliveryOptimizerService::customerFee() — same config methods, same
+            // >= threshold semantics — so the charged fee always equals the preview's
+            // customer_flat_fee, without constructing the full optimizer (quote clients etc.).
+            if ($cfg->freeDeliveryEnabled() && $amount >= $cfg->freeDeliveryThreshold()) {
+                return 0.0;
+            }
+            return (float) $cfg->baseFlatFee();
+        } catch (\Throwable $e) {
+            return null;
         }
     }
 

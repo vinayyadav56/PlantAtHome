@@ -263,9 +263,15 @@ class OrderRepository extends BaseRepository
             && isset($cfg['options']['freeShippingAmount'])
             && (float) $cfg['options']['freeShippingAmount'] <= (float) $request['amount'];
 
+        // Fee cutover: Delivery Optimizer enabled ⇒ the consolidated flat fee (same pure
+        // amount+settings function verify charged — zero drift). Null (flag off / failure)
+        // ⇒ legacy per-product charge, byte-identical. Coupon/threshold-free always win.
+        $optimizerFee = $checkout->optimizerFlatFee((float) $request['amount']);
         $request['delivery_fee'] = ($freeShipByCoupon || $freeShipByThreshold)
             ? 0
-            : (float) $checkout->calculateShippingCharge($request, $request['amount']);
+            : ($optimizerFee !== null
+                ? $optimizerFee
+                : (float) $checkout->calculateShippingCharge($request, $request['amount']));
         $request['sales_tax'] = (float) $checkout->calculateTax($request, $request['delivery_fee'], $request['amount']);
 
         // Floor at 0 — a payable total must never be negative (C3 defense-in-depth).

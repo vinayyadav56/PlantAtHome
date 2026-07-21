@@ -7,6 +7,7 @@ use Marvel\Database\Models\DeliveryPartner;
 use Marvel\Database\Models\Order;
 use Marvel\Database\Models\Shipment;
 use Marvel\Database\Models\Shop;
+use Marvel\Enums\Permission;
 use Marvel\Services\FulfillmentService;
 use Marvel\Services\ItemAssignmentService;
 use Marvel\Services\MatchingService;
@@ -200,13 +201,16 @@ class OrderAssignmentController extends CoreController
      * (C5). Courier shipments expose courier name + AWB + tracking link + status; local
      * shipments fall back to the live DP map (courierLocation). No vendor identity is leaked.
      */
-    public function trackingShipments($tracking)
+    public function trackingShipments(Request $request, $tracking)
     {
         $order = Order::where('tracking_number', $tracking)->first();
-        if (!$order) {
+        if (!$order || !$this->canViewTracking($request, $order)) {
+            // Not found OR not permitted → identical empty payload, so an enumerator
+            // (tracking numbers are date+6-digits, guessable at scale) learns nothing.
             return ['shipments' => []];
         }
-        $rows = Shipment::where('order_id', $order->id)->get();
+        $rows = Shipment::with('items.product:id,name,slug,image')
+            ->where('order_id', $order->id)->get();
         return [
             'shipments' => $rows->map(fn ($s) => [
                 'fulfillment_mode'     => $s->fulfillment_mode,
@@ -220,8 +224,42 @@ class OrderAssignmentController extends CoreController
                 'delivered_at'         => optional($s->delivered_at)->toDateString(),
                 'eta_days'             => $s->eta_days,
                 'expected_delivery_at' => optional($s->expected_delivery_at)->toDateString(),
+                // Parcel contents — whitelist only (never vendor identity or platform cost).
+                'items'                => $s->items->map(fn ($it) => [
+                    'name'     => $it->product->name ?? null,
+                    'slug'     => $it->product->slug ?? null,
+                    'image'    => $it->product->image ?? null,
+                    'quantity' => (int) $it->order_quantity,
+                ])->values(),
             ])->values(),
         ];
+    }
+
+    /**
+     * Same access semantics as OrderController::fetchSingleOrder, minus the vendor branch
+     * (vendors don't use the customer tracking endpoint): guest orders require the per-order
+     * tracking_token (hash_equals); legacy tokenless guest orders stay public (non-PII
+     * logistics only); registered orders are owner or super-admin only.
+     */
+    private function canViewTracking(Request $request, Order $order): bool
+    {
+        if (!$order->customer_id) {
+            if (!empty($order->tracking_token)) {
+                $provided = (string) ($request->query('token') ?? $request->input('token') ?? '');
+                return $provided !== '' && hash_equals((string) $order->tracking_token, $provided);
+            }
+            return true; // legacy tokenless guest order
+        }
+        $user = $request->user();
+        if (!$user) {
+            return false;
+        }
+        try {
+            return ((int) $user->id === (int) $order->customer_id)
+                || $user->hasPermissionTo(Permission::SUPER_ADMIN);
+        } catch (\Throwable $e) {
+            return false;
+        }
     }
 
     /**
