@@ -166,6 +166,35 @@ final class ShoppingCityGateTest extends TestCase
         ]));
     }
 
+    public function test_city_without_supply_is_out_of_stock_gated(): void
+    {
+        Schema::create('product_city_availability', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('product_id');
+            $t->string('city');
+            $t->boolean('has_local')->default(false);
+            $t->boolean('has_courier')->default(false);
+        });
+
+        $repo = new CheckoutRepository();
+
+        // No supply anywhere → declared shopping city is browse-only.
+        $blocked = $repo->shoppingCityOutOfStock(['shopping_city' => 'Gurugram']);
+        $this->assertNotNull($blocked);
+        $this->assertSame('CITY_OUT_OF_STOCK', $blocked['code']);
+        $this->assertStringContainsString('out of stock in Gurugram', $blocked['message']);
+
+        // Old clients that send no shopping_city are never gated.
+        $this->assertNull($repo->shoppingCityOutOfStock([]));
+
+        // A single supplied product flips the city back to orderable — including
+        // via the Gurgaon alias.
+        DB::table('product_city_availability')->insert([
+            ['product_id' => 11, 'city' => 'gurugram', 'has_local' => 1, 'has_courier' => 0],
+        ]);
+        $this->assertNull($repo->shoppingCityOutOfStock(['shopping_city' => 'Gurgaon']));
+    }
+
     public function test_reverse_geocode_service_nearest_city_fallback(): void
     {
         // No Google key in tests → the service must fall back to the nearest canon city.

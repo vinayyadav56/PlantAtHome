@@ -176,6 +176,16 @@ class OrderRepository extends BaseRepository
             $canonCity = \Marvel\Database\Models\City::query()
                 ->whereRaw('LOWER(name) = ?', [$cityKey])->value('name');
             $request['serviceable_city'] = $canonCity ?: trim((string) $request['shopping_city']);
+
+            // Display-only policy: a city with NO nursery supply is browse-only —
+            // ordering is blocked with a structured 422. Old clients that send no
+            // shopping_city are unaffected; cityHasSupply fails open on any fault.
+            $cityStock = $checkoutGate->shoppingCityOutOfStock($request);
+            if ($cityStock !== null) {
+                throw new \Illuminate\Http\Exceptions\HttpResponseException(
+                    response()->json($cityStock, 422)
+                );
+            }
         }
         // Deliver-to-someone-else: a recipient must be identifiable for the courier.
         if (($request['deliver_to'] ?? null) === 'someone_else') {

@@ -270,6 +270,24 @@ class AvailabilityService
         }
     }
 
+    /**
+     * Whether ANY nursery currently supplies anything in this city (projection-backed).
+     * Display-only policy: a serviceable city with no supply shows the catalog but is
+     * NOT orderable. Fail-open TRUE — a fault must never block live ordering.
+     */
+    public function cityHasSupply(string $city): bool
+    {
+        try {
+            $key = $this->normalizeCityKey($city);
+            if ($key === '') {
+                return true;
+            }
+            return $this->availabilityProductIdQuery($key, false)->exists();
+        } catch (\Throwable $e) {
+            return true;
+        }
+    }
+
     /** Whether a city (matched by name, case-insensitive) is serviceable + accepting orders. */
     public function cityIsServiceable(string $cityName): bool
     {
