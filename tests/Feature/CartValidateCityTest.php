@@ -110,15 +110,17 @@ final class CartValidateCityTest extends TestCase
         $this->assertCount(1, $res->json('data.unavailable'));
     }
 
-    public function test_serviceable_unmapped_city_keeps_everything(): void
+    public function test_serviceable_city_without_supply_is_display_only(): void
     {
+        // Display-only policy: Jaipur is serviceable but NO nursery supplies it —
+        // the catalog shows there, but a cart cannot survive a switch to it.
         $res = $this->postJson('/api/cart/validate-city', [
             'city'  => 'Jaipur',
             'items' => [['product_id' => 11], ['product_id' => 999]],
         ]);
         $res->assertOk();
-        $this->assertCount(2, $res->json('data.available'));
-        $this->assertCount(0, $res->json('data.unavailable'));
+        $this->assertCount(0, $res->json('data.available'));
+        $this->assertCount(2, $res->json('data.unavailable'));
     }
 
     public function test_non_serviceable_city_drops_everything(): void

@@ -139,6 +139,13 @@ class CartController extends CoreController
             ? null
             : array_map('intval', $scope->pluck('product_id')->all());
 
+        // Display-only policy: a serviceable city with NO nursery supply shows the
+        // catalog but cannot hold an orderable cart — every line is unavailable.
+        // (cityHasSupply fails open TRUE, so a fault keeps today's keep-all behavior.)
+        if ($allowed === null && !$availability->cityHasSupply($city)) {
+            $allowed = [];
+        }
+
         // Reprice the kept lines to the target city's uniform selling price.
         $pricing = new PricingService();
         $repriced = [];

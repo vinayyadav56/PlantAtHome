@@ -89,6 +89,16 @@ class CheckoutRepository
         // is sent (old clients unaffected). verify() reports it structured so the UI can
         // show the choose-another-address / change-city dialog; storeOrder() hard-blocks.
         $city_mismatch = $this->shoppingCityMismatch($request);
+        // Display-only policy: shopping city declared but NO nursery supplies it →
+        // the whole cart is unavailable (browse-only city). Structured payload for
+        // the storefront's out-of-stock banner. Old clients (no shopping_city) skip.
+        $city_stock = $this->shoppingCityOutOfStock($request);
+        if ($city_stock !== null) {
+            $unavailable_products = array_values(array_unique(array_merge(
+                array_map('intval', (array) $unavailable_products),
+                collect($request['products'])->pluck('product_id')->filter()->map(fn ($i) => (int) $i)->all()
+            )));
+        }
         if ($city_mismatch !== null) {
             $unavailable_products = array_values(array_unique(array_merge(
                 array_map('intval', $unavailable_products),
@@ -147,6 +157,7 @@ class CheckoutRepository
             // an explicit cutover, so the charged total stays byte-identical. Never throws.
             'optimized'            => $this->optimizedCheckout($request, (float) $amount, (bool) ($request['isFullWalletPayment'] ?? false)),
             'unavailable_products' => $unavailable_products,
+            'city_stock'           => $city_stock,
             // Shopping-City gate: null when OK / not applicable; else
             // { code, shopping_city, address_city } for the storefront mismatch dialog.
             'city_mismatch'        => $city_mismatch,
@@ -195,6 +206,36 @@ class CheckoutRepository
      * Both sides normalize through AvailabilityService::normalizeCityKey (aliases:
      * Gurgaon→Gurugram etc.), so exonym/endonym never falsely blocks.
      */
+    /**
+     * Display-only policy: when the client declares a shopping city that is
+     * serviceable but has NO nursery supply, ordering is blocked (browse-only).
+     * Null when not applicable (no shopping_city sent — old clients — or the
+     * city has supply). Fail-open on any fault.
+     */
+    public function shoppingCityOutOfStock($request): ?array
+    {
+        try {
+            $city = trim((string) ($request['shopping_city'] ?? ''));
+            if ($city === '') {
+                return null;
+            }
+            $availability = app(\Marvel\Services\AvailabilityService::class);
+            if ($availability->cityHasSupply($city)) {
+                return null;
+            }
+            return [
+                'code'    => 'CITY_OUT_OF_STOCK',
+                'city'    => $city,
+                'message' => sprintf(
+                    'All products are currently out of stock in %s. You can browse the catalog, but orders cannot be placed in this city yet.',
+                    $city
+                ),
+            ];
+        } catch (\Throwable $e) {
+            return null; // never break checkout on a gate fault
+        }
+    }
+
     public function shoppingCityMismatch($request): ?array
     {
         try {
