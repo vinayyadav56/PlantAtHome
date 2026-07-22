@@ -437,6 +437,10 @@ class ItemAssignmentService
 
     private function norm(?string $s): string
     {
-        return strtolower(trim((string) $s));
+        // Route through the shared city normalizer so vendor matching honours the same
+        // exonym aliases as discovery (Gurgaon->Gurugram etc.) — previously a customer
+        // shopping "Gurgaon" could see products (aliased) but match no vendor (un-aliased).
+        return app(\Marvel\Services\AvailabilityService::class)
+            ->normalizeCityKey((string) $s);
     }
 }

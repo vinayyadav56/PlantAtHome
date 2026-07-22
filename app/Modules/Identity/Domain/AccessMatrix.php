@@ -40,6 +40,7 @@ final class AccessMatrix
                 Permission::ORDERS_VIEW_ALL,
                 Permission::NURSERIES_MANAGE,
                 Permission::WITHDRAWALS_MANAGE,
+                Permission::MARKETING_MANAGE,
             ],
             RoleName::SUPER_ADMIN => Permission::all(), // everything
         ];

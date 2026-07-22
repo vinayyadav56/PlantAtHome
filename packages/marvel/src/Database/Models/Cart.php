@@ -8,7 +8,7 @@ class Cart extends Model
 {
     protected $table = 'carts';
 
-    protected $fillable = ['user_id', 'items'];
+    protected $fillable = ['user_id', 'items', 'shopping_city_id', 'shopping_city'];
 
     protected $casts = [
         'items' => 'array',

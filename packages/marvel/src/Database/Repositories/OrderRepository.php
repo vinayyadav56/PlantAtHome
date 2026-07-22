@@ -154,6 +154,41 @@ class OrderRepository extends BaseRepository
         // Operations Control Center — final guard: never create an order
         // containing a vertical that's unavailable in the shipping city.
         $this->assertVerticalsAvailable($request);
+
+        // Shopping-City hard gate (redesign): when the client declares its shopping city,
+        // the delivery address MUST belong to it — 422 otherwise (the storefront shows the
+        // choose-another-address / change-city dialog). Old clients that send no
+        // shopping_city are unaffected. On a match, the server stamps the canonical
+        // shopping city (never trusting the client's serviceable_city claim).
+        $checkoutGate = new CheckoutRepository();
+        $mismatch = $checkoutGate->shoppingCityMismatch($request);
+        if ($mismatch !== null) {
+            // HttpResponseException so the structured payload reaches the client
+            // verbatim (the marvel handler masks HttpException messages in prod).
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(
+                response()->json($mismatch, 422)
+            );
+        }
+        if (!empty($request['shopping_city'])) {
+            // Stamp the CANONICAL city name (Gurgaon -> Gurugram), not the client's raw string.
+            $cityKey = app(\Marvel\Services\AvailabilityService::class)
+                ->normalizeCityKey((string) $request['shopping_city']);
+            $canonCity = \Marvel\Database\Models\City::query()
+                ->whereRaw('LOWER(name) = ?', [$cityKey])->value('name');
+            $request['serviceable_city'] = $canonCity ?: trim((string) $request['shopping_city']);
+        }
+        // Deliver-to-someone-else: a recipient must be identifiable for the courier.
+        if (($request['deliver_to'] ?? null) === 'someone_else') {
+            $shipAddr = (array) ($request['shipping_address'] ?? []);
+            if (empty($shipAddr['recipient_name']) || empty($shipAddr['recipient_phone'])) {
+                throw new \Illuminate\Http\Exceptions\HttpResponseException(
+                    response()->json([
+                        'code'    => 'RECIPIENT_REQUIRED',
+                        'message' => 'Recipient name and phone are required when delivering to someone else.',
+                    ], 422)
+                );
+            }
+        }
         // $request->merge([
         //     'payable'         => $request['paid_total'], // amount to be paid through paymentGateway
         //     'wallet_currency' => 0
@@ -263,9 +298,15 @@ class OrderRepository extends BaseRepository
             && isset($cfg['options']['freeShippingAmount'])
             && (float) $cfg['options']['freeShippingAmount'] <= (float) $request['amount'];
 
+        // Fee cutover: Delivery Optimizer enabled ⇒ the consolidated flat fee (same pure
+        // amount+settings function verify charged — zero drift). Null (flag off / failure)
+        // ⇒ legacy per-product charge, byte-identical. Coupon/threshold-free always win.
+        $optimizerFee = $checkout->optimizerFlatFee((float) $request['amount']);
         $request['delivery_fee'] = ($freeShipByCoupon || $freeShipByThreshold)
             ? 0
-            : (float) $checkout->calculateShippingCharge($request, $request['amount']);
+            : ($optimizerFee !== null
+                ? $optimizerFee
+                : (float) $checkout->calculateShippingCharge($request, $request['amount']));
         $request['sales_tax'] = (float) $checkout->calculateTax($request, $request['delivery_fee'], $request['amount']);
 
         // Floor at 0 — a payable total must never be negative (C3 defense-in-depth).

@@ -42,6 +42,10 @@ class Kernel extends ConsoleKernel
         // v2 outbox relay (Phase 0): drain pending domain events to subscribers.
         $schedule->command('outbox:relay --once')->everyMinute()->withoutOverlapping();
 
+        // v2 Marketing: launch campaigns whose scheduled time has arrived. Only
+        // creates runs + enqueues jobs (never sends inline), so it's fast.
+        $schedule->command('marketing:dispatch-due')->everyMinute()->withoutOverlapping();
+
         // v2 Phase 12 observability: keyed heartbeat proving this cron loop is
         // alive — GET /api/v1/platform/status reports its staleness. DB-backed
         // (cache is not cross-process on every environment); guarded so a

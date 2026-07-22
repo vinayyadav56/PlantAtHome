@@ -10,6 +10,7 @@ use Marvel\Database\Repositories\AddressRepository;
 use Marvel\Enums\Permission;
 use Marvel\Exceptions\MarvelException;
 use Marvel\Http\Requests\AddressRequest;
+use Marvel\Services\ReverseGeocodeService;
 use Prettus\Validator\Exceptions\ValidatorException;
 
 class AddressController extends CoreController
@@ -51,6 +52,7 @@ class AddressController extends CoreController
             $data = $request->validated();
             // Never trust a client-supplied customer_id — bind to the caller.
             $data['customer_id'] = $request->user()->id;
+            $data = $this->withReverseGeocode($data);
             return $this->repository->create($data);
         } catch (MarvelException $e) {
             throw new MarvelException(COULD_NOT_CREATE_THE_RESOURCE);
@@ -88,11 +90,37 @@ class AddressController extends CoreController
             $this->authorizeOwner($address, $request);
             $data = $request->validated();
             unset($data['customer_id']); // never re-parent an address to another user
+            $data = $this->withReverseGeocode($data);
             $address->update($data);
             return $address;
         } catch (MarvelException $e) {
             throw new MarvelException(COULD_NOT_UPDATE_THE_RESOURCE);
         }
+    }
+
+    /**
+     * Shopping-City redesign: rg_* (reverse-geocoded city/district/state/pincode) are
+     * SERVER-derived from the map-pin coordinates — never accepted from the client —
+     * so the checkout shopping-city gate can trust them. Fail-open: geocoding faults
+     * leave the rg_* fields untouched (the gate then falls back to the postal master).
+     */
+    private function withReverseGeocode(array $data): array
+    {
+        $lat = isset($data['latitude']) ? (float) $data['latitude'] : null;
+        $lng = isset($data['longitude']) ? (float) $data['longitude'] : null;
+        if (!$lat || !$lng) {
+            return $data;
+        }
+        try {
+            $rg = app(ReverseGeocodeService::class)->resolve($lat, $lng);
+            $data['rg_city']     = $rg['city'] ?? null;
+            $data['rg_district'] = $rg['district'] ?? null;
+            $data['rg_state']    = $rg['state'] ?? null;
+            $data['rg_pincode']  = $rg['pincode'] ?? null;
+        } catch (\Throwable $e) {
+            // fail-open
+        }
+        return $data;
     }
 
     /** Allow the owner or a super-admin; otherwise 403. */

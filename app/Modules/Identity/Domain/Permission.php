@@ -25,6 +25,7 @@ final class Permission
     public const USERS_MANAGE       = 'users.manage';      // manage identity users
     public const NURSERIES_MANAGE   = 'nurseries.manage';  // vendor lifecycle (Nursery module)
     public const WITHDRAWALS_MANAGE = 'withdrawals.manage'; // decide vendor payouts
+    public const MARKETING_MANAGE   = 'marketing.manage';   // audiences, templates, campaigns (Marketing module)
 
     // Nursery (vendor) self-service — always scoped to the caller's own nursery
     public const NURSERY_MANAGE_OWN = 'nursery.manage_own'; // own stock/pricing/sub-orders
@@ -53,6 +54,7 @@ final class Permission
             self::USERS_MANAGE,
             self::NURSERIES_MANAGE,
             self::WITHDRAWALS_MANAGE,
+            self::MARKETING_MANAGE,
             self::NURSERY_MANAGE_OWN,
             self::NURSERY_VIEW_OWN,
             self::CATALOG_PROPOSE,

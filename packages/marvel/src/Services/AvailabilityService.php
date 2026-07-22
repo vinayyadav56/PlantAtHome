@@ -194,6 +194,20 @@ class AvailabilityService
             'calcutta'  => 'kolkata',
             'madras'    => 'chennai',
             'new delhi' => 'delhi',
+            // Delhi NCT postal districts — all one shopping city for us. The
+            // reverse-geocode nearest-city fallback otherwise lands on these
+            // non-serviceable sub-city rows (e.g. a Rohini pin -> "North West
+            // Delhi") and wrongly reports Delhi as unserviceable.
+            'central delhi'    => 'delhi',
+            'east delhi'       => 'delhi',
+            'north delhi'      => 'delhi',
+            'north east delhi' => 'delhi',
+            'north west delhi' => 'delhi',
+            'south delhi'      => 'delhi',
+            'south east delhi' => 'delhi',
+            'south west delhi' => 'delhi',
+            'west delhi'       => 'delhi',
+            'shahdara'         => 'delhi',
         ];
         return $aliases[$key] ?? $key;
     }

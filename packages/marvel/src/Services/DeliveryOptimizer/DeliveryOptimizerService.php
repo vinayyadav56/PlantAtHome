@@ -276,7 +276,12 @@ final class DeliveryOptimizerService
         return !empty($prices) ? (float) min($prices) : 0.0;
     }
 
-    /** @return array{0: float, 1: array{gap_to_free_delivery: float, threshold: float}|null} */
+    /**
+     * NB: the checkout FEE CUTOVER (CheckoutRepository::optimizerFlatFee) mirrors this
+     * function's math off the same OptimizerConfig methods — keep them in sync.
+     *
+     * @return array{0: float, 1: array{gap_to_free_delivery: float, threshold: float}|null}
+     */
     private function customerFee(float $subtotal): array
     {
         $threshold = $this->config->freeDeliveryThreshold();

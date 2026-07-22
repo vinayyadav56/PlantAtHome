@@ -469,6 +469,37 @@ class UserController extends CoreController
         }
     }
 
+    /**
+     * PUT me/shopping-city — persist the customer's chosen Shopping City (drives all
+     * product discovery; GPS never decides). Validates against the serviceable cities
+     * canon (alias-normalized, so "Gurgaon" resolves to "Gurugram") and stores the
+     * CANONICAL name in users.preferred_city.
+     */
+    public function updateShoppingCity(Request $request)
+    {
+        $data = $request->validate(['city' => 'required|string|max:120']);
+
+        $normalized = app(\Marvel\Services\AvailabilityService::class)
+            ->normalizeCityKey($data['city']);
+        $canon = \Marvel\Database\Models\City::query()
+            ->whereRaw('LOWER(name) = ?', [$normalized])
+            ->first();
+        if (!$canon || !$canon->acceptsOrders()) {
+            return response()->json([
+                'message' => 'This city is not serviceable yet.',
+                'code'    => 'CITY_NOT_SERVICEABLE',
+            ], 422);
+        }
+
+        $user = $request->user();
+        $user->forceFill(['preferred_city' => $canon->name])->save();
+
+        return [
+            'preferred_city' => $canon->name,
+            'city_id'        => $canon->id,
+        ];
+    }
+
     public function token(Request $request)
     {
         $request->validate([

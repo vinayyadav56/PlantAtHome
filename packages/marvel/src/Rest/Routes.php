@@ -77,6 +77,7 @@ use Marvel\Http\Controllers\DesignationController;
 use Marvel\Http\Controllers\ServiceAvailabilityController;
 use Marvel\Http\Controllers\BundleController;
 use Marvel\Http\Controllers\LocationPriceController;
+use Marvel\Http\Controllers\GeoController;
 use Marvel\Http\Controllers\OrderAssignmentController;
 use Marvel\Http\Controllers\DeliveryPartnerWithdrawController;
 use Marvel\Http\Controllers\DeliveryPartnerEarningsController;
@@ -243,13 +244,21 @@ Route::get('location-price', [LocationPriceController::class, 'show'])->middlewa
 Route::post('location-price/batch', [LocationPriceController::class, 'batch'])->middleware('throttle:60,1');
 Route::get('city-availability', [LocationPriceController::class, 'cityAvailability'])->middleware('throttle:120,1');
 Route::post('checkout/estimate', [LocationPriceController::class, 'checkoutEstimate'])->middleware('throttle:60,1');
+// Shopping-City redesign — public geo + cart-migration endpoints.
+// geo/reverse: the draggable map pin resolves to {city,district,state,pincode} SERVER-side
+// (Google -> postal-master canon -> nearest-city fallback); the client never decides the city.
+Route::get('geo/reverse', [GeoController::class, 'reverse'])->middleware('throttle:60,1');
+// cart/validate-city: change-shopping-city migration — which cart lines survive in the target
+// city (+ that city's prices). Public because guest carts live client-side.
+Route::post('cart/validate-city', [CartController::class, 'validateCity'])->middleware('throttle:60,1');
 // Operations Control Center — public storefront availability check (PDP gate).
 Route::get('service-availability/check', [ServiceAvailabilityController::class, 'check'])
     ->middleware('throttle:120,1');
 
-// Public: live courier position for an order (only while out for delivery)
-Route::get('orders/{tracking}/courier-location', [OrderAssignmentController::class, 'courierLocation']);
-Route::get('orders/{tracking}/shipments', [OrderAssignmentController::class, 'trackingShipments']);
+// Public: live courier position for an order (only while out for delivery). Tracking numbers are
+// enumerable, so both routes are throttled and /shipments is token/owner-gated in the controller.
+Route::get('orders/{tracking}/courier-location', [OrderAssignmentController::class, 'courierLocation'])->middleware('throttle:120,1');
+Route::get('orders/{tracking}/shipments', [OrderAssignmentController::class, 'trackingShipments'])->middleware('throttle:60,1');
 
 Route::get('store-notices', [StoreNoticeController::class, 'index'])->name('store-notices.index');
 
@@ -375,6 +384,8 @@ Route::group(['middleware' => ['auth:sanctum', 'can:' . Permission::CUSTOMER, 'e
     // Server-side account cart (cross-device sync: Android / iOS / web).
     Route::get('me/cart', [CartController::class, 'show']);
     Route::put('me/cart', [CartController::class, 'update']);
+    // Shopping City (drives all discovery; GPS never decides). Canon-validated.
+    Route::put('me/shopping-city', [UserController::class, 'updateShoppingCity']);
     // Profile contacts: up to 2 phones + 2 emails; emails verified via email OTP.
     Route::get('me/contacts', [ContactController::class, 'show']);
     Route::put('me/contacts', [ContactController::class, 'updateContacts']);

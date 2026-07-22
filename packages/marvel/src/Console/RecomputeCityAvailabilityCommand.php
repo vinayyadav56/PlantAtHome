@@ -29,8 +29,16 @@ class RecomputeCityAvailabilityCommand extends Command
             return self::SUCCESS;
         }
 
-        $pids = VendorProductPrice::query()->distinct()->pluck('product_id');
-        $this->info('Recomputing city availability for ' . $pids->count() . ' products with vendor inventory…');
+        // Union of products WITH vendor inventory and products still PRESENT in the
+        // projection: a product whose vendor inventory was removed entirely (vendor
+        // deleted / wiped) leaves ORPHANED projection rows that would otherwise never
+        // be flushed — recomputing such a product deletes its stale rows.
+        $pids = VendorProductPrice::query()->distinct()->pluck('product_id')
+            ->merge(\Marvel\Database\Models\ProductCityAvailability::query()->distinct()->pluck('product_id'))
+            ->map(fn ($id) => (int) $id)
+            ->unique()
+            ->values();
+        $this->info('Recomputing city availability for ' . $pids->count() . ' products (inventory + projection)…');
         $bar = $this->output->createProgressBar($pids->count());
         foreach ($pids as $pid) {
             $svc->recomputeForProduct((int) $pid);
