@@ -41,20 +41,25 @@ jobs:
                   raise SystemExit(f"GraphQL errors: {d['errors']}")
               return d['data']
 
-          projects = gql('query{projects{edges{node{id name '
-                         'environments{edges{node{id name}}} '
-                         'services{edges{node{id name}}}}}}}')['projects']['edges']
-          target = None
-          for p in projects:
-              n = p['node']
-              for s in n['services']['edges']:
-                  if 'image' in s['node']['name'].lower():
-                      envs = {e['node']['name']: e['node']['id'] for e in n['environments']['edges']}
-                      env_id = envs.get('production') or next(iter(envs.values()))
-                      target = (n['id'], env_id, s['node']['id'], s['node']['name'])
-          if not target:
-              raise SystemExit('No Railway service with "image" in its name found on this account.')
-          pid, eid, sid, name = target
+          # The token is PROJECT-scoped (403 on account-level queries), so look
+          # for the image-service as a sibling service inside the API project.
+          pid = os.environ['API_PROJECT_ID']
+          project = gql(
+              'query($id:String!){project(id:$id){name '
+              'environments{edges{node{id name}}} '
+              'services{edges{node{id name}}}}}',
+              {'id': pid})['project']
+          services = {s['node']['name']: s['node']['id'] for s in project['services']['edges']}
+          envs = {e['node']['name']: e['node']['id'] for e in project['environments']['edges']}
+          print('Project services:', ', '.join(sorted(services)))
+
+          name = next((n for n in services if 'image' in n.lower()), None)
+          if not name:
+              raise SystemExit(
+                  'No service with "image" in its name inside this Railway project — '
+                  'the image-service must live elsewhere; set OPENAI_SECRET_KEY manually.')
+          sid = services[name]
+          eid = envs.get('production') or os.environ['API_ENVIRONMENT_ID']
           variables = gql(
               'query($p:String!,$e:String!,$s:String!){variables(projectId:$p,environmentId:$e,serviceId:$s)}',
               {'p': pid, 'e': eid, 's': sid})['variables']
