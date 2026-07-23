@@ -22,12 +22,25 @@ jobs:
       API_ENVIRONMENT_ID: 268099e7-b634-4d26-a5ff-a95a0c145f8f
       API_SERVICE_ID: da92f9ad-814e-4e0e-a0bb-932268379c6b
     steps:
-      - name: Read the key from the image-service Railway service (masked)
+      - name: Read the key (GH secret first, then Railway image-service)
         id: read
+        env:
+          GH_OPENAI_SECRET_KEY: ${{ secrets.OPENAI_SECRET_KEY }}
         run: |
           set -e
           python3 - <<'PY'
           import json, os, urllib.error, urllib.request
+
+          # Preferred source: the repo secret (add OPENAI_SECRET_KEY under
+          # Settings → Secrets → Actions). Railway discovery is the fallback —
+          # both current Railway tokens are write-only, so it usually can't read.
+          gh_key = os.environ.get('GH_OPENAI_SECRET_KEY')
+          if gh_key:
+              print('::add-mask::' + gh_key)
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write(f'key={gh_key}\n')
+              print(f'Using OPENAI_SECRET_KEY from GitHub secrets (length {len(gh_key)}).')
+              raise SystemExit(0)
 
           tokens = [t for t in (
               ('RAILWAY_TOKEN', os.environ.get('RAILWAY_TOKEN')),
