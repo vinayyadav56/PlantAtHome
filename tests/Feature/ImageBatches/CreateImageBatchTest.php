@@ -50,11 +50,7 @@ final class CreateImageBatchTest extends ImageBatchTestCase
         Queue::fake();
         $user = $this->admin();
 
-        $res = $this->createBatch();
-        if ($res->status() !== 201) {
-            fwrite(STDERR, "\nDEBUG create body: " . json_encode($res->json()) . "\n");
-        }
-        $res->assertStatus(201);
+        $res = $this->createBatch()->assertStatus(201);
 
         $batch = ImageBatch::first();
         $this->assertSame('BATCH' . str_pad((string) $batch->id, 6, '0', STR_PAD_LEFT), $res->json('batch.display_id'));

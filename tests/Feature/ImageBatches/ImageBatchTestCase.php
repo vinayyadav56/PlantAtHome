@@ -68,6 +68,15 @@ abstract class ImageBatchTestCase extends TestCase
         Storage::fake('local');
         Mail::fake();
 
+        // Laravel-Excel spools uploads into a temp dir that a fresh CI clone
+        // doesn't have (storage/framework/cache is gitignored and the
+        // library's mkdir is not recursive) — point it at a real tmp dir.
+        $excelTmp = sys_get_temp_dir() . '/laravel-excel-tests';
+        if (!is_dir($excelTmp)) {
+            mkdir($excelTmp, 0777, true);
+        }
+        config(['excel.temporary_files.local_path' => $excelTmp]);
+
         $this->withoutMiddleware();
     }
 
