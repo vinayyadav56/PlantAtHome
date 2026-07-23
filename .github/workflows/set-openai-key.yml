@@ -16,6 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
       # Staging API service on Railway (same IDs as set-railway-s3-vars.yml).
       API_PROJECT_ID: e6fc52de-45a9-4bc0-92fe-5b9840a4d399
       API_ENVIRONMENT_ID: 268099e7-b634-4d26-a5ff-a95a0c145f8f
@@ -26,11 +27,14 @@ jobs:
         run: |
           set -e
           python3 - <<'PY'
-          import json, os, urllib.request
+          import json, os, urllib.error, urllib.request
 
-          token = os.environ['RAILWAY_API_TOKEN']
+          tokens = [t for t in (
+              ('RAILWAY_TOKEN', os.environ.get('RAILWAY_TOKEN')),
+              ('RAILWAY_API_TOKEN', os.environ.get('RAILWAY_API_TOKEN')),
+          ) if t[1]]
 
-          def gql(query, variables=None):
+          def gql(token, query, variables=None):
               body = json.dumps({'query': query, 'variables': variables or {}}).encode()
               req = urllib.request.Request(
                   'https://backboard.railway.app/graphql/v2', data=body,
@@ -38,40 +42,65 @@ jobs:
               with urllib.request.urlopen(req) as r:
                   d = json.load(r)
               if d.get('errors'):
-                  raise SystemExit(f"GraphQL errors: {d['errors']}")
+                  raise RuntimeError(f"GraphQL errors: {d['errors']}")
               return d['data']
 
-          # The token is PROJECT-scoped (403 on account-level queries), so look
-          # for the image-service as a sibling service inside the API project.
-          pid = os.environ['API_PROJECT_ID']
-          project = gql(
-              'query($id:String!){project(id:$id){name '
-              'environments{edges{node{id name}}} '
-              'services{edges{node{id name}}}}}',
-              {'id': pid})['project']
-          services = {s['node']['name']: s['node']['id'] for s in project['services']['edges']}
-          envs = {e['node']['name']: e['node']['id'] for e in project['environments']['edges']}
-          print('Project services:', ', '.join(sorted(services)))
+          def discover(token):
+              """Yield (pid, envs, services{name:id}) via whichever query the token allows."""
+              # Account-scoped tokens: enumerate all projects.
+              for q, root in (
+                  ('query{projects{edges{node{id name environments{edges{node{id name}}} services{edges{node{id name}}}}}}}', 'projects'),
+                  ('query{me{projects{edges{node{id name environments{edges{node{id name}}} services{edges{node{id name}}}}}}}}', 'me'),
+              ):
+                  try:
+                      data = gql(token, q)
+                      edges = (data['me']['projects'] if root == 'me' else data['projects'])['edges']
+                      for p in edges:
+                          n = p['node']
+                          yield (n['id'],
+                                 {e['node']['name']: e['node']['id'] for e in n['environments']['edges']},
+                                 {s['node']['name']: s['node']['id'] for s in n['services']['edges']})
+                      return
+                  except (urllib.error.HTTPError, RuntimeError, KeyError, TypeError):
+                      continue
+              # Project-scoped tokens: only the API project is visible.
+              try:
+                  n = gql(token,
+                          'query($id:String!){project(id:$id){id name environments{edges{node{id name}}} services{edges{node{id name}}}}}',
+                          {'id': os.environ['API_PROJECT_ID']})['project']
+                  yield (n['id'],
+                         {e['node']['name']: e['node']['id'] for e in n['environments']['edges']},
+                         {s['node']['name']: s['node']['id'] for s in n['services']['edges']})
+              except (urllib.error.HTTPError, RuntimeError, KeyError, TypeError):
+                  return
 
-          name = next((n for n in services if 'image' in n.lower()), None)
-          if not name:
-              raise SystemExit(
-                  'No service with "image" in its name inside this Railway project — '
-                  'the image-service must live elsewhere; set OPENAI_SECRET_KEY manually.')
-          sid = services[name]
-          eid = envs.get('production') or os.environ['API_ENVIRONMENT_ID']
-          variables = gql(
-              'query($p:String!,$e:String!,$s:String!){variables(projectId:$p,environmentId:$e,serviceId:$s)}',
-              {'p': pid, 'e': eid, 's': sid})['variables']
-          key = variables.get('OPENAI_API_KEY')
+          key = None
+          for token_name, token in tokens:
+              for pid, envs, services in discover(token):
+                  print(f'[{token_name}] project {pid}: services = {", ".join(sorted(services))}')
+                  name = next((n for n in services if 'image' in n.lower()), None)
+                  if not name:
+                      continue
+                  eid = envs.get('production') or next(iter(envs.values()))
+                  try:
+                      variables = gql(token,
+                          'query($p:String!,$e:String!,$s:String!){variables(projectId:$p,environmentId:$e,serviceId:$s)}',
+                          {'p': pid, 'e': eid, 's': services[name]})['variables']
+                  except (urllib.error.HTTPError, RuntimeError):
+                      continue
+                  key = variables.get('OPENAI_API_KEY')
+                  if key:
+                      # Mask FIRST so no later log line can ever expose it.
+                      print(f'::add-mask::{key}')
+                      with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                          f.write(f'key={key}\n')
+                      print(f'Found OpenAI key on Railway service "{name}" (length {len(key)}).')
+                      break
+              if key:
+                  break
           if not key:
-              raise SystemExit(f'OPENAI_API_KEY is not set on service {name}.')
-
-          # Mask FIRST so no later log line can ever expose it.
-          print(f'::add-mask::{key}')
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-              f.write(f'key={key}\n')
-          print(f'Found OpenAI key on Railway service "{name}" (length {len(key)}).')
+              raise SystemExit('Could not read OPENAI_API_KEY from any reachable Railway service — '
+                               'set OPENAI_SECRET_KEY manually on staging Railway + prod EC2.')
           PY
 
       - name: Upsert OPENAI_SECRET_KEY onto the staging API service
