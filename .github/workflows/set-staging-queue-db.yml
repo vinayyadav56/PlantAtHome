@@ -1,0 +1,31 @@
+name: Set staging QUEUE_CONNECTION=database (Railway)
+
+# One-shot: staging Railway ran with QUEUE_CONNECTION=sync, so "queued" jobs
+# (careplans, marketing, AI image batches) executed INLINE in web requests —
+# multi-minute batch requests 504'd at nginx while the supervisord queue
+# workers sat idle on an empty jobs table. Prod EC2 already runs
+# `queue:work database`; this aligns staging. Manual only.
+# Requires secret: RAILWAY_API_TOKEN.
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  set-var:
+    runs-on: ubuntu-latest
+    env:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      PROJECT_ID: e6fc52de-45a9-4bc0-92fe-5b9840a4d399
+      ENVIRONMENT_ID: 268099e7-b634-4d26-a5ff-a95a0c145f8f
+      SERVICE_ID: da92f9ad-814e-4e0e-a0bb-932268379c6b
+    steps:
+      - name: Upsert QUEUE_CONNECTION=database on the staging API service
+        run: |
+          set -e
+          [ -n "$RAILWAY_API_TOKEN" ] || { echo "::error::Missing RAILWAY_API_TOKEN"; exit 1; }
+          q=$(python3 -c "import json,os; print(json.dumps({'query':'mutation(\$i:VariableUpsertInput!){variableUpsert(input:\$i)}','variables':{'i':{'projectId':os.environ['PROJECT_ID'],'environmentId':os.environ['ENVIRONMENT_ID'],'serviceId':os.environ['SERVICE_ID'],'name':'QUEUE_CONNECTION','value':'database'}}}))")
+          resp=$(curl -sS -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+            --data "$q")
+          echo "$resp" | python3 -c "import json,sys;d=json.load(sys.stdin);print('upsert ->',d.get('data'),'errors:',d.get('errors'));sys.exit(1 if d.get('errors') else 0)"
+          echo "Done — Railway will redeploy the service with the new variable."
