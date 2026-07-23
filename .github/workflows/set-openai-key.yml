@@ -117,6 +117,11 @@ jobs:
           PY
 
       - name: Upsert OPENAI_SECRET_KEY onto the staging API service
+        # Both Railway tokens currently fail variable mutations ("Not
+        # Authorized") — keep trying, but never block the prod EC2 leg.
+        # If this step fails, set OPENAI_SECRET_KEY on the staging service
+        # via the Railway dashboard instead.
+        continue-on-error: true
         env:
           OPENAI_KEY: ${{ steps.read.outputs.key }}
         run: |
