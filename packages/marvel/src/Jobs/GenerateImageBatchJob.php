@@ -180,6 +180,7 @@ class GenerateImageBatchJob implements ShouldQueue
             }
 
             $started = microtime(true);
+            $paceThisImage = true;
 
             try {
                 $image = $this->generateOne($client, $batch, $row, $references, $settings);
@@ -227,11 +228,16 @@ class GenerateImageBatchJob implements ShouldQueue
                     // Back off one extra interval on 429 before the next call.
                     $this->pause($interval);
                 }
+                // Local/config failures (status 0) never reached OpenAI —
+                // pacing them only burns worker time.
+                if ($e instanceof ImageGenerationException && $e->status === 0) {
+                    $paceThisImage = false;
+                }
             }
 
             $processed++;
             $elapsed = microtime(true) - $started;
-            if ($elapsed < $interval) {
+            if ($paceThisImage && $elapsed < $interval) {
                 $this->pause($interval - $elapsed);
             }
         }
@@ -378,9 +384,26 @@ class GenerateImageBatchJob implements ShouldQueue
             ->count();
 
         if ($open > 0) {
-            // Tail (or cooling retries) → continue as fresh queue work.
-            ImageBatch::where('id', $batch->id)->update(['last_dispatched_at' => now()]);
-            static::dispatch($batch->id)->delay(now()->addSeconds(5));
+            // Continue as fresh queue work — but ONLY when a row is claimable
+            // now (pending, or a retrying row past its cooldown). If everything
+            // open is still cooling down, the sweeper re-dispatches later;
+            // dispatching here would spin (and on a sync queue, recurse
+            // indefinitely inside the original request).
+            $cooldown  = (int) config('image-batches.retry_cooldown_seconds', 60);
+            $claimable = ImageGenerationJob::where('batch_id', $batch->id)
+                ->where(function ($q) use ($cooldown) {
+                    $q->where('status', ImageGenerationJob::STATUS_PENDING)
+                        ->orWhere(function ($q2) use ($cooldown) {
+                            $q2->where('status', ImageGenerationJob::STATUS_RETRYING)
+                                ->where('updated_at', '<=', now()->subSeconds($cooldown));
+                        });
+                })
+                ->exists();
+
+            if ($claimable) {
+                ImageBatch::where('id', $batch->id)->update(['last_dispatched_at' => now()]);
+                static::dispatch($batch->id)->delay(now()->addSeconds(5));
+            }
 
             return;
         }
