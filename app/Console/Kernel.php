@@ -46,6 +46,12 @@ class Kernel extends ConsoleKernel
         // creates runs + enqueues jobs (never sends inline), so it's fast.
         $schedule->command('marketing:dispatch-due')->everyMinute()->withoutOverlapping();
 
+        // Batch AI image generation: recover stalled rows / orphaned batches /
+        // missed finalize (safety net over the `images` queue worker), and
+        // daily retention prune of generated files (audit rows are kept).
+        $schedule->command('images:sweep-batches')->everyMinute()->withoutOverlapping();
+        $schedule->command('images:prune-batches')->dailyAt('04:30')->withoutOverlapping();
+
         // v2 Phase 12 observability: keyed heartbeat proving this cron loop is
         // alive — GET /api/v1/platform/status reports its staleness. DB-backed
         // (cache is not cross-process on every environment); guarded so a

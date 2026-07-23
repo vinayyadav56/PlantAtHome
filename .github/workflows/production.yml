@@ -259,7 +259,7 @@ jobs:
             pgrep -x cron >/dev/null && echo "    cron daemon: running" || echo "    WARNING: cron daemon NOT running"
             echo "==> one-shot schedule:run as www-data (proves the cron command works; output below)"
             sudo -u www-data /usr/bin/php artisan schedule:run 2>&1 | tail -20 || echo "    WARNING: one-shot schedule:run FAILED"
-            # 2) queue workers as templated systemd units (default + careplans).
+            # 2) queue workers as templated systemd units (default + careplans + images).
             sudo tee /etc/systemd/system/plantathome-queue@.service > /dev/null <<'UNIT'
             [Unit]
             Description=PlantAtHome API queue worker (%i)
@@ -277,10 +277,10 @@ jobs:
             WantedBy=multi-user.target
             UNIT
             sudo systemctl daemon-reload
-            sudo systemctl enable --now plantathome-queue@default plantathome-queue@careplans
+            sudo systemctl enable --now plantathome-queue@default plantathome-queue@careplans plantathome-queue@images
             # restart so workers pick up the NEW code from this deploy
-            sudo systemctl restart 'plantathome-queue@default' 'plantathome-queue@careplans'
-            sudo systemctl is-active plantathome-queue@default plantathome-queue@careplans
+            sudo systemctl restart 'plantathome-queue@default' 'plantathome-queue@careplans' 'plantathome-queue@images'
+            sudo systemctl is-active plantathome-queue@default plantathome-queue@careplans plantathome-queue@images
 
             echo "==> Reloading PHP-FPM..."
             sudo systemctl reload php8.1-fpm
