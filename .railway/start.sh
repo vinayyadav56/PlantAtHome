@@ -1,5 +1,12 @@
 #!/bin/sh
 
+# Queue MUST be database on staging: the supervisord queue workers (default /
+# careplans / marketing / images) only consume a database queue, and a `sync`
+# service variable would make "queued" jobs run inline inside web requests
+# (multi-minute AI batches then 504 at nginx). Process env overrides .env in
+# Laravel, so force it here for supervisord and every child process.
+export QUEUE_CONNECTION=database
+
 echo "==> Creating .env from environment variables..."
 cat > /var/www/html/.env << ENVEOF
 APP_NAME=PlantAtHome
@@ -17,7 +24,7 @@ DB_PASSWORD=${DB_PASSWORD:-${MYSQLPASSWORD}}
 BROADCAST_DRIVER=log
 CACHE_DRIVER=file
 FILESYSTEM_DISK=s3
-QUEUE_CONNECTION=${QUEUE_CONNECTION:-database}
+QUEUE_CONNECTION=database
 SESSION_DRIVER=file
 SANCTUM_STATEFUL_DOMAINS=plantathome-shop-staging.vercel.app,plantathome-admin-staging.vercel.app
 RAZORPAY_KEY_ID=${RAZORPAY_KEY_ID:-}
@@ -67,6 +74,7 @@ WHATSAPP_NOTIFY_LANG=${WHATSAPP_NOTIFY_LANG:-}
 MARVEL_FORCE_TRUST=${MARVEL_FORCE_TRUST:-}
 MARKETPLACE_LEDGER=${MARKETPLACE_LEDGER:-}
 GOOGLE_MAPS_SERVER_KEY=${GOOGLE_MAPS_SERVER_KEY:-}
+OPENAI_SECRET_KEY=${OPENAI_SECRET_KEY:-}
 ENVEOF
 
 cd /var/www/html
