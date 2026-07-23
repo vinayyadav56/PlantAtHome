@@ -1,0 +1,126 @@
+name: Set OPENAI_SECRET_KEY (staging + prod)
+
+# One-shot: copies the OpenAI API key already configured on the Railway
+# image-service onto (a) the STAGING Railway API service and (b) the PROD EC2
+# API .env — both as OPENAI_SECRET_KEY (used by batch AI image generation).
+# The key value never appears in logs: it is ::add-mask::ed the moment it is
+# read. Manual only. Requires secrets: RAILWAY_API_TOKEN, EC2_SSH_KEY,
+# EC2_HOST, EC2_USER, AWS_* + AWS_EC2_SG_ID (port-22 window, mirrors the
+# production deploy).
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  set-key:
+    runs-on: ubuntu-latest
+    env:
+      RAILWAY_API_TOKEN: ${{ secrets.RAILWAY_API_TOKEN }}
+      # Staging API service on Railway (same IDs as set-railway-s3-vars.yml).
+      API_PROJECT_ID: e6fc52de-45a9-4bc0-92fe-5b9840a4d399
+      API_ENVIRONMENT_ID: 268099e7-b634-4d26-a5ff-a95a0c145f8f
+      API_SERVICE_ID: da92f9ad-814e-4e0e-a0bb-932268379c6b
+    steps:
+      - name: Read the key from the image-service Railway service (masked)
+        id: read
+        run: |
+          set -e
+          python3 - <<'PY'
+          import json, os, urllib.request
+
+          token = os.environ['RAILWAY_API_TOKEN']
+
+          def gql(query, variables=None):
+              body = json.dumps({'query': query, 'variables': variables or {}}).encode()
+              req = urllib.request.Request(
+                  'https://backboard.railway.app/graphql/v2', data=body,
+                  headers={'Authorization': f'Bearer {token}', 'Content-Type': 'application/json'})
+              with urllib.request.urlopen(req) as r:
+                  d = json.load(r)
+              if d.get('errors'):
+                  raise SystemExit(f"GraphQL errors: {d['errors']}")
+              return d['data']
+
+          projects = gql('query{projects{edges{node{id name '
+                         'environments{edges{node{id name}}} '
+                         'services{edges{node{id name}}}}}}}')['projects']['edges']
+          target = None
+          for p in projects:
+              n = p['node']
+              for s in n['services']['edges']:
+                  if 'image' in s['node']['name'].lower():
+                      envs = {e['node']['name']: e['node']['id'] for e in n['environments']['edges']}
+                      env_id = envs.get('production') or next(iter(envs.values()))
+                      target = (n['id'], env_id, s['node']['id'], s['node']['name'])
+          if not target:
+              raise SystemExit('No Railway service with "image" in its name found on this account.')
+          pid, eid, sid, name = target
+          variables = gql(
+              'query($p:String!,$e:String!,$s:String!){variables(projectId:$p,environmentId:$e,serviceId:$s)}',
+              {'p': pid, 'e': eid, 's': sid})['variables']
+          key = variables.get('OPENAI_API_KEY')
+          if not key:
+              raise SystemExit(f'OPENAI_API_KEY is not set on service {name}.')
+
+          # Mask FIRST so no later log line can ever expose it.
+          print(f'::add-mask::{key}')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'key={key}\n')
+          print(f'Found OpenAI key on Railway service "{name}" (length {len(key)}).')
+          PY
+
+      - name: Upsert OPENAI_SECRET_KEY onto the staging API service
+        env:
+          OPENAI_KEY: ${{ steps.read.outputs.key }}
+        run: |
+          set -e
+          q=$(python3 -c "import json,os; print(json.dumps({'query':'mutation(\$i:VariableUpsertInput!){variableUpsert(input:\$i)}','variables':{'i':{'projectId':os.environ['API_PROJECT_ID'],'environmentId':os.environ['API_ENVIRONMENT_ID'],'serviceId':os.environ['API_SERVICE_ID'],'name':'OPENAI_SECRET_KEY','value':os.environ['OPENAI_KEY']}}}))")
+          resp=$(curl -sS -X POST https://backboard.railway.app/graphql/v2 \
+            -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" \
+            --data "$q")
+          echo "$resp" | python3 -c "import json,sys;d=json.load(sys.stdin);print('staging upsert ->',d.get('data'),'errors:',d.get('errors'));sys.exit(1 if d.get('errors') else 0)"
+
+      - name: Open port 22 for this runner
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          RUNNER_IP=$(curl -s ifconfig.me/ip)
+          echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_ENV
+          aws ec2 authorize-security-group-ingress \
+            --group-id ${{ secrets.AWS_EC2_SG_ID }} \
+            --protocol tcp --port 22 --cidr "${RUNNER_IP}/32" \
+            --region ${{ secrets.AWS_REGION }} || true
+
+      - name: Set OPENAI_SECRET_KEY on prod EC2 .env
+        uses: appleboy/ssh-action@v1.2.5
+        env:
+          OPENAI_KEY: ${{ steps.read.outputs.key }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: OPENAI_KEY
+          script: |
+            set -e
+            cd /var/www/plantathome/api
+            if sudo grep -q '^OPENAI_SECRET_KEY=' .env; then
+              sudo sed -i "s|^OPENAI_SECRET_KEY=.*|OPENAI_SECRET_KEY=${OPENAI_KEY}|" .env
+            else
+              echo "OPENAI_SECRET_KEY=${OPENAI_KEY}" | sudo tee -a .env >/dev/null
+            fi
+            sudo -u www-data /usr/bin/php artisan config:cache >/dev/null
+            echo "OPENAI_SECRET_KEY present in prod .env: $(sudo grep -c '^OPENAI_SECRET_KEY=' .env)"
+
+      - name: Close port 22
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id ${{ secrets.AWS_EC2_SG_ID }} \
+            --protocol tcp --port 22 --cidr "${RUNNER_IP}/32" \
+            --region ${{ secrets.AWS_REGION }} || true

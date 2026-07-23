@@ -64,6 +64,7 @@ use Marvel\Http\Controllers\DeliveryCoverageController;
 use Marvel\Http\Controllers\DeliveryNotifyController;
 use Marvel\Http\Controllers\DeliveryPartnerController;
 use Marvel\Http\Controllers\PriceSheetController;
+use Marvel\Http\Controllers\ImageBatchController;
 use Marvel\Http\Controllers\VendorInventoryController;
 use Marvel\Http\Controllers\SettlementController;
 use Marvel\Http\Controllers\ReportController;
@@ -706,6 +707,18 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
 
     // Edit a vendor's commission after onboarding (approve-shop sets it initially).
     Route::post('update-shop-commission', [ShopController::class, 'updateCommission']);
+
+    // Batch AI image generation (SRS): Excel of plants -> background queue ->
+    // progress -> ZIP download center. Options are config-driven (capabilities).
+    Route::get('ai-image-batches/capabilities', [ImageBatchController::class, 'capabilities']);
+    Route::get('ai-image-batches', [ImageBatchController::class, 'index']);
+    Route::post('ai-image-batches', [ImageBatchController::class, 'store']);
+    Route::get('ai-image-batches/{id}/rows', [ImageBatchController::class, 'rows']);
+    Route::get('ai-image-batches/{id}/download', [ImageBatchController::class, 'download']);
+    Route::post('ai-image-batches/{id}/cancel', [ImageBatchController::class, 'cancel']);
+    Route::post('ai-image-batches/{id}/retry-failed', [ImageBatchController::class, 'retryFailed']);
+    Route::get('ai-image-batches/{id}', [ImageBatchController::class, 'show']);
+    Route::delete('ai-image-batches/{id}', [ImageBatchController::class, 'destroy']);
 
     // Vendor price sheets (admin-only Excel cost upload + audit + review)
     Route::post('import-vendor-price-sheet', [PriceSheetController::class, 'import']);
