@@ -35,7 +35,10 @@ return [
 
     // Sweeper thresholds (minutes).
     'stall_minutes'      => 30, // processing row with no heartbeat → re-pend
-    'redispatch_minutes' => 10, // active batch with no live job → re-dispatch
+    // Active batch with no live job → re-dispatch. This is also what re-drives
+    // rows cooling down in `retrying` (the job chain deliberately ends rather
+    // than spin-wait), so keep it short; double-dispatch is safe (atomic claims).
+    'redispatch_minutes' => (int) env('IMAGE_BATCH_REDISPATCH_MINUTES', 2),
 
     // Days generated files + zips are kept before the daily prune. Audit rows
     // are never deleted — only the files.
