@@ -154,6 +154,33 @@ class SystemController extends CoreController
      * a clear error if the grant is missing so the fallback (growing the
      * volume in the dashboard) is an informed decision.
      */
+    /** Server-level disk forensics: tablespace files + log settings + version. */
+    public function dbDiagnostics(): JsonResponse
+    {
+        $safe = function (string $sql) {
+            try {
+                return collect(DB::select($sql))->map(fn ($r) => (array) $r);
+            } catch (\Throwable $e) {
+                return ['error' => mb_substr($e->getMessage(), 0, 200)];
+            }
+        };
+
+        return response()->json([
+            'version'   => $safe('SELECT @@version AS v'),
+            'files'     => $safe(
+                "SELECT file_name, tablespace_name,
+                        ROUND((total_extents * extent_size) / 1048576, 1) AS size_mb
+                 FROM information_schema.FILES
+                 ORDER BY (total_extents * extent_size) DESC
+                 LIMIT 15"
+            ),
+            'log_flags' => $safe(
+                'SELECT @@general_log AS general_log, @@slow_query_log AS slow_query_log,
+                        @@log_bin AS log_bin, @@innodb_temp_data_file_path AS temp_path'
+            ),
+        ]);
+    }
+
     public function purgeBinlogs(): JsonResponse
     {
         try {
