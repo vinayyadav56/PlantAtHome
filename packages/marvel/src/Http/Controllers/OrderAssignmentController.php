@@ -126,6 +126,10 @@ class OrderAssignmentController extends CoreController
     {
         $order = Order::findOrFail($id);
 
+        // Location Capture gate (flag-gated, default off): when enabled, an
+        // order whose customer has no verified GPS location cannot be assigned.
+        app(\Marvel\Services\LocationCaptureService::class)->assertCustomerVerifiedForDispatch($order);
+
         $mode = $request->input('delivery_mode');
         $isCourier = in_array($mode, ['courier_admin', 'courier_dp'], true);
 

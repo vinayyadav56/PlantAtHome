@@ -65,6 +65,7 @@ use Marvel\Http\Controllers\DeliveryNotifyController;
 use Marvel\Http\Controllers\DeliveryPartnerController;
 use Marvel\Http\Controllers\PriceSheetController;
 use Marvel\Http\Controllers\ImageBatchController;
+use Marvel\Http\Controllers\LocationCaptureController;
 use Marvel\Http\Controllers\VendorInventoryController;
 use Marvel\Http\Controllers\SettlementController;
 use Marvel\Http\Controllers\ReportController;
@@ -710,6 +711,13 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
 
     // Batch AI image generation (SRS): Excel of plants -> background queue ->
     // progress -> ZIP download center. Options are config-driven (capabilities).
+    // Location Capture Email System (admin): send/regenerate capture links,
+    // per-target status summaries, and the audit log.
+    Route::get('location-capture/summary', [LocationCaptureController::class, 'summary']);
+    Route::get('location-capture/requests', [LocationCaptureController::class, 'index']);
+    Route::post('location-capture/requests', [LocationCaptureController::class, 'store'])->middleware('throttle:60,1');
+    Route::post('location-capture/requests/{uuid}/regenerate', [LocationCaptureController::class, 'regenerate'])->middleware('throttle:60,1');
+
     // Instant single-image generation (consolidated from the Node image-service).
     Route::post('ai-images/instant', [ImageBatchController::class, 'instantStore'])->middleware('throttle:20,1');
     Route::get('ai-images/instant', [ImageBatchController::class, 'instantIndex']);

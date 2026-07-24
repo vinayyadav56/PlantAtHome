@@ -242,6 +242,7 @@ class ShopServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__ . '/../config/shop.php', 'shop');
         $this->mergeConfigFrom(__DIR__ . '/../config/deliveryoptimizer.php', 'deliveryoptimizer');
         $this->mergeConfigFrom(__DIR__ . '/../config/image-batches.php', 'image-batches');
+        $this->mergeConfigFrom(__DIR__ . '/../config/location.php', 'location');
 
         config([
             'auth'               => File::getRequire(__DIR__ . '/../config/auth.php'),
