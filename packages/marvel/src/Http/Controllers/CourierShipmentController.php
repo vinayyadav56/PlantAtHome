@@ -28,7 +28,9 @@ class CourierShipmentController extends CoreController
     /** POST shipments/{id}/book-courier — create Shiprocket provider order + allocate AWB. */
     public function book(Request $request, $id)
     {
-        $res = $this->courier()->bookShipment($this->shipment($id));
+        $shipment = $this->shipment($id);
+        $this->assertCustomerLocation($shipment);
+        $res = $this->courier()->bookShipment($shipment);
         return response()->json($res, !empty($res['ok']) ? 200 : 409);
     }
 
@@ -49,7 +51,9 @@ class CourierShipmentController extends CoreController
      */
     public function dispatchShipment(Request $request, $id)
     {
-        $res = $this->courier()->book($this->shipment($id));
+        $shipment = $this->shipment($id);
+        $this->assertCustomerLocation($shipment);
+        $res = $this->courier()->book($shipment);
         return response()->json($res, !empty($res['ok']) ? 200 : 409);
     }
 
@@ -83,5 +87,14 @@ class CourierShipmentController extends CoreController
     {
         $shop = Shop::findOrFail($id);
         return response()->json($this->courier()->syncPickupLocation($shop));
+    }
+
+    /** Location Capture gate (flag-gated, default off) for courier bookings. */
+    private function assertCustomerLocation($shipment): void
+    {
+        $order = $shipment->order ?? null;
+        if ($order) {
+            app(\Marvel\Services\LocationCaptureService::class)->assertCustomerVerifiedForDispatch($order);
+        }
     }
 }
