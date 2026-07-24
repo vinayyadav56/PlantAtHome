@@ -1030,6 +1030,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // Schema ops: visible migrate state + on-demand migrate (Railway has no shell).
     Route::get('system/schema-status', [SystemController::class, 'schemaStatus']);
     Route::post('system/run-migrations', [SystemController::class, 'runMigrations'])->middleware('throttle:6,1');
+    Route::post('system/prune-table', [SystemController::class, 'pruneTable'])->middleware('throttle:6,1');
 });
 
 
