@@ -13,6 +13,10 @@ return [
     // notification jobs (mirrors the careplans/marketing worker split).
     'queue' => env('IMAGE_BATCH_QUEUE', 'images'),
 
+    // Instant admin previews get their own worker so they never wait behind
+    // a running batch.
+    'instant_queue' => env('IMAGE_INSTANT_QUEUE', 'images-instant'),
+
     // Global pacing across a batch: images generated per minute. gpt-image-1
     // orgs commonly allow ~5 img/min; raise via env once limits are verified.
     'rate_per_minute' => (float) env('IMAGE_BATCH_RATE_PER_MINUTE', 5),
