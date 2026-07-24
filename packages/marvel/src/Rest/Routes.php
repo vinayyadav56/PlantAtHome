@@ -1027,6 +1027,9 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('request-logs/settings', [SystemController::class, 'logSettings']);
     Route::post('request-logs/settings', [SystemController::class, 'updateLogSettings']);
     Route::post('request-logs/clear', [SystemController::class, 'clearLogs']);
+    // Schema ops: visible migrate state + on-demand migrate (Railway has no shell).
+    Route::get('system/schema-status', [SystemController::class, 'schemaStatus']);
+    Route::post('system/run-migrations', [SystemController::class, 'runMigrations'])->middleware('throttle:6,1');
 });
 
 

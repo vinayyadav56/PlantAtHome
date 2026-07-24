@@ -4,7 +4,10 @@ namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\AdminTask;
 use Marvel\Database\Models\RequestLog;
 use Marvel\Database\Models\RequestLogSetting;
@@ -103,5 +106,48 @@ class SystemController extends CoreController
     {
         RequestLog::truncate();
         return response()->json(['message' => 'Logs cleared']);
+    }
+
+    // ------------------------------------------------------- SCHEMA OPS
+    // Container platforms (Railway) give us no shell; the boot script swallows
+    // `migrate` failures. These two endpoints make schema state visible and
+    // repairable from the admin (SUPER_ADMIN group).
+
+    /** Read-only: pending migrations + presence of recently-added tables. */
+    public function schemaStatus(): JsonResponse
+    {
+        $ran = collect(DB::table('migrations')->orderByDesc('id')->limit(15)->pluck('migration'));
+        $all = collect(glob(base_path('packages/marvel/database/migrations/*.php')))
+            ->map(fn ($f) => basename($f, '.php'));
+        $ranAll  = collect(DB::table('migrations')->pluck('migration'));
+        $pending = $all->reject(fn ($m) => $ranAll->contains($m))->values();
+
+        return response()->json([
+            'pending_marvel_migrations' => $pending,
+            'last_ran'                  => $ran,
+            'tables'                    => [
+                'location_capture_requests' => Schema::hasTable('location_capture_requests'),
+                'instant_images'            => Schema::hasTable('instant_images'),
+                'image_batches'             => Schema::hasTable('image_batches'),
+                'users.location_verified'   => Schema::hasColumn('users', 'location_verified'),
+                'shops.location_verified'   => Schema::hasColumn('shops', 'location_verified'),
+            ],
+        ]);
+    }
+
+    /** Run pending migrations NOW and return the real output (boot swallows it). */
+    public function runMigrations(): JsonResponse
+    {
+        try {
+            Artisan::call('migrate', ['--force' => true]);
+
+            return response()->json(['ok' => true, 'output' => Artisan::output()]);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'ok'     => false,
+                'error'  => $e->getMessage(),
+                'output' => Artisan::output(),
+            ], 500);
+        }
     }
 }
