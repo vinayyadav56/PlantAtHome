@@ -132,6 +132,53 @@ class SystemController extends CoreController
                 'users.location_verified'   => Schema::hasColumn('users', 'location_verified'),
                 'shops.location_verified'   => Schema::hasColumn('shops', 'location_verified'),
             ],
+            // Disk forensics: who is eating the volume (MB, incl. index + free).
+            'table_sizes' => DB::select(
+                "SELECT table_name AS t,
+                        ROUND((data_length + index_length) / 1048576, 1) AS mb,
+                        ROUND(data_free / 1048576, 1) AS free_mb,
+                        table_rows AS approx_rows
+                 FROM information_schema.tables
+                 WHERE table_schema = DATABASE()
+                 ORDER BY (data_length + index_length) DESC
+                 LIMIT 20"
+            ),
+        ]);
+    }
+
+    /**
+     * Emergency space reclaim on shell-less platforms. DROP frees disk without
+     * needing free space (unlike TRUNCATE/DELETE, which deadlock on a full
+     * volume). Only expendable operational tables are allowed, and each is
+     * recreated empty immediately via its migration.
+     */
+    public function pruneTable(Request $request): JsonResponse
+    {
+        $allowed = [
+            'request_logs' => 'packages/marvel/database/migrations',
+            'failed_jobs'  => 'database/migrations',
+        ];
+        $table = (string) $request->input('table');
+        if (!isset($allowed[$table])) {
+            return response()->json(['ok' => false, 'error' => 'Table not in the prune allowlist.'], 422);
+        }
+        if (!Schema::hasTable($table)) {
+            return response()->json(['ok' => false, 'error' => 'Table does not exist.'], 422);
+        }
+
+        Schema::drop($table);
+
+        // Recreate empty from its own migration file.
+        $file = collect(glob(base_path($allowed[$table] . '/*.php')))
+            ->first(fn ($f) => str_contains(basename($f), 'create_' . $table . '_table'));
+        if ($file) {
+            (require $file)->up();
+        }
+
+        return response()->json([
+            'ok'        => true,
+            'table'     => $table,
+            'recreated' => Schema::hasTable($table),
         ]);
     }
 
