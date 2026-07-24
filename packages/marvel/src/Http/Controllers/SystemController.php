@@ -147,6 +147,37 @@ class SystemController extends CoreController
     }
 
     /**
+     * Binlog forensics + purge. On small MySQL volumes (Railway) the binary
+     * logs — not the schema — are the classic disk-filler. Purging is safe on
+     * this environment (no replication, no point-in-time recovery); it needs
+     * a privileged DB user (Railway's default root user qualifies). Surfaces
+     * a clear error if the grant is missing so the fallback (growing the
+     * volume in the dashboard) is an informed decision.
+     */
+    public function purgeBinlogs(): JsonResponse
+    {
+        try {
+            $before   = collect(DB::select('SHOW BINARY LOGS'))->map(fn ($r) => (array) $r);
+            $beforeMb = round($before->sum(fn ($r) => (float) ($r['File_size'] ?? 0)) / 1048576, 1);
+
+            DB::statement('PURGE BINARY LOGS BEFORE DATE_SUB(NOW(), INTERVAL 1 HOUR)');
+
+            $after   = collect(DB::select('SHOW BINARY LOGS'))->map(fn ($r) => (array) $r);
+            $afterMb = round($after->sum(fn ($r) => (float) ($r['File_size'] ?? 0)) / 1048576, 1);
+
+            return response()->json([
+                'ok'           => true,
+                'before_mb'    => $beforeMb,
+                'after_mb'     => $afterMb,
+                'files_before' => $before->count(),
+                'files_after'  => $after->count(),
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json(['ok' => false, 'error' => mb_substr($e->getMessage(), 0, 400)], 500);
+        }
+    }
+
+    /**
      * Emergency space reclaim on shell-less platforms. DROP frees disk without
      * needing free space (unlike TRUNCATE/DELETE, which deadlock on a full
      * volume). Only expendable operational tables are allowed, and each is

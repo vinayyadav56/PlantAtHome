@@ -1031,6 +1031,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('system/schema-status', [SystemController::class, 'schemaStatus']);
     Route::post('system/run-migrations', [SystemController::class, 'runMigrations'])->middleware('throttle:6,1');
     Route::post('system/prune-table', [SystemController::class, 'pruneTable'])->middleware('throttle:6,1');
+    Route::post('system/purge-binlogs', [SystemController::class, 'purgeBinlogs'])->middleware('throttle:6,1');
 });
 
 
