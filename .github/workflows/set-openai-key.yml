@@ -163,6 +163,9 @@ jobs:
               echo "OPENAI_SECRET_KEY=${OPENAI_KEY}" | sudo tee -a .env >/dev/null
             fi
             sudo -u www-data /usr/bin/php artisan config:cache >/dev/null
+            # Long-running queue workers cache config at boot — tell them to
+            # gracefully restart so they pick up the new key.
+            sudo -u www-data /usr/bin/php artisan queue:restart >/dev/null
             echo "OPENAI_SECRET_KEY present in prod .env: $(sudo grep -c '^OPENAI_SECRET_KEY=' .env)"
 
       - name: Close port 22
