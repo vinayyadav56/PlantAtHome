@@ -8,9 +8,11 @@ use Illuminate\Support\Facades\Storage;
 use Maatwebsite\Excel\Facades\Excel;
 use Marvel\Database\Models\ImageBatch;
 use Marvel\Database\Models\ImageGenerationJob;
+use Marvel\Database\Models\InstantImage;
 use Marvel\Imports\ImageBatchSheetImport;
 use Marvel\Imports\RowLimitExceededException;
 use Marvel\Jobs\GenerateImageBatchJob;
+use Marvel\Jobs\GenerateInstantImageJob;
 
 /**
  * Admin-only (SUPER_ADMIN) background AI image generation: Excel upload →
@@ -347,6 +349,97 @@ class ImageBatchController extends CoreController
         $batch->update(['files_pruned_at' => now()]);
 
         return response()->json(['message' => "Batch {$batch->display_id} files deleted (audit record kept)."]);
+    }
+
+    /* ── instant generation (old image-service flow, consolidated) ────────── */
+
+    /**
+     * Queue one instant preview generation. Deliberately LENIENT on options
+     * (the legacy UI sent DALL·E-era values): anything not in the model's
+     * capability list falls back to a sane default instead of 422ing.
+     */
+    public function instantStore(Request $request)
+    {
+        $request->validate([
+            'prompt'             => 'required|string|max:4000',
+            'reference_images'   => 'nullable|array|max:' . (int) config('image-batches.max_reference_images', 4),
+            'reference_images.*' => 'file|mimes:png,jpg,jpeg,webp|max:' . ((int) config('image-batches.max_file_mb', 10) * 1024),
+        ]);
+
+        $models  = (array) config('image-batches.models', []);
+        $modelId = (string) $request->input('model', 'gpt-image-1');
+        if (!isset($models[$modelId])) {
+            $modelId = (string) array_key_first($models);
+        }
+        $model = $models[$modelId];
+
+        $pick = function (?string $value, array $allowed, ?string $fallback) {
+            return ($value !== null && in_array($value, $allowed, true)) ? $value : $fallback;
+        };
+
+        // Accept both `size` and the legacy `resolution` param name.
+        $size    = $pick($request->input('size', $request->input('resolution')), $model['sizes'] ?? [], ($model['sizes'] ?? [])[0] ?? '1024x1024');
+        $quality = $pick($request->input('quality'), $model['qualities'] ?? [], in_array('high', $model['qualities'] ?? [], true) ? 'high' : (($model['qualities'] ?? [])[0] ?? null));
+        $style   = $pick($request->input('style'), $model['styles'] ?? [], null);
+        $bg      = $pick($request->input('background'), $model['backgrounds'] ?? [], null);
+
+        $row = InstantImage::create([
+            'requested_by' => optional($request->user())->id,
+            'prompt'       => (string) $request->input('prompt'),
+            'settings'     => [
+                'model'      => $modelId,
+                'size'       => $size,
+                'quality'    => $quality,
+                'style'      => $style,
+                'background' => $bg,
+            ],
+            'status'       => InstantImage::STATUS_PENDING,
+        ]);
+
+        $references = $request->file('reference_images', []);
+        if (!empty($references) && !empty($model['supports_reference_images'])) {
+            $keys = [];
+            foreach (array_values($references) as $i => $ref) {
+                $ext = strtolower($ref->getClientOriginalExtension() ?: 'png');
+                $key = 'ai-instant/' . now()->format('Y-m') . '/instant_' . $row->id . '/_reference/ref_' . ($i + 1) . '.' . $ext;
+                Storage::disk('s3')->put($key, file_get_contents($ref->getRealPath()));
+                $keys[] = $key;
+            }
+            $row->update(['reference_images' => $keys]);
+        }
+
+        GenerateInstantImageJob::dispatch($row->id);
+
+        return response()->json(['id' => $row->id, 'status' => $row->status], 201);
+    }
+
+    public function instantShow($id)
+    {
+        $row = InstantImage::findOrFail($id);
+
+        return response()->json([
+            'id'             => $row->id,
+            'status'         => $row->status,
+            'url'            => $row->public_url,
+            'revised_prompt' => $row->revised_prompt,
+            'error'          => $row->error,
+            'model'          => $row->settings['model'] ?? null,
+            'created_at'     => optional($row->created_at)->toIso8601String(),
+        ]);
+    }
+
+    /** Recent instant generations (history strip in the admin). */
+    public function instantIndex(Request $request)
+    {
+        $limit = min(50, (int) ($request->limit ?? 12));
+
+        return InstantImage::orderByDesc('id')->limit($limit)->get()->map(fn ($row) => [
+            'id'         => $row->id,
+            'status'     => $row->status,
+            'url'        => $row->public_url,
+            'prompt'     => mb_substr($row->prompt, 0, 160),
+            'created_at' => optional($row->created_at)->toIso8601String(),
+        ]);
     }
 
     /* ── helpers ──────────────────────────────────────────────────────────── */

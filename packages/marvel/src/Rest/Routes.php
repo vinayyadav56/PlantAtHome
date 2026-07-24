@@ -710,6 +710,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
 
     // Batch AI image generation (SRS): Excel of plants -> background queue ->
     // progress -> ZIP download center. Options are config-driven (capabilities).
+    // Instant single-image generation (consolidated from the Node image-service).
+    Route::post('ai-images/instant', [ImageBatchController::class, 'instantStore'])->middleware('throttle:20,1');
+    Route::get('ai-images/instant', [ImageBatchController::class, 'instantIndex']);
+    Route::get('ai-images/instant/{id}', [ImageBatchController::class, 'instantShow'])->middleware('throttle:240,1');
     Route::get('ai-image-batches/capabilities', [ImageBatchController::class, 'capabilities']);
     Route::get('ai-image-batches', [ImageBatchController::class, 'index']);
     Route::post('ai-image-batches', [ImageBatchController::class, 'store']);
