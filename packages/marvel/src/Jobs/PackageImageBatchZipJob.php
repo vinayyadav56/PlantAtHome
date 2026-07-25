@@ -179,7 +179,7 @@ class PackageImageBatchZipJob implements ShouldQueue
             ->orderBy('job_id')
             ->orderBy('image_index')
             ->with('job:id,folder_name')
-            ->chunkById(200, function ($results) use (&$zip, &$partBytes, &$entryIndex, $tmpDir, $maxPartBytes, $openPart, $closeAndUpload) {
+            ->chunkById(200, function ($results) use (&$zip, &$partBytes, &$entryIndex, $tmpDir, $maxPartBytes, $openPart, $closeAndUpload, $batch) {
                 foreach ($results as $result) {
                     $bytes = (int) ($result->bytes ?? 0);
                     if ($partBytes > 0 && $partBytes + $bytes > $maxPartBytes) {
@@ -200,7 +200,9 @@ class PackageImageBatchZipJob implements ShouldQueue
                     }
 
                     $folder = $result->job->folder_name ?? 'images';
-                    $entry  = $folder . '/' . $result->file_name;
+                    $entry  = $batch->fileStructure() === 'flat'
+                        ? $result->file_name
+                        : $folder . '/' . $result->file_name;
                     $zip->addFile($local, $entry);
                     // PNGs are already compressed — STORE keeps close() fast.
                     $zip->setCompressionName($entry, ZipArchive::CM_STORE);
@@ -231,13 +233,17 @@ class PackageImageBatchZipJob implements ShouldQueue
             ->orderBy('job_id')
             ->orderBy('image_index')
             ->with('job:id,plant_code,plant_name,folder_name')
-            ->chunkById(500, function ($results) use (&$images) {
+            ->chunkById(500, function ($results) use (&$images, $batch) {
                 foreach ($results as $r) {
                     $images[] = [
                         'image_id'   => $r->display_id,
                         'plant_code' => $r->job->plant_code ?? null,
                         'plant_name' => $r->job->plant_name ?? null,
-                        'file'       => $r->file_name ? (($r->job->folder_name ?? '') . '/' . $r->file_name) : null,
+                        'file'       => $r->file_name
+                            ? ($batch->fileStructure() === 'flat'
+                                ? $r->file_name
+                                : (($r->job->folder_name ?? '') . '/' . $r->file_name))
+                            : null,
                         'url'        => $r->public_url,
                         'status'     => $r->status,
                         'model'      => $r->model,
