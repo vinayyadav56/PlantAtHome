@@ -43,6 +43,28 @@ final class RunCommandDiagnosticTest extends ImageBatchTestCase
             'inventory:release-expired',
             'outbox:relay',
             'marketing:dispatch-due',
-        ], SystemController::RUNNABLE_COMMANDS);
+        ], array_keys(SystemController::RUNNABLE_COMMANDS));
+    }
+
+    /**
+     * Every allowlisted signature must map to a class that exists AND actually
+     * declares that signature. Without this the endpoint silently degrades into
+     * reporting "command does not exist" — indistinguishable from the real
+     * scheduler fault it is built to diagnose.
+     */
+    public function test_every_allowlisted_command_resolves_to_its_real_class(): void
+    {
+        foreach (SystemController::RUNNABLE_COMMANDS as $signature => $class) {
+            $this->assertTrue(class_exists($class), "{$class} does not exist");
+
+            $declared = (new \ReflectionClass($class))->newInstanceWithoutConstructor();
+            $property = (new \ReflectionClass($class))->getProperty('signature');
+            $property->setAccessible(true);
+            $this->assertStringStartsWith(
+                $signature,
+                (string) $property->getValue($declared),
+                "{$class} does not declare the signature {$signature}"
+            );
+        }
     }
 }

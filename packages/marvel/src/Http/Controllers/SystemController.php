@@ -374,26 +374,34 @@ class SystemController extends CoreController
      * maintenance commands — never a free-form command runner.
      */
     public const RUNNABLE_COMMANDS = [
-        'images:sweep-batches',
-        'content:sweep-batches',
-        'inventory:release-expired',
-        'outbox:relay',
-        'marketing:dispatch-due',
+        'images:sweep-batches'      => \Marvel\Console\SweepImageBatchesCommand::class,
+        'content:sweep-batches'     => \Marvel\Console\SweepContentBatchesCommand::class,
+        'inventory:release-expired' => \App\Modules\Inventory\Console\ReleaseExpiredReservationsCommand::class,
+        'outbox:relay'              => \App\Console\Commands\OutboxRelayCommand::class,
+        'marketing:dispatch-due'    => \App\Modules\Marketing\Console\DispatchDueCampaignsCommand::class,
     ];
 
     public function runCommand(Request $request): JsonResponse
     {
         $command = (string) $request->input('command', '');
-        if (!in_array($command, self::RUNNABLE_COMMANDS, true)) {
+        if (!array_key_exists($command, self::RUNNABLE_COMMANDS)) {
             return response()->json([
                 'ok'      => false,
                 'error'   => 'Command is not on the allowlist.',
-                'allowed' => self::RUNNABLE_COMMANDS,
+                'allowed' => array_keys(self::RUNNABLE_COMMANDS),
             ], 422);
         }
 
         $started = microtime(true);
         try {
+            // Register the concrete command first. Marvel registers its commands
+            // from bootForConsole(), and the module providers do the same, so in
+            // an HTTP request NONE of them exist — calling by name would report
+            // "command does not exist" and look exactly like the real bug this
+            // endpoint is meant to diagnose. Register explicitly, don't infer.
+            app(\Illuminate\Contracts\Console\Kernel::class)
+                ->registerCommand(app(self::RUNNABLE_COMMANDS[$command]));
+
             $exit   = Artisan::call($command, $command === 'outbox:relay' ? ['--once' => true] : []);
             $output = Artisan::output();
 
