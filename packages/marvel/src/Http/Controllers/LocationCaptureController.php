@@ -3,6 +3,8 @@
 namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\LocationCaptureRequest;
 use Marvel\Database\Models\Shop;
 use Marvel\Database\Models\User;
@@ -139,9 +141,35 @@ class LocationCaptureController extends CoreController
             abort(422, 'Provide exactly one of user_id or vendor_id.');
         }
 
-        return $userId
-            ? [User::findOrFail((int) $userId), null]
-            : [null, Shop::findOrFail((int) $vendorId)];
+        if ($userId) {
+            return [User::findOrFail((int) $userId), null];
+        }
+
+        return [null, $this->resolveShop((string) $vendorId)];
+    }
+
+    /**
+     * Resolve a vendor to its legacy Shop from EITHER a legacy integer shop id
+     * (the vendor list sends this) OR a v2 nursery UUID (the vendor edit form's
+     * initialValues.id is the nursery UUID, not the legacy int). Without this,
+     * a UUID silently truncated to a bogus integer → 404, and the vendor card
+     * hung on "Loading location status…" with no Send button.
+     */
+    private function resolveShop(string $vendorId): Shop
+    {
+        if (ctype_digit($vendorId)) {
+            return Shop::findOrFail((int) $vendorId);
+        }
+
+        // v2 nursery uuid → its mirrored legacy shop (nurseries.legacy_id → shops.id).
+        if (Schema::hasTable('nurseries')) {
+            $legacyId = DB::table('nurseries')->where('uuid', $vendorId)->value('legacy_id');
+            if ($legacyId) {
+                return Shop::findOrFail((int) $legacyId);
+            }
+        }
+
+        abort(404, 'Vendor not found.');
     }
 
     private function statusFor($target, ?LocationCaptureRequest $latest): string

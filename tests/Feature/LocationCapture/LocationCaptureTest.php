@@ -61,6 +61,14 @@ final class LocationCaptureTest extends TestCase
             $t->timestamps();
         });
 
+        // Minimal v2 nurseries table (uuid → legacy shop) for the UUID-resolution path.
+        Schema::create('nurseries', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->uuid('uuid')->nullable();
+            $t->unsignedBigInteger('legacy_id')->nullable();
+            $t->string('slug')->nullable();
+        });
+
         foreach ([
             '2026_07_24_120000_create_location_capture_requests_table.php',
             '2026_07_24_120010_add_verified_location_to_users_and_shops.php',
@@ -268,6 +276,32 @@ final class LocationCaptureTest extends TestCase
     }
 
     /* ── admin endpoints ──────────────────────────────────────────────────── */
+
+    public function test_vendor_resolves_by_nursery_uuid(): void
+    {
+        $this->fakeGoogle();
+        $admin = User::forceCreate(['name' => 'Admin', 'email' => 'admin@example.com']);
+        $this->actingAs($admin);
+
+        $owner = User::forceCreate(['name' => 'Owner', 'email' => 'owner2@example.com']);
+        $shop  = Shop::forceCreate(['name' => 'UUID Nursery', 'slug' => 'uuid-nursery', 'owner_id' => $owner->id]);
+        $uuid  = '133782e1-5633-52b9-a7d2-3095c7c21bdd';
+        DB::table('nurseries')->insert(['uuid' => $uuid, 'legacy_id' => $shop->id, 'slug' => 'uuid-nursery']);
+
+        // The vendor edit form sends the v2 nursery UUID, not the legacy int.
+        $this->getJson('/api/location-capture/summary?vendor_id=' . $uuid)
+            ->assertOk()
+            ->assertJsonPath('status', 'missing');
+
+        $create = $this->postJson('/api/location-capture/requests', ['vendor_id' => $uuid])->assertStatus(201);
+        $this->assertNotEmpty($create->json('capture_url'));
+        // The stored request points at the LEGACY shop id, not the uuid.
+        $this->assertSame($shop->id, LocationCaptureRequest::first()->vendor_id);
+
+        // A bogus uuid → clean 404, not a truncated-int mismatch.
+        $this->getJson('/api/location-capture/summary?vendor_id=00000000-0000-0000-0000-000000000000')
+            ->assertStatus(404);
+    }
 
     public function test_admin_summary_store_regenerate_and_logs(): void
     {
