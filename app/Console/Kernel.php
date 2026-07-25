@@ -51,6 +51,8 @@ class Kernel extends ConsoleKernel
         // daily retention prune of generated files (audit rows are kept).
         $schedule->command('images:sweep-batches')->everyMinute()->withoutOverlapping();
         $schedule->command('images:prune-batches')->dailyAt('04:30')->withoutOverlapping();
+        // Safety net for bulk AI content runs (re-drive stalled batches/rows).
+        $schedule->command('content:sweep-batches')->everyMinute()->withoutOverlapping();
 
         // v2 Phase 12 observability: keyed heartbeat proving this cron loop is
         // alive — GET /api/v1/platform/status reports its staleness. DB-backed

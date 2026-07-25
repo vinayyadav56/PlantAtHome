@@ -65,6 +65,7 @@ use Marvel\Http\Controllers\DeliveryNotifyController;
 use Marvel\Http\Controllers\DeliveryPartnerController;
 use Marvel\Http\Controllers\PriceSheetController;
 use Marvel\Http\Controllers\ImageBatchController;
+use Marvel\Http\Controllers\ProductContentBatchController;
 use Marvel\Http\Controllers\LocationCaptureController;
 use Marvel\Http\Controllers\VendorInventoryController;
 use Marvel\Http\Controllers\SettlementController;
@@ -351,6 +352,7 @@ Route::post('/email/verification-notification', [UserController::class, 'sendVer
 // enumeration/replay storms against the live payment processor.
 Route::post('orders/payment', [OrderController::class, 'submitPayment'])->middleware('throttle:20,1');
 Route::post('generate-descriptions', [AiController::class, 'generateDescription'])->middleware('throttle:10,1');
+Route::post('suggest-categories', [AiController::class, 'suggestCategories'])->middleware('throttle:20,1');
 Route::get('/payment-intent', [PaymentIntentController::class, 'getPaymentIntent'])->middleware('throttle:20,1');
 
 Route::apiResource('faqs', FaqsController::class, [
@@ -731,6 +733,15 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('ai-image-batches/{id}/retry-failed', [ImageBatchController::class, 'retryFailed']);
     Route::get('ai-image-batches/{id}', [ImageBatchController::class, 'show']);
     Route::delete('ai-image-batches/{id}', [ImageBatchController::class, 'destroy']);
+
+    // Bulk AI product-content generation (descriptions + categories) from the listing.
+    Route::get('ai-content-batches/capabilities', [ProductContentBatchController::class, 'capabilities']);
+    Route::get('ai-content-batches', [ProductContentBatchController::class, 'index']);
+    Route::post('ai-content-batches', [ProductContentBatchController::class, 'store']);
+    Route::get('ai-content-batches/{id}/rows', [ProductContentBatchController::class, 'rows']);
+    Route::post('ai-content-batches/{id}/cancel', [ProductContentBatchController::class, 'cancel']);
+    Route::post('ai-content-batches/{id}/retry-failed', [ProductContentBatchController::class, 'retryFailed']);
+    Route::get('ai-content-batches/{id}', [ProductContentBatchController::class, 'show']);
 
     // Vendor price sheets (admin-only Excel cost upload + audit + review)
     Route::post('import-vendor-price-sheet', [PriceSheetController::class, 'import']);
