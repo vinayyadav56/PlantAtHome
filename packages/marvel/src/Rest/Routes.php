@@ -1046,6 +1046,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('system/db-diagnostics', [SystemController::class, 'dbDiagnostics']);
     Route::match(['get', 'post'], 'system/mail-diagnostics', [SystemController::class, 'mailDiagnostics'])->middleware('throttle:20,1');
     Route::match(['get', 'post'], 'system/sendgrid-diagnostics', [SystemController::class, 'sendgridDiagnostics'])->middleware('throttle:20,1');
+    // Run one ALLOWLISTED maintenance command and return its exception verbatim —
+    // the scheduler swallows per-event errors, so a sweep can fail every minute
+    // while schedule:run looks healthy, and there is no shell on this host.
+    Route::match(['get', 'post'], 'system/run-command', [SystemController::class, 'runCommand'])->middleware('throttle:20,1');
 });
 
 

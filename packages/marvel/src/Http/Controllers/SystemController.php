@@ -361,4 +361,63 @@ class SystemController extends CoreController
             ], 500);
         }
     }
+
+    /**
+     * Run one allowlisted maintenance command in-request and return what it
+     * actually did — output, exit code, and the VERBATIM exception if it threw.
+     *
+     * Why this exists: the scheduler swallows per-event exceptions (by design —
+     * one bad command must not stop the others), so a scheduled sweep can fail
+     * every minute for hours while `schedule:run` looks perfectly healthy. On a
+     * host with no shell (Railway) there was previously no way to see that
+     * exception at all. Strictly allowlisted to idempotent, safe-to-rerun
+     * maintenance commands — never a free-form command runner.
+     */
+    public const RUNNABLE_COMMANDS = [
+        'images:sweep-batches',
+        'content:sweep-batches',
+        'inventory:release-expired',
+        'outbox:relay',
+        'marketing:dispatch-due',
+    ];
+
+    public function runCommand(Request $request): JsonResponse
+    {
+        $command = (string) $request->input('command', '');
+        if (!in_array($command, self::RUNNABLE_COMMANDS, true)) {
+            return response()->json([
+                'ok'      => false,
+                'error'   => 'Command is not on the allowlist.',
+                'allowed' => self::RUNNABLE_COMMANDS,
+            ], 422);
+        }
+
+        $started = microtime(true);
+        try {
+            $exit   = Artisan::call($command, $command === 'outbox:relay' ? ['--once' => true] : []);
+            $output = Artisan::output();
+
+            return response()->json([
+                'ok'          => $exit === 0,
+                'command'     => $command,
+                'exit_code'   => $exit,
+                'output'      => $output,
+                'duration_ms' => (int) round((microtime(true) - $started) * 1000),
+            ]);
+        } catch (\Throwable $e) {
+            // The whole point: surface the exception the scheduler would eat.
+            return response()->json([
+                'ok'          => false,
+                'command'     => $command,
+                'error'       => $e->getMessage(),
+                'exception'   => get_class($e),
+                'at'          => $e->getFile() . ':' . $e->getLine(),
+                'trace'       => collect($e->getTrace())->take(12)->map(fn ($f) => trim(
+                    ($f['file'] ?? '?') . ':' . ($f['line'] ?? '?') . ' ' . ($f['function'] ?? '')
+                ))->values(),
+                'output'      => Artisan::output(),
+                'duration_ms' => (int) round((microtime(true) - $started) * 1000),
+            ], 500);
+        }
+    }
 }
