@@ -3,6 +3,7 @@
 namespace Marvel\Console;
 
 use Illuminate\Console\Command;
+use Marvel\Console\Support\Heartbeat;
 use Marvel\Database\Models\ImageBatch;
 use Marvel\Database\Models\ImageGenerationJob;
 use Marvel\Jobs\GenerateImageBatchJob;
@@ -87,6 +88,8 @@ class SweepImageBatchesCommand extends Command
                 PackageImageBatchZipJob::dispatch($batch->id);
                 $this->info("Batch {$batch->display_id}: packaging re-dispatched.");
             });
+
+        Heartbeat::beat('images-sweeper');
 
         return self::SUCCESS;
     }

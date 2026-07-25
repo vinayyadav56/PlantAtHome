@@ -7,6 +7,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\Category;
 use Marvel\Database\Models\Product;
@@ -62,10 +63,19 @@ class GenerateProductContentBatchJob implements ShouldQueue
             return;
         }
 
-        $batch->update([
-            'status'             => ProductContentBatch::STATUS_PROCESSING,
-            'last_dispatched_at' => now(),
-        ]);
+        // Atomically claim the batch — abort if a cancel/terminal status landed
+        // since we loaded it above (an unguarded update by primary key would
+        // resurrect a cancelled batch back to processing).
+        $claimed = ProductContentBatch::where('id', $batch->id)
+            ->whereIn('status', [ProductContentBatch::STATUS_PENDING, ProductContentBatch::STATUS_PROCESSING])
+            ->update([
+                'status'             => ProductContentBatch::STATUS_PROCESSING,
+                'last_dispatched_at' => now(),
+            ]);
+        if (!$claimed) {
+            return; // cancelled or already finalized in the meantime
+        }
+        $batch->refresh();
 
         $interval  = 60.0 / max(0.1, (float) config('content-batches.rate_per_minute', 30));
         // Leave 60s headroom for the last call + finalize, then hand off the tail.
@@ -145,16 +155,17 @@ class GenerateProductContentBatchJob implements ShouldQueue
         try {
             $product = Product::find($row->product_id);
             if (!$product) {
-                $row->update(['status' => ProductContentJob::STATUS_SKIPPED, 'last_error' => 'Product not found', 'claimed_at' => null]);
-                ProductContentBatch::where('id', $batch->id)->increment('processed_count');
-                ProductContentBatch::where('id', $batch->id)->increment('skipped_count');
+                $this->finishRow($batch, $row, ProductContentJob::STATUS_SKIPPED, 'skipped_count', [
+                    'description_updated' => false,
+                    'categories_added'    => [],
+                ], 'Product not found');
                 return;
             }
 
-            $generate    = (array) ($options['generate'] ?? ['description', 'categories']);
-            $wantDesc    = in_array('description', $generate, true);
-            $wantCats    = in_array('categories', $generate, true);
-            $onlyMissing = (bool) ($options['only_missing'] ?? false);
+            $generate     = (array) ($options['generate'] ?? ['description', 'categories']);
+            $wantDesc     = in_array('description', $generate, true);
+            $wantCats     = in_array('categories', $generate, true);
+            $onlyMissing  = (bool) ($options['only_missing'] ?? false);
             $categoryMode = ($options['category_mode'] ?? 'append') === 'replace' ? 'replace' : 'append';
 
             // A description is needed unless "only fill empty" is on and this
@@ -171,6 +182,17 @@ class GenerateProductContentBatchJob implements ShouldQueue
                     ->map(fn ($c) => ['id' => $c->id, 'name' => $c->name, 'slug' => $c->slug])
                     ->all();
             }
+            $wantCatsEffective = $wantCats && !empty($candidates);
+
+            // Nothing to generate (e.g. only-missing + already described, no
+            // categories) — finish WITHOUT a paid AI call.
+            if (!$descNeeded && !$wantCatsEffective) {
+                $this->finishRow($batch, $row, ProductContentJob::STATUS_COMPLETED, 'skipped_count', [
+                    'description_updated' => false,
+                    'categories_added'    => [],
+                ]);
+                return;
+            }
 
             $req = (object) [
                 'name'             => $product->name,
@@ -179,49 +201,99 @@ class GenerateProductContentBatchJob implements ShouldQueue
                 'tone'             => $options['tone'] ?? 'professional',
                 'length'           => $options['length'] ?? 'medium',
                 'want_description' => $descNeeded,
-                'want_categories'  => $wantCats && !empty($candidates),
+                'want_categories'  => $wantCatsEffective,
                 'categories'       => $candidates,
             ];
 
-            $result  = $ai->generateProductContent($req);
-            $changes = ['description_updated' => false, 'categories_added' => []];
-            $didWork = false;
+            $result = $ai->generateProductContent($req);
 
-            if ($descNeeded && !empty($result['description'])) {
-                // Writes the plain base `description` column (read-time overlay
-                // handles other locales).
-                $product->update(['description' => $result['description']]);
-                $changes['description_updated'] = true;
-                $didWork = true;
-            }
+            // Apply every write + finalize atomically so a mid-flight crash can't
+            // leave the row completed-but-uncounted (it rolls back to processing
+            // and the sweeper re-drives it; the writes are overwrite-idempotent).
+            DB::transaction(function () use ($batch, $row, $product, $result, $descNeeded, $wantCatsEffective, $categoryMode) {
+                $changes = ['description_updated' => false, 'categories_added' => []];
+                $didWork = false;
 
-            if ($req->want_categories && !empty($result['category_ids'])) {
-                if ($categoryMode === 'replace') {
-                    $product->categories()->sync($result['category_ids']);
-                    $changes['categories_added'] = array_values($result['category_ids']);
-                    $didWork = true;
-                } else {
-                    $existing = $product->categories()->pluck('categories.id')->all();
-                    $newIds   = array_values(array_diff($result['category_ids'], $existing));
-                    if (!empty($newIds)) {
-                        $product->categories()->attach($newIds);
-                        $changes['categories_added'] = $newIds;
+                if ($descNeeded && !empty($result['description'])) {
+                    $safeHtml = static::sanitizeDescription((string) $result['description']);
+                    if (trim(strip_tags($safeHtml)) !== '') {
+                        // Writes the plain base `description` column (read-time
+                        // overlay handles other locales).
+                        $product->update(['description' => $safeHtml]);
+                        $changes['description_updated'] = true;
                         $didWork = true;
                     }
                 }
-            }
 
-            $row->update([
-                'status'     => ProductContentJob::STATUS_COMPLETED,
-                'changes'    => $changes,
-                'last_error' => null,
-                'claimed_at' => null,
-            ]);
-            ProductContentBatch::where('id', $batch->id)->increment('processed_count');
-            ProductContentBatch::where('id', $batch->id)->increment($didWork ? 'updated_count' : 'skipped_count');
+                if ($wantCatsEffective && !empty($result['category_ids'])) {
+                    if ($categoryMode === 'replace') {
+                        $product->categories()->sync($result['category_ids']);
+                        $changes['categories_added'] = array_values($result['category_ids']);
+                        $didWork = true;
+                    } else {
+                        $existing = $product->categories()->pluck('categories.id')->all();
+                        $newIds   = array_values(array_diff($result['category_ids'], $existing));
+                        if (!empty($newIds)) {
+                            $product->categories()->attach($newIds);
+                            $changes['categories_added'] = $newIds;
+                            $didWork = true;
+                        }
+                    }
+                }
+
+                $row->update([
+                    'status'     => ProductContentJob::STATUS_COMPLETED,
+                    'changes'    => $changes,
+                    'last_error' => null,
+                    'claimed_at' => null,
+                ]);
+                ProductContentBatch::where('id', $batch->id)->increment('processed_count');
+                ProductContentBatch::where('id', $batch->id)->increment($didWork ? 'updated_count' : 'skipped_count');
+            });
         } catch (\Throwable $e) {
             $this->failRow($batch, $row, $e);
         }
+    }
+
+    /**
+     * Allowlist-sanitize model-authored HTML before it becomes live storefront
+     * copy. Three separate hazards, in order:
+     *  1. `strip_tags` keeps the CONTENTS of what it strips, so a `<script>`
+     *     block would survive as its own body text ("alert(1)") and overwrite
+     *     good copy — script/style blocks must be removed whole, first.
+     *  2. `strip_tags` also keeps ATTRIBUTES of allowed tags, so `<p onclick=…>`
+     *     would pass straight through — every allowed tag is emitted bare.
+     *  3. No `<a>`: a generated description has no reason to link out, and
+     *     allowing it re-opens `href="javascript:…"`.
+     */
+    public static function sanitizeDescription(string $html): string
+    {
+        $html = (string) preg_replace('#<(script|style)\b[^>]*>.*?</\1\s*>#is', '', $html);
+        $html = (string) preg_replace('#<(script|style)\b[^>]*>.*#is', '', $html); // unclosed
+        $html = strip_tags($html, '<p><ul><ol><li><strong><em><b><i><br>');
+
+        return (string) preg_replace('#<\s*([a-z]+)\b[^>]*?(/?)\s*>#i', '<$1$2>', $html);
+    }
+
+    /** Atomically mark a row terminal + bump processed_count and one outcome counter. */
+    private function finishRow(
+        ProductContentBatch $batch,
+        ProductContentJob $row,
+        string $status,
+        string $counter,
+        array $changes,
+        ?string $error = null
+    ): void {
+        DB::transaction(function () use ($batch, $row, $status, $counter, $changes, $error) {
+            $row->update([
+                'status'     => $status,
+                'changes'    => $changes,
+                'last_error' => $error,
+                'claimed_at' => null,
+            ]);
+            ProductContentBatch::where('id', $batch->id)->increment('processed_count');
+            ProductContentBatch::where('id', $batch->id)->increment($counter);
+        });
     }
 
     private function failRow(ProductContentBatch $batch, ProductContentJob $row, \Throwable $e): void
@@ -239,14 +311,16 @@ class GenerateProductContentBatchJob implements ShouldQueue
             return;
         }
 
-        $row->update([
-            'status'     => ProductContentJob::STATUS_FAILED,
-            'attempts'   => $attempts,
-            'last_error' => $message,
-            'claimed_at' => null,
-        ]);
-        ProductContentBatch::where('id', $batch->id)->increment('processed_count');
-        ProductContentBatch::where('id', $batch->id)->increment('failed_count');
+        DB::transaction(function () use ($batch, $row, $message, $attempts) {
+            $row->update([
+                'status'     => ProductContentJob::STATUS_FAILED,
+                'attempts'   => $attempts,
+                'last_error' => $message,
+                'claimed_at' => null,
+            ]);
+            ProductContentBatch::where('id', $batch->id)->increment('processed_count');
+            ProductContentBatch::where('id', $batch->id)->increment('failed_count');
+        });
         $this->recordRowError($batch, (int) $row->product_id, $message);
     }
 

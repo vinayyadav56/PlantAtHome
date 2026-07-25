@@ -18,10 +18,10 @@ class Openai extends Base implements AiInterface
         parent::__construct();
     }
 
-    /** Chat model used for all text generation (overridable via env OPENAI_TEXT_MODEL). */
+    /** Chat model used for all text generation (env OPENAI_TEXT_MODEL, via content-batches config). */
     private function textModel(): string
     {
-        return config('shop.openai.text_model', 'gpt-4o-mini');
+        return config('content-batches.text_model', 'gpt-4o-mini');
     }
 
     /** Map a length option (short|medium|long, or a character count) to a prompt hint. */
@@ -200,10 +200,21 @@ class Openai extends Base implements AiInterface
             ],
         ]);
 
-        $content = $response->choices[0]->message->content ?? '{}';
-        $parsed  = json_decode($content, true) ?: [];
+        $content = $response->choices[0]->message->content ?? '';
+        $parsed  = json_decode($content, true);
+        // Truncated/invalid JSON (e.g. hit max_tokens) must surface as an error so
+        // the batch row retries — never silently drop the result and mark it done.
+        if (!is_array($parsed)) {
+            throw new \RuntimeException('AI content response was not valid JSON (possibly truncated).');
+        }
 
-        $description = $wantDesc ? trim((string) ($parsed['description_html'] ?? '')) : null;
+        // Guard the type: a stray array/object for description_html would stringify
+        // to "Array" and get written as the live product description.
+        $description = null;
+        if ($wantDesc) {
+            $d = $parsed['description_html'] ?? null;
+            $description = is_string($d) ? trim($d) : null;
+        }
 
         $slugs = [];
         $ids   = [];

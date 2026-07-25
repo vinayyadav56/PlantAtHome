@@ -150,25 +150,31 @@ class ProductContentBatchController extends CoreController
             throw new HttpException(409, 'Only completed-with-errors or failed runs can be retried.');
         }
 
-        $failedCount = ProductContentJob::where('batch_id', $batch->id)
+        $reset = ProductContentJob::where('batch_id', $batch->id)
             ->where('status', ProductContentJob::STATUS_FAILED)
-            ->count();
-        if ($failedCount < 1) {
+            ->update(['status' => ProductContentJob::STATUS_PENDING, 'attempts' => 0, 'last_error' => null]);
+        if ($reset < 1) {
             throw new HttpException(409, 'There are no failed rows to retry.');
         }
 
-        ProductContentJob::where('batch_id', $batch->id)
-            ->where('status', ProductContentJob::STATUS_FAILED)
-            ->update(['status' => ProductContentJob::STATUS_PENDING, 'attempts' => 0, 'last_error' => null]);
+        // Recompute counters from the actual row states — idempotent, so two
+        // concurrent retries converge instead of double-subtracting (the batch is
+        // terminal here, so no worker is mutating rows concurrently).
+        $counts = ProductContentJob::where('batch_id', $batch->id)
+            ->selectRaw('status, count(*) as c')
+            ->groupBy('status')
+            ->pluck('c', 'status');
+        $processed = (int) (($counts[ProductContentJob::STATUS_COMPLETED] ?? 0)
+            + ($counts[ProductContentJob::STATUS_SKIPPED] ?? 0)
+            + ($counts[ProductContentJob::STATUS_FAILED] ?? 0));
 
-        // Roll the failed rows back out of the completed counters.
-        DB::table('product_content_batches')->where('id', $batch->id)->update([
-            'processed_count' => DB::raw("GREATEST(0, processed_count - {$failedCount})"),
-            'failed_count'    => DB::raw("GREATEST(0, failed_count - {$failedCount})"),
+        $batch->update([
+            'processed_count' => $processed,
+            'failed_count'    => (int) ($counts[ProductContentJob::STATUS_FAILED] ?? 0),
             'row_errors'      => null,
             'completed_at'    => null,
+            'status'          => ProductContentBatch::STATUS_PROCESSING,
         ]);
-        $batch->update(['status' => ProductContentBatch::STATUS_PROCESSING]);
 
         GenerateProductContentBatchJob::dispatch($batch->id);
 

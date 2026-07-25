@@ -3,6 +3,7 @@
 namespace Marvel\Console;
 
 use Illuminate\Console\Command;
+use Marvel\Console\Support\Heartbeat;
 use Marvel\Database\Models\ProductContentBatch;
 use Marvel\Database\Models\ProductContentJob;
 use Marvel\Jobs\GenerateProductContentBatchJob;
@@ -49,12 +50,18 @@ class SweepContentBatchesCommand extends Command
                 GenerateProductContentBatchJob::dispatch($batch->id);
             } else {
                 $failed = (int) $batch->failed_count;
-                $batch->update([
-                    'status'       => $failed > 0 ? ProductContentBatch::STATUS_COMPLETED_WITH_ERRORS : ProductContentBatch::STATUS_COMPLETED,
-                    'completed_at' => now(),
-                ]);
+                // Guard the flip so a concurrent cancel isn't overwritten
+                // (mirrors the worker's guarded finalize).
+                ProductContentBatch::where('id', $batch->id)
+                    ->whereIn('status', ProductContentBatch::ACTIVE_STATUSES)
+                    ->update([
+                        'status'       => $failed > 0 ? ProductContentBatch::STATUS_COMPLETED_WITH_ERRORS : ProductContentBatch::STATUS_COMPLETED,
+                        'completed_at' => now(),
+                    ]);
             }
         }
+
+        Heartbeat::beat('content-sweeper');
 
         return self::SUCCESS;
     }
