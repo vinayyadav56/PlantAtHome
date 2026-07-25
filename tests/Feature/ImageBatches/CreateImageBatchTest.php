@@ -166,6 +166,31 @@ final class CreateImageBatchTest extends ImageBatchTestCase
         }
     }
 
+    public function test_custom_output_folder_and_flat_structure(): void
+    {
+        Queue::fake();
+        $this->admin();
+
+        // Custom folder is slugified + stored; flat structure recorded.
+        $this->createBatch(['output_folder' => 'Monsoon Plants 2026!', 'file_structure' => 'flat'])
+            ->assertStatus(201);
+        $batch = ImageBatch::first();
+        $this->assertSame('monsoon-plants-2026', $batch->settings['output_folder']);
+        $this->assertSame('flat', $batch->settings['file_structure']);
+        $this->assertStringEndsWith('/monsoon-plants-2026', $batch->storagePrefix());
+        $this->assertSame('flat', $batch->fileStructure());
+
+        // Duplicate live folder is rejected.
+        $this->createBatch(['output_folder' => 'monsoon plants 2026'])
+            ->assertStatus(422);
+
+        // Default: BATCHxxxxxx prefix + per-plant folders.
+        $this->createBatch()->assertStatus(201);
+        $default = ImageBatch::orderByDesc('id')->first();
+        $this->assertStringEndsWith($default->display_id, $default->storagePrefix());
+        $this->assertSame('folders', $default->fileStructure());
+    }
+
     public function test_list_show_and_rows_endpoints(): void
     {
         Queue::fake();

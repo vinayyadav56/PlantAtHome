@@ -186,7 +186,10 @@ class GenerateImageBatchJob implements ShouldQueue
                 $image = $this->generateOne($client, $batch, $row, $references, $settings);
 
                 $fileName = $row->folder_name . '_' . $index . '.png';
-                $s3Path   = $batch->storagePrefix() . '/' . $row->folder_name . '/' . $fileName;
+                // 'folders' = per-plant subfolder (default); 'flat' = all files together.
+                $s3Path = $batch->fileStructure() === 'flat'
+                    ? $batch->storagePrefix() . '/' . $fileName
+                    : $batch->storagePrefix() . '/' . $row->folder_name . '/' . $fileName;
                 // Never set visibility — the bucket has ACLs disabled and is
                 // public via bucket policy (see config/filesystems.php).
                 Storage::disk('s3')->put($s3Path, $image['bytes']);

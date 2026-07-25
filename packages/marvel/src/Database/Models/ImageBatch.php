@@ -75,10 +75,18 @@ class ImageBatch extends Model
         return in_array($this->status, self::ACTIVE_STATUSES, true);
     }
 
-    /** s3 folder for everything this batch generates. */
+    /** s3 folder for everything this batch generates (custom output_folder or BATCHxxxxxx). */
     public function storagePrefix(): string
     {
-        return trim(config('image-batches.s3_prefix', 'ai-batches'), '/') . '/' . $this->display_id;
+        $folder = $this->settings['output_folder'] ?? null;
+
+        return trim(config('image-batches.s3_prefix', 'ai-batches'), '/') . '/' . ($folder ?: $this->display_id);
+    }
+
+    /** 'folders' (per-plant subfolders, default) or 'flat' (all files together). */
+    public function fileStructure(): string
+    {
+        return ($this->settings['file_structure'] ?? 'folders') === 'flat' ? 'flat' : 'folders';
     }
 
     public function uploader(): BelongsTo

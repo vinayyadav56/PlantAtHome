@@ -66,6 +66,8 @@ class ImageBatchController extends CoreController
             'background'         => 'nullable|string',
             'images_per_plant'   => 'required|integer|min:1|max:' . (int) config('image-batches.max_images_per_plant', 10),
             'notify_email'       => 'nullable|email',
+            'output_folder'      => 'nullable|string|max:80',
+            'file_structure'     => 'nullable|in:folders,flat',
             'reference_images'   => 'nullable|array|max:' . (int) config('image-batches.max_reference_images', 4),
             'reference_images.*' => 'file|mimes:png,jpg,jpeg,webp|max:' . ((int) config('image-batches.max_file_mb', 10) * 1024),
         ]);
@@ -105,6 +107,29 @@ class ImageBatchController extends CoreController
         $imagesPerPlant = (int) $request->input('images_per_plant');
         $unitCost       = (float) (($model['cost_per_image'][$quality][$size] ?? 0));
 
+        // Optional custom S3/ZIP directory. Sanitized to a slug and unique
+        // among batches whose files still exist — two live batches sharing a
+        // folder would overwrite each other's images.
+        $outputFolder = null;
+        if ($request->filled('output_folder')) {
+            $outputFolder = strtolower(trim((string) preg_replace(
+                ['/\s+/', '/[^A-Za-z0-9_\-]/', '/[-_]{2,}/'],
+                ['-', '', '-'],
+                (string) $request->input('output_folder')
+            ), '-_'));
+            if ($outputFolder === '') {
+                $outputFolder = null;
+            } elseif (
+                ImageBatch::whereNull('files_pruned_at')
+                    ->where('settings->output_folder', $outputFolder)
+                    ->exists()
+            ) {
+                return response()->json([
+                    'message' => "Output folder '{$outputFolder}' is already used by another batch — pick a different name.",
+                ], 422);
+            }
+        }
+
         // Original sheet on the PRIVATE disk (audit/re-parse only).
         $originalPath = $sheet->storeAs('ai-image-batches', 'batch-' . time() . '-' . uniqid() . '.' . $ext, 'local');
 
@@ -113,11 +138,13 @@ class ImageBatchController extends CoreController
             'notify_email'     => $request->input('notify_email') ?: optional($request->user())->email,
             'original_file'    => $originalPath,
             'settings'         => [
-                'model'      => $modelId,
-                'size'       => $size,
-                'quality'    => $quality,
-                'style'      => $style,
-                'background' => $background,
+                'model'          => $modelId,
+                'size'           => $size,
+                'quality'        => $quality,
+                'style'          => $style,
+                'background'     => $background,
+                'output_folder'  => $outputFolder,
+                'file_structure' => $request->input('file_structure') === 'flat' ? 'flat' : 'folders',
             ],
             'images_per_plant' => $imagesPerPlant,
             'status'           => ImageBatch::STATUS_PENDING,
