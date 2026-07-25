@@ -7,6 +7,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\AdminTask;
 use Marvel\Database\Models\RequestLog;
@@ -112,6 +113,52 @@ class SystemController extends CoreController
     // Container platforms (Railway) give us no shell; the boot script swallows
     // `migrate` failures. These two endpoints make schema state visible and
     // repairable from the admin (SUPER_ADMIN group).
+
+    /** Mail diagnostics: resolved config + an optional SYNC test send (SUPER_ADMIN). */
+    public function mailDiagnostics(Request $request): JsonResponse
+    {
+        $config = [
+            'default_mailer'       => config('mail.default'),
+            'sendgrid_key_present' => (bool) config('mail.mailers.sendgrid.key'),
+            'from_address'         => config('mail.from.address'),
+            'from_name'            => config('mail.from.name'),
+            'smtp_host'            => config('mail.mailers.smtp.host'),
+        ];
+
+        $to = $request->input('to');
+        if (!$to) {
+            return response()->json(['config' => $config, 'note' => 'Pass ?to=email&mailer=sendgrid|smtp to run a sync test send.']);
+        }
+
+        // A synchronous send surfaces the real transport error (a queued send
+        // hides it in a worker). Default to the sendgrid HTTPS transport.
+        $mailer = $request->input('mailer')
+            ?: (config('mail.mailers.sendgrid.key') ? 'sendgrid' : config('mail.default'));
+
+        try {
+            Mail::mailer($mailer)->raw(
+                'PlantAtHome mail diagnostics test — sent at ' . now()->toDateTimeString() . " via [{$mailer}].",
+                function ($m) use ($to) {
+                    $m->to($to)->subject('PlantAtHome mail test');
+                }
+            );
+
+            return response()->json([
+                'config'    => $config,
+                'sent'      => true,
+                'mailer'    => $mailer,
+                'to'        => $to,
+                'note'      => 'Transport accepted the message. If it does not arrive, the sender is likely unverified in SendGrid or it landed in spam.',
+            ]);
+        } catch (\Throwable $e) {
+            return response()->json([
+                'config' => $config,
+                'sent'   => false,
+                'mailer' => $mailer,
+                'error'  => mb_substr($e->getMessage(), 0, 500),
+            ], 500);
+        }
+    }
 
     /** Read-only: pending migrations + presence of recently-added tables. */
     public function schemaStatus(): JsonResponse

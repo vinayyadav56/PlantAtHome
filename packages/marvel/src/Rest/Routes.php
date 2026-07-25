@@ -1033,6 +1033,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('system/prune-table', [SystemController::class, 'pruneTable'])->middleware('throttle:6,1');
     Route::post('system/purge-binlogs', [SystemController::class, 'purgeBinlogs'])->middleware('throttle:6,1');
     Route::get('system/db-diagnostics', [SystemController::class, 'dbDiagnostics']);
+    Route::match(['get', 'post'], 'system/mail-diagnostics', [SystemController::class, 'mailDiagnostics'])->middleware('throttle:20,1');
 });
 
 
