@@ -163,6 +163,62 @@ class SystemController extends CoreController
         }
     }
 
+    /**
+     * Ask SendGrid directly (via its v3 API with the configured key) what
+     * senders/domains are verified, and attempt a raw send returning
+     * SendGrid's real HTTP status + body. This bypasses Laravel's mail
+     * transport + Marvel's 500 masking, so the true cause of non-delivery
+     * (almost always "from address is not a verified Sender Identity") is
+     * visible. Everything returns at 200.
+     */
+    public function sendgridDiagnostics(Request $request): JsonResponse
+    {
+        $key  = config('mail.mailers.sendgrid.key');
+        $from = config('mail.from.address');
+        if (!$key) {
+            return response()->json(['error' => 'No SendGrid key configured.']);
+        }
+
+        $get = function (string $path) use ($key) {
+            try {
+                $res = \Illuminate\Support\Facades\Http::withToken($key)
+                    ->timeout(15)->get('https://api.sendgrid.com/v3/' . $path);
+
+                return ['status' => $res->status(), 'body' => $res->json() ?? mb_substr($res->body(), 0, 300)];
+            } catch (\Throwable $e) {
+                return ['error' => mb_substr($e->getMessage(), 0, 200)];
+            }
+        };
+
+        $out = [
+            'configured_from'  => $from,
+            'verified_senders' => $get('verified_senders'),
+            'domain_auth'      => $get('whitelabel/domains'),
+        ];
+
+        // Optional raw send → SendGrid's real accept/reject for the current from.
+        if ($to = $request->input('to')) {
+            try {
+                $res = \Illuminate\Support\Facades\Http::withToken($key)
+                    ->timeout(20)
+                    ->post('https://api.sendgrid.com/v3/mail/send', [
+                        'personalizations' => [['to' => [['email' => $to]]]],
+                        'from'    => ['email' => $from, 'name' => config('mail.from.name')],
+                        'subject' => 'PlantAtHome SendGrid diagnostic',
+                        'content' => [['type' => 'text/plain', 'value' => 'Diagnostic send at ' . now()->toDateTimeString()]],
+                    ]);
+                $out['raw_send'] = [
+                    'http_status' => $res->status(), // 202 = accepted; 403 = unverified sender
+                    'body'        => $res->successful() ? '(accepted)' : (mb_substr($res->body(), 0, 500) ?: '(empty)'),
+                ];
+            } catch (\Throwable $e) {
+                $out['raw_send'] = ['error' => mb_substr($e->getMessage(), 0, 300)];
+            }
+        }
+
+        return response()->json($out);
+    }
+
     /** Read-only: pending migrations + presence of recently-added tables. */
     public function schemaStatus(): JsonResponse
     {
