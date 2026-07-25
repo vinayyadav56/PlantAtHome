@@ -374,6 +374,14 @@ class SystemController extends CoreController
      * maintenance commands — never a free-form command runner.
      */
     public const RUNNABLE_COMMANDS = [
+        // Clears orphaned scheduler overlap mutexes. `withoutOverlapping()`
+        // registers a SKIP FILTER, so a lock left behind by a killed process
+        // makes schedule:run drop the event with no exception and no log line —
+        // the command simply never runs. Shortening the TTL in code cannot
+        // release a lock that already exists, and on a database cache store the
+        // row survives redeploys, so this is the only way to clear it without a
+        // shell. Safe: the scheduler recreates locks on the next tick.
+        'schedule:clear-cache'      => \Illuminate\Console\Scheduling\ScheduleClearCacheCommand::class,
         'images:sweep-batches'      => \Marvel\Console\SweepImageBatchesCommand::class,
         'content:sweep-batches'     => \Marvel\Console\SweepContentBatchesCommand::class,
         'inventory:release-expired' => \App\Modules\Inventory\Console\ReleaseExpiredReservationsCommand::class,

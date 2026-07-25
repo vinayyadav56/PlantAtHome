@@ -38,6 +38,7 @@ final class RunCommandDiagnosticTest extends ImageBatchTestCase
         // A guard on the guard: this list is the blast radius of the endpoint,
         // so widening it should be a deliberate edit, not a drive-by.
         $this->assertSame([
+            'schedule:clear-cache',
             'images:sweep-batches',
             'content:sweep-batches',
             'inventory:release-expired',
@@ -57,13 +58,25 @@ final class RunCommandDiagnosticTest extends ImageBatchTestCase
         foreach (SystemController::RUNNABLE_COMMANDS as $signature => $class) {
             $this->assertTrue(class_exists($class), "{$class} does not exist");
 
-            $declared = (new \ReflectionClass($class))->newInstanceWithoutConstructor();
-            $property = (new \ReflectionClass($class))->getProperty('signature');
-            $property->setAccessible(true);
-            $this->assertStringStartsWith(
-                $signature,
-                (string) $property->getValue($declared),
-                "{$class} does not declare the signature {$signature}"
+            $ref      = new \ReflectionClass($class);
+            $declared = $ref->newInstanceWithoutConstructor();
+
+            // Commands declare their name via $signature (modern) or $name
+            // (older framework commands, e.g. ScheduleClearCacheCommand).
+            $names = [];
+            foreach (['signature', 'name'] as $prop) {
+                if (!$ref->hasProperty($prop)) {
+                    continue;
+                }
+                $p = $ref->getProperty($prop);
+                $p->setAccessible(true);
+                $names[] = (string) $p->getValue($declared);
+            }
+
+            $this->assertTrue(
+                (bool) array_filter($names, fn ($n) => str_starts_with($n, $signature)),
+                "{$class} does not declare the command name {$signature} (found: "
+                    . implode(', ', array_filter($names)) . ')'
             );
         }
     }
