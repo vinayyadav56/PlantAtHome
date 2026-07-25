@@ -39,23 +39,32 @@ final class VariableMapper
      * unknown/blank vars become ''. $row keys are matched case-insensitively so
      * a {{City}} token binds to a `city` column.
      *
+     * ⚠️ $escapeHtml MUST be true whenever $text is an HTML document. The values
+     * come from an audience row — i.e. from customer-controlled columns such as
+     * name and address. Substituting them raw into the assembled email body is a
+     * stored-XSS sink: the poisoned body is persisted on the notification and
+     * later rendered in the admin panel, which would execute it in the admin's
+     * origin. Escape the VALUES, never the template — the template is authored
+     * HTML and must keep working.
+     *
      * @param array<string,mixed> $row
      */
-    public static function render(string $text, array $row): string
+    public static function render(string $text, array $row, bool $escapeHtml = false): string
     {
         $lookup = [];
         foreach ($row as $key => $value) {
             $lookup[strtolower((string) $key)] = $value;
         }
 
-        return (string) preg_replace_callback(self::PATTERN, function (array $m) use ($lookup) {
+        return (string) preg_replace_callback(self::PATTERN, function (array $m) use ($lookup, $escapeHtml) {
             $key = strtolower($m[1]);
             $value = $lookup[$key] ?? '';
             if (is_array($value) || is_object($value)) {
                 return '';
             }
+            $value = (string) $value;
 
-            return (string) $value;
+            return $escapeHtml ? htmlspecialchars($value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') : $value;
         }, $text);
     }
 
