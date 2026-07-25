@@ -151,12 +151,15 @@ class SystemController extends CoreController
                 'note'      => 'Transport accepted the message. If it does not arrive, the sender is likely unverified in SendGrid or it landed in spam.',
             ]);
         } catch (\Throwable $e) {
+            // Return 200 so the real transport error survives (Marvel's handler
+            // rewrites 500 bodies to a generic "Server Error.").
             return response()->json([
-                'config' => $config,
-                'sent'   => false,
-                'mailer' => $mailer,
-                'error'  => mb_substr($e->getMessage(), 0, 500),
-            ], 500);
+                'config'     => $config,
+                'sent'       => false,
+                'mailer'     => $mailer,
+                'error_type' => get_class($e),
+                'error'      => mb_substr($e->getMessage(), 0, 800),
+            ]);
         }
     }
 
