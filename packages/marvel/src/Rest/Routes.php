@@ -126,12 +126,26 @@ Route::get("products/calculate-rental-price", [ProductController::class, 'calcul
 // so the public routes can't be abused for bulk-write storms / catalog scraping.
 Route::post('import-products', [ProductController::class, 'importProducts'])->middleware('throttle:20,1');
 Route::post('import-variation-options', [ProductController::class, 'importVariationOptions'])->middleware('throttle:20,1');
-Route::get('export-products/{shop_id}', [ProductController::class, 'exportProducts'])->middleware('throttle:30,1');
-Route::get('export-variation-options/{shop_id}', [ProductController::class, 'exportVariableOptions'])->middleware('throttle:30,1');
+// ⚠️ CSV exports stream a shop's ENTIRE catalogue (cost fields, stock, the full
+// option matrix) and were reachable with no auth for any enumerable {shop_id} —
+// while the import endpoints above have always carried hasPermission(). They
+// cannot move behind `auth:sanctum`: the admin downloads them with a plain
+// `<a href>` browser navigation that sends no Bearer token, so gating them
+// directly breaks Products → Export. Instead they require a SIGNED url, minted
+// by the authed + permission-checked `export-urls/{shop_id}` below. Same shape
+// as the existing export-order/download-invoice token flows.
+Route::get('export-products/{shop_id}', [ProductController::class, 'exportProducts'])
+    ->middleware(['signed', 'throttle:30,1'])->name('export_products.signed');
+Route::get('export-variation-options/{shop_id}', [ProductController::class, 'exportVariableOptions'])
+    ->middleware(['signed', 'throttle:30,1'])->name('export_variation_options.signed');
 // (removed dead `generate-description` singular route — ProductController has no
 //  such method; it 500'd. The working endpoint is the plural `generate-descriptions`.)
 Route::post('import-attributes', [AttributeController::class, 'importAttributes'])->middleware('throttle:20,1');
-Route::get('export-attributes/{shop_id}', [AttributeController::class, 'exportAttributes']);
+Route::get('export-attributes/{shop_id}', [AttributeController::class, 'exportAttributes'])
+    ->middleware(['signed', 'throttle:30,1'])->name('export_attributes.signed');
+// Authed + permission-checked issuer for the three signed export URLs above.
+Route::get('export-urls/{shop_id}', [ProductController::class, 'exportUrls'])
+    ->middleware(['auth:sanctum', 'throttle:30,1']);
 Route::get('download_url/token/{token}', [DownloadController::class, 'downloadFile'])->name('download_url.token');
 Route::get('export-order/token/{token}', [OrderController::class, 'exportOrder'])->name('export_order.token');
 Route::post('subscribe-to-newsletter', [UserController::class, 'subscribeToNewsletter'])->name('subscribeToNewsletter');
@@ -351,8 +365,12 @@ Route::post('/email/verification-notification', [UserController::class, 'sendVer
 // Payment submission keyed by a guessable tracking_number — throttle to stop
 // enumeration/replay storms against the live payment processor.
 Route::post('orders/payment', [OrderController::class, 'submitPayment'])->middleware('throttle:20,1');
-Route::post('generate-descriptions', [AiController::class, 'generateDescription'])->middleware('throttle:10,1');
-Route::post('suggest-categories', [AiController::class, 'suggestCategories'])->middleware('throttle:20,1');
+// ⚠️ These call a PAID LLM. Unauthenticated they are an open, unmetered spend
+// tap on our OpenAI account (which has already hit its billing hard limit once).
+// Both are only ever called from the admin product form via the authed
+// HttpClient, so requiring a token costs nothing and closes the tap.
+Route::post('generate-descriptions', [AiController::class, 'generateDescription'])->middleware(['auth:sanctum', 'throttle:10,1']);
+Route::post('suggest-categories', [AiController::class, 'suggestCategories'])->middleware(['auth:sanctum', 'throttle:20,1']);
 Route::get('/payment-intent', [PaymentIntentController::class, 'getPaymentIntent'])->middleware('throttle:20,1');
 
 Route::apiResource('faqs', FaqsController::class, [

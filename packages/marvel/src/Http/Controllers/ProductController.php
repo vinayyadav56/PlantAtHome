@@ -15,6 +15,7 @@ use Marvel\Database\Models\Variation;
 use Marvel\Exceptions\MarvelException;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\URL;
 use Marvel\Database\Models\Author;
 use Marvel\Database\Models\Category;
 use Marvel\Database\Models\Manufacturer;
@@ -713,6 +714,39 @@ class ProductController extends CoreController
      * @param  mixed $shop_id
      * @return void
      */
+    /**
+     * Issue short-lived SIGNED download URLs for the CSV exports.
+     *
+     * The exports themselves stream a shop's entire catalogue (and, for
+     * attributes, its full option matrix) and were reachable with NO auth at all
+     * for any enumerable {shop_id} — the import endpoints beside them have always
+     * carried `hasPermission()`, so this was an oversight, not a decision. They
+     * cannot simply be moved behind `auth:sanctum`, because the admin downloads
+     * them via a plain `<a href>` browser navigation which carries no Bearer
+     * token; gating them directly silently breaks Products → Export.
+     *
+     * So: this authed, permission-checked endpoint mints signed URLs (5 min),
+     * and the export routes require a valid signature. Same shape as the
+     * existing `export-order/token/{token}` / `download-invoice/token/{token}`
+     * download flows in this app.
+     */
+    public function exportUrls(Request $request, $shop_id)
+    {
+        $user = $request->user();
+        if (!$this->repository->hasPermission($user, $shop_id)) {
+            throw new AuthorizationException(NOT_AUTHORIZED);
+        }
+
+        $expires = now()->addMinutes(5);
+
+        return [
+            'expires_at'        => $expires->toIso8601String(),
+            'products'          => URL::temporarySignedRoute('export_products.signed', $expires, ['shop_id' => $shop_id]),
+            'variation_options' => URL::temporarySignedRoute('export_variation_options.signed', $expires, ['shop_id' => $shop_id]),
+            'attributes'        => URL::temporarySignedRoute('export_attributes.signed', $expires, ['shop_id' => $shop_id]),
+        ];
+    }
+
     public function exportProducts(Request $request, $shop_id)
     {
 
