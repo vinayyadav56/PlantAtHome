@@ -758,6 +758,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('ai-images/lora-models', [LoraModelController::class, 'store'])->middleware('throttle:10,1');
     Route::get('ai-images/lora-models/{id}', [LoraModelController::class, 'show'])->middleware('throttle:240,1');
     Route::post('ai-images/lora-models/{id}/cancel', [LoraModelController::class, 'cancel']);
+    // Row-only delete (nothing removed on Replicate or s3); pending/training rows 409 until canceled.
+    Route::delete('ai-images/lora-models/{id}', [LoraModelController::class, 'destroy']);
+    // Admin uploads OWN training photos → media-host URLs that store()'s SSRF allowlist accepts.
+    Route::post('ai-images/lora-uploads', [LoraModelController::class, 'upload'])->middleware('throttle:20,1');
     Route::get('ai-image-batches/capabilities', [ImageBatchController::class, 'capabilities']);
     Route::get('ai-image-batches', [ImageBatchController::class, 'index']);
     Route::post('ai-image-batches', [ImageBatchController::class, 'store']);

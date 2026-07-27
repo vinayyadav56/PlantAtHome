@@ -163,6 +163,44 @@ class LoraModelController extends CoreController
     }
 
     /**
+     * Admin uploads their OWN training photos (the picker otherwise only
+     * offers AI-generated instant images). Each file lands on the public
+     * media disk at ai-lora/uploads/YYYY-MM/{uuid}.{ext}, so the returned
+     * URLs are on the media host and pass store()'s SSRF allowlist
+     * unchanged. Visibility is never set — the bucket policy handles
+     * public read (same contract as the instant pipeline).
+     */
+    public function upload(Request $request)
+    {
+        $request->validate([
+            'images'   => 'required|array|min:1|max:' . self::MAX_IMAGES,
+            'images.*' => 'file|mimes:png,jpg,jpeg,webp|max:' . ((int) config('image-batches.max_file_mb', 10) * 1024),
+        ]);
+
+        $month  = now()->format('Y-m');
+        $images = [];
+
+        foreach (array_values($request->file('images', [])) as $file) {
+            // Client extension when it is one of ours, else derive from the
+            // sniffed mime (a mimes-valid file can still be named "photo").
+            $ext = strtolower($file->getClientOriginalExtension());
+            if (!in_array($ext, ['png', 'jpg', 'jpeg', 'webp'], true)) {
+                $ext = $this->extensionFor(strtolower((string) $file->getMimeType()));
+            }
+
+            $key = 'ai-lora/uploads/' . $month . '/' . (string) Str::uuid() . '.' . $ext;
+            Storage::disk('s3')->put($key, (string) file_get_contents($file->getRealPath()));
+
+            $images[] = [
+                'url'  => Storage::disk('s3')->url($key),
+                'name' => $file->getClientOriginalName(),
+            ];
+        }
+
+        return response()->json(['images' => $images], 201);
+    }
+
+    /**
      * Show one model; while it is pending/training, refresh from Replicate and
      * persist the mapped status (succeeded parses output.version's hash).
      */
@@ -203,6 +241,27 @@ class LoraModelController extends CoreController
             'message' => "Training for '{$row->name}' canceled.",
             'model'   => $row->fresh(),
         ]);
+    }
+
+    /**
+     * Delete the DB row only. Deliberately touches NOTHING remote: versions
+     * on the Replicate destination model are harmless (and other rows may
+     * reference the same destination), and the training zip stays on s3 as
+     * the audit trail of what the model was trained on.
+     */
+    public function destroy($id)
+    {
+        $row = AiLoraModel::findOrFail($id);
+
+        if (in_array($row->status, self::REFRESHABLE, true)) {
+            return response()->json([
+                'message' => "Model '{$row->name}' is {$row->status} — cancel the training first, then delete it.",
+            ], 409);
+        }
+
+        $row->delete();
+
+        return response()->json(['message' => "LoRA model '{$row->name}' deleted."]);
     }
 
     /* ── helpers ──────────────────────────────────────────────────────────── */

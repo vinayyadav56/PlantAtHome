@@ -2,6 +2,7 @@
 
 namespace Tests\Feature\ImageBatches;
 
+use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Marvel\Database\Models\AiLoraModel;
@@ -315,5 +316,135 @@ final class LoraModelTest extends ImageBatchTestCase
         $this->assertSame('Old Ready', $models[1]['name']);
         $this->assertTrue($models[1]['ready']);
         $this->assertSame(AiLoraModel::STATUS_SUCCEEDED, $models[1]['status']);
+    }
+
+    /* ── own-photo uploads ────────────────────────────────────────────────── */
+
+    /** Re-fake s3 with a media-host url so ->url() matches production shape. */
+    private function fakeMediaDisk(): void
+    {
+        Storage::fake('s3', ['url' => 'https://' . self::MEDIA_HOST]);
+    }
+
+    public function test_upload_stores_own_photos_and_returns_urls_in_order(): void
+    {
+        $this->fakeMediaDisk();
+        $this->admin();
+
+        $res = $this->postJson('/api/ai-images/lora-uploads', [
+            'images' => [
+                UploadedFile::fake()->image('front porch.jpg'),
+                UploadedFile::fake()->image('leaf-closeup.png'),
+                UploadedFile::fake()->image('pot.webp'),
+            ],
+        ])->assertStatus(201);
+
+        $images = $res->json('images');
+        $this->assertCount(3, $images);
+        // Original client filenames, in upload order.
+        $this->assertSame(
+            ['front porch.jpg', 'leaf-closeup.png', 'pot.webp'],
+            array_column($images, 'name')
+        );
+
+        // Stored under ai-lora/uploads/YYYY-MM/{uuid}.{ext} on the media disk.
+        $month  = now()->format('Y-m');
+        $stored = Storage::disk('s3')->allFiles('ai-lora/uploads');
+        $this->assertCount(3, $stored);
+        foreach ($stored as $path) {
+            $this->assertMatchesRegularExpression(
+                '#^ai-lora/uploads/' . $month . '/[0-9a-f-]{36}\.(png|jpg|webp)$#',
+                $path
+            );
+        }
+
+        // URLs are https on OUR media host and keep the client extension.
+        foreach ($images as $image) {
+            $this->assertStringStartsWith('https://' . self::MEDIA_HOST . '/ai-lora/uploads/' . $month . '/', $image['url']);
+        }
+        $this->assertStringEndsWith('.jpg', $images[0]['url']);
+        $this->assertStringEndsWith('.png', $images[1]['url']);
+        $this->assertStringEndsWith('.webp', $images[2]['url']);
+    }
+
+    public function test_upload_rejects_a_non_image_file(): void
+    {
+        $this->fakeMediaDisk();
+        $this->admin();
+
+        $this->postJson('/api/ai-images/lora-uploads', [
+            'images' => [
+                UploadedFile::fake()->image('real.png'),
+                UploadedFile::fake()->create('notes.txt', 10, 'text/plain'),
+            ],
+        ])->assertStatus(422)->assertJsonValidationErrors(['images.1']);
+
+        // The whole request fails — nothing was stored, not even the valid file.
+        $this->assertSame([], Storage::disk('s3')->allFiles('ai-lora/uploads'));
+    }
+
+    public function test_uploaded_urls_pass_the_store_ssrf_allowlist(): void
+    {
+        $this->fakeMediaDisk();
+        $this->fakeReplicateTraining();
+        $this->admin();
+
+        $urls = $this->postJson('/api/ai-images/lora-uploads', [
+            'images' => array_map(fn ($i) => UploadedFile::fake()->image("own-photo-{$i}.jpg"), range(1, 8)),
+        ])->assertStatus(201)->json('images.*.url');
+
+        // The uploaded URLs feed store() UNCHANGED and clear its media-host guard.
+        $this->postJson('/api/ai-images/lora-models', [
+            'name'         => 'Own Photos Style',
+            'trigger_word' => 'PAHOWN',
+            'image_urls'   => $urls,
+        ])->assertStatus(201);
+
+        $row = AiLoraModel::firstOrFail();
+        $this->assertSame(AiLoraModel::STATUS_TRAINING, $row->status);
+        $this->assertSame(8, $row->image_count);
+    }
+
+    /* ── delete ───────────────────────────────────────────────────────────── */
+
+    public function test_destroy_deletes_a_succeeded_row(): void
+    {
+        $row = AiLoraModel::create([
+            'name'              => 'Done Style',
+            'trigger_word'      => 'PAHDONE',
+            'replicate_model'   => 'test-owner/done-style',
+            'replicate_version' => 'ver-1',
+            'status'            => AiLoraModel::STATUS_SUCCEEDED,
+        ]);
+        Http::fake();
+        $this->admin();
+
+        $this->deleteJson('/api/ai-images/lora-models/' . $row->id)
+            ->assertOk()
+            ->assertJsonPath('message', "LoRA model 'Done Style' deleted.");
+
+        $this->assertSame(0, AiLoraModel::count());
+        Http::assertNothingSent(); // row-only delete — Replicate is never called
+    }
+
+    public function test_destroy_refuses_while_training(): void
+    {
+        $row = AiLoraModel::create([
+            'name'                  => 'In Flight',
+            'trigger_word'          => 'PAHFLY',
+            'replicate_model'       => 'test-owner/in-flight',
+            'replicate_training_id' => 'train-123',
+            'status'                => AiLoraModel::STATUS_TRAINING,
+        ]);
+        $this->admin();
+
+        $res = $this->deleteJson('/api/ai-images/lora-models/' . $row->id)->assertStatus(409);
+        $this->assertStringContainsString('cancel the training first', $res->json('message'));
+        $this->assertSame(1, AiLoraModel::count());
+
+        // Pending rows are protected the same way.
+        $row->update(['status' => AiLoraModel::STATUS_PENDING]);
+        $this->deleteJson('/api/ai-images/lora-models/' . $row->id)->assertStatus(409);
+        $this->assertSame(1, AiLoraModel::count());
     }
 }
