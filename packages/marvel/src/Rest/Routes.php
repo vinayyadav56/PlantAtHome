@@ -180,6 +180,15 @@ Route::post('voice-search/log', [VoiceSearchController::class, 'storeLog'])
 Route::get('plant-doctor/settings', [PlantDoctorController::class, 'getSettings']);
 Route::post('plant-doctor/diagnose', [PlantDoctorController::class, 'diagnose'])
     ->middleware('throttle:30,1');
+// Plant Doctor consultation history — customer-owned rows (user_id always from
+// the token). Auth-gated; store is rate-limited alongside the diagnose cap.
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('plant-doctor/consultations', [PlantDoctorController::class, 'consultations']);
+    Route::post('plant-doctor/consultations', [PlantDoctorController::class, 'storeConsultation'])
+        ->middleware('throttle:30,1');
+    Route::delete('plant-doctor/consultations/{id}', [PlantDoctorController::class, 'deleteConsultation'])
+        ->whereNumber('id');
+});
 
 // Plant care tracker — public reads the feature flag; the customer routes (my plans,
 // start a plan, mark reminders done) are auth-gated below. Plans are auto-created on
