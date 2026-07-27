@@ -35,6 +35,15 @@ return [
         'key' => env('PIXABAY_API_KEY'),
     ],
 
+    // PlantAtHome — Replicate (Flux) second provider for the admin instant AI image
+    // generator. Token-gated: ai-image-batches/capabilities reports configured=false
+    // until REPLICATE_API_TOKEN is set — no code change needed to enable.
+    'replicate' => [
+        'api_token' => env('REPLICATE_API_TOKEN'),
+        'model'     => env('REPLICATE_MODEL', 'black-forest-labs/flux-dev'),
+        'base_url'  => env('REPLICATE_BASE_URL', 'https://api.replicate.com'),
+    ],
+
     // PlantAtHome — MSG91 OTP gateway (phone signup). DLT-registered sender + template.
     'msg91' => [
         'auth_key' => env('MSG91_AUTH_KEY'),

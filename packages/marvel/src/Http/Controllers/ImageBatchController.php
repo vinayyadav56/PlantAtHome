@@ -11,6 +11,7 @@ use Marvel\Database\Models\ImageGenerationJob;
 use Marvel\Database\Models\InstantImage;
 use Marvel\Imports\ImageBatchSheetImport;
 use Marvel\Imports\RowLimitExceededException;
+use Marvel\Ai\ReplicateImageService;
 use Marvel\Jobs\GenerateImageBatchJob;
 use Marvel\Jobs\GenerateInstantImageJob;
 
@@ -40,6 +41,18 @@ class ImageBatchController extends CoreController
 
         return response()->json([
             'models' => $models,
+            // Instant-generator provider matrix: which backends are usable
+            // (env-token-gated) + the Replicate/Flux option lists.
+            'providers' => [
+                'openai' => [
+                    'configured' => (bool) config('shop.openai.secret_Key'),
+                ],
+                'replicate' => [
+                    'configured'    => (bool) config('services.replicate.api_token'),
+                    'model'         => (string) config('services.replicate.model', 'black-forest-labs/flux-dev'),
+                    'aspect_ratios' => ReplicateImageService::ASPECT_RATIOS,
+                ],
+            ],
             'limits' => [
                 'max_rows'             => (int) config('image-batches.max_rows'),
                 'max_images_per_plant' => (int) config('image-batches.max_images_per_plant'),
@@ -389,9 +402,42 @@ class ImageBatchController extends CoreController
     {
         $request->validate([
             'prompt'             => 'required|string|max:4000',
+            'provider'           => 'nullable|in:openai,replicate',
+            // Replicate/Flux-only knobs — ignored on the OpenAI path.
+            'aspect_ratio'       => 'nullable|in:' . implode(',', ReplicateImageService::ASPECT_RATIOS),
+            'guidance'           => 'nullable|numeric|min:0|max:20',
+            'steps'              => 'nullable|integer|min:1|max:50',
+            'seed'               => 'nullable|integer|min:0',
             'reference_images'   => 'nullable|array|max:' . (int) config('image-batches.max_reference_images', 4),
             'reference_images.*' => 'file|mimes:png,jpg,jpeg,webp|max:' . ((int) config('image-batches.max_file_mb', 10) * 1024),
         ]);
+
+        // Second provider: Replicate (Flux). Provider + its options ride the
+        // existing free-form `settings` json column — no schema change. Flux is
+        // text-to-image here, so reference images are deliberately not uploaded.
+        if ($request->input('provider') === 'replicate') {
+            $settings = [
+                'provider'     => 'replicate',
+                'model'        => (string) config('services.replicate.model', 'black-forest-labs/flux-dev'),
+                'aspect_ratio' => (string) ($request->input('aspect_ratio') ?: '1:1'),
+            ];
+            foreach (['guidance', 'steps', 'seed'] as $opt) {
+                if ($request->filled($opt)) {
+                    $settings[$opt] = $request->input($opt);
+                }
+            }
+
+            $row = InstantImage::create([
+                'requested_by' => optional($request->user())->id,
+                'prompt'       => (string) $request->input('prompt'),
+                'settings'     => $settings,
+                'status'       => InstantImage::STATUS_PENDING,
+            ]);
+
+            GenerateInstantImageJob::dispatch($row->id);
+
+            return response()->json(['id' => $row->id, 'status' => $row->status, 'provider' => 'replicate'], 201);
+        }
 
         $models  = (array) config('image-batches.models', []);
         $modelId = (string) $request->input('model', 'gpt-image-1');
@@ -414,6 +460,7 @@ class ImageBatchController extends CoreController
             'requested_by' => optional($request->user())->id,
             'prompt'       => (string) $request->input('prompt'),
             'settings'     => [
+                'provider'   => 'openai',
                 'model'      => $modelId,
                 'size'       => $size,
                 'quality'    => $quality,
@@ -437,7 +484,7 @@ class ImageBatchController extends CoreController
 
         GenerateInstantImageJob::dispatch($row->id);
 
-        return response()->json(['id' => $row->id, 'status' => $row->status], 201);
+        return response()->json(['id' => $row->id, 'status' => $row->status, 'provider' => 'openai'], 201);
     }
 
     public function instantShow($id)
@@ -450,6 +497,7 @@ class ImageBatchController extends CoreController
             'url'            => $row->public_url,
             'revised_prompt' => $row->revised_prompt,
             'error'          => $row->error,
+            'provider'       => $row->settings['provider'] ?? 'openai',
             'model'          => $row->settings['model'] ?? null,
             'created_at'     => optional($row->created_at)->toIso8601String(),
         ]);
@@ -465,6 +513,7 @@ class ImageBatchController extends CoreController
             'status'     => $row->status,
             'url'        => $row->public_url,
             'prompt'     => mb_substr($row->prompt, 0, 160),
+            'provider'   => $row->settings['provider'] ?? 'openai',
             'created_at' => optional($row->created_at)->toIso8601String(),
         ]);
     }

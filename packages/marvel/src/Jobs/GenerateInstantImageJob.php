@@ -10,6 +10,7 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Marvel\Ai\OpenAiImageClient;
+use Marvel\Ai\ReplicateImageService;
 use Marvel\Database\Models\InstantImage;
 
 /**
@@ -57,7 +58,16 @@ class GenerateInstantImageJob implements ShouldQueue
             return;
         }
 
-        $settings   = (array) $row->settings;
+        $settings = (array) $row->settings;
+
+        // Second provider: Replicate (Flux). Same claim, same storage path,
+        // same terminal statuses — only the generation call differs.
+        if (($settings['provider'] ?? 'openai') === 'replicate') {
+            $this->handleReplicate($row, $settings);
+
+            return;
+        }
+
         $model      = (string) ($settings['model'] ?? 'gpt-image-1');
         $size       = (string) ($settings['size'] ?? '1024x1024');
         $quality    = $settings['quality'] ?? null;
@@ -103,6 +113,42 @@ class GenerateInstantImageJob implements ShouldQueue
             foreach ($references as $file) {
                 @unlink($file['path']);
             }
+        }
+    }
+
+    /**
+     * Replicate (Flux) generation — mirrors the OpenAI success/failure
+     * conventions exactly: same S3 key scheme (`ai-instant/YYYY-MM/instant_{id}.png`),
+     * same row fields, same truncated error persistence. Flux ignores
+     * reference images (text-to-image only).
+     */
+    private function handleReplicate(InstantImage $row, array $settings): void
+    {
+        try {
+            $image = app(ReplicateImageService::class)->generate((string) $row->prompt, [
+                'aspect_ratio'        => $settings['aspect_ratio'] ?? '1:1',
+                'guidance'            => $settings['guidance'] ?? null,
+                'num_inference_steps' => $settings['steps'] ?? null,
+                'seed'                => $settings['seed'] ?? null,
+            ]);
+
+            $path = 'ai-instant/' . now()->format('Y-m') . '/instant_' . $row->id . '.png';
+            // Never set visibility — bucket policy handles it.
+            Storage::disk('s3')->put($path, $image['bytes']);
+
+            $row->update([
+                'status'         => InstantImage::STATUS_COMPLETED,
+                's3_path'        => $path,
+                'public_url'     => Storage::disk('s3')->url($path),
+                'bytes'          => strlen($image['bytes']),
+                'revised_prompt' => $image['revised_prompt'],
+                'error'          => null,
+            ]);
+        } catch (\Throwable $e) {
+            $row->update([
+                'status' => InstantImage::STATUS_FAILED,
+                'error'  => mb_substr($e->getMessage(), 0, 1000),
+            ]);
         }
     }
 
