@@ -5,7 +5,9 @@ namespace Marvel\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Support\Facades\Schema;
 use Maatwebsite\Excel\Facades\Excel;
+use Marvel\Database\Models\AiLoraModel;
 use Marvel\Database\Models\ImageBatch;
 use Marvel\Database\Models\ImageGenerationJob;
 use Marvel\Database\Models\InstantImage;
@@ -51,6 +53,20 @@ class ImageBatchController extends CoreController
                     'configured'    => (bool) config('services.replicate.api_token'),
                     'model'         => (string) config('services.replicate.model', 'black-forest-labs/flux-dev'),
                     'aspect_ratios' => ReplicateImageService::ASPECT_RATIOS,
+                    // Fine-tuned styles — ALL rows (the UI shows training
+                    // progress too). DB only, never a Replicate call here.
+                    // Table-guarded: capabilities must survive a pre-migrate boot.
+                    'lora'          => [
+                        'models' => Schema::hasTable('ai_lora_models')
+                            ? AiLoraModel::orderByDesc('id')->get()->map(fn ($m) => [
+                                'id'           => $m->id,
+                                'name'         => $m->name,
+                                'trigger_word' => $m->trigger_word,
+                                'status'       => $m->status,
+                                'ready'        => $m->isReady(),
+                            ])->values()->all()
+                            : [],
+                    ],
                 ],
             ],
             'limits' => [
@@ -408,6 +424,7 @@ class ImageBatchController extends CoreController
             'guidance'           => 'nullable|numeric|min:0|max:20',
             'steps'              => 'nullable|integer|min:1|max:50',
             'seed'               => 'nullable|integer|min:0',
+            'lora_model_id'      => 'nullable|integer|exists:ai_lora_models,id',
             'reference_images'   => 'nullable|array|max:' . (int) config('image-batches.max_reference_images', 4),
             'reference_images.*' => 'file|mimes:png,jpg,jpeg,webp|max:' . ((int) config('image-batches.max_file_mb', 10) * 1024),
         ]);
@@ -425,6 +442,21 @@ class ImageBatchController extends CoreController
                 if ($request->filled($opt)) {
                     $settings[$opt] = $request->input($opt);
                 }
+            }
+
+            // Fine-tuned style: generate on the trained LoRA version instead
+            // of the base flux model. Only a trained model may be referenced.
+            if ($request->filled('lora_model_id')) {
+                $lora = AiLoraModel::find((int) $request->input('lora_model_id'));
+                if (!$lora || !$lora->isReady()) {
+                    return response()->json([
+                        'message' => 'That LoRA model is not ready yet — it must finish training (status succeeded) before it can generate.',
+                    ], 422);
+                }
+                $settings['lora_model_id'] = $lora->id;
+                $settings['lora_version']  = $lora->replicate_version;
+                $settings['trigger_word']  = $lora->trigger_word;
+                $settings['model']         = $lora->replicate_model;
             }
 
             $row = InstantImage::create([

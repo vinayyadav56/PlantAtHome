@@ -125,12 +125,28 @@ class GenerateInstantImageJob implements ShouldQueue
     private function handleReplicate(InstantImage $row, array $settings): void
     {
         try {
-            $image = app(ReplicateImageService::class)->generate((string) $row->prompt, [
+            $service = app(ReplicateImageService::class);
+            $prompt  = (string) $row->prompt;
+            $options = [
                 'aspect_ratio'        => $settings['aspect_ratio'] ?? '1:1',
                 'guidance'            => $settings['guidance'] ?? null,
                 'num_inference_steps' => $settings['steps'] ?? null,
                 'seed'                => $settings['seed'] ?? null,
-            ]);
+            ];
+
+            // Fine-tuned style: generate on the trained LoRA version, and make
+            // sure the trigger word leads the prompt (that's what activates
+            // the trained concept) unless the admin already typed it.
+            $loraVersion = (string) ($settings['lora_version'] ?? '');
+            if ($loraVersion !== '') {
+                $trigger = (string) ($settings['trigger_word'] ?? '');
+                if ($trigger !== '' && mb_stripos($prompt, $trigger) === false) {
+                    $prompt = $trigger . ', ' . $prompt;
+                }
+                $image = $service->generateWithVersion($loraVersion, $prompt, $options);
+            } else {
+                $image = $service->generate($prompt, $options);
+            }
 
             $path = 'ai-instant/' . now()->format('Y-m') . '/instant_' . $row->id . '.png';
             // Never set visibility — bucket policy handles it.

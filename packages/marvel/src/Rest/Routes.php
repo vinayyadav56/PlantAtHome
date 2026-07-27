@@ -65,6 +65,7 @@ use Marvel\Http\Controllers\DeliveryNotifyController;
 use Marvel\Http\Controllers\DeliveryPartnerController;
 use Marvel\Http\Controllers\PriceSheetController;
 use Marvel\Http\Controllers\ImageBatchController;
+use Marvel\Http\Controllers\LoraModelController;
 use Marvel\Http\Controllers\ProductContentBatchController;
 use Marvel\Http\Controllers\LocationCaptureController;
 use Marvel\Http\Controllers\VendorInventoryController;
@@ -751,6 +752,12 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('ai-images/instant', [ImageBatchController::class, 'instantStore'])->middleware('throttle:20,1');
     Route::get('ai-images/instant', [ImageBatchController::class, 'instantIndex']);
     Route::get('ai-images/instant/{id}', [ImageBatchController::class, 'instantShow'])->middleware('throttle:240,1');
+    // Replicate LoRA fine-tunes: train a style once, then generate instants
+    // with provider=replicate + lora_model_id. show() lazily refreshes status.
+    Route::get('ai-images/lora-models', [LoraModelController::class, 'index']);
+    Route::post('ai-images/lora-models', [LoraModelController::class, 'store'])->middleware('throttle:10,1');
+    Route::get('ai-images/lora-models/{id}', [LoraModelController::class, 'show'])->middleware('throttle:240,1');
+    Route::post('ai-images/lora-models/{id}/cancel', [LoraModelController::class, 'cancel']);
     Route::get('ai-image-batches/capabilities', [ImageBatchController::class, 'capabilities']);
     Route::get('ai-image-batches', [ImageBatchController::class, 'index']);
     Route::post('ai-image-batches', [ImageBatchController::class, 'store']);

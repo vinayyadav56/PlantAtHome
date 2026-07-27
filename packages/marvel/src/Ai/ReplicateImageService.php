@@ -31,21 +31,180 @@ class ReplicateImageService
     /** Aspect ratios the admin UI may offer for Flux (also the validation list). */
     public const ASPECT_RATIOS = ['1:1', '3:4', '4:3', '16:9', '9:16'];
 
+    /** The public LoRA trainer we fine-tune through. */
+    public const TRAINER_MODEL = 'ostris/flux-dev-lora-trainer';
+
     private const POLL_INTERVAL_SECONDS = 3;
     private const POLL_TIMEOUT_SECONDS  = 120;
     private const TERMINAL_STATUSES     = ['succeeded', 'failed', 'canceled'];
 
+    /** Per-request cache: resolveTrainerVersion() hits the API at most once. */
+    private ?string $trainerVersion = null;
+
     /**
-     * Text → image.
+     * Text → image on the configured base model (flux-dev).
      *
      * @param array{aspect_ratio?: ?string, guidance?: mixed, num_inference_steps?: mixed, seed?: mixed} $opts
      * @return array{bytes: string, revised_prompt: ?string}
      */
     public function generate(string $prompt, array $opts = []): array
     {
-        $base  = rtrim((string) config('services.replicate.base_url', 'https://api.replicate.com'), '/');
+        $base  = $this->baseUrl();
         $model = (string) config('services.replicate.model', 'black-forest-labs/flux-dev');
 
+        return $this->runPrediction(
+            "{$base}/v1/models/{$model}/predictions",
+            ['input' => $this->predictionInput($prompt, $opts)],
+        );
+    }
+
+    /**
+     * Text → image on a SPECIFIC model version (a trained LoRA). Same wait +
+     * poll + download behavior as generate(); only the endpoint differs —
+     * version-pinned predictions go to POST /v1/predictions.
+     *
+     * @param array{aspect_ratio?: ?string, guidance?: mixed, num_inference_steps?: mixed, seed?: mixed} $opts
+     * @return array{bytes: string, revised_prompt: ?string}
+     */
+    public function generateWithVersion(string $versionHash, string $prompt, array $opts = []): array
+    {
+        return $this->runPrediction($this->baseUrl() . '/v1/predictions', [
+            'version' => $versionHash,
+            'input'   => $this->predictionInput($prompt, $opts),
+        ]);
+    }
+
+    /* ── LoRA training ────────────────────────────────────────────────────── */
+
+    /**
+     * Ensure the private destination model exists (trainings push versions
+     * into it). "Already exists" is success — Replicate answers 409 (or an
+     * error body saying so) when the model was created by a previous run.
+     *
+     * @return string the destination "owner/name"
+     */
+    public function ensureModel(string $owner, string $name): string
+    {
+        $response = $this->request()->post($this->baseUrl() . '/v1/models', [
+            'owner'      => $owner,
+            'name'       => $name,
+            'visibility' => 'private',
+            'hardware'   => 'cpu',
+        ]);
+
+        if ($response->successful()) {
+            return "{$owner}/{$name}";
+        }
+
+        $detail = strtolower(
+            (string) ($response->json('detail') ?? '') . ' ' . (string) ($this->errorString((array) $response->json()) ?? '')
+        );
+        if ($response->status() === 409 || str_contains($detail, 'already exists')) {
+            return "{$owner}/{$name}";
+        }
+
+        $this->throwHttpError($response);
+    }
+
+    /**
+     * The trainer version hash to launch trainings against: the env override
+     * (REPLICATE_TRAINER_VERSION) when set, otherwise the trainer's
+     * latest_version.id. Cached per request.
+     */
+    public function resolveTrainerVersion(): string
+    {
+        if ($this->trainerVersion !== null) {
+            return $this->trainerVersion;
+        }
+
+        $override = (string) config('services.replicate.trainer_version', '');
+        if ($override !== '') {
+            return $this->trainerVersion = $override;
+        }
+
+        $response = $this->request()->get($this->baseUrl() . '/v1/models/' . self::TRAINER_MODEL);
+        if ($response->failed()) {
+            $this->throwHttpError($response);
+        }
+
+        $id = (string) ($response->json('latest_version.id') ?? '');
+        if ($id === '') {
+            throw new ImageGenerationException('Replicate: could not resolve the LoRA trainer version (no latest_version.id).');
+        }
+
+        return $this->trainerVersion = $id;
+    }
+
+    /**
+     * Launch a LoRA training. $zipUrl must be a publicly downloadable ZIP of
+     * training images (+ optional per-image .txt captions).
+     *
+     * @return array{id: string, raw: array}
+     */
+    public function createTraining(
+        string $destination,
+        string $zipUrl,
+        string $triggerWord,
+        int $steps,
+        int $loraRank,
+        bool $autocaption
+    ): array {
+        $version  = $this->resolveTrainerVersion();
+        $response = $this->request()->post(
+            $this->baseUrl() . '/v1/models/' . self::TRAINER_MODEL . "/versions/{$version}/trainings",
+            [
+                'destination' => $destination,
+                'input'       => [
+                    'input_images'       => $zipUrl,
+                    'trigger_word'       => $triggerWord,
+                    'steps'              => $steps,
+                    'lora_rank'          => $loraRank,
+                    'autocaption'        => $autocaption,
+                    'autocaption_prefix' => $triggerWord . ', ',
+                ],
+            ]
+        );
+
+        if ($response->failed()) {
+            $this->throwHttpError($response);
+        }
+
+        $raw = (array) $response->json();
+        $id  = (string) ($raw['id'] ?? '');
+        if ($id === '') {
+            throw new ImageGenerationException('Replicate training response contained no training id.');
+        }
+
+        return ['id' => $id, 'raw' => $raw];
+    }
+
+    /** Current state of a training (status, error, output.version, …). */
+    public function getTraining(string $id): array
+    {
+        $response = $this->request()->get($this->baseUrl() . "/v1/trainings/{$id}");
+        if ($response->failed()) {
+            $this->throwHttpError($response);
+        }
+
+        return (array) $response->json();
+    }
+
+    /** Ask Replicate to cancel a running training. */
+    public function cancelTraining(string $id): array
+    {
+        $response = $this->request()->post($this->baseUrl() . "/v1/trainings/{$id}/cancel");
+        if ($response->failed()) {
+            $this->throwHttpError($response);
+        }
+
+        return (array) $response->json();
+    }
+
+    /* ── internals ────────────────────────────────────────────────────────── */
+
+    /** @param array{aspect_ratio?: ?string, guidance?: mixed, num_inference_steps?: mixed, seed?: mixed} $opts */
+    private function predictionInput(string $prompt, array $opts): array
+    {
         $input = [
             'prompt'         => $prompt,
             'aspect_ratio'   => (string) (($opts['aspect_ratio'] ?? null) ?: '1:1'),
@@ -63,17 +222,29 @@ class ReplicateImageService
             $input['seed'] = (int) $opts['seed'];
         }
 
+        return $input;
+    }
+
+    /**
+     * POST a prediction, wait/poll to terminal, download the first output.
+     * Shared by generate() (model-routed) and generateWithVersion()
+     * (version-pinned) so wait/poll/error behavior can never drift.
+     *
+     * @return array{bytes: string, revised_prompt: ?string}
+     */
+    private function runPrediction(string $url, array $payload): array
+    {
         // Prefer: wait — Replicate blocks up to ~60s and usually returns the
         // finished prediction in one round trip.
         $response = $this->request()
             ->withHeaders(['Prefer' => 'wait'])
-            ->post("{$base}/v1/models/{$model}/predictions", ['input' => $input]);
+            ->post($url, $payload);
 
         if ($response->failed()) {
             $this->throwHttpError($response);
         }
 
-        $prediction = $this->waitForTerminal($base, (array) $response->json());
+        $prediction = $this->waitForTerminal($this->baseUrl(), (array) $response->json());
 
         $status = (string) ($prediction['status'] ?? 'unknown');
         if ($status !== 'succeeded') {
@@ -95,7 +266,10 @@ class ReplicateImageService
         ];
     }
 
-    /* ── internals ────────────────────────────────────────────────────────── */
+    private function baseUrl(): string
+    {
+        return rtrim((string) config('services.replicate.base_url', 'https://api.replicate.com'), '/');
+    }
 
     /** Poll GET /v1/predictions/{id} until terminal or POLL_TIMEOUT_SECONDS. */
     private function waitForTerminal(string $base, array $prediction): array

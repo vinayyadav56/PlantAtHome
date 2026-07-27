@@ -42,6 +42,10 @@ return [
         'api_token' => env('REPLICATE_API_TOKEN'),
         'model'     => env('REPLICATE_MODEL', 'black-forest-labs/flux-dev'),
         'base_url'  => env('REPLICATE_BASE_URL', 'https://api.replicate.com'),
+        // LoRA fine-tuning: destination models are created under this account.
+        'owner'     => env('REPLICATE_OWNER', 'vinayyadav55'),
+        // Optional pin for ostris/flux-dev-lora-trainer; empty = use latest_version.
+        'trainer_version' => env('REPLICATE_TRAINER_VERSION'),
     ],
 
     // PlantAtHome — MSG91 OTP gateway (phone signup). DLT-registered sender + template.
