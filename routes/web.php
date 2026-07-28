@@ -9,10 +9,24 @@ use Marvel\Http\Controllers\LocationCapturePageController;
  * EMERGENCY DB disk reclaim — a WEB route (no auth:sanctum) so it works when the
  * DB volume is full and every authenticated request 500s (Sanctum's last_used_at
  * write fails). DROP frees space on a full disk (TRUNCATE/DELETE deadlock when
- * full). Secret-gated; drops+recreates only expendable operational tables.
+ * full). Drops+recreates only expendable operational tables.
+ *
+ * OPT-IN ONLY: the route does not exist unless EMERGENCY_RECLAIM_SECRET is
+ * explicitly set (>=16 chars). It previously fell back to a secret committed
+ * in this file — i.e. public in git history — which left an unauthenticated
+ * endpoint able to DROP `jobs` (destroying every queued order email and
+ * shipping booking) and `sessions` (logging out every user).
+ *
+ * Set it on the small-volume Railway staging DB, where this is the only
+ * recovery path once the disk is full. Do NOT set it in production: that host
+ * has a real shell (SSM), so it never needs to make this trade. Note APP_ENV
+ * is an unreliable discriminator here (staging also reports 'production'),
+ * which is exactly why the gate is the secret's presence, not the env name.
  */
-Route::get('/system/emergency-db-reclaim', function (\Illuminate\Http\Request $request) {
-    if ($request->query('secret') !== env('EMERGENCY_RECLAIM_SECRET', 'pah-reclaim-7f3a9')) {
+$reclaimSecret = (string) env('EMERGENCY_RECLAIM_SECRET', '');
+if (strlen($reclaimSecret) >= 16) {
+Route::get('/system/emergency-db-reclaim', function (\Illuminate\Http\Request $request) use ($reclaimSecret) {
+    if (!hash_equals($reclaimSecret, (string) $request->query('secret'))) {
         abort(404);
     }
     $result = [];
@@ -39,6 +53,7 @@ Route::get('/system/emergency-db-reclaim', function (\Illuminate\Http\Request $r
 
     return response()->json(['reclaimed' => $result, 'at' => now()->toDateTimeString()]);
 })->middleware('throttle:10,1');
+}
 
 /*
 |--------------------------------------------------------------------------
