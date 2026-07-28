@@ -15,6 +15,7 @@ use Marvel\Database\Models\Variation;
 use Marvel\Exceptions\MarvelException;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\URL;
 use Marvel\Database\Models\Author;
 use Marvel\Database\Models\Category;
@@ -158,6 +159,182 @@ class ProductController extends CoreController
     }
 
 
+
+    /**
+     * GET products/filter-facets — distinct non-empty plant-attribute values
+     * (with counts), pet-friendly true/false counts and a price {min,max,
+     * histogram[12]} for the storefront filter rail. Applies the SAME scoping
+     * as the public product list: language + status:publish + visibility:
+     * visibility_public, the optional hide_unpriced price gate, optional
+     * type/categories narrowing (slugs), the city-first availability scope and
+     * the Operations Control Center vertical kill-switch. null / '' / 'None'
+     * values are excluded, so the rail can never offer a zero-result option.
+     */
+    public function filterFacets(Request $request)
+    {
+        $language = $request->language ?: DEFAULT_LANGUAGE;
+
+        if (!$this->isPublicCacheable($request)) {
+            return response()->json($this->computeFilterFacets($request));
+        }
+
+        // Only result-affecting params key the cache (same policy as index()).
+        $keyParams = [
+            'city'          => strtolower(trim((string) $request->input('city', ''))),
+            'availability'  => (string) $request->input('availability', ''),
+            'type'          => (string) $request->input('type', ''),
+            'categories'    => (string) $request->input('categories', ''),
+            'hide_unpriced' => $request->boolean('hide_unpriced') ? 1 : 0,
+        ];
+        $key = 'products:facets:v' . $this->cacheVersion('products') . ':' . $language . ':' . md5(json_encode($keyParams));
+        $data = Cache::remember($key, 300, fn () => $this->computeFilterFacets($request));
+
+        return response()->json($data)->header('Cache-Control', $this->cacheControl());
+    }
+
+    /** The publicly-visible product scope the facets are counted over. */
+    private function facetBaseQuery(Request $request)
+    {
+        $query = Product::query()
+            ->where('products.language', DEFAULT_LANGUAGE)
+            ->where('products.status', \Marvel\Enums\ProductStatus::PUBLISH)
+            ->where('products.visibility', \Marvel\Enums\ProductVisibilityStatus::VISIBILITY_PUBLIC);
+
+        // Customer surfaces send hide_unpriced=1 (same gate as fetchProducts).
+        if ($request->boolean('hide_unpriced')) {
+            $query->where(function ($q) {
+                $q->where('products.price', '>', 0)
+                    ->orWhere('products.sale_price', '>', 0)
+                    ->orWhere('products.max_price', '>', 0);
+            });
+        }
+
+        // Optional narrowing to the current listing context (vertical / category pages).
+        if ($request->filled('type')) {
+            $typeSlug = (string) $request->type;
+            $query->whereHas('type', fn ($q) => $q->where('slug', $typeSlug));
+        }
+        if ($request->filled('categories')) {
+            $slugs = array_values(array_filter(array_map('trim', explode(',', (string) $request->categories))));
+            if (!empty($slugs)) {
+                $query->whereHas('categories', fn ($q) => $q->whereIn('slug', $slugs));
+            }
+        }
+
+        // City-first availability scope (identical policy to fetchProducts).
+        if ($request->filled('city')) {
+            $localOnly = $request->input('availability') === 'local';
+            $query = (new \Marvel\Services\AvailabilityService())
+                ->applyCityScope($query, (string) $request->city, $localOnly, 'products.id');
+        }
+
+        // Operations Control Center — vertical kill-switch parity with fetchProducts.
+        $availSvc = app(\Marvel\Services\ServiceAvailabilityService::class);
+        $availCity = $request->filled('city') ? (string) $request->city : null;
+        $availableVerticals = $availSvc->availableVerticalsForCity($availCity);
+        $allVerticals = $availSvc->allVerticals();
+        if (count($availableVerticals) > 0 && count($availableVerticals) < count($allVerticals)) {
+            $query->whereHas('type', fn ($q) => $q->whereIn('slug', $availableVerticals));
+        }
+
+        return $query;
+    }
+
+    private function computeFilterFacets(Request $request): array
+    {
+        $base = $this->facetBaseQuery($request);
+        $ids = (clone $base)->pluck('products.id')->all();
+        $total = count($ids);
+
+        // ── plant-attribute value facets (distinct non-empty values + counts) ──
+        $valueColumns = ['sunlight', 'water_requirement', 'indoor_outdoor', 'growth_rate', 'difficulty_level'];
+        $facets = array_fill_keys($valueColumns, []);
+        $petFriendly = ['true' => 0, 'false' => 0];
+
+        if ($total > 0) {
+            foreach ($valueColumns as $col) {
+                $rows = \Marvel\Database\Models\PlantAttribute::query()
+                    ->whereIn('product_id', $ids)
+                    ->whereNotNull($col)
+                    // the catalogue is full of '', 'None' and n/a placeholders — a
+                    // facet must never offer a value that renders as nothing
+                    ->whereRaw("LOWER(TRIM($col)) NOT IN ('', 'none', 'null', 'n/a', 'na', '-')")
+                    ->selectRaw("TRIM($col) as value, COUNT(*) as cnt")
+                    ->groupBy(DB::raw("TRIM($col)"))
+                    ->orderByDesc('cnt')
+                    ->orderBy('value')
+                    ->get();
+                $facets[$col] = $rows
+                    ->map(fn ($r) => ['value' => (string) $r->value, 'count' => (int) $r->cnt])
+                    ->values()
+                    ->all();
+            }
+
+            foreach (
+                \Marvel\Database\Models\PlantAttribute::query()
+                    ->whereIn('product_id', $ids)
+                    ->whereNotNull('pet_friendly')
+                    ->selectRaw('pet_friendly as value, COUNT(*) as cnt')
+                    ->groupBy('pet_friendly')
+                    ->get() as $row
+            ) {
+                $petFriendly[$row->value ? 'true' : 'false'] = (int) $row->cnt;
+            }
+        }
+
+        // ── price facet: {min, max, histogram[~12]} over the card "from" price ──
+        // COALESCE(min_price, price): variable products carry the range in
+        // min_price/max_price (price is NULL); simple products mirror price into
+        // min_price on save, with COALESCE covering legacy rows. This is the same
+        // column the storefront's between-filter targets (search=min_price:a,b).
+        $priceExpr = 'COALESCE(products.min_price, products.price)';
+        $prices = $total > 0
+            ? (clone $base)->whereRaw("$priceExpr > 0")->selectRaw("$priceExpr as facet_price")
+                ->pluck('facet_price')->map(fn ($v) => (float) $v)->all()
+            : [];
+
+        if (empty($prices)) {
+            $price = ['min' => 0, 'max' => 0, 'histogram' => []];
+        } else {
+            $min = (float) floor(min($prices));
+            $max = (float) ceil(max($prices));
+            if ($max <= $min) {
+                $price = ['min' => $min, 'max' => $max, 'histogram' => [
+                    ['from' => $min, 'to' => $max, 'count' => count($prices)],
+                ]];
+            } else {
+                $bucketCount = 12;
+                $width = ($max - $min) / $bucketCount;
+                $counts = array_fill(0, $bucketCount, 0);
+                foreach ($prices as $p) {
+                    $i = (int) floor(($p - $min) / $width);
+                    $counts[min($i, $bucketCount - 1)]++;
+                }
+                $histogram = [];
+                for ($i = 0; $i < $bucketCount; $i++) {
+                    $histogram[] = [
+                        'from'  => round($min + $i * $width, 2),
+                        'to'    => round($min + ($i + 1) * $width, 2),
+                        'count' => $counts[$i],
+                    ];
+                }
+                $price = ['min' => $min, 'max' => $max, 'histogram' => $histogram];
+            }
+        }
+
+        return [
+            'total'  => $total,
+            'facets' => [
+                'sunlight'          => $facets['sunlight'],
+                'water_requirement' => $facets['water_requirement'],
+                'indoor_outdoor'    => $facets['indoor_outdoor'],
+                'growth_rate'       => $facets['growth_rate'],
+                'difficulty_level'  => $facets['difficulty_level'],
+                'pet_friendly'      => $petFriendly,
+                'price'             => $price,
+            ],
+        ];
+    }
 
     /**
      * fetchProducts

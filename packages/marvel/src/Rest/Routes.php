@@ -123,6 +123,10 @@ Route::get('best-selling-products', [ProductController::class, 'bestSellingProdu
 Route::get('top-rated-products', [ProductController::class, 'topRatedProducts']);
 Route::get('check-availability', [ProductController::class, 'checkAvailability']);
 Route::get("products/calculate-rental-price", [ProductController::class, 'calculateRentalPrice']);
+// PlantAtHome — distinct plant-attribute values + counts + price histogram for the
+// storefront filter rail. Public + cached; registered BEFORE the products apiResource
+// so `filter-facets` is never captured by the products/{product} show param.
+Route::get('products/filter-facets', [ProductController::class, 'filterFacets'])->middleware('throttle:120,1');
 // Bulk import/export carry an in-controller hasPermission() check; add a throttle
 // so the public routes can't be abused for bulk-write storms / catalog scraping.
 Route::post('import-products', [ProductController::class, 'importProducts'])->middleware('throttle:20,1');
@@ -711,6 +715,22 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // switches, e.g. Porter's paid get_quote/track). No secrets — those stay env-only.
     Route::get('courier/partners/{code}/config', [CourierPartnerProxyController::class, 'show']);
     Route::put('courier/partners/{code}/config', [CourierPartnerProxyController::class, 'update']);
+    // Partner DEBUG CONSOLE, proxied 1:1 to the same service. Returns the service's `exchange`
+    // (exact upstream request/response, credentials masked service-side) so a partner integration
+    // can be debugged from the admin UI. The test/* calls hit LIVE partner APIs and cost money, so
+    // each carries its own tight throttle on top of the group's; book/cancel touch a REAL delivery
+    // and are the tightest. Their confirmation string is the CALLER's, forwarded verbatim — the
+    // guard is enforced by the shipping-service, never here.
+    Route::get('courier/partners/{code}/webhooks', [CourierPartnerProxyController::class, 'webhooks'])
+        ->middleware('throttle:60,1');
+    Route::post('courier/partners/{code}/test/quote', [CourierPartnerProxyController::class, 'testQuote'])
+        ->middleware('throttle:20,1');
+    Route::get('courier/partners/{code}/test/track', [CourierPartnerProxyController::class, 'testTrack'])
+        ->middleware('throttle:20,1');
+    Route::post('courier/partners/{code}/test/book', [CourierPartnerProxyController::class, 'testBook'])
+        ->middleware('throttle:5,1');
+    Route::post('courier/partners/{code}/test/cancel', [CourierPartnerProxyController::class, 'testCancel'])
+        ->middleware('throttle:5,1');
     // Route::get('messages/get-conversations/{shop_id}', [ConversationController::class, 'getConversationByShopId']);
     // Route::get('analytics', [AnalyticsController::class, 'analytics']);
     Route::apiResource('types', TypeController::class, [
