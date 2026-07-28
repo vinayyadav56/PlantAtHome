@@ -113,22 +113,46 @@ class ProductFilterFacetsTest extends TestCase
         });
     }
 
-    /** Seed one published+public product with its plant attributes. */
+    /**
+     * Seed one published+public product with its plant attributes.
+     *
+     * ⚠️ The insert goes through the QUERY BUILDER, not Product::create(), and that is load-bearing.
+     *
+     * Product uses kodeine's Metable trait, whose hasColumn() caches the table's column list in a
+     * FUNCTION-LEVEL `static $columns` keyed by class name — i.e. once per PHP process, not per
+     * test. Whichever test class first touches Product freezes that list for the entire run.
+     *
+     * These tests build their own richer `products` table in setUp, so in a FULL suite run an
+     * earlier class's narrower schema wins the cache and Metable stops believing `min_price`,
+     * `max_price` and `status` are real columns. Eloquent then quietly diverts them into
+     * products_meta and the actual columns stay NULL — which made drafts leak into the facets and
+     * emptied the hide_unpriced gate. The tests passed in isolation and failed in CI, which is the
+     * worst possible way for this to present.
+     *
+     * The query builder writes the columns literally, so the seed no longer depends on which test
+     * class happened to run first.
+     */
     private function plant(string $name, array $attrs = [], array $product = []): Product
     {
-        $p = Product::query()->create(array_merge([
-            'name'      => $name,
-            'slug'      => str($name)->slug()->toString(),
-            'language'  => 'en',
-            'status'    => 'publish',
-            'visibility'=> 'visibility_public',
-            'min_price' => 359,
-            'max_price' => 929,
-        ], $product));
+        $row = array_merge([
+            'name'       => $name,
+            'slug'       => str($name)->slug()->toString(),
+            'language'   => 'en',
+            'status'     => 'publish',
+            'visibility' => 'visibility_public',
+            'min_price'  => 359,
+            'max_price'  => 929,
+            'created_at' => now(),
+            'updated_at' => now(),
+        ], $product);
 
-        PlantAttribute::query()->create(array_merge(['product_id' => $p->id], $attrs));
+        $id = DB::table('products')->insertGetId($row);
 
-        return $p;
+        PlantAttribute::query()->create(array_merge(['product_id' => $id], $attrs));
+
+        // Read back through the model so callers still get a Product (ids/relations), while the
+        // stored column values are the ones written above.
+        return Product::query()->findOrFail($id);
     }
 
     /**
