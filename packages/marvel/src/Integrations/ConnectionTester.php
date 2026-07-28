@@ -23,6 +23,20 @@ use Throwable;
  */
 class ConnectionTester
 {
+    /**
+     * Which action the resulting log row is attributed to. An operator clicking "Test Connection"
+     * and the scheduler sweeping every provider run the identical probe, but only one of them is
+     * someone waiting for an answer — telling them apart in the log matters when reading it back.
+     */
+    private string $logAction = IntegrationLog::ACTION_TEST;
+
+    public function asScheduledCheck(): self
+    {
+        $this->logAction = IntegrationLog::ACTION_HEALTH;
+
+        return $this;
+    }
+
     public function __construct(private ?IntegrationService $integrations = null)
     {
         $this->integrations = $integrations ?? new IntegrationService();
@@ -47,6 +61,20 @@ class ConnectionTester
         $res['detail']['latency_ms'] = (int) round((microtime(true) - $started) * 1000);
 
         $this->integrations->recordHealth($slug, $res['status'], $res['detail']);
+
+        // The row keeps only the LATEST health result, which cannot answer "when did this start
+        // failing" or "is it flapping". The log keeps the history that makes that answerable.
+        IntegrationLog::record(
+            $slug,
+            $this->logAction,
+            ($res['ok'] ?? false) ? IntegrationLog::STATUS_OK : IntegrationLog::STATUS_FAILED,
+            [
+                'duration_ms'   => $res['detail']['latency_ms'],
+                'http_status'   => $res['detail']['http_status'] ?? null,
+                'error_code'    => $res['status'],
+                'error_message' => ($res['ok'] ?? false) ? null : ($res['message'] ?? null),
+            ]
+        );
 
         return $res;
     }

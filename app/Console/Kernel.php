@@ -61,6 +61,12 @@ class Kernel extends ConsoleKernel
         // Safety net for bulk AI content runs (re-drive stalled batches/rows).
         $schedule->command('content:sweep-batches')->everyMinute()->withoutOverlapping(5);
 
+        // Probe enabled third-party integrations so an expired key surfaces here rather than in a
+        // customer's failed checkout. Hourly, not per-minute: several probes are billed per call
+        // (Porter's get_quote among them), and a credential does not expire on a one-minute
+        // boundary. Also prunes integration_logs on the same pass.
+        $schedule->command('integrations:health')->hourly()->withoutOverlapping(30);
+
         // v2 Phase 12 observability: keyed heartbeat proving this cron loop is
         // alive — GET /api/v1/platform/status reports its staleness. DB-backed
         // (cache is not cross-process on every environment); guarded so a

@@ -3,6 +3,8 @@
 namespace Marvel\Database\Models;
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * One third-party provider's configuration for one environment.
@@ -63,6 +65,86 @@ class IntegrationProvider extends Model
                 $provider->credentials_version = (int) $provider->getOriginal('credentials_version', 0) + 1;
             }
         });
+
+        // Audit lives here for the same reason the version bump does: every write path must be
+        // covered, including console commands and the backfill migration. A controller-level audit
+        // would silently miss those, and "who changed this credential" is exactly the question
+        // asked when something has already gone wrong.
+        //
+        // `created`/`updated` rather than `saved`, because `saved` cannot tell the two apart:
+        // `wasRecentlyCreated` stays true for the life of the instance, and `performInsert` never
+        // calls syncChanges() so getChanges() is empty after an insert. Using the specific events
+        // means an insert is an insert and a no-op save fires nothing at all.
+        static::created(fn (self $provider) => $provider->writeAuditRow('created'));
+        static::updated(fn (self $provider) => $provider->writeAuditRow('updated'));
+        static::deleted(fn (self $provider) => $provider->writeAuditRow('deleted'));
+    }
+
+    /**
+     * Record one configuration change.
+     *
+     * Secret fields contribute their NAME to `changed_fields` and a literal "********" to the
+     * before/after payloads. Storing the real values in an unencrypted audit table would undo the
+     * encryption on the row it is auditing.
+     *
+     * Never throws: an audit-table failure must not roll back a legitimate credential save. The
+     * write is skipped entirely when the table is absent (pre-migration environments).
+     */
+    public function writeAuditRow(string $action): void
+    {
+        try {
+            if (!Schema::hasTable('integration_audits')) {
+                return;
+            }
+
+            // An insert leaves getChanges() empty (performInsert never syncs them), so a creation
+            // has to be described by the attributes it was created WITH.
+            $dirty    = $action === 'created' ? $this->getAttributes() : $this->getChanges();
+            $original = $action === 'created' ? [] : $this->getOriginal();
+            unset($dirty['updated_at'], $dirty['created_at'], $dirty['id']);
+
+            if ($dirty === [] && $action !== 'deleted') {
+                return;
+            }
+
+            $mask = static function (string $field, mixed $value): mixed {
+                return in_array($field, ['credentials'], true) ? '********' : $value;
+            };
+
+            $before = $after = [];
+            foreach (array_keys($dirty) as $field) {
+                $before[$field] = $mask($field, $original[$field] ?? null);
+                $after[$field]  = $mask($field, $this->getAttribute($field));
+            }
+
+            // A credential change is reported as the field NAMES that were touched, resolved from
+            // the decrypted bag — never the values themselves.
+            $changed = array_keys($dirty);
+            if (array_key_exists('credentials', $dirty)) {
+                $changed = array_values(array_diff($changed, ['credentials']));
+                foreach (array_keys((array) ($this->credentials ?? [])) as $name) {
+                    $changed[] = "credentials.$name";
+                }
+            }
+
+            $request = request();
+
+            DB::table('integration_audits')->insert([
+                'provider_slug'  => $this->provider_slug,
+                'environment'    => $this->environment,
+                'action'         => $action,
+                'user_id'        => optional($request?->user())->id,
+                'ip'             => $request?->ip(),
+                'user_agent'     => substr((string) $request?->userAgent(), 0, 255) ?: null,
+                'changed_fields' => json_encode($changed),
+                'before'         => json_encode($before),
+                'after'          => json_encode($after),
+                'created_at'     => now(),
+            ]);
+        } catch (\Throwable) {
+            // Auditing is best-effort. Losing an audit row is bad; losing the credential save that
+            // an operator just made, because the audit table hiccuped, is worse.
+        }
     }
 
     /**

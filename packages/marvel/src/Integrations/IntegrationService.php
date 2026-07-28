@@ -233,6 +233,13 @@ class IntegrationService
         ])->save();
         $this->forget($slug);
 
+        IntegrationLog::record(
+            $slug,
+            IntegrationLog::ACTION_SYNC,
+            $status === IntegrationProvider::SYNC_SYNCED ? IntegrationLog::STATUS_OK : IntegrationLog::STATUS_FAILED,
+            ['error_code' => $status, 'error_message' => $error]
+        );
+
         if ($status === IntegrationProvider::SYNC_FAILED) {
             // Worth a log line: the save succeeded locally but the shipping service is still using
             // the previous key, which is exactly the state that looks like "the save did nothing".

@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\Gate;
 use Marvel\Ai\Ai;
 use Marvel\Console\AdminCreateCommand;
 use Marvel\Console\AWSSetupCommand;
+use Marvel\Console\CheckIntegrationHealth;
 use Marvel\Console\CopyFilesCommand;
 use Marvel\Console\DatabaseSetupCommand;
 use Marvel\Console\DefaultLanguageSetupCommand;
@@ -120,6 +121,7 @@ class ShopServiceProvider extends ServiceProvider
         \Marvel\Console\RunSettlementsCommand::class,
         \Marvel\Console\BackfillOrderItemsCommand::class,
         \Marvel\Console\ReconcileSettlementsCommand::class,
+        CheckIntegrationHealth::class,
         InstallCommand::class,
         AdminCreateCommand::class,
         ImportDemoData::class,
