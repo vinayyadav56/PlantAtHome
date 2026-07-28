@@ -53,6 +53,10 @@ class ImageBatchController extends CoreController
                     'configured'    => (bool) config('services.replicate.api_token'),
                     'model'         => (string) config('services.replicate.model', 'black-forest-labs/flux-dev'),
                     'aspect_ratios' => ReplicateImageService::ASPECT_RATIOS,
+                    // Flat per-image rate (no size/quality tiers) — batch
+                    // estimates and the max_estimated_cost cap both use it,
+                    // so the UI must quote the same number the cap enforces.
+                    'cost_per_image' => (float) config('image-batches.replicate_cost_per_image', 0.04),
                     // Fine-tuned styles — ALL rows (the UI shows training
                     // progress too). DB only, never a Replicate call here.
                     // Table-guarded: capabilities must survive a pre-migrate boot.
