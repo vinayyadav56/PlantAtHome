@@ -51,6 +51,12 @@ return [
     // OpenAI HTTP timeout per image (high-quality gpt-image-1 can take ~60s+).
     'request_timeout' => (int) env('IMAGE_BATCH_REQUEST_TIMEOUT', 300),
 
+    // Replicate (Flux) per-image cost estimate for the batch cost cap. Flux
+    // has no size/quality tiers on this route — one flat USD rate covers the
+    // base model and LoRA fine-tunes alike (same underlying compute cost).
+    // Verify against replicate.com/black-forest-labs/flux-dev when tuning.
+    'replicate_cost_per_image' => (float) env('IMAGE_BATCH_REPLICATE_COST_PER_IMAGE', 0.04),
+
     // ZIP packaging: parts are capped so temp-disk use stays bounded
     // (~2× one part peak). PNGs are STOREd, not compressed.
     'zip' => [

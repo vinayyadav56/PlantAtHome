@@ -5,6 +5,7 @@ namespace Tests\Feature\ImageBatches;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
+use Marvel\Database\Models\AiLoraModel;
 use Marvel\Database\Models\ImageBatch;
 use Marvel\Database\Models\ImageGenerationJob;
 use Marvel\Jobs\GenerateImageBatchJob;
@@ -12,6 +13,12 @@ use Marvel\Jobs\GenerateImageBatchJob;
 /** POST /api/ai-image-batches + capabilities: validation, parsing, audit, dispatch. */
 final class CreateImageBatchTest extends ImageBatchTestCase
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+        (require base_path('packages/marvel/database/migrations/2026_07_27_100000_create_ai_lora_models_table.php'))->up();
+    }
+
     private function createBatch(array $overrides = [], ?UploadedFile $file = null)
     {
         return $this->postJson('/api/ai-image-batches', array_merge([
@@ -24,6 +31,19 @@ final class CreateImageBatchTest extends ImageBatchTestCase
             'quality'          => 'low',
             'style'            => 'natural',
             'background'       => 'auto',
+            'images_per_plant' => 2,
+        ], $overrides));
+    }
+
+    /** provider=replicate variant of createBatch() — no model/size/quality needed. */
+    private function replicateBatch(array $overrides = [], ?UploadedFile $file = null)
+    {
+        return $this->postJson('/api/ai-image-batches', array_merge([
+            'file'             => $file ?? $this->sheet([
+                ['PLT001', 'Areca Palm', 'A lush areca palm in a white pot'],
+                ['PLT002', 'Snake Plant', 'A tall snake plant'],
+            ]),
+            'provider'         => 'replicate',
             'images_per_plant' => 2,
         ], $overrides));
     }
@@ -209,5 +229,132 @@ final class CreateImageBatchTest extends ImageBatchTestCase
 
         // No zip yet → download 404s.
         $this->getJson("/api/ai-image-batches/{$id}/download")->assertStatus(404);
+    }
+
+    /* ── provider=replicate (Flux) ────────────────────────────────────────── */
+
+    public function test_replicate_batch_persists_settings_and_uses_replicate_cost(): void
+    {
+        Queue::fake();
+        config(['services.replicate.model' => 'black-forest-labs/flux-dev']);
+        $this->admin();
+
+        $res = $this->replicateBatch(['aspect_ratio' => '4:3'])->assertStatus(201);
+
+        $batch = ImageBatch::first();
+        $this->assertSame('replicate', $batch->settings['provider']);
+        $this->assertSame('black-forest-labs/flux-dev', $batch->settings['model']);
+        $this->assertSame('4:3', $batch->settings['aspect_ratio']);
+        $this->assertArrayNotHasKey('lora_model_id', $batch->settings);
+        $this->assertSame(4, (int) $batch->total_images); // 2 rows x 2 images
+        $this->assertEqualsWithDelta(4 * 0.04, $batch->estimated_cost, 0.0001);
+
+        $this->assertSame('BATCH' . str_pad((string) $batch->id, 6, '0', STR_PAD_LEFT), $res->json('batch.display_id'));
+        Queue::assertPushed(GenerateImageBatchJob::class, fn ($job) => $job->queue === 'images');
+    }
+
+    public function test_replicate_batch_defaults_aspect_ratio_to_1_1(): void
+    {
+        Queue::fake();
+        $this->admin();
+
+        $this->replicateBatch()->assertStatus(201);
+
+        $this->assertSame('1:1', ImageBatch::first()->settings['aspect_ratio']);
+    }
+
+    public function test_replicate_batch_with_lora_persists_lora_fields_and_resolved_model(): void
+    {
+        Queue::fake();
+        $lora = AiLoraModel::create([
+            'name'              => 'Forest Style',
+            'trigger_word'      => 'PAHSTYLE',
+            'replicate_model'   => 'test-owner/forest-style',
+            'replicate_version' => 'ver-hash-1',
+            'status'            => AiLoraModel::STATUS_SUCCEEDED,
+        ]);
+        $this->admin();
+
+        $this->replicateBatch(['lora_model_id' => $lora->id])->assertStatus(201);
+
+        $batch = ImageBatch::first();
+        $this->assertSame('replicate', $batch->settings['provider']);
+        // The LoRA's own destination model wins over the base flux model.
+        $this->assertSame('test-owner/forest-style', $batch->settings['model']);
+        $this->assertSame($lora->id, $batch->settings['lora_model_id']);
+        $this->assertSame('ver-hash-1', $batch->settings['lora_version']);
+        $this->assertSame('PAHSTYLE', $batch->settings['trigger_word']);
+    }
+
+    public function test_replicate_batch_accepts_lora_model_id_without_an_explicit_provider(): void
+    {
+        Queue::fake();
+        $lora = AiLoraModel::create([
+            'name'              => 'Forest Style',
+            'trigger_word'      => 'PAHSTYLE',
+            'replicate_model'   => 'test-owner/forest-style',
+            'replicate_version' => 'ver-hash-1',
+            'status'            => AiLoraModel::STATUS_SUCCEEDED,
+        ]);
+        $this->admin();
+
+        // No `provider` key at all — lora_model_id alone implies replicate.
+        $this->postJson('/api/ai-image-batches', [
+            'file'             => $this->sheet([['PLT001', 'Areca Palm', 'A lush areca palm']]),
+            'lora_model_id'    => $lora->id,
+            'images_per_plant' => 1,
+        ])->assertStatus(201);
+
+        $this->assertSame('replicate', ImageBatch::first()->settings['provider']);
+    }
+
+    public function test_replicate_batch_rejects_a_not_ready_lora_model(): void
+    {
+        Queue::fake();
+        $lora = AiLoraModel::create([
+            'name'            => 'Still Training',
+            'trigger_word'    => 'PAHSTYLE',
+            'replicate_model' => 'test-owner/still-training',
+            'status'          => AiLoraModel::STATUS_TRAINING, // no replicate_version yet
+        ]);
+        $this->admin();
+
+        $res = $this->replicateBatch(['lora_model_id' => $lora->id])->assertStatus(422);
+        $this->assertStringContainsString('not ready yet', $res->json('message'));
+
+        $this->assertSame(0, ImageBatch::count());
+        Queue::assertNothingPushed();
+    }
+
+    public function test_lora_model_id_with_an_explicit_openai_provider_is_rejected(): void
+    {
+        Queue::fake();
+        $lora = AiLoraModel::create([
+            'name'              => 'Forest Style',
+            'trigger_word'      => 'PAHSTYLE',
+            'replicate_model'   => 'test-owner/forest-style',
+            'replicate_version' => 'ver-hash-1',
+            'status'            => AiLoraModel::STATUS_SUCCEEDED,
+        ]);
+        $this->admin();
+
+        $res = $this->createBatch(['provider' => 'openai', 'lora_model_id' => $lora->id])->assertStatus(422);
+        $this->assertStringContainsString("requires provider 'replicate'", $res->json('message'));
+
+        $this->assertSame(0, ImageBatch::count());
+        Queue::assertNothingPushed();
+    }
+
+    public function test_replicate_batch_ignores_reference_images_without_erroring(): void
+    {
+        Queue::fake();
+        $this->admin();
+
+        $this->replicateBatch([
+            'reference_images' => [UploadedFile::fake()->image('ref.png')],
+        ])->assertStatus(201);
+
+        $batch = ImageBatch::first();
+        $this->assertEmpty($batch->reference_images);
     }
 }

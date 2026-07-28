@@ -86,13 +86,35 @@ class ImageBatchController extends CoreController
     {
         $models = (array) config('image-batches.models', []);
 
+        // Provider: default openai (unchanged behavior for every existing
+        // caller that never sends this field). lora_model_id only makes sense
+        // on the replicate path, so it implies provider=replicate — but an
+        // explicit conflicting provider is rejected rather than silently
+        // overridden.
+        $providerInput = $request->input('provider');
+        $hasLora       = $request->filled('lora_model_id');
+        if ($hasLora && $providerInput !== null && $providerInput !== 'replicate') {
+            return response()->json(['message' => "lora_model_id requires provider 'replicate'."], 422);
+        }
+        $provider = ($providerInput === 'replicate' || $hasLora) ? 'replicate' : 'openai';
+
         $request->validate([
             'file'               => 'required|file',
-            'model'              => 'required|string',
-            'size'               => 'required|string',
-            'quality'            => 'required|string',
+            'provider'           => 'nullable|in:openai,replicate',
+            'lora_model_id'      => 'nullable|integer|exists:ai_lora_models,id',
+            // model/size/quality are OpenAI-shaped (catalogue-validated below);
+            // Flux has no quality tiers and resolves its own model, so they're
+            // only required on the openai path.
+            'model'              => $provider === 'openai' ? 'required|string' : 'nullable|string',
+            'size'               => $provider === 'openai' ? 'required|string' : 'nullable|string',
+            'quality'            => $provider === 'openai' ? 'required|string' : 'nullable|string',
             'style'              => 'nullable|string',
             'background'         => 'nullable|string',
+            // Replicate/Flux-only knobs — ignored on the OpenAI path (mirrors instantStore).
+            'aspect_ratio'       => 'nullable|in:' . implode(',', ReplicateImageService::ASPECT_RATIOS),
+            'guidance'           => 'nullable|numeric|min:0|max:20',
+            'steps'              => 'nullable|integer|min:1|max:50',
+            'seed'               => 'nullable|integer|min:0',
             'images_per_plant'   => 'required|integer|min:1|max:' . (int) config('image-batches.max_images_per_plant', 10),
             'notify_email'       => 'nullable|email',
             'output_folder'      => 'nullable|string|max:80',
@@ -101,30 +123,75 @@ class ImageBatchController extends CoreController
             'reference_images.*' => 'file|mimes:png,jpg,jpeg,webp|max:' . ((int) config('image-batches.max_file_mb', 10) * 1024),
         ]);
 
-        // Settings must exist in the capability matrix — the config is the contract.
-        $modelId = (string) $request->input('model');
-        $model   = $models[$modelId] ?? null;
-        if (!$model) {
-            return response()->json(['message' => "Unknown model '{$modelId}'."], 422);
-        }
-        $size       = (string) $request->input('size');
-        $quality    = (string) $request->input('quality');
-        $style      = $request->input('style') ?: null;
-        $background = $request->input('background') ?: null;
-        foreach ([
-            ['size', $size, $model['sizes'] ?? []],
-            ['quality', $quality, $model['qualities'] ?? []],
-            ['style', $style, $model['styles'] ?? []],
-            ['background', $background, $model['backgrounds'] ?? []],
-        ] as [$field, $value, $allowed]) {
-            if ($value !== null && !in_array($value, $allowed, true)) {
-                return response()->json(['message' => "Invalid {$field} '{$value}' for model '{$modelId}'."], 422);
+        $references = [];
+        if ($provider === 'replicate') {
+            // Fine-tuned style: generate on the trained LoRA version instead
+            // of the base flux model. Only a trained (ready) model may be referenced.
+            $lora = null;
+            if ($hasLora) {
+                $lora = AiLoraModel::find((int) $request->input('lora_model_id'));
+                if (!$lora || !$lora->isReady()) {
+                    return response()->json([
+                        'message' => 'That LoRA model is not ready yet — it must finish training (status succeeded) before it can generate.',
+                    ], 422);
+                }
             }
-        }
 
-        $references = $request->file('reference_images', []);
-        if (!empty($references) && empty($model['supports_reference_images'])) {
-            return response()->json(['message' => "Model '{$modelId}' does not support reference images."], 422);
+            // Flux is text-to-image only — reference images are silently
+            // ignored here (never uploaded), same as instantStore's replicate branch.
+            $settingsBase = [
+                'provider'     => 'replicate',
+                'model'        => $lora ? $lora->replicate_model : (string) config('services.replicate.model', 'black-forest-labs/flux-dev'),
+                'aspect_ratio' => (string) ($request->input('aspect_ratio') ?: '1:1'),
+            ];
+            foreach (['guidance', 'steps', 'seed'] as $opt) {
+                if ($request->filled($opt)) {
+                    $settingsBase[$opt] = $request->input($opt);
+                }
+            }
+            if ($lora) {
+                $settingsBase['lora_model_id'] = $lora->id;
+                $settingsBase['lora_version']  = $lora->replicate_version;
+                $settingsBase['trigger_word']  = $lora->trigger_word;
+            }
+
+            $unitCost = (float) config('image-batches.replicate_cost_per_image', 0.04);
+        } else {
+            // Settings must exist in the capability matrix — the config is the contract.
+            $modelId = (string) $request->input('model');
+            $model   = $models[$modelId] ?? null;
+            if (!$model) {
+                return response()->json(['message' => "Unknown model '{$modelId}'."], 422);
+            }
+            $size       = (string) $request->input('size');
+            $quality    = (string) $request->input('quality');
+            $style      = $request->input('style') ?: null;
+            $background = $request->input('background') ?: null;
+            foreach ([
+                ['size', $size, $model['sizes'] ?? []],
+                ['quality', $quality, $model['qualities'] ?? []],
+                ['style', $style, $model['styles'] ?? []],
+                ['background', $background, $model['backgrounds'] ?? []],
+            ] as [$field, $value, $allowed]) {
+                if ($value !== null && !in_array($value, $allowed, true)) {
+                    return response()->json(['message' => "Invalid {$field} '{$value}' for model '{$modelId}'."], 422);
+                }
+            }
+
+            $references = $request->file('reference_images', []);
+            if (!empty($references) && empty($model['supports_reference_images'])) {
+                return response()->json(['message' => "Model '{$modelId}' does not support reference images."], 422);
+            }
+
+            $unitCost     = (float) (($model['cost_per_image'][$quality][$size] ?? 0));
+            $settingsBase = [
+                'provider'   => 'openai',
+                'model'      => $modelId,
+                'size'       => $size,
+                'quality'    => $quality,
+                'style'      => $style,
+                'background' => $background,
+            ];
         }
 
         $sheet = $request->file('file');
@@ -134,7 +201,6 @@ class ImageBatchController extends CoreController
         }
 
         $imagesPerPlant = (int) $request->input('images_per_plant');
-        $unitCost       = (float) (($model['cost_per_image'][$quality][$size] ?? 0));
 
         // Optional custom S3/ZIP directory. Sanitized to a slug and unique
         // among batches whose files still exist — two live batches sharing a
@@ -166,15 +232,10 @@ class ImageBatchController extends CoreController
             'uploaded_by'      => optional($request->user())->id,
             'notify_email'     => $request->input('notify_email') ?: optional($request->user())->email,
             'original_file'    => $originalPath,
-            'settings'         => [
-                'model'          => $modelId,
-                'size'           => $size,
-                'quality'        => $quality,
-                'style'          => $style,
-                'background'     => $background,
+            'settings'         => array_merge($settingsBase, [
                 'output_folder'  => $outputFolder,
                 'file_structure' => $request->input('file_structure') === 'flat' ? 'flat' : 'folders',
-            ],
+            ]),
             'images_per_plant' => $imagesPerPlant,
             'status'           => ImageBatch::STATUS_PENDING,
         ]);

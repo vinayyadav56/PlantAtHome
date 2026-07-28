@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
 use Marvel\Ai\ImageGenerationException;
 use Marvel\Ai\OpenAiImageClient;
+use Marvel\Ai\ReplicateImageService;
 use Marvel\Database\Models\ImageBatch;
 use Marvel\Database\Models\ImageGenerationJob;
 use Marvel\Database\Models\ImageGenerationResult;
@@ -53,7 +54,7 @@ class GenerateImageBatchJob implements ShouldQueue
         return [60, 180];
     }
 
-    public function handle(OpenAiImageClient $client): void
+    public function handle(OpenAiImageClient $client, ?ReplicateImageService $replicateClient = null): void
     {
         $batch = ImageBatch::find($this->batchId);
         if (!$batch || !in_array($batch->status, [ImageBatch::STATUS_PENDING, ImageBatch::STATUS_PROCESSING], true)) {
@@ -85,7 +86,7 @@ class GenerateImageBatchJob implements ShouldQueue
                     break; // drained (or only backoff-cooling retries left)
                 }
 
-                [$processed, $finished] = $this->processRow($client, $batch, $row, $references, $processed, $capacity, $interval);
+                [$processed, $finished] = $this->processRow($client, $replicateClient, $batch, $row, $references, $processed, $capacity, $interval);
 
                 if (!$finished) {
                     break; // capacity hit mid-row; row was re-pended
@@ -155,6 +156,7 @@ class GenerateImageBatchJob implements ShouldQueue
      */
     private function processRow(
         OpenAiImageClient $client,
+        ?ReplicateImageService $replicateClient,
         ImageBatch $batch,
         ImageGenerationJob $row,
         array $references,
@@ -163,6 +165,9 @@ class GenerateImageBatchJob implements ShouldQueue
         float $interval,
     ): array {
         $settings = (array) $batch->settings;
+        // Replicate/Flux has no size tiers — fall back to aspect_ratio so the
+        // audit row/download UI still shows something meaningful.
+        $auditSize = $settings['size'] ?? ($settings['aspect_ratio'] ?? null);
 
         for ($index = 1; $index <= (int) $row->images_requested; $index++) {
             // Partial-success invariant: a completed slot is never regenerated.
@@ -183,7 +188,7 @@ class GenerateImageBatchJob implements ShouldQueue
             $paceThisImage = true;
 
             try {
-                $image = $this->generateOne($client, $batch, $row, $references, $settings);
+                $image = $this->generateOne($client, $replicateClient, $batch, $row, $references, $settings, $index);
 
                 $fileName = $row->folder_name . '_' . $index . '.png';
                 // 'folders' = per-plant subfolder (default); 'flat' = all files together.
@@ -204,7 +209,7 @@ class GenerateImageBatchJob implements ShouldQueue
                         'public_url'     => Storage::disk('s3')->url($s3Path),
                         'bytes'          => strlen($image['bytes']),
                         'model'          => $settings['model'] ?? null,
-                        'size'           => $settings['size'] ?? null,
+                        'size'           => $auditSize,
                         'quality'        => $settings['quality'] ?? null,
                         'style'          => $settings['style'] ?? null,
                         'revised_prompt' => $image['revised_prompt'],
@@ -219,7 +224,7 @@ class GenerateImageBatchJob implements ShouldQueue
                         'batch_id' => $batch->id,
                         'status'   => ImageGenerationResult::STATUS_FAILED,
                         'model'    => $settings['model'] ?? null,
-                        'size'     => $settings['size'] ?? null,
+                        'size'     => $auditSize,
                         'quality'  => $settings['quality'] ?? null,
                         'style'    => $settings['style'] ?? null,
                         'error'    => mb_substr($e->getMessage(), 0, 1000),
@@ -302,11 +307,20 @@ class GenerateImageBatchJob implements ShouldQueue
      */
     private function generateOne(
         OpenAiImageClient $client,
+        ?ReplicateImageService $replicateClient,
         ImageBatch $batch,
         ImageGenerationJob $row,
         array $references,
         array $settings,
+        int $imageIndex = 1,
     ): array {
+        // Second provider: Replicate (Flux). Same claim/pacing/result plumbing
+        // above; only the generation call differs (mirrors
+        // GenerateInstantImageJob::handleReplicate exactly).
+        if (($settings['provider'] ?? 'openai') === 'replicate') {
+            return $this->generateOneReplicate($replicateClient ?? app(ReplicateImageService::class), $row, $settings, $imageIndex);
+        }
+
         $model      = (string) ($settings['model'] ?? 'gpt-image-1');
         $size       = (string) ($settings['size'] ?? '1024x1024');
         $quality    = $settings['quality'] ?? null;
@@ -330,6 +344,54 @@ class GenerateImageBatchJob implements ShouldQueue
         }
 
         return $client->generate($model, $prompt, $size, $quality, $apiStyle, $background);
+    }
+
+    /**
+     * Replicate (Flux) generation for one row — reuses
+     * ReplicateImageService::generate()/generateWithVersion() (which share
+     * the runPrediction/predictionInput internals) exactly as the instant
+     * generator does. Flux is text-to-image only; $references are never used.
+     *
+     * @return array{bytes: string, revised_prompt: ?string}
+     */
+    private function generateOneReplicate(
+        ReplicateImageService $service,
+        ImageGenerationJob $row,
+        array $settings,
+        int $imageIndex = 1,
+    ): array {
+        $prompt = (string) $row->prompt;
+
+        // A batch asks for the SAME prompt images_per_plant times. Flux is
+        // deterministic, so a pinned seed would return the identical image for
+        // every slot (and bill for each) — offset it per slot so slot 1 still
+        // reproduces the given seed exactly and the rest stay distinct.
+        $seed = $settings['seed'] ?? null;
+        if ($seed !== null && $seed !== '') {
+            $seed = (int) $seed + ($imageIndex - 1);
+        }
+
+        $options = [
+            'aspect_ratio'        => $settings['aspect_ratio'] ?? '1:1',
+            'guidance'            => $settings['guidance'] ?? null,
+            'num_inference_steps' => $settings['steps'] ?? null,
+            'seed'                => $seed,
+        ];
+
+        // Fine-tuned style: generate on the trained LoRA version, and make
+        // sure the trigger word leads the prompt (that's what activates the
+        // trained concept) unless it's already present, case-insensitive.
+        $loraVersion = (string) ($settings['lora_version'] ?? '');
+        if ($loraVersion !== '') {
+            $trigger = (string) ($settings['trigger_word'] ?? '');
+            if ($trigger !== '' && mb_stripos($prompt, $trigger) === false) {
+                $prompt = $trigger . ', ' . $prompt;
+            }
+
+            return $service->generateWithVersion($loraVersion, $prompt, $options);
+        }
+
+        return $service->generate($prompt, $options);
     }
 
     /* ── reference images ─────────────────────────────────────────────────── */
