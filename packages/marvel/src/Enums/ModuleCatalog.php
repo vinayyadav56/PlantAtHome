@@ -67,6 +67,10 @@ final class ModuleCatalog
                 'states'        => self::CRUD,
                 'delivery'      => ['view', 'edit'],
                 'notifications' => ['view', 'create', 'send'],
+                // Third-party Integration Management. Split finer than CRUD because the actions
+                // carry very different risk: viewing which providers exist is harmless, editing a
+                // credential is not, and testing a connection makes an outbound call.
+                'integrations'  => ['view', 'edit', 'test'],
             ],
             'employees' => [
                 'employees'    => self::CRUD,

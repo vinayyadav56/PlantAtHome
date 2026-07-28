@@ -245,6 +245,9 @@ class ShopServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__ . '/../config/image-batches.php', 'image-batches');
         $this->mergeConfigFrom(__DIR__ . '/../config/content-batches.php', 'content-batches');
         $this->mergeConfigFrom(__DIR__ . '/../config/location.php', 'location');
+        // ⚠️ Without this line every config('integrations.*') lookup silently returns null — the
+        // same trap that makes packages/marvel/config/services.php dead code.
+        $this->mergeConfigFrom(__DIR__ . '/../config/integrations.php', 'integrations');
 
         config([
             'auth'               => File::getRequire(__DIR__ . '/../config/auth.php'),

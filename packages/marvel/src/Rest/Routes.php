@@ -73,6 +73,7 @@ use Marvel\Http\Controllers\SettlementController;
 use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
+use Marvel\Http\Controllers\IntegrationController;
 use Marvel\Http\Controllers\CourierPartnerProxyController;
 use Marvel\Http\Controllers\PricingMarginController;
 use Marvel\Http\Controllers\VendorController;
@@ -704,6 +705,32 @@ Route::group(
  * Authorized Route for Super Admin only
  * *****************************************
  */
+
+/*
+ * Integration Management — the single source of truth for third-party credentials.
+ *
+ * This group is keyed on the FINE-GRAINED settings.integrations.* permissions rather than sitting
+ * inside the super-admin block below. A super admin still passes every check via the global
+ * Gate::before bypass in ShopServiceProvider, but this way a designation can be granted read-only
+ * visibility (view) or the ability to run a connection test without also being handed the right to
+ * edit credentials.
+ *
+ * Reads never return a credential VALUE — only which fields are set. There is deliberately no
+ * reveal endpoint.
+ */
+Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
+    Route::get('integrations', [IntegrationController::class, 'index'])
+        ->middleware('permission:settings.integrations.view');
+    Route::get('integrations/{slug}', [IntegrationController::class, 'show'])
+        ->middleware('permission:settings.integrations.view');
+    Route::put('integrations/{slug}', [IntegrationController::class, 'update'])
+        ->middleware(['permission:settings.integrations.edit', 'throttle:30,1']);
+    // Test + sync make OUTBOUND calls, so they are throttled harder than a read.
+    Route::post('integrations/{slug}/test', [IntegrationController::class, 'test'])
+        ->middleware(['permission:settings.integrations.test', 'throttle:20,1']);
+    Route::post('integrations/{slug}/sync', [IntegrationController::class, 'sync'])
+        ->middleware(['permission:settings.integrations.edit', 'throttle:20,1']);
+});
 
 Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sanctum']], function () {
     // Courier / shipping-microservice config: master switch + default package + per-partner
