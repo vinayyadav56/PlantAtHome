@@ -2,7 +2,9 @@
 
 namespace Marvel\Integrations;
 
+use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\CourierPartnerConfig;
+use Marvel\Database\Models\TranslationProviderConfig;
 use Throwable;
 
 /**
@@ -73,6 +75,17 @@ class LegacyBridge
                 'api_key' => env('GEMINI_API_KEY'),
                 default   => '',
             },
+            // First-party AI services: the secret is a PLAINTEXT column today. Reading it through
+            // here is what lets the backfill encrypt it without any caller noticing the move.
+            'ai_chat'      => $this->legacyRow('ai_chat_settings', 'service_api_key'),
+            'plant_doctor' => $this->legacyRow('plant_doctor_settings', 'service_api_key'),
+            'care_plan'    => $this->legacyRow('care_plan_settings', 'service_api_key'),
+
+            // translation_provider_configs stores an encrypted bag per provider row, so the field
+            // name varies by provider ('key' for Azure, 'api_key' for DeepL).
+            'translation_azure' => $this->translationCred('azure', $field) ?: env('AZURE_TRANSLATOR_KEY'),
+            'translation_deepl' => $this->translationCred('deepl', $field) ?: env('DEEPL_API_KEY'),
+
             'replicate' => match ($field) {
                 'api_token' => config('services.replicate.token') ?? env('REPLICATE_API_TOKEN'),
                 default     => '',
@@ -143,6 +156,21 @@ class LegacyBridge
                 'owner'    => config('services.replicate.owner'),
                 default    => null,
             },
+
+            // First-party AI services — everything except the key is non-secret config.
+            'ai_chat'      => $this->legacyRowValue('ai_chat_settings', $field),
+            'plant_doctor' => $this->legacyRowValue('plant_doctor_settings', $field),
+            'care_plan'    => $this->legacyRowValue('care_plan_settings', $field),
+
+            'translation_azure' => match ($field) {
+                'region'   => $this->translationSetting('azure', 'region') ?: env('AZURE_TRANSLATOR_REGION'),
+                'endpoint' => $this->translationSetting('azure', 'endpoint') ?: env('AZURE_TRANSLATOR_ENDPOINT'),
+                default    => null,
+            },
+            'translation_deepl' => match ($field) {
+                'endpoint' => $this->translationSetting('deepl', 'endpoint'),
+                default    => null,
+            },
             // The delivery partners' own credentials have never lived in the monolith: since the
             // in-process courier stack was retired, they exist only as env vars inside the Go
             // shipping-service. There is deliberately nothing to bridge.
@@ -170,6 +198,57 @@ class LegacyBridge
      * The shipping-service link is the one provider that already had an encrypted admin-managed
      * home (courier_partner_configs), so read it before falling back to config().
      */
+    /**
+     * Read one column off a single-row legacy settings table.
+     *
+     * These three tables (ai_chat_settings, plant_doctor_settings, care_plan_settings) hold exactly
+     * one row and store their service key as a PLAINTEXT varchar. Queried through the DB facade
+     * rather than a model so this keeps working after the models are eventually deleted.
+     */
+    private function legacyRow(string $table, string $column): string
+    {
+        try {
+            $row = DB::table($table)->first();
+            return (string) ($row?->{$column} ?? '');
+        } catch (Throwable) {
+            return ''; // table absent on this environment — reads as "not configured"
+        }
+    }
+
+    /** Non-secret column off a single-row legacy settings table (booleans/ints kept as-is). */
+    private function legacyRowValue(string $table, string $column): mixed
+    {
+        try {
+            $row = DB::table($table)->first();
+            return $row?->{$column} ?? null;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /** Non-secret setting off a translation_provider_configs row. */
+    private function translationSetting(string $provider, string $field): string
+    {
+        try {
+            $row = TranslationProviderConfig::query()->where('provider', $provider)->first();
+            return (string) (((array) ($row?->settings ?? []))[$field] ?? '');
+        } catch (Throwable) {
+            return '';
+        }
+    }
+
+    /** Credential field off a translation_provider_configs row (encrypted bag, keyed by provider). */
+    private function translationCred(string $provider, string $field): string
+    {
+        try {
+            $row = TranslationProviderConfig::query()->where('provider', $provider)->first();
+            $creds = (array) ($row?->credentials ?? []);
+            return (string) ($creds[$field] ?? '');
+        } catch (Throwable) {
+            return '';
+        }
+    }
+
     private function shippingService(string $field): string
     {
         try {

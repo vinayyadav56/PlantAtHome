@@ -345,6 +345,97 @@ class ProviderRegistry
                 priority: 40,
             ),
 
+            // ── First-party AI microservices ────────────────────────────────────────────────
+            //
+            // These are OUR services (chatbot, plant-doctor, care-plan), not vendors — but they
+            // are reached over HTTP with a shared key exactly like a vendor, and that key is a
+            // secret. Each currently lives in its own table with `service_api_key` stored as a
+            // PLAINTEXT varchar; folding them in here is what gets those secrets encrypted.
+            //
+            // Their `enabled` flag is load-bearing beyond this module: three PUBLIC endpoints
+            // (GET ai-chat/settings, care-plans/settings, plant-doctor/settings) report it to the
+            // storefront so a feature hides itself when its backend is off. Those endpoints must
+            // keep returning ONLY `enabled` (+ max_prompts) — never a URL, never a key.
+            new ProviderDefinition(
+                slug: 'ai_chat',
+                displayName: 'Ask AI Chat Service',
+                category: ProviderDefinition::CATEGORY_AI,
+                credentialFields: [
+                    ['name' => 'service_api_key', 'label' => 'Service API Key', 'required' => true],
+                ],
+                configFields: [
+                    ['name' => 'service_url', 'label' => 'Service URL', 'placeholder' => 'https://chatbot-service…up.railway.app'],
+                    ['name' => 'openai_model', 'label' => 'Model'],
+                    ['name' => 'monthly_budget_inr', 'label' => 'Monthly Budget (₹)', 'type' => 'number'],
+                    ['name' => 'max_prompts', 'label' => 'Max Prompts / Conversation', 'type' => 'number'],
+                    ['name' => 'daily_user_cap', 'label' => 'Daily Cap / User', 'type' => 'number'],
+                ],
+                priority: 50,
+                blurb: 'Per-plant chat on the product page. Disabled hides the button.',
+            ),
+            new ProviderDefinition(
+                slug: 'plant_doctor',
+                displayName: 'Plant Doctor Service',
+                category: ProviderDefinition::CATEGORY_AI,
+                credentialFields: [
+                    ['name' => 'service_api_key', 'label' => 'Service API Key', 'required' => true],
+                ],
+                configFields: [
+                    ['name' => 'service_url', 'label' => 'Service URL'],
+                    ['name' => 'openai_model', 'label' => 'Model'],
+                    ['name' => 'monthly_budget_inr', 'label' => 'Monthly Budget (₹)', 'type' => 'number'],
+                    ['name' => 'plant_id_enabled', 'label' => 'Plant identification', 'type' => 'boolean'],
+                ],
+                priority: 51,
+                blurb: 'Photo → diagnosis. Powers /plant-doctor and the app health check.',
+            ),
+            new ProviderDefinition(
+                slug: 'care_plan',
+                displayName: 'Care Plan Service',
+                category: ProviderDefinition::CATEGORY_AI,
+                credentialFields: [
+                    ['name' => 'service_api_key', 'label' => 'Service API Key', 'required' => true],
+                ],
+                configFields: [
+                    ['name' => 'service_url', 'label' => 'Service URL'],
+                    ['name' => 'model', 'label' => 'Model'],
+                    ['name' => 'monthly_budget_inr', 'label' => 'Monthly Budget (₹)', 'type' => 'number'],
+                    ['name' => 'auto_on_delivery', 'label' => 'Generate on delivery', 'type' => 'boolean'],
+                ],
+                priority: 52,
+                blurb: 'Post-delivery AI care plan + reminder schedule.',
+            ),
+
+            // ── Translation ─────────────────────────────────────────────────────────────────
+            // One row per provider, mirroring translation_provider_configs. `is_active` there
+            // picks which one the TranslationManager actually uses; here that is `priority`
+            // plus `enabled`, so the lowest-priority enabled provider wins.
+            new ProviderDefinition(
+                slug: 'translation_azure',
+                displayName: 'Azure Translator',
+                category: ProviderDefinition::CATEGORY_TRANSLATION,
+                credentialFields: [
+                    ['name' => 'key', 'label' => 'Subscription Key', 'required' => true],
+                ],
+                configFields: [
+                    ['name' => 'region', 'label' => 'Region', 'placeholder' => 'centralindia'],
+                    ['name' => 'endpoint', 'label' => 'Endpoint', 'placeholder' => 'https://api.cognitive.microsofttranslator.com'],
+                ],
+                priority: 10,
+            ),
+            new ProviderDefinition(
+                slug: 'translation_deepl',
+                displayName: 'DeepL',
+                category: ProviderDefinition::CATEGORY_TRANSLATION,
+                credentialFields: [
+                    ['name' => 'api_key', 'label' => 'API Key', 'required' => true],
+                ],
+                configFields: [
+                    ['name' => 'endpoint', 'label' => 'Endpoint', 'placeholder' => 'https://api-free.deepl.com'],
+                ],
+                priority: 20,
+            ),
+
             // ── Analytics ───────────────────────────────────────────────────────────────────
             new ProviderDefinition(
                 slug: 'google_analytics',
