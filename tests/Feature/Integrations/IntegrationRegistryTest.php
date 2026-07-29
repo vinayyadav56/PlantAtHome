@@ -16,6 +16,47 @@ use Tests\TestCase;
  */
 final class IntegrationRegistryTest extends TestCase
 {
+    /**
+     * Field `type` is a cross-repo contract with the admin form, which switches on these exact
+     * strings and falls through to a plain text input for anything it does not recognise.
+     *
+     * That fallback is silent, which is what makes this worth a test: two config fields were once
+     * declared 'boolean' (a type the form does not handle) and rendered as text boxes for an
+     * operator to type "true" into. Nothing errored — it just quietly did the wrong thing.
+     *
+     * Adding a type here means teaching provider-form.tsx to render it FIRST.
+     */
+    public function test_every_field_type_is_one_the_admin_form_can_render(): void
+    {
+        $renderable = ['text', 'password', 'number', 'switch', 'select', 'textarea'];
+
+        foreach (ProviderRegistry::all() as $slug => $def) {
+            foreach ($def->fieldSchema() as $group => $fields) {
+                foreach ($fields as $field) {
+                    $this->assertContains(
+                        $field['type'],
+                        $renderable,
+                        "{$slug}.{$field['name']} declares type '{$field['type']}', which provider-form.tsx does not handle — it will silently render as a text input"
+                    );
+                }
+            }
+        }
+    }
+
+    /** A select must ship its options, or it renders as an empty dropdown. */
+    public function test_select_fields_declare_options(): void
+    {
+        foreach (ProviderRegistry::all() as $slug => $def) {
+            foreach ($def->fieldSchema() as $fields) {
+                foreach ($fields as $field) {
+                    if ($field['type'] === 'select') {
+                        $this->assertNotEmpty($field['options'], "{$slug}.{$field['name']} is a select with no options");
+                    }
+                }
+            }
+        }
+    }
+
     public function test_every_definition_is_internally_consistent(): void
     {
         foreach (ProviderRegistry::all() as $slug => $def) {
