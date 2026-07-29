@@ -188,7 +188,10 @@ class CourierService
             return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
         }
         $order = $shipment->order;
-        $cod = $order && $order->payment_gateway === PaymentGatewayType::CASH_ON_DELIVERY;
+        // Checkout stores CASH_ON_DELIVERY, COD or CASH interchangeably. Comparing with === against
+        // one of them booked a 'CASH' order as PREPAID, so the rider was never told to collect and
+        // the order value was simply lost. Always ask the enum.
+        $cod = $order && PaymentGatewayType::isCashOnDelivery($order->payment_gateway);
         return $this->shippingClient()->book($shipment, $this->modeOf($shipment), (bool) $cod, $this->shipmentCodAmount($shipment, $order));
     }
 
@@ -208,7 +211,7 @@ class CourierService
     public function quoteShipment(Shipment $shipment, ?bool $cod = null): array
     {
         $order = $shipment->order;
-        $cod = $cod ?? ($order && $order->payment_gateway === PaymentGatewayType::CASH_ON_DELIVERY);
+        $cod = $cod ?? ($order && PaymentGatewayType::isCashOnDelivery($order->payment_gateway));
         $mode = $this->modeOf($shipment);
 
         if (!$this->shippingServiceEnabled()) {
