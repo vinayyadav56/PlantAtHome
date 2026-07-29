@@ -201,7 +201,47 @@ class IntegrationController extends CoreController
             'sync_error'        => $row->sync_error ?? null,
             'synced_at'         => optional($row?->synced_at)->toIso8601String(),
             'syncs_to_shipping' => $def->syncsToShipping,
+            'webhook'           => $this->webhook($def),
             'updated_at'        => optional($row?->updated_at)->toIso8601String(),
+        ];
+    }
+
+    /**
+     * What an operator has to paste into the partner's dashboard, and whether the matching secret
+     * is set on our side.
+     *
+     * Computed, never stored. The URL is entirely derivable from the shipping-service base URL plus
+     * the partner code, and a stored copy is just a second thing to keep in step — the failure mode
+     * being a dashboard registered against a URL we no longer serve.
+     *
+     * Returns null for providers that do not call us back, so the admin renders nothing rather than
+     * an empty webhook panel.
+     */
+    private function webhook(ProviderDefinition $def): ?array
+    {
+        // Only the delivery partners post status callbacks to us today.
+        $tokenField = match ($def->slug) {
+            'porter'     => 'webhook_token',
+            'borzo'      => 'callback_token',
+            'shiprocket' => 'webhook_token',
+            default      => null,
+        };
+        if ($tokenField === null) {
+            return null;
+        }
+
+        $base = rtrim((string) $this->integrations->config('shipping_service', 'url', ''), '/');
+
+        return [
+            'url'        => $base === '' ? null : "{$base}/webhooks/{$def->slug}",
+            'secret_set' => $this->integrations->credentialsSet($def->slug)[$tokenField] ?? false,
+            // The header name the partner must send the shared token under.
+            'auth_header' => 'X-Api-Key',
+            'token_field' => $tokenField,
+            // Said plainly because it is the question this panel exists to pre-empt: a webhook that
+            // never arrives is NOT lost. The service re-polls open bookings every 10 minutes, so
+            // status still advances — a missing webhook costs latency, not correctness.
+            'note' => 'If this is not registered, delivery status still updates via the 10-minute reconcile poll — slower, but nothing is lost.',
         ];
     }
 
