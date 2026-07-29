@@ -315,7 +315,39 @@ class ShippingServiceClient
             'pincode' => (string) ($shop->pickup_postcode ?? $a['zip'] ?? $a['pincode'] ?? ''),
             'lat'     => (float) ($a['lat'] ?? $a['latitude'] ?? $shop->lat ?? $loc['lat'] ?? 0),
             'lng'     => (float) ($a['lng'] ?? $a['longitude'] ?? $shop->lng ?? $loc['lng'] ?? 0),
-        ];
+        ] + $this->addressDetail($a);
+    }
+
+    /**
+     * The optional address detail a rider needs to find the door: apartment/flat, a second street
+     * line, and a landmark.
+     *
+     * Porter documents all three (apartment_address / street_address2 / landmark) and the shipping
+     * service forwards them, but NOTHING here ever populated them — so on every real order the
+     * rider got a street and a pin and nothing else, while the debug console could send them and
+     * made it look as though the integration handled them. Checkout and vendor onboarding store
+     * these under several historical key names, so all are read.
+     *
+     * Empty values are omitted entirely rather than sent blank: a partner that validates an empty
+     * string differently from an absent key should see an absent key.
+     */
+    private function addressDetail(array $a): array
+    {
+        $pick = static function (array $src, array $keys): string {
+            foreach ($keys as $k) {
+                $v = trim((string) ($src[$k] ?? ''));
+                if ($v !== '') {
+                    return $v;
+                }
+            }
+            return '';
+        };
+
+        return array_filter([
+            'apartment' => $pick($a, ['apartment', 'apartment_address', 'flat', 'flat_no', 'building', 'house_no']),
+            'line2'     => $pick($a, ['line2', 'street_address2', 'address_line_2', 'area', 'locality']),
+            'landmark'  => $pick($a, ['landmark', 'nearby', 'near']),
+        ], static fn ($v) => $v !== '');
     }
 
     private function addressFromOrder($order): array
@@ -336,7 +368,7 @@ class ShippingServiceClient
             'pincode' => (string) ($a['zip'] ?? $a['pincode'] ?? $a['postal_code'] ?? ''),
             'lat'     => (float) ($loc['lat'] ?? $a['lat'] ?? $a['latitude'] ?? 0),
             'lng'     => (float) ($loc['lng'] ?? $a['lng'] ?? $a['longitude'] ?? 0),
-        ];
+        ] + $this->addressDetail($a);
     }
 
     private function items(Shipment $shipment): array

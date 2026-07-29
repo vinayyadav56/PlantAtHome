@@ -100,8 +100,50 @@ final class CodGatewayTest extends TestCase
         });
     }
 
+    /**
+     * Porter documents apartment_address / street_address2 / landmark and the shipping service
+     * forwards them, but the monolith never populated them — so on every real order the rider got a
+     * street and a pin and nothing else. Only the debug console could send them, which made the
+     * integration look complete when it was not.
+     */
+    public function test_address_detail_reaches_the_shipping_service(): void
+    {
+        Http::fake(['*' => Http::response(['ok' => true, 'partner_code' => 'porter', 'provider_order_id' => 'CRN1'], 200)]);
+
+        $this->bookShipmentWithGateway('RAZORPAY', dropDetail: [
+            'apartment' => 'Flat 402',
+            'line2'     => '16th Main, BTM Layout',
+            'landmark'  => 'Opposite the water tank',
+        ]);
+
+        Http::assertSent(function ($request) {
+            $drop = $request['drop'] ?? [];
+            $this->assertSame('Flat 402', $drop['apartment'] ?? null, 'apartment must reach the service');
+            $this->assertSame('16th Main, BTM Layout', $drop['line2'] ?? null, 'line2 must reach the service');
+            $this->assertSame('Opposite the water tank', $drop['landmark'] ?? null, 'landmark must reach the service');
+
+            return true;
+        });
+    }
+
+    /** Blank detail is omitted entirely rather than sent as empty strings. */
+    public function test_blank_address_detail_is_omitted_not_sent_empty(): void
+    {
+        Http::fake(['*' => Http::response(['ok' => true, 'partner_code' => 'porter', 'provider_order_id' => 'CRN2'], 200)]);
+
+        $this->bookShipmentWithGateway('RAZORPAY');
+
+        Http::assertSent(function ($request) {
+            foreach (['apartment', 'line2', 'landmark'] as $k) {
+                $this->assertArrayNotHasKey($k, $request['drop'] ?? [], "blank {$k} should be absent, not empty");
+            }
+
+            return true;
+        });
+    }
+
     /** Builds a same-city shipment for the given gateway and books it through the real service. */
-    private function bookShipmentWithGateway(string $gateway): void
+    private function bookShipmentWithGateway(string $gateway, array $dropDetail = []): void
     {
         // The master switch lives in settings.options.courier.enabled; stub the resolved value so
         // the test exercises the COD decision rather than the settings lookup.
@@ -129,6 +171,13 @@ final class CodGatewayTest extends TestCase
             'amount'          => 500,
             'paid_total'      => 500,
             'payment_gateway' => $gateway,
+            'shipping_address' => json_encode([
+                'street_address' => 'BTM Layout',
+                'city'           => 'Bengaluru',
+                'state'          => 'Karnataka',
+                'zip'            => '560029',
+                'location'       => ['lat' => 12.9165757, 'lng' => 77.6101163],
+            ] + $dropDetail),
         ]);
         $shipmentId = DB::table('shipments')->insertGetId([
             'order_id'         => $orderId,
