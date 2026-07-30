@@ -29,6 +29,10 @@ use Throwable;
  *  - Empty values never overlay, so a half-filled row cannot blank out a working env var.
  *  - Nothing here may throw. A missing table, an unreachable cache or a bag encrypted under a
  *    rotated APP_KEY must all degrade to "keep the env value", never to a 500 on every route.
+ *
+ * ⚠️ This applies at BOOT, so a long-running queue worker keeps the values it booted with. Web
+ * requests pick up a rotation on the next request; workers need `php artisan queue:restart`. A key
+ * rotated to fix failing jobs will otherwise look like it did not work.
  */
 class ConfigOverlay
 {
