@@ -58,7 +58,39 @@ class ProductRepository extends BaseRepository
         'metas.key',
         'metas.value',
         'product_type',
-        'visibility'
+        'visibility',
+        // PlantAtHome — botanical facets, filtered through the plantAttribute
+        // HasOne (Prettus turns `plantAttribute.<col>` into whereHas). Multi-
+        // select facets use 'in' (comma-separated values). 'in'/'between'
+        // entries are ALSO immune to the bare-search smear (RequestCriteria
+        // skips them when no key:value is present). pet_friendly is a boolean
+        // '=' filter — its value is coerced to 0/1 in boot() below so a string
+        // can never reach the tinyint column (MySQL STRICT 500 guard).
+        'plantAttribute.sunlight' => 'in',
+        'plantAttribute.water_requirement' => 'in',
+        'plantAttribute.indoor_outdoor' => 'in',
+        'plantAttribute.growth_rate' => 'in',
+        'plantAttribute.difficulty_level' => 'in',
+        'plantAttribute.height_range' => 'in',
+        'plantAttribute.pet_friendly',
+        // Size chips filter through the variations axis (Small/Medium/Large);
+        // in_stock backs the "in stock only" toggle — the storefronts used to
+        // send both as PLAIN query params, which RequestCriteria ignores, so
+        // those filters were silent no-ops until they moved into `search`.
+        'variations.value' => 'in',
+        'in_stock',
+    ];
+
+    /**
+     * Boolean-backed searchable fields. Their values are coerced to 0/1 in
+     * boot() before Prettus can compare them — under MySQL STRICT mode a
+     * string vs tinyint comparison is a 500, and `is_rental` proved this class
+     * of bug exists (it was explicitly filterable long before this list).
+     */
+    private const BOOLEAN_SEARCH_FIELDS = [
+        'plantAttribute.pet_friendly',
+        'in_stock',
+        'is_rental',
     ];
 
     protected $dataArray = [
@@ -103,19 +135,63 @@ class ProductRepository extends BaseRepository
 
     public function boot()
     {
-        // PlantAtHome — the storefront sends `search` as `key:value` (e.g. name:rose), but a
-        // colon-less free-text value (e.g. ?search=rose) makes Prettus RequestCriteria apply the
-        // bare value to EVERY $fieldSearchable entry — including the integer/boolean columns
-        // shop_id, is_rental and visibility. Under MySQL STRICT mode (prod/RDS default)
-        // `shop_id = 'rose'` raises an invalid-numeric-value error -> 500. Normalize a colon-less
-        // value into the already-safe `name:<value>` form so only `name LIKE '%value%'` is emitted.
+        // PlantAtHome — the storefront sends `search` as `key:value` terms joined by ';'
+        // (e.g. name:rose;status:publish), but Prettus RequestCriteria applies any BARE
+        // (colon-less) value to EVERY $fieldSearchable entry — including the integer/boolean
+        // columns shop_id, is_rental, visibility and plantAttribute.pet_friendly. Under MySQL
+        // STRICT mode (prod/RDS default) `shop_id = 'rose'` raises an invalid-numeric-value
+        // error -> 500. Three bare-value routes exist in RequestCriteria, and ALL are
+        // normalized here into the safe `name:<value>` term:
+        //   1. a fully colon-less search (?search=rose);
+        //   2. a bare SEGMENT inside a compound search (?search=rose;name:x —
+        //      parserSearchValue() returns 'rose' and smears it across all '='/like fields);
+        //   3. a leading-colon value (?search=:rose — stripos()===0 is FALSY in
+        //      parserSearchData(), so the whole string becomes the bare value).
+        // Additionally `plantAttribute.pet_friendly` (tinyint) values are coerced to 0/1
+        // (true/false/1/0/yes/no accepted); an unparseable value drops the term entirely,
+        // so a string comparison can never reach the boolean column.
         $request = app('request');
         $rawSearch = $request->get('search');
-        if (is_string($rawSearch) && $rawSearch !== '' && !str_contains($rawSearch, ':')) {
-            $clean = trim(preg_replace('/\s+/', ' ', str_replace([';', ':'], ' ', $rawSearch)));
-            if ($clean !== '') {
-                $request->merge(['search' => 'name:' . $clean]);
+        if (is_string($rawSearch) && $rawSearch !== '') {
+            $terms = [];
+            $bare = [];
+            foreach (explode(';', $rawSearch) as $segment) {
+                $pos = strpos($segment, ':');
+                if ($pos === false || $pos === 0) {
+                    // Bare free text (or a leading-colon fragment) → route into name:.
+                    $clean = trim(preg_replace('/\s+/', ' ', str_replace(':', ' ', $segment)));
+                    if ($clean !== '') {
+                        $bare[] = $clean;
+                    }
+                    continue;
+                }
+                $field = substr($segment, 0, $pos);
+                $value = substr($segment, $pos + 1);
+                if (in_array($field, self::BOOLEAN_SEARCH_FIELDS, true)) {
+                    $bool = filter_var(trim($value), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
+                    if ($bool === null) {
+                        continue; // unparseable boolean → drop the term (never string-vs-tinyint)
+                    }
+                    $value = $bool ? '1' : '0';
+                }
+                $terms[] = $field . ':' . $value;
             }
+            if (!empty($bare)) {
+                $text = implode(' ', $bare);
+                $nameIdx = null;
+                foreach ($terms as $i => $t) {
+                    if (str_starts_with($t, 'name:')) {
+                        $nameIdx = $i;
+                        break;
+                    }
+                }
+                if ($nameIdx !== null) {
+                    $terms[$nameIdx] .= ' ' . $text;
+                } else {
+                    $terms[] = 'name:' . $text;
+                }
+            }
+            $request->merge(['search' => implode(';', $terms)]);
         }
 
         try {

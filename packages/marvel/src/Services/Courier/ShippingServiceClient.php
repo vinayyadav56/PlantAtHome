@@ -229,6 +229,55 @@ class ShippingServiceClient
         return $this->request('put', '/v1/partners/' . rawurlencode($code) . '/config', $payload);
     }
 
+    // ── partner debug console (super-admin) ───────────────────────
+    // These back the admin's per-partner debug console. The service answers each test/* call with a
+    // { ok, ..., exchange } envelope, where `exchange` is the EXACT upstream request/response with
+    // auth headers already masked by the service — that is the whole feature: debug a partner
+    // integration without server logs. Bodies are forwarded/returned as-is and never logged here.
+
+    /**
+     * Recent INBOUND partner webhooks recorded by the service, newest first. $query carries only the
+     * paging keys the admin actually sent (limit, before); defaulting/clamping is the service's job.
+     */
+    public function getPartnerWebhooks(string $code, array $query = []): array
+    {
+        return $this->request('get', '/v1/partners/' . rawurlencode($code) . '/webhooks', [], null, $query);
+    }
+
+    /** Live rate-card call against the partner (paid API on some partners). Read-only. */
+    public function partnerTestQuote(string $code, array $body): array
+    {
+        return $this->request('post', '/v1/partners/' . rawurlencode($code) . '/test/quote', $body);
+    }
+
+    /** Live status lookup for one provider order id (paid API on some partners). Read-only. */
+    public function partnerTestTrack(string $code, string $providerOrderId): array
+    {
+        return $this->request(
+            'get',
+            '/v1/partners/' . rawurlencode($code) . '/test/track',
+            [],
+            null,
+            ['provider_order_id' => $providerOrderId]
+        );
+    }
+
+    /**
+     * CREATES A REAL DELIVERY. $body must carry the caller's own `confirm` string verbatim — the
+     * guard is enforced by the SERVICE, deliberately not here, so no monolith-side bug can satisfy
+     * it by accident.
+     */
+    public function partnerTestBook(string $code, array $body): array
+    {
+        return $this->request('post', '/v1/partners/' . rawurlencode($code) . '/test/book', $body);
+    }
+
+    /** AFFECTS A LIVE JOB. Same caller-supplied `confirm` contract as partnerTestBook(). */
+    public function partnerTestCancel(string $code, array $body): array
+    {
+        return $this->request('post', '/v1/partners/' . rawurlencode($code) . '/test/cancel', $body);
+    }
+
     // ── request building ──────────────────────────────────────────
 
     private function buildRequest(Shipment $shipment, string $mode, bool $cod, float $codAmount): array
@@ -266,7 +315,39 @@ class ShippingServiceClient
             'pincode' => (string) ($shop->pickup_postcode ?? $a['zip'] ?? $a['pincode'] ?? ''),
             'lat'     => (float) ($a['lat'] ?? $a['latitude'] ?? $shop->lat ?? $loc['lat'] ?? 0),
             'lng'     => (float) ($a['lng'] ?? $a['longitude'] ?? $shop->lng ?? $loc['lng'] ?? 0),
-        ];
+        ] + $this->addressDetail($a);
+    }
+
+    /**
+     * The optional address detail a rider needs to find the door: apartment/flat, a second street
+     * line, and a landmark.
+     *
+     * Porter documents all three (apartment_address / street_address2 / landmark) and the shipping
+     * service forwards them, but NOTHING here ever populated them — so on every real order the
+     * rider got a street and a pin and nothing else, while the debug console could send them and
+     * made it look as though the integration handled them. Checkout and vendor onboarding store
+     * these under several historical key names, so all are read.
+     *
+     * Empty values are omitted entirely rather than sent blank: a partner that validates an empty
+     * string differently from an absent key should see an absent key.
+     */
+    private function addressDetail(array $a): array
+    {
+        $pick = static function (array $src, array $keys): string {
+            foreach ($keys as $k) {
+                $v = trim((string) ($src[$k] ?? ''));
+                if ($v !== '') {
+                    return $v;
+                }
+            }
+            return '';
+        };
+
+        return array_filter([
+            'apartment' => $pick($a, ['apartment', 'apartment_address', 'flat', 'flat_no', 'building', 'house_no']),
+            'line2'     => $pick($a, ['line2', 'street_address2', 'address_line_2', 'area', 'locality']),
+            'landmark'  => $pick($a, ['landmark', 'nearby', 'near']),
+        ], static fn ($v) => $v !== '');
     }
 
     private function addressFromOrder($order): array
@@ -287,7 +368,7 @@ class ShippingServiceClient
             'pincode' => (string) ($a['zip'] ?? $a['pincode'] ?? $a['postal_code'] ?? ''),
             'lat'     => (float) ($loc['lat'] ?? $a['lat'] ?? $a['latitude'] ?? 0),
             'lng'     => (float) ($loc['lng'] ?? $a['lng'] ?? $a['longitude'] ?? 0),
-        ];
+        ] + $this->addressDetail($a);
     }
 
     private function items(Shipment $shipment): array
@@ -322,7 +403,8 @@ class ShippingServiceClient
         return preg_replace('/\D+/', '', (string) $s) ?: '';
     }
 
-    private function request(string $method, string $path, array $body = [], ?float $timeoutSeconds = null): array
+    /** $query is GET-only (POST/PUT carry $body); an empty $query keeps the original bare get(). */
+    private function request(string $method, string $path, array $body = [], ?float $timeoutSeconds = null, array $query = []): array
     {
         if (!$this->configured()) {
             return ['ok' => false, 'status' => 0, 'data' => null, 'error' => 'Shipping service is not configured.'];
@@ -342,7 +424,9 @@ class ShippingServiceClient
                     ->acceptJson();
             }
             $resp = match ($method) {
-                'get'   => $http->get($this->baseUrl . $path),
+                'get'   => empty($query)
+                    ? $http->get($this->baseUrl . $path)
+                    : $http->get($this->baseUrl . $path, $query),
                 'put'   => $http->put($this->baseUrl . $path, $body),
                 default => $http->post($this->baseUrl . $path, $body),
             };

@@ -66,8 +66,11 @@ class CarePlanService
         if (!$this->withinBudget($setting)) {
             return null;
         }
-        $serviceUrl = rtrim($setting->service_url ?: (string) env('CARE_PLAN_SERVICE_URL'), '/');
-        $serviceKey = $setting->service_api_key ?: (string) env('CARE_PLAN_SERVICE_API_KEY');
+        // Resolved through the Integration module (integration_providers → care_plan_settings →
+        // env), so a rotated key is an admin action rather than a redeploy.
+        $integrations = app(\Marvel\Integrations\IntegrationService::class);
+        $serviceUrl = rtrim((string) $integrations->config('care_plan', 'service_url', env('CARE_PLAN_SERVICE_URL')), '/');
+        $serviceKey = $integrations->secret('care_plan', 'service_api_key', (string) env('CARE_PLAN_SERVICE_API_KEY'));
         if (empty($serviceUrl) || empty($args['user_id']) || empty($args['plant_name'])) {
             return null;
         }

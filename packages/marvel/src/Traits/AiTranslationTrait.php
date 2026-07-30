@@ -19,9 +19,11 @@ trait AiTranslationTrait
 
     protected function aiApiKey(): string
     {
-        $key = (string) env('ANTHROPIC_API_KEY', '');
+        // Through config, not env(), so an Anthropic key managed in Settings → Integrations
+        // overlays it. config/services.php still defaults the key to ANTHROPIC_API_KEY.
+        $key = (string) (config('services.anthropic.api_key') ?: '');
         if ($key === '') {
-            throw new \RuntimeException('ANTHROPIC_API_KEY is not set in the environment.');
+            throw new \RuntimeException('No Anthropic API key: set ANTHROPIC_API_KEY or the Anthropic provider in Settings → Integrations.');
         }
         return $key;
     }

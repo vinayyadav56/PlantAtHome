@@ -22,6 +22,7 @@ use Illuminate\Support\Facades\Gate;
 use Marvel\Ai\Ai;
 use Marvel\Console\AdminCreateCommand;
 use Marvel\Console\AWSSetupCommand;
+use Marvel\Console\CheckIntegrationHealth;
 use Marvel\Console\CopyFilesCommand;
 use Marvel\Console\DatabaseSetupCommand;
 use Marvel\Console\DefaultLanguageSetupCommand;
@@ -98,6 +99,7 @@ class ShopServiceProvider extends ServiceProvider
     protected $commandList = [
         \Marvel\Console\SweepImageBatchesCommand::class,
         \Marvel\Console\PruneImageBatchesCommand::class,
+        \Marvel\Console\SweepContentBatchesCommand::class,
         \Marvel\Console\FetchPlantImagesCommand::class,
         \Marvel\Console\SyncImageColumnsCommand::class,
         \Marvel\Console\AssignProductShopCommand::class,
@@ -119,6 +121,7 @@ class ShopServiceProvider extends ServiceProvider
         \Marvel\Console\RunSettlementsCommand::class,
         \Marvel\Console\BackfillOrderItemsCommand::class,
         \Marvel\Console\ReconcileSettlementsCommand::class,
+        CheckIntegrationHealth::class,
         InstallCommand::class,
         AdminCreateCommand::class,
         ImportDemoData::class,
@@ -164,6 +167,11 @@ class ShopServiceProvider extends ServiceProvider
         $this->loadMigrations();
         $this->loadHelpers();
         Resource::withoutWrapping();
+
+        // Let admin-managed provider credentials win over the env vars baked in at deploy time.
+        // Must run at boot: payment/OTP/mail/maps clients read config() at call time, so a key
+        // rotated in Settings → Integrations only takes effect if config carries it. Never throws.
+        \Marvel\Integrations\ConfigOverlay::apply();
 
         // Translation overlay (cache-table model): version + requeue translations
         // when an entity's canonical English fields change.
@@ -242,7 +250,11 @@ class ShopServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__ . '/../config/shop.php', 'shop');
         $this->mergeConfigFrom(__DIR__ . '/../config/deliveryoptimizer.php', 'deliveryoptimizer');
         $this->mergeConfigFrom(__DIR__ . '/../config/image-batches.php', 'image-batches');
+        $this->mergeConfigFrom(__DIR__ . '/../config/content-batches.php', 'content-batches');
         $this->mergeConfigFrom(__DIR__ . '/../config/location.php', 'location');
+        // ⚠️ Without this line every config('integrations.*') lookup silently returns null — the
+        // same trap that makes packages/marvel/config/services.php dead code.
+        $this->mergeConfigFrom(__DIR__ . '/../config/integrations.php', 'integrations');
 
         config([
             'auth'               => File::getRequire(__DIR__ . '/../config/auth.php'),

@@ -49,8 +49,23 @@ class Kernel extends ConsoleKernel
         // Batch AI image generation: recover stalled rows / orphaned batches /
         // missed finalize (safety net over the `images` queue worker), and
         // daily retention prune of generated files (audit rows are kept).
-        $schedule->command('images:sweep-batches')->everyMinute()->withoutOverlapping();
+        // ⚠️ The overlap mutex is given a 5-minute expiry (default is 24 HOURS):
+        // a container restart mid-run leaves the lock behind, and with the
+        // default these safety nets would stop running for a day — long enough
+        // for an in-flight batch to sit parked with nobody re-driving it. Both
+        // sweeps finish in well under a minute and are idempotent (rows are
+        // claimed atomically), so a short expiry cannot cause harmful overlap.
+        // Liveness is visible at GET /api/v1/platform/status → beats.
+        $schedule->command('images:sweep-batches')->everyMinute()->withoutOverlapping(5);
         $schedule->command('images:prune-batches')->dailyAt('04:30')->withoutOverlapping();
+        // Safety net for bulk AI content runs (re-drive stalled batches/rows).
+        $schedule->command('content:sweep-batches')->everyMinute()->withoutOverlapping(5);
+
+        // Probe enabled third-party integrations so an expired key surfaces here rather than in a
+        // customer's failed checkout. Hourly, not per-minute: several probes are billed per call
+        // (Porter's get_quote among them), and a credential does not expire on a one-minute
+        // boundary. Also prunes integration_logs on the same pass.
+        $schedule->command('integrations:health')->hourly()->withoutOverlapping(30);
 
         // v2 Phase 12 observability: keyed heartbeat proving this cron loop is
         // alive — GET /api/v1/platform/status reports its staleness. DB-backed

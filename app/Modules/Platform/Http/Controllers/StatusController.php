@@ -46,6 +46,19 @@ final class StatusController extends ApiController
             : null;
         $beatAge = $beatAt ? $now->diffInSeconds(Carbon::parse($beatAt)) : null;
 
+        // Per-command beats (image/content batch sweepers). The `scheduler` beat
+        // only proves the cron loop ticks — an individual command can still be
+        // skipped by a stale overlap mutex, which parks in-flight batches.
+        $beats = [];
+        if (Schema::hasTable('platform_heartbeats')) {
+            foreach (DB::table('platform_heartbeats')->where('name', '!=', 'scheduler')->get() as $row) {
+                $beats[$row->name] = [
+                    'last_beat_at' => $row->beat_at,
+                    'age_seconds' => $row->beat_at ? $now->diffInSeconds(Carbon::parse($row->beat_at)) : null,
+                ];
+            }
+        }
+
         $schedulerAlive = $beatAge !== null && $beatAge <= self::HEARTBEAT_STALE_AFTER;
         $outboxFlowing = $oldestPendingAge <= self::OUTBOX_STALE_AFTER;
 
@@ -67,6 +80,7 @@ final class StatusController extends ApiController
                 'beat_age_seconds' => $beatAge,
                 'alive' => $schedulerAlive,
             ],
+            'beats' => $beats,
         ]);
     }
 }

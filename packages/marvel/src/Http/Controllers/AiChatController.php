@@ -7,6 +7,7 @@ use Illuminate\Http\JsonResponse;
 use Marvel\Database\Models\AiChatSetting;
 use Marvel\Database\Models\AiChatConversation;
 use Marvel\Enums\Permission;
+use Marvel\Integrations\IntegrationService;
 
 /**
  * "Ask AI" per-plant chat.
@@ -38,6 +39,16 @@ class AiChatController extends CoreController
         return AiChatSetting::first();
     }
 
+    /**
+     * Credentials and endpoints resolve through the Integration Management module, which reads
+     * `integration_providers` first and falls back to this feature's own table and then to env.
+     * Controllers must not read secrets out of a model column directly.
+     */
+    private function integrations(): IntegrationService
+    {
+        return app(IntegrationService::class);
+    }
+
     private function monthCostInr(): float
     {
         return (float) AiChatConversation::where('created_at', '>=', now()->startOfMonth())
@@ -65,8 +76,8 @@ class AiChatController extends CoreController
         if (!$setting || !$setting->enabled) {
             return response()->json(['message' => 'Ask AI is currently unavailable.'], 503);
         }
-        $serviceUrl = rtrim($setting->service_url ?: (string) env('CHATBOT_SERVICE_URL'), '/');
-        $serviceKey = $setting->service_api_key ?: (string) env('AI_CHAT_SERVICE_API_KEY');
+        $serviceUrl = rtrim((string) $this->integrations()->config('ai_chat', 'service_url', env('CHATBOT_SERVICE_URL')), '/');
+        $serviceKey = $this->integrations()->secret('ai_chat', 'service_api_key', (string) env('AI_CHAT_SERVICE_API_KEY'));
         if (empty($serviceUrl)) {
             return response()->json(['message' => 'Ask AI service is not configured.'], 503);
         }
@@ -105,9 +116,8 @@ class AiChatController extends CoreController
     /** Best-effort: tell the service the chat ended so it flushes the transcript. */
     public function end(Request $request): JsonResponse
     {
-        $setting = $this->setting();
-        $serviceUrl = rtrim(($setting->service_url ?? '') ?: (string) env('CHATBOT_SERVICE_URL'), '/');
-        $serviceKey = ($setting->service_api_key ?? '') ?: (string) env('AI_CHAT_SERVICE_API_KEY');
+        $serviceUrl = rtrim((string) $this->integrations()->config('ai_chat', 'service_url', env('CHATBOT_SERVICE_URL')), '/');
+        $serviceKey = $this->integrations()->secret('ai_chat', 'service_api_key', (string) env('AI_CHAT_SERVICE_API_KEY'));
         $conversationId = $request->input('conversation_id');
         if ($serviceUrl && $conversationId) {
             try {
@@ -128,11 +138,10 @@ class AiChatController extends CoreController
      */
     public function persist(Request $request): JsonResponse
     {
-        $setting = $this->setting();
-        $expected = ($setting && $setting->service_api_key)
-            ? $setting->service_api_key
-            : (string) env('AI_CHAT_SERVICE_API_KEY');
-        if (empty($expected) || $request->header('X-Api-Key') !== $expected) {
+        $expected = $this->integrations()->secret('ai_chat', 'service_api_key', (string) env('AI_CHAT_SERVICE_API_KEY'));
+        // hash_equals: this compares an attacker-supplied header against a secret, so the
+        // comparison itself must not leak length or prefix through timing.
+        if (empty($expected) || !hash_equals($expected, (string) $request->header('X-Api-Key'))) {
             return response()->json(['message' => 'Unauthorized'], 401);
         }
 

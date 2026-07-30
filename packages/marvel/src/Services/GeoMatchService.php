@@ -19,7 +19,8 @@ class GeoMatchService
 
     public function __construct()
     {
-        $this->key = env('GOOGLE_MAPS_SERVER_KEY') ?: env('GOOGLE_MAP_API_KEY') ?: null;
+        // config first so a key managed in Settings → Integrations overlays the env var.
+        $this->key = config('location.google_maps_key') ?: env('GOOGLE_MAP_API_KEY') ?: null;
     }
 
     public function hasKey(): bool

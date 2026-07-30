@@ -35,6 +35,19 @@ return [
         'key' => env('PIXABAY_API_KEY'),
     ],
 
+    // PlantAtHome — Replicate (Flux) second provider for the admin instant AI image
+    // generator. Token-gated: ai-image-batches/capabilities reports configured=false
+    // until REPLICATE_API_TOKEN is set — no code change needed to enable.
+    'replicate' => [
+        'api_token' => env('REPLICATE_API_TOKEN'),
+        'model'     => env('REPLICATE_MODEL', 'black-forest-labs/flux-dev'),
+        'base_url'  => env('REPLICATE_BASE_URL', 'https://api.replicate.com'),
+        // LoRA fine-tuning: destination models are created under this account.
+        'owner'     => env('REPLICATE_OWNER', 'vinayyadav55'),
+        // Optional pin for ostris/flux-dev-lora-trainer; empty = use latest_version.
+        'trainer_version' => env('REPLICATE_TRAINER_VERSION'),
+    ],
+
     // PlantAtHome — MSG91 OTP gateway (phone signup). DLT-registered sender + template.
     'msg91' => [
         'auth_key' => env('MSG91_AUTH_KEY'),
@@ -55,6 +68,24 @@ return [
         'otp_has_button' => env('WHATSAPP_OTP_HAS_BUTTON', false),
         'notify_template' => env('WHATSAPP_NOTIFY_TEMPLATE'),
         'notify_lang' => env('WHATSAPP_NOTIFY_LANG', 'en'),
+    ],
+
+    // PlantAtHome — Twilio (alternative OTP gateway). TwilioGateway already reads these keys, but
+    // no block defined them, so every lookup resolved to null; the setup command only ever wrote
+    // the env vars.
+    'twilio' => [
+        'account_sid'      => env('TWILIO_ACCOUNT_SID'),
+        'auth_token'       => env('TWILIO_AUTH_TOKEN'),
+        'from'             => env('TWILIO_FROM_NUMBER'),
+        'verification_sid' => env('TWILIO_VERIFICATION_SID'),
+    ],
+
+    // PlantAtHome — Anthropic (translation engine, and anything else on AiTranslationTrait).
+    // Read through config rather than env() so the Integrations module can overlay a key rotated
+    // from the admin without a redeploy.
+    'anthropic' => [
+        'api_key' => env('ANTHROPIC_API_KEY'),
+        'model'   => env('CLAUDE_TRANSLATE_MODEL'),
     ],
 
     // PlantAtHome — LinkedIn ("Sign In with LinkedIn using OpenID Connect").

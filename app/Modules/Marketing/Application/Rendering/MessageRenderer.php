@@ -61,7 +61,11 @@ final class MessageRenderer
 
         return [
             'subject' => $subject,
-            'body'    => VariableMapper::render(implode("\n", $parts), $row),
+            // HTML context — recipient values are customer-controlled and must be
+            // escaped on the way in (see VariableMapper::render). The SMS/WhatsApp
+            // path above is plain text and deliberately stays unescaped, or every
+            // apostrophe would ship as &#039;.
+            'body'    => VariableMapper::render(implode("\n", $parts), $row, true),
         ];
     }
 }

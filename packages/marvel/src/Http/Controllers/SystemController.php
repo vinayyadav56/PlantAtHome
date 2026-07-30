@@ -7,6 +7,7 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\AdminTask;
 use Marvel\Database\Models\RequestLog;
@@ -112,6 +113,111 @@ class SystemController extends CoreController
     // Container platforms (Railway) give us no shell; the boot script swallows
     // `migrate` failures. These two endpoints make schema state visible and
     // repairable from the admin (SUPER_ADMIN group).
+
+    /** Mail diagnostics: resolved config + an optional SYNC test send (SUPER_ADMIN). */
+    public function mailDiagnostics(Request $request): JsonResponse
+    {
+        $config = [
+            'default_mailer'       => config('mail.default'),
+            'sendgrid_key_present' => (bool) config('mail.mailers.sendgrid.key'),
+            'from_address'         => config('mail.from.address'),
+            'from_name'            => config('mail.from.name'),
+            'smtp_host'            => config('mail.mailers.smtp.host'),
+        ];
+
+        $to = $request->input('to');
+        if (!$to) {
+            return response()->json(['config' => $config, 'note' => 'Pass ?to=email&mailer=sendgrid|smtp to run a sync test send.']);
+        }
+
+        // A synchronous send surfaces the real transport error (a queued send
+        // hides it in a worker). Default to the sendgrid HTTPS transport.
+        $mailer = $request->input('mailer')
+            ?: (config('mail.mailers.sendgrid.key') ? 'sendgrid' : config('mail.default'));
+
+        try {
+            Mail::mailer($mailer)->raw(
+                'PlantAtHome mail diagnostics test — sent at ' . now()->toDateTimeString() . " via [{$mailer}].",
+                function ($m) use ($to) {
+                    $m->to($to)->subject('PlantAtHome mail test');
+                }
+            );
+
+            return response()->json([
+                'config'    => $config,
+                'sent'      => true,
+                'mailer'    => $mailer,
+                'to'        => $to,
+                'note'      => 'Transport accepted the message. If it does not arrive, the sender is likely unverified in SendGrid or it landed in spam.',
+            ]);
+        } catch (\Throwable $e) {
+            // Return 200 so the real transport error survives (Marvel's handler
+            // rewrites 500 bodies to a generic "Server Error.").
+            return response()->json([
+                'config'     => $config,
+                'sent'       => false,
+                'mailer'     => $mailer,
+                'error_type' => get_class($e),
+                'error'      => mb_substr($e->getMessage(), 0, 800),
+            ]);
+        }
+    }
+
+    /**
+     * Ask SendGrid directly (via its v3 API with the configured key) what
+     * senders/domains are verified, and attempt a raw send returning
+     * SendGrid's real HTTP status + body. This bypasses Laravel's mail
+     * transport + Marvel's 500 masking, so the true cause of non-delivery
+     * (almost always "from address is not a verified Sender Identity") is
+     * visible. Everything returns at 200.
+     */
+    public function sendgridDiagnostics(Request $request): JsonResponse
+    {
+        $key  = config('mail.mailers.sendgrid.key');
+        $from = config('mail.from.address');
+        if (!$key) {
+            return response()->json(['error' => 'No SendGrid key configured.']);
+        }
+
+        $get = function (string $path) use ($key) {
+            try {
+                $res = \Illuminate\Support\Facades\Http::withToken($key)
+                    ->timeout(15)->get('https://api.sendgrid.com/v3/' . $path);
+
+                return ['status' => $res->status(), 'body' => $res->json() ?? mb_substr($res->body(), 0, 300)];
+            } catch (\Throwable $e) {
+                return ['error' => mb_substr($e->getMessage(), 0, 200)];
+            }
+        };
+
+        $out = [
+            'configured_from'  => $from,
+            'verified_senders' => $get('verified_senders'),
+            'domain_auth'      => $get('whitelabel/domains'),
+        ];
+
+        // Optional raw send → SendGrid's real accept/reject for the current from.
+        if ($to = $request->input('to')) {
+            try {
+                $res = \Illuminate\Support\Facades\Http::withToken($key)
+                    ->timeout(20)
+                    ->post('https://api.sendgrid.com/v3/mail/send', [
+                        'personalizations' => [['to' => [['email' => $to]]]],
+                        'from'    => ['email' => $from, 'name' => config('mail.from.name')],
+                        'subject' => 'PlantAtHome SendGrid diagnostic',
+                        'content' => [['type' => 'text/plain', 'value' => 'Diagnostic send at ' . now()->toDateTimeString()]],
+                    ]);
+                $out['raw_send'] = [
+                    'http_status' => $res->status(), // 202 = accepted; 403 = unverified sender
+                    'body'        => $res->successful() ? '(accepted)' : (mb_substr($res->body(), 0, 500) ?: '(empty)'),
+                ];
+            } catch (\Throwable $e) {
+                $out['raw_send'] = ['error' => mb_substr($e->getMessage(), 0, 300)];
+            }
+        }
+
+        return response()->json($out);
+    }
 
     /** Read-only: pending migrations + presence of recently-added tables. */
     public function schemaStatus(): JsonResponse
@@ -252,6 +358,81 @@ class SystemController extends CoreController
                 'ok'     => false,
                 'error'  => $e->getMessage(),
                 'output' => Artisan::output(),
+            ], 500);
+        }
+    }
+
+    /**
+     * Run one allowlisted maintenance command in-request and return what it
+     * actually did — output, exit code, and the VERBATIM exception if it threw.
+     *
+     * Why this exists: the scheduler swallows per-event exceptions (by design —
+     * one bad command must not stop the others), so a scheduled sweep can fail
+     * every minute for hours while `schedule:run` looks perfectly healthy. On a
+     * host with no shell (Railway) there was previously no way to see that
+     * exception at all. Strictly allowlisted to idempotent, safe-to-rerun
+     * maintenance commands — never a free-form command runner.
+     */
+    public const RUNNABLE_COMMANDS = [
+        // Clears orphaned scheduler overlap mutexes. `withoutOverlapping()`
+        // registers a SKIP FILTER, so a lock left behind by a killed process
+        // makes schedule:run drop the event with no exception and no log line —
+        // the command simply never runs. Shortening the TTL in code cannot
+        // release a lock that already exists, and on a database cache store the
+        // row survives redeploys, so this is the only way to clear it without a
+        // shell. Safe: the scheduler recreates locks on the next tick.
+        'schedule:clear-cache'      => \Illuminate\Console\Scheduling\ScheduleClearCacheCommand::class,
+        'images:sweep-batches'      => \Marvel\Console\SweepImageBatchesCommand::class,
+        'content:sweep-batches'     => \Marvel\Console\SweepContentBatchesCommand::class,
+        'inventory:release-expired' => \App\Modules\Inventory\Console\ReleaseExpiredReservationsCommand::class,
+        'outbox:relay'              => \App\Console\Commands\OutboxRelayCommand::class,
+        'marketing:dispatch-due'    => \App\Modules\Marketing\Console\DispatchDueCampaignsCommand::class,
+    ];
+
+    public function runCommand(Request $request): JsonResponse
+    {
+        $command = (string) $request->input('command', '');
+        if (!array_key_exists($command, self::RUNNABLE_COMMANDS)) {
+            return response()->json([
+                'ok'      => false,
+                'error'   => 'Command is not on the allowlist.',
+                'allowed' => array_keys(self::RUNNABLE_COMMANDS),
+            ], 422);
+        }
+
+        $started = microtime(true);
+        try {
+            // Register the concrete command first. Marvel registers its commands
+            // from bootForConsole(), and the module providers do the same, so in
+            // an HTTP request NONE of them exist — calling by name would report
+            // "command does not exist" and look exactly like the real bug this
+            // endpoint is meant to diagnose. Register explicitly, don't infer.
+            app(\Illuminate\Contracts\Console\Kernel::class)
+                ->registerCommand(app(self::RUNNABLE_COMMANDS[$command]));
+
+            $exit   = Artisan::call($command, $command === 'outbox:relay' ? ['--once' => true] : []);
+            $output = Artisan::output();
+
+            return response()->json([
+                'ok'          => $exit === 0,
+                'command'     => $command,
+                'exit_code'   => $exit,
+                'output'      => $output,
+                'duration_ms' => (int) round((microtime(true) - $started) * 1000),
+            ]);
+        } catch (\Throwable $e) {
+            // The whole point: surface the exception the scheduler would eat.
+            return response()->json([
+                'ok'          => false,
+                'command'     => $command,
+                'error'       => $e->getMessage(),
+                'exception'   => get_class($e),
+                'at'          => $e->getFile() . ':' . $e->getLine(),
+                'trace'       => collect($e->getTrace())->take(12)->map(fn ($f) => trim(
+                    ($f['file'] ?? '?') . ':' . ($f['line'] ?? '?') . ' ' . ($f['function'] ?? '')
+                ))->values(),
+                'output'      => Artisan::output(),
+                'duration_ms' => (int) round((microtime(true) - $started) * 1000),
             ], 500);
         }
     }

@@ -65,12 +65,15 @@ use Marvel\Http\Controllers\DeliveryNotifyController;
 use Marvel\Http\Controllers\DeliveryPartnerController;
 use Marvel\Http\Controllers\PriceSheetController;
 use Marvel\Http\Controllers\ImageBatchController;
+use Marvel\Http\Controllers\LoraModelController;
+use Marvel\Http\Controllers\ProductContentBatchController;
 use Marvel\Http\Controllers\LocationCaptureController;
 use Marvel\Http\Controllers\VendorInventoryController;
 use Marvel\Http\Controllers\SettlementController;
 use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
+use Marvel\Http\Controllers\IntegrationController;
 use Marvel\Http\Controllers\CourierPartnerProxyController;
 use Marvel\Http\Controllers\PricingMarginController;
 use Marvel\Http\Controllers\VendorController;
@@ -121,16 +124,34 @@ Route::get('best-selling-products', [ProductController::class, 'bestSellingProdu
 Route::get('top-rated-products', [ProductController::class, 'topRatedProducts']);
 Route::get('check-availability', [ProductController::class, 'checkAvailability']);
 Route::get("products/calculate-rental-price", [ProductController::class, 'calculateRentalPrice']);
+// PlantAtHome — distinct plant-attribute values + counts + price histogram for the
+// storefront filter rail. Public + cached; registered BEFORE the products apiResource
+// so `filter-facets` is never captured by the products/{product} show param.
+Route::get('products/filter-facets', [ProductController::class, 'filterFacets'])->middleware('throttle:120,1');
 // Bulk import/export carry an in-controller hasPermission() check; add a throttle
 // so the public routes can't be abused for bulk-write storms / catalog scraping.
 Route::post('import-products', [ProductController::class, 'importProducts'])->middleware('throttle:20,1');
 Route::post('import-variation-options', [ProductController::class, 'importVariationOptions'])->middleware('throttle:20,1');
-Route::get('export-products/{shop_id}', [ProductController::class, 'exportProducts'])->middleware('throttle:30,1');
-Route::get('export-variation-options/{shop_id}', [ProductController::class, 'exportVariableOptions'])->middleware('throttle:30,1');
+// ⚠️ CSV exports stream a shop's ENTIRE catalogue (cost fields, stock, the full
+// option matrix) and were reachable with no auth for any enumerable {shop_id} —
+// while the import endpoints above have always carried hasPermission(). They
+// cannot move behind `auth:sanctum`: the admin downloads them with a plain
+// `<a href>` browser navigation that sends no Bearer token, so gating them
+// directly breaks Products → Export. Instead they require a SIGNED url, minted
+// by the authed + permission-checked `export-urls/{shop_id}` below. Same shape
+// as the existing export-order/download-invoice token flows.
+Route::get('export-products/{shop_id}', [ProductController::class, 'exportProducts'])
+    ->middleware(['signed', 'throttle:30,1'])->name('export_products.signed');
+Route::get('export-variation-options/{shop_id}', [ProductController::class, 'exportVariableOptions'])
+    ->middleware(['signed', 'throttle:30,1'])->name('export_variation_options.signed');
 // (removed dead `generate-description` singular route — ProductController has no
 //  such method; it 500'd. The working endpoint is the plural `generate-descriptions`.)
 Route::post('import-attributes', [AttributeController::class, 'importAttributes'])->middleware('throttle:20,1');
-Route::get('export-attributes/{shop_id}', [AttributeController::class, 'exportAttributes']);
+Route::get('export-attributes/{shop_id}', [AttributeController::class, 'exportAttributes'])
+    ->middleware(['signed', 'throttle:30,1'])->name('export_attributes.signed');
+// Authed + permission-checked issuer for the three signed export URLs above.
+Route::get('export-urls/{shop_id}', [ProductController::class, 'exportUrls'])
+    ->middleware(['auth:sanctum', 'throttle:30,1']);
 Route::get('download_url/token/{token}', [DownloadController::class, 'downloadFile'])->name('download_url.token');
 Route::get('export-order/token/{token}', [OrderController::class, 'exportOrder'])->name('export_order.token');
 Route::post('subscribe-to-newsletter', [UserController::class, 'subscribeToNewsletter'])->name('subscribeToNewsletter');
@@ -165,6 +186,15 @@ Route::post('voice-search/log', [VoiceSearchController::class, 'storeLog'])
 Route::get('plant-doctor/settings', [PlantDoctorController::class, 'getSettings']);
 Route::post('plant-doctor/diagnose', [PlantDoctorController::class, 'diagnose'])
     ->middleware('throttle:30,1');
+// Plant Doctor consultation history — customer-owned rows (user_id always from
+// the token). Auth-gated; store is rate-limited alongside the diagnose cap.
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('plant-doctor/consultations', [PlantDoctorController::class, 'consultations']);
+    Route::post('plant-doctor/consultations', [PlantDoctorController::class, 'storeConsultation'])
+        ->middleware('throttle:30,1');
+    Route::delete('plant-doctor/consultations/{id}', [PlantDoctorController::class, 'deleteConsultation'])
+        ->whereNumber('id');
+});
 
 // Plant care tracker — public reads the feature flag; the customer routes (my plans,
 // start a plan, mark reminders done) are auth-gated below. Plans are auto-created on
@@ -350,7 +380,12 @@ Route::post('/email/verification-notification', [UserController::class, 'sendVer
 // Payment submission keyed by a guessable tracking_number — throttle to stop
 // enumeration/replay storms against the live payment processor.
 Route::post('orders/payment', [OrderController::class, 'submitPayment'])->middleware('throttle:20,1');
-Route::post('generate-descriptions', [AiController::class, 'generateDescription'])->middleware('throttle:10,1');
+// ⚠️ These call a PAID LLM. Unauthenticated they are an open, unmetered spend
+// tap on our OpenAI account (which has already hit its billing hard limit once).
+// Both are only ever called from the admin product form via the authed
+// HttpClient, so requiring a token costs nothing and closes the tap.
+Route::post('generate-descriptions', [AiController::class, 'generateDescription'])->middleware(['auth:sanctum', 'throttle:10,1']);
+Route::post('suggest-categories', [AiController::class, 'suggestCategories'])->middleware(['auth:sanctum', 'throttle:20,1']);
 Route::get('/payment-intent', [PaymentIntentController::class, 'getPaymentIntent'])->middleware('throttle:20,1');
 
 Route::apiResource('faqs', FaqsController::class, [
@@ -671,6 +706,32 @@ Route::group(
  * *****************************************
  */
 
+/*
+ * Integration Management — the single source of truth for third-party credentials.
+ *
+ * This group is keyed on the FINE-GRAINED settings.integrations.* permissions rather than sitting
+ * inside the super-admin block below. A super admin still passes every check via the global
+ * Gate::before bypass in ShopServiceProvider, but this way a designation can be granted read-only
+ * visibility (view) or the ability to run a connection test without also being handed the right to
+ * edit credentials.
+ *
+ * Reads never return a credential VALUE — only which fields are set. There is deliberately no
+ * reveal endpoint.
+ */
+Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
+    Route::get('integrations', [IntegrationController::class, 'index'])
+        ->middleware('permission:settings.integrations.view');
+    Route::get('integrations/{slug}', [IntegrationController::class, 'show'])
+        ->middleware('permission:settings.integrations.view');
+    Route::put('integrations/{slug}', [IntegrationController::class, 'update'])
+        ->middleware(['permission:settings.integrations.edit', 'throttle:30,1']);
+    // Test + sync make OUTBOUND calls, so they are throttled harder than a read.
+    Route::post('integrations/{slug}/test', [IntegrationController::class, 'test'])
+        ->middleware(['permission:settings.integrations.test', 'throttle:20,1']);
+    Route::post('integrations/{slug}/sync', [IntegrationController::class, 'sync'])
+        ->middleware(['permission:settings.integrations.edit', 'throttle:20,1']);
+});
+
 Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sanctum']], function () {
     // Courier / shipping-microservice config: master switch + default package + per-partner
     // (Borzo / Shiprocket / Go shipping-service) enable + non-secret settings + ENCRYPTED
@@ -681,6 +742,22 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // switches, e.g. Porter's paid get_quote/track). No secrets — those stay env-only.
     Route::get('courier/partners/{code}/config', [CourierPartnerProxyController::class, 'show']);
     Route::put('courier/partners/{code}/config', [CourierPartnerProxyController::class, 'update']);
+    // Partner DEBUG CONSOLE, proxied 1:1 to the same service. Returns the service's `exchange`
+    // (exact upstream request/response, credentials masked service-side) so a partner integration
+    // can be debugged from the admin UI. The test/* calls hit LIVE partner APIs and cost money, so
+    // each carries its own tight throttle on top of the group's; book/cancel touch a REAL delivery
+    // and are the tightest. Their confirmation string is the CALLER's, forwarded verbatim — the
+    // guard is enforced by the shipping-service, never here.
+    Route::get('courier/partners/{code}/webhooks', [CourierPartnerProxyController::class, 'webhooks'])
+        ->middleware('throttle:60,1');
+    Route::post('courier/partners/{code}/test/quote', [CourierPartnerProxyController::class, 'testQuote'])
+        ->middleware('throttle:20,1');
+    Route::get('courier/partners/{code}/test/track', [CourierPartnerProxyController::class, 'testTrack'])
+        ->middleware('throttle:20,1');
+    Route::post('courier/partners/{code}/test/book', [CourierPartnerProxyController::class, 'testBook'])
+        ->middleware('throttle:5,1');
+    Route::post('courier/partners/{code}/test/cancel', [CourierPartnerProxyController::class, 'testCancel'])
+        ->middleware('throttle:5,1');
     // Route::get('messages/get-conversations/{shop_id}', [ConversationController::class, 'getConversationByShopId']);
     // Route::get('analytics', [AnalyticsController::class, 'analytics']);
     Route::apiResource('types', TypeController::class, [
@@ -722,6 +799,16 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('ai-images/instant', [ImageBatchController::class, 'instantStore'])->middleware('throttle:20,1');
     Route::get('ai-images/instant', [ImageBatchController::class, 'instantIndex']);
     Route::get('ai-images/instant/{id}', [ImageBatchController::class, 'instantShow'])->middleware('throttle:240,1');
+    // Replicate LoRA fine-tunes: train a style once, then generate instants
+    // with provider=replicate + lora_model_id. show() lazily refreshes status.
+    Route::get('ai-images/lora-models', [LoraModelController::class, 'index']);
+    Route::post('ai-images/lora-models', [LoraModelController::class, 'store'])->middleware('throttle:10,1');
+    Route::get('ai-images/lora-models/{id}', [LoraModelController::class, 'show'])->middleware('throttle:240,1');
+    Route::post('ai-images/lora-models/{id}/cancel', [LoraModelController::class, 'cancel']);
+    // Row-only delete (nothing removed on Replicate or s3); pending/training rows 409 until canceled.
+    Route::delete('ai-images/lora-models/{id}', [LoraModelController::class, 'destroy']);
+    // Admin uploads OWN training photos → media-host URLs that store()'s SSRF allowlist accepts.
+    Route::post('ai-images/lora-uploads', [LoraModelController::class, 'upload'])->middleware('throttle:20,1');
     Route::get('ai-image-batches/capabilities', [ImageBatchController::class, 'capabilities']);
     Route::get('ai-image-batches', [ImageBatchController::class, 'index']);
     Route::post('ai-image-batches', [ImageBatchController::class, 'store']);
@@ -731,6 +818,15 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('ai-image-batches/{id}/retry-failed', [ImageBatchController::class, 'retryFailed']);
     Route::get('ai-image-batches/{id}', [ImageBatchController::class, 'show']);
     Route::delete('ai-image-batches/{id}', [ImageBatchController::class, 'destroy']);
+
+    // Bulk AI product-content generation (descriptions + categories) from the listing.
+    Route::get('ai-content-batches/capabilities', [ProductContentBatchController::class, 'capabilities']);
+    Route::get('ai-content-batches', [ProductContentBatchController::class, 'index']);
+    Route::post('ai-content-batches', [ProductContentBatchController::class, 'store']);
+    Route::get('ai-content-batches/{id}/rows', [ProductContentBatchController::class, 'rows']);
+    Route::post('ai-content-batches/{id}/cancel', [ProductContentBatchController::class, 'cancel']);
+    Route::post('ai-content-batches/{id}/retry-failed', [ProductContentBatchController::class, 'retryFailed']);
+    Route::get('ai-content-batches/{id}', [ProductContentBatchController::class, 'show']);
 
     // Vendor price sheets (admin-only Excel cost upload + audit + review)
     Route::post('import-vendor-price-sheet', [PriceSheetController::class, 'import']);
@@ -1033,6 +1129,12 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('system/prune-table', [SystemController::class, 'pruneTable'])->middleware('throttle:6,1');
     Route::post('system/purge-binlogs', [SystemController::class, 'purgeBinlogs'])->middleware('throttle:6,1');
     Route::get('system/db-diagnostics', [SystemController::class, 'dbDiagnostics']);
+    Route::match(['get', 'post'], 'system/mail-diagnostics', [SystemController::class, 'mailDiagnostics'])->middleware('throttle:20,1');
+    Route::match(['get', 'post'], 'system/sendgrid-diagnostics', [SystemController::class, 'sendgridDiagnostics'])->middleware('throttle:20,1');
+    // Run one ALLOWLISTED maintenance command and return its exception verbatim —
+    // the scheduler swallows per-event errors, so a sweep can fail every minute
+    // while schedule:run looks healthy, and there is no shell on this host.
+    Route::match(['get', 'post'], 'system/run-command', [SystemController::class, 'runCommand'])->middleware('throttle:20,1');
 });
 
 

@@ -51,6 +51,12 @@ class ProductResource extends Resource
                 : $this->quantity,
             'display_priority'     => $this->display_priority,
             'unit'                 => $this->unit,
+            // PlantAtHome — short PLAIN-TEXT description for the listing card.
+            // The full HTML `description` is deliberately omitted from list
+            // payloads (size), which left cards showing unit/category fallbacks
+            // that never matched what the admin wrote. Rendered as text on the
+            // storefront (never HTML), so stripping here is also the XSS guard.
+            'description_preview'  => $this->descriptionPreview(),
             'sku'                  => $this->sku,
             'barcode'              => $this->barcode ?? null,
             'seo_title'            => $this->seo_title ?? null,
@@ -84,6 +90,21 @@ class ProductResource extends Resource
             'min_price'  => $p->min_price, // variable children: NULL price → shop falls back to this
             'quantity'   => (int) (optional($p->pivot)->quantity ?: 1),
         ])->values()->all();
+    }
+
+    /** Plain-text preview of the (Quill HTML) description, ≤200 chars. */
+    protected function descriptionPreview(): ?string
+    {
+        $raw = (string) ($this->description ?? '');
+        if ($raw === '') {
+            return null;
+        }
+        $text = trim((string) preg_replace('/\s+/u', ' ', html_entity_decode(strip_tags($raw), ENT_QUOTES | ENT_HTML5)));
+        if ($text === '') {
+            return null;
+        }
+
+        return mb_strlen($text) > 200 ? mb_substr($text, 0, 200) : $text;
     }
 
     /** Up to three short care chips (Light · Water · Ease) from plant_attribute. */

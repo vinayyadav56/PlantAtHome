@@ -157,4 +157,159 @@ final class GenerateImageBatchJobTest extends ImageBatchTestCase
         $this->assertNull($batch->fresh()->zip_paths);
         Mail::assertSent(ImageBatchCompleted::class);
     }
+
+    /* ── provider=replicate (Flux) ────────────────────────────────────────── */
+
+    public function test_replicate_lora_batch_generates_via_the_shared_replicate_service(): void
+    {
+        config(['services.replicate.api_token' => 'test-replicate-token']);
+        Http::fake([
+            // Version-pinned prediction (a trained LoRA) goes to POST /v1/predictions.
+            'api.replicate.com/v1/predictions' => Http::response([
+                'id'     => 'pred-1',
+                'status' => 'succeeded',
+                'output' => ['https://replicate.delivery/out/img.png'],
+            ], 201),
+            'replicate.delivery/*' => Http::response(self::PNG_BYTES, 200, ['Content-Type' => 'image/png']),
+        ]);
+
+        $batch = $this->makeBatch(
+            [['PLT001', 'Areca Palm', 'A lush areca palm']],
+            [
+                'settings' => [
+                    'provider'      => 'replicate',
+                    'model'         => 'test-owner/forest-style',
+                    'aspect_ratio'  => '4:3',
+                    'lora_model_id' => 1,
+                    'lora_version'  => 'ver-hash-1',
+                    'trigger_word'  => 'PAHSTYLE',
+                ],
+            ],
+            imagesPerPlant: 1,
+        );
+
+        GenerateImageBatchJob::dispatch($batch->id);
+
+        $batch->refresh();
+        $this->assertSame(ImageBatch::STATUS_COMPLETED, $batch->status);
+        $this->assertSame(1, (int) $batch->generated_count);
+        $this->assertSame(0, (int) $batch->failed_count);
+
+        $result = ImageGenerationResult::first();
+        $this->assertSame(ImageGenerationResult::STATUS_COMPLETED, $result->status);
+        $this->assertSame('test-owner/forest-style', $result->model);
+        $this->assertSame('4:3', $result->size); // aspect_ratio, audited via the 'size' column
+        $this->assertNull($result->quality); // Flux has no quality tiers
+        Storage::disk('s3')->assertExists($result->s3_path);
+        $this->assertSame(self::PNG_BYTES, Storage::disk('s3')->get($result->s3_path));
+
+        // The actual generation call: version-pinned prediction, trigger word
+        // prepended exactly once, aspect_ratio forwarded — proves the batch
+        // path reused ReplicateImageService::generateWithVersion() exactly as
+        // the instant generator does.
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/v1/predictions')
+            && $request['version'] === 'ver-hash-1'
+            && $request['input']['prompt'] === 'PAHSTYLE, A lush areca palm'
+            && $request['input']['aspect_ratio'] === '4:3');
+    }
+
+    public function test_replicate_lora_batch_does_not_double_prefix_an_existing_trigger_word(): void
+    {
+        config(['services.replicate.api_token' => 'test-replicate-token']);
+        Http::fake([
+            'api.replicate.com/v1/predictions' => Http::response([
+                'id' => 'pred-1', 'status' => 'succeeded', 'output' => ['https://replicate.delivery/out/img.png'],
+            ], 201),
+            'replicate.delivery/*' => Http::response(self::PNG_BYTES, 200, ['Content-Type' => 'image/png']),
+        ]);
+
+        // Prompt already contains the trigger word (case-insensitive).
+        $batch = $this->makeBatch(
+            [['PLT001', 'Areca Palm', 'pahstyle areca palm on a shelf']],
+            [
+                'settings' => [
+                    'provider'      => 'replicate',
+                    'model'         => 'test-owner/forest-style',
+                    'lora_version'  => 'ver-hash-1',
+                    'trigger_word'  => 'PAHSTYLE',
+                ],
+            ],
+            imagesPerPlant: 1,
+        );
+
+        GenerateImageBatchJob::dispatch($batch->id);
+
+        Http::assertSent(fn ($request) => str_ends_with($request->url(), '/v1/predictions')
+            && $request['input']['prompt'] === 'pahstyle areca palm on a shelf');
+    }
+
+    public function test_replicate_base_flux_batch_generates_via_the_model_routed_endpoint(): void
+    {
+        config(['services.replicate.api_token' => 'test-replicate-token']);
+        Http::fake([
+            // No lora_version → model-routed endpoint POST /v1/models/{model}/predictions.
+            'api.replicate.com/v1/models/black-forest-labs/flux-dev/predictions' => Http::response([
+                'id' => 'pred-2', 'status' => 'succeeded', 'output' => ['https://replicate.delivery/out/img2.png'],
+            ], 201),
+            'replicate.delivery/*' => Http::response(self::PNG_BYTES, 200, ['Content-Type' => 'image/png']),
+        ]);
+
+        $batch = $this->makeBatch(
+            [['PLT001', 'Areca Palm', 'A lush areca palm']],
+            [
+                'settings' => [
+                    'provider'     => 'replicate',
+                    'model'        => 'black-forest-labs/flux-dev',
+                    'aspect_ratio' => '1:1',
+                ],
+            ],
+            imagesPerPlant: 1,
+        );
+
+        GenerateImageBatchJob::dispatch($batch->id);
+
+        $this->assertSame(ImageBatch::STATUS_COMPLETED, $batch->fresh()->status);
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/v1/models/black-forest-labs/flux-dev/predictions')
+            && $request['input']['prompt'] === 'A lush areca palm');
+    }
+
+    /**
+     * Flux is deterministic: a pinned seed reused across every slot of a
+     * multi-image row would return the SAME image N times (and bill for each).
+     * Each slot must therefore get its own offset seed.
+     */
+    public function test_replicate_pinned_seed_is_offset_per_image_slot(): void
+    {
+        config(['services.replicate.api_token' => 'test-replicate-token']);
+        Http::fake([
+            'api.replicate.com/v1/models/black-forest-labs/flux-dev/predictions' => Http::response([
+                'id' => 'pred-3', 'status' => 'succeeded', 'output' => ['https://replicate.delivery/out/img3.png'],
+            ], 201),
+            'replicate.delivery/*' => Http::response(self::PNG_BYTES, 200, ['Content-Type' => 'image/png']),
+        ]);
+
+        $batch = $this->makeBatch(
+            [['PLT001', 'Areca Palm', 'A lush areca palm']],
+            [
+                'settings' => [
+                    'provider'     => 'replicate',
+                    'model'        => 'black-forest-labs/flux-dev',
+                    'aspect_ratio' => '1:1',
+                    'seed'         => 4242,
+                ],
+            ],
+            imagesPerPlant: 3,
+        );
+
+        GenerateImageBatchJob::dispatch($batch->id);
+
+        $this->assertSame(ImageBatch::STATUS_COMPLETED, $batch->fresh()->status);
+        $this->assertSame(3, (int) $batch->fresh()->generated_count);
+
+        // Slot 1 reproduces the requested seed exactly; 2 and 3 step off it.
+        foreach ([4242, 4243, 4244] as $expectedSeed) {
+            Http::assertSent(fn ($request) => str_contains($request->url(), '/flux-dev/predictions')
+                && ($request['input']['seed'] ?? null) === $expectedSeed);
+        }
+    }
 }

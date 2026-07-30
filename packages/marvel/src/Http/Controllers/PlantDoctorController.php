@@ -7,10 +7,16 @@ use Illuminate\Http\JsonResponse;
 use Illuminate\Support\Facades\Http;
 use Marvel\Database\Models\PlantDoctorSetting;
 use Marvel\Database\Models\PlantDoctorLog;
+use Marvel\Database\Models\PlantDoctorConsultation;
 use Marvel\Enums\Permission;
 
 class PlantDoctorController extends CoreController
 {
+    // Server-side history: rows kept per user (oldest pruned) and the max
+    // accepted size for the data-URI thumbnail (client sends ~<50KB).
+    private const CONSULTATIONS_PER_USER = 50;
+    private const THUMB_MAX_BYTES = 80_000;
+
     // Claude (Anthropic) pricing, USD per 1M tokens [input, output]. The Plant Doctor
     // microservice runs on Claude vision; the service returns the exact model + token usage.
     private const MODEL_PRICES = [
@@ -53,8 +59,11 @@ class PlantDoctorController extends CoreController
             return response()->json(['message' => 'Plant Doctor is currently unavailable.'], 503);
         }
 
-        $serviceUrl = rtrim($setting->service_url ?: (string) env('PLANT_DOCTOR_SERVICE_URL'), '/');
-        $serviceKey = $setting->service_api_key ?: (string) env('PLANT_DOCTOR_SERVICE_API_KEY');
+        // Resolved through the Integration module (integration_providers → this feature's table →
+        // env), so a rotated key is an admin action rather than a redeploy.
+        $integrations = app(\Marvel\Integrations\IntegrationService::class);
+        $serviceUrl = rtrim((string) $integrations->config('plant_doctor', 'service_url', env('PLANT_DOCTOR_SERVICE_URL')), '/');
+        $serviceKey = $integrations->secret('plant_doctor', 'service_api_key', (string) env('PLANT_DOCTOR_SERVICE_API_KEY'));
         if (empty($serviceUrl)) {
             return response()->json(['message' => 'Plant Doctor service is not configured.'], 503);
         }
@@ -147,6 +156,72 @@ class PlantDoctorController extends CoreController
         ]);
 
         return response()->json(['data' => $body]);
+    }
+
+    /** Auth — the current user's saved consultations, newest first. */
+    public function consultations(Request $request): JsonResponse
+    {
+        $rows = PlantDoctorConsultation::where('user_id', $request->user()->id)
+            ->orderByDesc('id')
+            ->limit(20)
+            ->get();
+
+        return response()->json(['data' => $rows]);
+    }
+
+    /**
+     * Auth — save a diagnosis to the current user's history. user_id always
+     * comes from the token, never from input; the per-user row count is capped.
+     */
+    public function storeConsultation(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'plant_name' => 'nullable|string|max:191',
+            'thumb' => 'nullable|string',
+            'diagnosis' => 'required|array',
+            'health_score' => 'nullable|integer|min:0|max:100',
+            'worst_severity' => 'nullable|string|max:16',
+        ]);
+
+        // Size-cap the data-URI thumbnail server-side (client sends ~<50KB).
+        if (!empty($data['thumb']) && strlen($data['thumb']) > self::THUMB_MAX_BYTES) {
+            return response()->json(['message' => 'Thumbnail is too large.'], 422);
+        }
+
+        $userId = $request->user()->id;
+        $row = PlantDoctorConsultation::create([
+            'user_id' => $userId,
+            'plant_name' => $data['plant_name'] ?? null,
+            'thumb' => $data['thumb'] ?? null,
+            'diagnosis' => $data['diagnosis'],
+            'health_score' => $data['health_score'] ?? null,
+            'worst_severity' => $data['worst_severity'] ?? null,
+        ]);
+
+        // Prune the oldest rows beyond the per-user cap.
+        $excess = PlantDoctorConsultation::where('user_id', $userId)
+            ->orderByDesc('id')
+            ->skip(self::CONSULTATIONS_PER_USER)
+            ->take(self::CONSULTATIONS_PER_USER)
+            ->pluck('id');
+        if ($excess->isNotEmpty()) {
+            PlantDoctorConsultation::whereIn('id', $excess)->delete();
+        }
+
+        return response()->json(['data' => $row], 201);
+    }
+
+    /** Auth — delete one of the current user's consultations (404 otherwise). */
+    public function deleteConsultation(Request $request, int $id): JsonResponse
+    {
+        $deleted = PlantDoctorConsultation::where('user_id', $request->user()->id)
+            ->where('id', $id)
+            ->delete();
+        if (!$deleted) {
+            return response()->json(['message' => 'Not found.'], 404);
+        }
+
+        return response()->json(['message' => 'Deleted.']);
     }
 
     /** Public — the storefront reads this to know if the feature is on. */

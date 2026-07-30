@@ -33,6 +33,11 @@ class AiDescriptionRequest extends FormRequest
             // is a cost/abuse vector (route is public + throttled).
             'prompt'                  => ['string', 'required', 'max:2000'],
             'language'                => ['string', 'nullable', 'max:16'],
+            // Generation options (all optional): length may be a keyword
+            // (short|medium|long) or a character count; tone/keywords are free text.
+            'length'                  => ['nullable', 'string', 'max:20'],
+            'tone'                    => ['nullable', 'string', 'max:40'],
+            'keywords'                => ['nullable', 'string', 'max:500'],
         ];
     }
 
