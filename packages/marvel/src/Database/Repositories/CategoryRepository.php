@@ -23,6 +23,11 @@ class CategoryRepository extends BaseRepository
         'type.slug',
     ];
 
+    /**
+     * Write whitelist — saveCategory/updateCategory do $request->only($dataArray),
+     * so a column missing from this list is SILENTLY DROPPED. An admin toggle for
+     * such a column appears to save and never persists.
+     */
     protected $dataArray = [
         'name',
         'slug',
@@ -33,6 +38,9 @@ class CategoryRepository extends BaseRepository
         'details',
         'language',
         'parent',
+        'show_on_homepage',
+        'homepage_sort_order',
+        'is_active',
     ];
 
     public function boot()

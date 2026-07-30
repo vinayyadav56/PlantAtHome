@@ -87,12 +87,20 @@ class CategoryController extends CoreController
         // the formatted payload, busted by a version key on any category write.
         // `c3` is a static code version — bump it to abandon any old poisoned
         // cache entries (c2 omitted the type from the key → cross-vertical mix).
+        // Homepage placement filter, opt-in via ?home=1. Off by default so every
+        // existing caller (filter sidebar, mega-menu, admin) is untouched.
+        $homeOnly = filter_var($request->home ?? false, FILTER_VALIDATE_BOOLEAN);
+
         $ver = \Illuminate\Support\Facades\Cache::get('categories:ver', 1);
-        $key = "categories:c3:v{$ver}:{$language}:{$parent}:{$selfId}:{$limit}:{$page}:{$typeSlug}";
+        // ⚠️ EVERY filter must appear in this key. c2 omitted the type and one
+        // unfiltered request poisoned every vertical; `home` is the same hazard,
+        // so it is in the key AND the code version is bumped to c4 to abandon
+        // any c3 entry that predates the filter.
+        $key = "categories:c4:v{$ver}:{$language}:{$parent}:{$selfId}:{$limit}:{$page}:{$typeSlug}:" . ($homeOnly ? 'home' : 'all');
 
         // Cache the plain data ARRAY (not the JsonResponse — that would
         // re-serialize to {headers,original,exception} and break the shop).
-        $data = \Illuminate\Support\Facades\Cache::remember($key, 600, function () use ($language, $parent, $selfId, $limit, $typeSlug) {
+        $data = \Illuminate\Support\Facades\Cache::remember($key, 600, function () use ($language, $parent, $selfId, $limit, $typeSlug, $homeOnly) {
             // N+1 fix: CategoryResource reads $this->parentCategory (the show() path at :155/:158
             // already eager-loads 'parentCategory'); 'parent' was loaded-but-unused while
             // parentCategory lazy-loaded per row.
@@ -112,6 +120,15 @@ class CategoryController extends CoreController
             }
             if ($selfId) {
                 $categoriesQuery->where('id', '!=', $selfId);
+            }
+            if ($homeOnly) {
+                // Ordered here rather than in the client so every consumer of
+                // ?home=1 agrees, and so paging cannot interleave.
+                // name is the tie-break because sort_order defaults to 0 for all.
+                $categoriesQuery->where('show_on_homepage', true)
+                    ->where('is_active', true)
+                    ->orderBy('homepage_sort_order')
+                    ->orderBy('name');
             }
 
             $categories = $categoriesQuery->paginate($limit);
