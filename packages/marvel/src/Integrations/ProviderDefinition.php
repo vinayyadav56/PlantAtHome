@@ -58,6 +58,44 @@ class ProviderDefinition
     }
 
     /**
+     * The `config()` key each field overlays, keyed by field name.
+     *
+     * A provider is only really "managed here" if the code that calls it reads the saved value back.
+     * Almost everything in this codebase reads its credentials through `config()`, so declaring the
+     * key a field maps to is all ConfigOverlay needs for an admin-entered value to win over the
+     * deployed env var — with no edit at the ~40 call sites.
+     *
+     * A field with no `config_key` simply does not overlay. That is the correct state for a provider
+     * nothing integrates yet (cashfree, phonepe, mapbox…) and for the ones already read through
+     * IntegrationService directly (ai_chat, plant_doctor, care_plan).
+     *
+     * @return array<string,string>
+     */
+    public function credentialConfigKeys(): array
+    {
+        return self::configKeyMap($this->credentialFields);
+    }
+
+    /** @return array<string,string> */
+    public function configurationConfigKeys(): array
+    {
+        return self::configKeyMap($this->configFields);
+    }
+
+    /** @return array<string,string> */
+    private static function configKeyMap(array $fields): array
+    {
+        $out = [];
+        foreach ($fields as $f) {
+            if (($f['config_key'] ?? '') !== '') {
+                $out[$f['name']] = $f['config_key'];
+            }
+        }
+
+        return $out;
+    }
+
+    /**
      * The form schema the admin renders. Secrets are marked so the UI knows to use a password input
      * and the write-only "leave blank to keep" affordance.
      */

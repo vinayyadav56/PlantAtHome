@@ -70,6 +70,24 @@ return [
         'notify_lang' => env('WHATSAPP_NOTIFY_LANG', 'en'),
     ],
 
+    // PlantAtHome — Twilio (alternative OTP gateway). TwilioGateway already reads these keys, but
+    // no block defined them, so every lookup resolved to null; the setup command only ever wrote
+    // the env vars.
+    'twilio' => [
+        'account_sid'      => env('TWILIO_ACCOUNT_SID'),
+        'auth_token'       => env('TWILIO_AUTH_TOKEN'),
+        'from'             => env('TWILIO_FROM_NUMBER'),
+        'verification_sid' => env('TWILIO_VERIFICATION_SID'),
+    ],
+
+    // PlantAtHome — Anthropic (translation engine, and anything else on AiTranslationTrait).
+    // Read through config rather than env() so the Integrations module can overlay a key rotated
+    // from the admin without a redeploy.
+    'anthropic' => [
+        'api_key' => env('ANTHROPIC_API_KEY'),
+        'model'   => env('CLAUDE_TRANSLATE_MODEL'),
+    ],
+
     // PlantAtHome — LinkedIn ("Sign In with LinkedIn using OpenID Connect").
     // Web posts the NextAuth access_token to /social-login-token; the native app sends
     // the auth code to /social-login/linkedin/exchange (secret stays server-side).

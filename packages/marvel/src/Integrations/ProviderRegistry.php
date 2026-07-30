@@ -91,13 +91,13 @@ class ProviderRegistry
                 displayName: 'Shipping Service',
                 category: ProviderDefinition::CATEGORY_DELIVERY,
                 credentialFields: [
-                    ['name' => 'api_key', 'label' => 'Service API Key', 'required' => true, 'help' => 'X-Api-Key this monolith sends to the Go shipping-service.'],
-                    ['name' => 'callback_key', 'label' => 'Callback Key', 'help' => 'X-Api-Key the shipping-service must present on its callbacks to us.'],
-                    ['name' => 'sync_key', 'label' => 'Credential Sync Key', 'help' => '32-byte hex/base64. Seals credential pushes to the shipping service. Must equal its INTEGRATION_SYNC_KEY.'],
+                    ['name' => 'api_key', 'label' => 'Service API Key', 'required' => true, 'config_key' => 'services.shipping_service.api_key', 'help' => 'X-Api-Key this monolith sends to the Go shipping-service.'],
+                    ['name' => 'callback_key', 'label' => 'Callback Key', 'config_key' => 'services.shipping_service.callback_key', 'help' => 'X-Api-Key the shipping-service must present on its callbacks to us.'],
+                    ['name' => 'sync_key', 'label' => 'Credential Sync Key', 'config_key' => 'integrations.sync_key', 'help' => '32-byte hex/base64. Seals credential pushes to the shipping service. Must equal its INTEGRATION_SYNC_KEY.'],
                 ],
                 configFields: [
-                    ['name' => 'url', 'label' => 'Service URL', 'required' => true, 'placeholder' => 'https://xxxx.ap-south-1.awsapprunner.com'],
-                    ['name' => 'timeout', 'label' => 'Timeout (seconds)', 'type' => 'number', 'placeholder' => '20'],
+                    ['name' => 'url', 'label' => 'Service URL', 'required' => true, 'config_key' => 'services.shipping_service.url', 'placeholder' => 'https://xxxx.ap-south-1.awsapprunner.com'],
+                    ['name' => 'timeout', 'label' => 'Timeout (seconds)', 'type' => 'number', 'config_key' => 'services.shipping_service.timeout', 'placeholder' => '20'],
                 ],
                 priority: 1,
                 blurb: 'The Go microservice that performs all courier API calls.',
@@ -109,13 +109,13 @@ class ProviderRegistry
                 displayName: 'Razorpay',
                 category: ProviderDefinition::CATEGORY_PAYMENT,
                 credentialFields: [
-                    ['name' => 'key_secret', 'label' => 'Key Secret', 'required' => true],
-                    ['name' => 'webhook_secret', 'label' => 'Webhook Secret', 'help' => 'Verifies X-Razorpay-Signature on inbound payment webhooks.'],
+                    ['name' => 'key_secret', 'label' => 'Key Secret', 'required' => true, 'config_key' => 'shop.razorpay.key_secret'],
+                    ['name' => 'webhook_secret', 'label' => 'Webhook Secret', 'config_key' => 'shop.razorpay.webhook_secret', 'help' => 'Verifies X-Razorpay-Signature on inbound payment webhooks.'],
                 ],
                 configFields: [
                     // The key ID is PUBLIC by design — the browser and the mobile app need it to open
                     // the payment sheet, and it is already served from /api/settings.
-                    ['name' => 'key_id', 'label' => 'Key ID', 'required' => true, 'help' => 'Public. rzp_live_… for real payments; rzp_test_… only ever accepts test cards.'],
+                    ['name' => 'key_id', 'label' => 'Key ID', 'required' => true, 'config_key' => 'shop.razorpay.key_id', 'help' => 'Public. rzp_live_… for real payments; rzp_test_… only ever accepts test cards.'],
                 ],
                 priority: 10,
                 blurb: 'Cards, UPI and netbanking.',
@@ -152,11 +152,13 @@ class ProviderRegistry
                 displayName: 'Stripe',
                 category: ProviderDefinition::CATEGORY_PAYMENT,
                 credentialFields: [
-                    ['name' => 'secret_key', 'label' => 'Secret Key', 'required' => true],
-                    ['name' => 'webhook_secret', 'label' => 'Webhook Signing Secret'],
+                    ['name' => 'secret_key', 'label' => 'Secret Key', 'required' => true, 'config_key' => 'shop.stripe.api_secret'],
+                    ['name' => 'webhook_secret', 'label' => 'Webhook Signing Secret', 'config_key' => 'shop.stripe.webhook_secret'],
                 ],
                 configFields: [
-                    ['name' => 'publishable_key', 'label' => 'Publishable Key', 'help' => 'Public by design.'],
+                    // NOTE the flat key: shop.php stores the publishable key at the top level as
+                    // `stripe_api_key`, NOT inside the `stripe` block.
+                    ['name' => 'publishable_key', 'label' => 'Publishable Key', 'config_key' => 'shop.stripe_api_key', 'help' => 'Public by design.'],
                 ],
                 priority: 40,
             ),
@@ -167,12 +169,12 @@ class ProviderRegistry
                 displayName: 'MSG91',
                 category: ProviderDefinition::CATEGORY_COMMUNICATION,
                 credentialFields: [
-                    ['name' => 'auth_key', 'label' => 'Auth Key', 'required' => true],
+                    ['name' => 'auth_key', 'label' => 'Auth Key', 'required' => true, 'config_key' => 'services.msg91.auth_key'],
                 ],
                 configFields: [
-                    ['name' => 'sender', 'label' => 'Sender ID', 'placeholder' => 'PLNTAT'],
-                    ['name' => 'template_id', 'label' => 'OTP Template ID'],
-                    ['name' => 'flow_id', 'label' => 'Flow ID'],
+                    ['name' => 'sender', 'label' => 'Sender ID', 'config_key' => 'services.msg91.sender', 'placeholder' => 'PLNTAT'],
+                    ['name' => 'template_id', 'label' => 'OTP Template ID', 'config_key' => 'services.msg91.template_id'],
+                    ['name' => 'flow_id', 'label' => 'Flow ID', 'config_key' => 'services.msg91.flow_id'],
                 ],
                 priority: 10,
                 blurb: 'SMS and OTP delivery.',
@@ -182,12 +184,13 @@ class ProviderRegistry
                 displayName: 'Twilio',
                 category: ProviderDefinition::CATEGORY_COMMUNICATION,
                 credentialFields: [
-                    ['name' => 'auth_token', 'label' => 'Auth Token', 'required' => true],
+                    ['name' => 'auth_token', 'label' => 'Auth Token', 'required' => true, 'config_key' => 'services.twilio.auth_token'],
                 ],
                 configFields: [
-                    ['name' => 'account_sid', 'label' => 'Account SID', 'required' => true],
-                    ['name' => 'from_number', 'label' => 'From Number', 'placeholder' => '+1…'],
-                    ['name' => 'verification_sid', 'label' => 'Verify Service SID'],
+                    ['name' => 'account_sid', 'label' => 'Account SID', 'required' => true, 'config_key' => 'services.twilio.account_sid'],
+                    // TwilioGateway reads `services.twilio.from` — not `from_number`.
+                    ['name' => 'from_number', 'label' => 'From Number', 'config_key' => 'services.twilio.from', 'placeholder' => '+1…'],
+                    ['name' => 'verification_sid', 'label' => 'Verify Service SID', 'config_key' => 'services.twilio.verification_sid'],
                 ],
                 priority: 20,
             ),
@@ -196,12 +199,12 @@ class ProviderRegistry
                 displayName: 'WhatsApp Business',
                 category: ProviderDefinition::CATEGORY_COMMUNICATION,
                 credentialFields: [
-                    ['name' => 'access_token', 'label' => 'Access Token', 'required' => true],
+                    ['name' => 'access_token', 'label' => 'Access Token', 'required' => true, 'config_key' => 'services.whatsapp.access_token'],
                 ],
                 configFields: [
-                    ['name' => 'phone_number_id', 'label' => 'Phone Number ID', 'required' => true],
-                    ['name' => 'api_version', 'label' => 'Graph API Version', 'placeholder' => 'v19.0'],
-                    ['name' => 'otp_template', 'label' => 'OTP Template Name'],
+                    ['name' => 'phone_number_id', 'label' => 'Phone Number ID', 'required' => true, 'config_key' => 'services.whatsapp.phone_number_id'],
+                    ['name' => 'api_version', 'label' => 'Graph API Version', 'config_key' => 'services.whatsapp.api_version', 'placeholder' => 'v19.0'],
+                    ['name' => 'otp_template', 'label' => 'OTP Template Name', 'config_key' => 'services.whatsapp.otp_template'],
                 ],
                 priority: 30,
             ),
@@ -210,11 +213,11 @@ class ProviderRegistry
                 displayName: 'SendGrid',
                 category: ProviderDefinition::CATEGORY_COMMUNICATION,
                 credentialFields: [
-                    ['name' => 'api_key', 'label' => 'API Key', 'required' => true],
+                    ['name' => 'api_key', 'label' => 'API Key', 'required' => true, 'config_key' => 'mail.mailers.sendgrid.key'],
                 ],
                 configFields: [
-                    ['name' => 'from_email', 'label' => 'From Address', 'placeholder' => 'hello@plantathome.in'],
-                    ['name' => 'from_name', 'label' => 'From Name', 'placeholder' => 'PlantAtHome'],
+                    ['name' => 'from_email', 'label' => 'From Address', 'config_key' => 'mail.from.address', 'placeholder' => 'hello@plantathome.in'],
+                    ['name' => 'from_name', 'label' => 'From Name', 'config_key' => 'mail.from.name', 'placeholder' => 'PlantAtHome'],
                 ],
                 priority: 40,
                 blurb: 'Transactional email over HTTPS (Railway blackholes SMTP).',
@@ -224,11 +227,11 @@ class ProviderRegistry
                 displayName: 'AWS SES',
                 category: ProviderDefinition::CATEGORY_COMMUNICATION,
                 credentialFields: [
-                    ['name' => 'secret_access_key', 'label' => 'Secret Access Key', 'required' => true],
+                    ['name' => 'secret_access_key', 'label' => 'Secret Access Key', 'required' => true, 'config_key' => 'services.ses.secret'],
                 ],
                 configFields: [
-                    ['name' => 'access_key_id', 'label' => 'Access Key ID', 'required' => true],
-                    ['name' => 'region', 'label' => 'Region', 'placeholder' => 'ap-south-1'],
+                    ['name' => 'access_key_id', 'label' => 'Access Key ID', 'required' => true, 'config_key' => 'services.ses.key'],
+                    ['name' => 'region', 'label' => 'Region', 'config_key' => 'services.ses.region', 'placeholder' => 'ap-south-1'],
                 ],
                 priority: 50,
             ),
@@ -239,7 +242,7 @@ class ProviderRegistry
                 displayName: 'Google Maps',
                 category: ProviderDefinition::CATEGORY_MAPS,
                 credentialFields: [
-                    ['name' => 'server_key', 'label' => 'Server API Key', 'required' => true, 'help' => 'Server-side key for geocoding and distance. Restrict it by IP.'],
+                    ['name' => 'server_key', 'label' => 'Server API Key', 'required' => true, 'config_key' => 'location.google_maps_key', 'help' => 'Server-side key for geocoding and distance. Restrict it by IP.'],
                 ],
                 configFields: [
                     ['name' => 'browser_key', 'label' => 'Browser API Key', 'help' => 'Public by design; restrict by HTTP referrer.'],
@@ -265,13 +268,13 @@ class ProviderRegistry
                 displayName: 'AWS S3',
                 category: ProviderDefinition::CATEGORY_STORAGE,
                 credentialFields: [
-                    ['name' => 'secret_access_key', 'label' => 'Secret Access Key', 'required' => true],
+                    ['name' => 'secret_access_key', 'label' => 'Secret Access Key', 'required' => true, 'config_key' => 'filesystems.disks.s3.secret'],
                 ],
                 configFields: [
-                    ['name' => 'access_key_id', 'label' => 'Access Key ID', 'required' => true],
-                    ['name' => 'region', 'label' => 'Region', 'placeholder' => 'ap-south-1'],
-                    ['name' => 'bucket', 'label' => 'Bucket', 'required' => true],
-                    ['name' => 'url', 'label' => 'Public URL / CDN base'],
+                    ['name' => 'access_key_id', 'label' => 'Access Key ID', 'required' => true, 'config_key' => 'filesystems.disks.s3.key'],
+                    ['name' => 'region', 'label' => 'Region', 'config_key' => 'filesystems.disks.s3.region', 'placeholder' => 'ap-south-1'],
+                    ['name' => 'bucket', 'label' => 'Bucket', 'required' => true, 'config_key' => 'filesystems.disks.s3.bucket'],
+                    ['name' => 'url', 'label' => 'Public URL / CDN base', 'config_key' => 'filesystems.disks.s3.url'],
                 ],
                 priority: 10,
             ),
@@ -295,7 +298,8 @@ class ProviderRegistry
                 displayName: 'OpenAI',
                 category: ProviderDefinition::CATEGORY_AI,
                 credentialFields: [
-                    ['name' => 'api_key', 'label' => 'API Key', 'required' => true],
+                    // NOTE the capital K — the existing config key really is `secret_Key`.
+                    ['name' => 'api_key', 'label' => 'API Key', 'required' => true, 'config_key' => 'shop.openai.secret_Key'],
                 ],
                 configFields: [
                     ['name' => 'text_model', 'label' => 'Text Model', 'placeholder' => 'gpt-4o-mini'],
@@ -309,10 +313,10 @@ class ProviderRegistry
                 displayName: 'Anthropic',
                 category: ProviderDefinition::CATEGORY_AI,
                 credentialFields: [
-                    ['name' => 'api_key', 'label' => 'API Key', 'required' => true],
+                    ['name' => 'api_key', 'label' => 'API Key', 'required' => true, 'config_key' => 'services.anthropic.api_key'],
                 ],
                 configFields: [
-                    ['name' => 'model', 'label' => 'Model', 'placeholder' => 'claude-opus-5'],
+                    ['name' => 'model', 'label' => 'Model', 'config_key' => 'services.anthropic.model', 'placeholder' => 'claude-opus-5'],
                     ['name' => 'monthly_budget_inr', 'label' => 'Monthly Budget (₹)', 'type' => 'number'],
                 ],
                 priority: 20,
@@ -335,12 +339,12 @@ class ProviderRegistry
                 displayName: 'Replicate',
                 category: ProviderDefinition::CATEGORY_AI,
                 credentialFields: [
-                    ['name' => 'api_token', 'label' => 'API Token', 'required' => true],
+                    ['name' => 'api_token', 'label' => 'API Token', 'required' => true, 'config_key' => 'services.replicate.api_token'],
                 ],
                 configFields: [
-                    ['name' => 'model', 'label' => 'Model'],
-                    ['name' => 'base_url', 'label' => 'Base URL', 'placeholder' => 'https://api.replicate.com'],
-                    ['name' => 'owner', 'label' => 'Owner'],
+                    ['name' => 'model', 'label' => 'Model', 'config_key' => 'services.replicate.model'],
+                    ['name' => 'base_url', 'label' => 'Base URL', 'config_key' => 'services.replicate.base_url', 'placeholder' => 'https://api.replicate.com'],
+                    ['name' => 'owner', 'label' => 'Owner', 'config_key' => 'services.replicate.owner'],
                 ],
                 priority: 40,
             ),

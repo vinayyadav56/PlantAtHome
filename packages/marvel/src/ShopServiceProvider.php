@@ -168,6 +168,11 @@ class ShopServiceProvider extends ServiceProvider
         $this->loadHelpers();
         Resource::withoutWrapping();
 
+        // Let admin-managed provider credentials win over the env vars baked in at deploy time.
+        // Must run at boot: payment/OTP/mail/maps clients read config() at call time, so a key
+        // rotated in Settings → Integrations only takes effect if config carries it. Never throws.
+        \Marvel\Integrations\ConfigOverlay::apply();
+
         // Translation overlay (cache-table model): version + requeue translations
         // when an entity's canonical English fields change.
         \Marvel\Database\Models\Product::observe(\Marvel\Observers\TranslatableObserver::class);

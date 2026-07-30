@@ -34,8 +34,10 @@ class LegacyBridge
                 default          => '',
             },
             'stripe' => match ($field) {
-                'secret_key'     => config('shop.stripe.stripe_api_secret') ?? env('STRIPE_API_SECRET'),
-                'webhook_secret' => env('STRIPE_WEBHOOK_SECRET_KEY'),
+                // shop.php really is `stripe.api_secret` / `stripe.webhook_secret` — the previous
+                // `stripe.stripe_api_secret` never resolved, so this always fell through to env.
+                'secret_key'     => config('shop.stripe.api_secret') ?? env('STRIPE_API_KEY'),
+                'webhook_secret' => config('shop.stripe.webhook_secret') ?? env('STRIPE_WEBHOOK_SECRET_KEY'),
                 default          => '',
             },
             'msg91' => match ($field) {
@@ -59,7 +61,7 @@ class LegacyBridge
                 default             => '',
             },
             'google_maps' => match ($field) {
-                'server_key' => config('location.google_maps_server_key') ?? env('GOOGLE_MAPS_SERVER_KEY'),
+                'server_key' => config('location.google_maps_key') ?? env('GOOGLE_MAPS_SERVER_KEY'),
                 default      => '',
             },
             'openai' => match ($field) {
@@ -68,7 +70,7 @@ class LegacyBridge
                 default   => '',
             },
             'anthropic' => match ($field) {
-                'api_key' => env('ANTHROPIC_API_KEY'),
+                'api_key' => config('services.anthropic.api_key') ?? env('ANTHROPIC_API_KEY'),
                 default   => '',
             },
             'google_gemini' => match ($field) {
@@ -87,7 +89,8 @@ class LegacyBridge
             'translation_deepl' => $this->translationCred('deepl', $field) ?: env('DEEPL_API_KEY'),
 
             'replicate' => match ($field) {
-                'api_token' => config('services.replicate.token') ?? env('REPLICATE_API_TOKEN'),
+                // config/services.php names this `api_token`, not `token`.
+                'api_token' => config('services.replicate.api_token') ?? env('REPLICATE_API_TOKEN'),
                 default     => '',
             },
             default => '',
@@ -108,7 +111,8 @@ class LegacyBridge
                 default  => null,
             },
             'stripe' => match ($field) {
-                'publishable_key' => config('shop.stripe.stripe_api_key') ?? env('STRIPE_API_KEY'),
+                // Flat key: shop.php keeps the publishable key at the top level, not in `stripe`.
+                'publishable_key' => config('shop.stripe_api_key') ?? env('STRIPE_API_KEY'),
                 default           => null,
             },
             'msg91' => match ($field) {
@@ -119,7 +123,7 @@ class LegacyBridge
             },
             'twilio' => match ($field) {
                 'account_sid'      => config('services.twilio.account_sid'),
-                'from_number'      => config('services.twilio.from_number'),
+                'from_number'      => config('services.twilio.from'),
                 'verification_sid' => config('services.twilio.verification_sid'),
                 default            => null,
             },
@@ -147,7 +151,7 @@ class LegacyBridge
                 default       => null,
             },
             'anthropic' => match ($field) {
-                'model' => env('CLAUDE_TRANSLATE_MODEL'),
+                'model' => config('services.anthropic.model') ?? env('CLAUDE_TRANSLATE_MODEL'),
                 default => null,
             },
             'replicate' => match ($field) {

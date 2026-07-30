@@ -277,6 +277,9 @@ class IntegrationService
         $this->memo = [];
         try {
             Cache::forget($this->cacheKey($slug));
+            // The overlay caches all rows under one key. Without this a save would keep booting
+            // from the stale set for a full TTL, which reads as "the save did nothing".
+            Cache::forget(ConfigOverlay::cacheKey($this->environment()));
         } catch (Throwable) {
             // A cache backend outage must not break a save.
         }

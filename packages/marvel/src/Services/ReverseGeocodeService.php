@@ -29,7 +29,8 @@ class ReverseGeocodeService
         return Cache::remember($cacheKey, now()->addHour(), function () use ($lat, $lng) {
             $out = ['city' => null, 'district' => null, 'state' => null, 'pincode' => null];
 
-            $key = env('GOOGLE_MAPS_SERVER_KEY') ?: env('GOOGLE_MAP_API_KEY');
+            // config first so a key managed in Settings → Integrations overlays the env var.
+            $key = config('location.google_maps_key') ?: env('GOOGLE_MAP_API_KEY');
             if ($key) {
                 try {
                     $json = Http::timeout(8)->get('https://maps.googleapis.com/maps/api/geocode/json', [
