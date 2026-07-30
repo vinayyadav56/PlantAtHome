@@ -59,6 +59,11 @@ class CourierPartnerProxyController extends CoreController
             'quote_enabled'  => 'sometimes|boolean',
             'track_enabled'  => 'sometimes|boolean',
             'cancel_enabled' => 'sometimes|boolean',
+            // Per-mode preference: {"same_city": 10}. Lower wins. A rank must be POSITIVE — the
+            // service reads 0 as "no preference", so accepting it here would report a save that
+            // changes no routing. Clearing a mode means omitting its key, not sending 0.
+            'mode_priority'   => 'sometimes|array',
+            'mode_priority.*' => 'integer|min:1',
         ]);
         // Forward only the toggles actually sent — the service does a partial merge over its current
         // effective state, so an untouched switch is never clobbered.
@@ -67,6 +72,16 @@ class CourierPartnerProxyController extends CoreController
             if (array_key_exists($f, $validated)) {
                 $payload[$f] = (bool) $validated[$f];
             }
+        }
+        if (array_key_exists('mode_priority', $validated)) {
+            // Sent WHOLE, not merged per key: it is one setting, and a per-key merge would make a
+            // mode impossible to un-rank. Cast to int so "10" from a form field is not stored as a
+            // string the service would reject.
+            $ranks = array_map('intval', (array) $validated['mode_priority']);
+            // ⚠️ An empty PHP array serializes as JSON `[]`, and the service decodes this field into
+            // an object — so clearing every rank, the one case that MUST get through, would 400.
+            // stdClass forces `{}`.
+            $payload['mode_priority'] = $ranks === [] ? new \stdClass() : $ranks;
         }
         // No toggles supplied → a no-op: return current state rather than forwarding an empty body
         // (Laravel serializes [] as JSON "[]", which the service's object decoder rejects with 400).
