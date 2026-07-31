@@ -284,14 +284,41 @@ jobs:
 
             echo "==> Ensuring opcache is tuned for production..."
             # opcache is INSTALLED but entirely unconfigured on this host, so it
-            # runs stock: validate_timestamps=1 means a stat() per file per
-            # request across ~1,000 files, and interned_strings_buffer was
-            # measured 100% full (8MB of 8MB), which forces opcache to stop
-            # interning and waste memory on duplicate strings.
+            # runs on stock defaults. Two of those defaults are genuinely wrong
+            # for this app; a third that I expected to be wrong turned out fine,
+            # and is deliberately NOT changed.
             #
-            # validate_timestamps=0 means PHP will NOT notice changed files, so
-            # the php-fpm reload below is mandatory on every deploy — it already
-            # runs further down this workflow.
+            # MEASURED, and why each line is here:
+            #
+            #   interned_strings_buffer — measured 100% full (8 MB of 8 MB). Once
+            #     that buffer fills, opcache silently stops interning and starts
+            #     storing duplicate copies of every repeated string. 32 MB.
+            #
+            #   max_accelerated_files — the default 10000 is below this app's
+            #     file count (1,547 app + 18,411 vendor; a request touches well
+            #     over 10k of them). Past the limit opcache evicts, so the tail
+            #     of every request recompiles. 20000.
+            #
+            #   memory_consumption — 256 MB to hold the above without eviction.
+            #
+            # NOT SET, and this is the interesting one: opcache.validate_timestamps=0.
+            # I had this in an earlier revision, justified as "saves a stat() per
+            # file per request". That justification was WRONG. opcache only
+            # re-stats a file once per opcache.revalidate_freq seconds, which
+            # defaults to 2 — so under production load the stat sweep amortises
+            # across ~2 seconds of traffic and costs approximately nothing per
+            # request.
+            #
+            # An interleaved A/B (8 rounds x 220 requests, arms alternated each
+            # round to cancel host drift) found NO benefit: median paired delta
+            # -0.084 ms, and validate_timestamps=0 won only 2 of 8 rounds — i.e.
+            # if anything it was marginally slower, and well within noise.
+            #
+            # So it buys nothing measurable, while carrying a genuinely nasty
+            # failure mode: PHP stops noticing changed files, and if a deploy
+            # ever fails to cycle php-fpm, production serves the previous build
+            # forever while every health check happily returns 200. Not worth it
+            # for 0%. Left at the default.
             #
             # opcache.* are PHP_INI_SYSTEM, so .user.ini cannot set them; it has
             # to be a conf.d fragment.
@@ -299,7 +326,6 @@ jobs:
             if [ -n "$PHP_CONF_DIR" ] && [ -d "$PHP_CONF_DIR" ]; then
               sudo tee "$PHP_CONF_DIR/zz-opcache.ini" >/dev/null <<'OPCACHECONF'
             opcache.enable=1
-            opcache.validate_timestamps=0
             opcache.max_accelerated_files=20000
             opcache.memory_consumption=256
             opcache.interned_strings_buffer=32
@@ -357,8 +383,20 @@ jobs:
             sudo systemctl restart 'plantathome-queue@default' 'plantathome-queue@careplans' 'plantathome-queue@images' 'plantathome-queue@images-instant' 'plantathome-queue@marketing' 'plantathome-queue@content'
             sudo systemctl is-active plantathome-queue@default plantathome-queue@careplans plantathome-queue@images plantathome-queue@images-instant plantathome-queue@marketing plantathome-queue@content
 
-            echo "==> Reloading PHP-FPM..."
-            sudo systemctl reload php8.1-fpm
+            # RESTART, not reload — this step writes a new conf.d/zz-opcache.ini
+            # above, and opcache.memory_consumption / interned_strings_buffer /
+            # max_accelerated_files are all PHP_INI_SYSTEM: they size shared
+            # memory segments that are allocated once when the master process
+            # starts. A SIGUSR2 reload re-reads the ini but cannot resize an
+            # already-allocated SHM segment, so the new sizes would appear in
+            # phpinfo() while the process kept running on the old 8 MB buffer —
+            # the exact condition this step exists to fix, silently not fixed.
+            #
+            # A restart costs a sub-second window on a manually-dispatched
+            # deploy, which is the right trade against applying nothing.
+            echo "==> Restarting PHP-FPM (required to resize the opcache SHM)..."
+            sudo systemctl restart php8.1-fpm
+            sudo systemctl is-active php8.1-fpm
 
             echo "==> Deploy complete"
 
