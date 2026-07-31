@@ -20,6 +20,7 @@
         "laravel/tinker": "2.8.2",
         "marvel/shop": "*",
         "messagebird/php-rest-api": "3.1.4",
+        "predis/predis": "^2.2",
         "psr/log": "3.0.0",
         "stevebauman/purify": "6.0.2",
         "symfony/http-client": "6.3.7",
