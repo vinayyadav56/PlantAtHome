@@ -184,7 +184,18 @@ jobs:
             echo "    (controllers/services/models/migrations) is picked up — composer skips"
             echo "    re-copying an unchanged-version path repo, so this is required on prod."
             composer reinstall marvel/shop --no-interaction || echo "WARNING: marvel/shop reinstall failed"
-            composer dump-autoload -o 2>/dev/null || true
+            # -a (--classmap-authoritative) implies -o and additionally tells the
+            # autoloader that the classmap is the whole truth: a class that is not
+            # in it does not exist, so PHP stops doing a filesystem stat() for
+            # every miss. The classmap has 15,528 entries and a request touches
+            # ~1,000 files.
+            #
+            # Safe here because nothing generates classes at runtime — no eval(),
+            # no class_alias(), no create_function() anywhere in app/ or the
+            # marvel package. Deliberately NOT set in composer.json, because there
+            # it would also apply to local development, where adding a new class
+            # without re-dumping would then fail to autoload.
+            composer dump-autoload -a 2>/dev/null || composer dump-autoload -o 2>/dev/null || true
 
             echo "==> Running migrations..."
             php artisan migrate --force
