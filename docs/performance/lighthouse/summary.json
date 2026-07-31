@@ -1,0 +1,42 @@
+{
+  "home-desktop": {
+    "perf": 0.67,
+    "first-contentful-paint": 1720.7239999999997,
+    "largest-contentful-paint": 2716.7874999999995,
+    "total-blocking-time": 143.99999999999818,
+    "cumulative-layout-shift": 0.0008945626477541371,
+    "speed-index": 7779.94754745293,
+    "interactive": 12012.819349999994,
+    "server-response-time": 39.827
+  },
+  "home-mobile": {
+    "perf": 0.33,
+    "first-contentful-paint": 3719.2735000000007,
+    "largest-contentful-paint": 7605.153500000002,
+    "total-blocking-time": 1235,
+    "cumulative-layout-shift": 0.08008923645572592,
+    "speed-index": 36412.36222542259,
+    "interactive": 66203.89530000005,
+    "server-response-time": 38.52199999999999
+  },
+  "search-desktop": {
+    "perf": 0.49,
+    "first-contentful-paint": 1374.1355,
+    "largest-contentful-paint": 4042.2915000000003,
+    "total-blocking-time": 99,
+    "cumulative-layout-shift": 0.5953463537197561,
+    "speed-index": 1928.1699395288817,
+    "interactive": 4045.941500000001,
+    "server-response-time": 36.656000000000006
+  },
+  "search-mobile": {
+    "perf": 0.36,
+    "first-contentful-paint": 6611.765,
+    "largest-contentful-paint": 21812.639,
+    "total-blocking-time": 1099,
+    "cumulative-layout-shift": 0,
+    "speed-index": 6849.8982643782965,
+    "interactive": 21812.639,
+    "server-response-time": 36.952
+  }
+}
