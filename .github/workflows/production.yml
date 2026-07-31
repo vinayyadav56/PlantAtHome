@@ -235,10 +235,69 @@ jobs:
             set_env AWS_DEFAULT_REGION "${{ secrets.AWS_REGION }}"
             set_env AWS_BUCKET plantathome-media-prod
 
-            echo "==> Caching config / routes / views..."
+            echo "==> Caching config / routes / views / events..."
             php artisan config:cache || echo "WARNING: config:cache failed — running without config cache"
             php artisan route:cache  || echo "WARNING: route:cache failed — running without route cache"
             php artisan view:cache   || echo "WARNING: view:cache failed — running without view cache"
+            # event:cache skips listener discovery at boot. Small win here (the
+            # app registers one listener explicitly and does not enable
+            # discovery), but 81 service providers boot per request and any of
+            # the 38 auto-discovered packages may register listeners.
+            php artisan event:cache  || echo "WARNING: event:cache failed — running without event cache"
+
+            echo "==> Ensuring nginx compresses API responses..."
+            # The API served every response uncompressed. Production nginx config
+            # lives on this box, not in the repo, so it is written here.
+            # Idempotent: same file every deploy, and nginx is only reloaded when
+            # the config actually changes and passes `nginx -t`.
+            #
+            # MEASURED compression on real endpoints:
+            #   /categories?limit=100   59,274 ->  2,997 B  (19.8x)
+            #   /products?limit=100    174,593 -> 12,377 B  (14.1x)
+            sudo tee /etc/nginx/conf.d/zz-gzip.conf >/dev/null <<'NGINXCONF'
+            gzip on;
+            gzip_vary on;
+            gzip_proxied any;
+            gzip_comp_level 5;
+            gzip_min_length 1024;
+            gzip_types application/json application/ld+json application/javascript
+                       application/xml text/css text/javascript text/plain text/xml
+                       image/svg+xml;
+            NGINXCONF
+            if sudo nginx -t 2>/dev/null; then
+              sudo systemctl reload nginx && echo "nginx reloaded with gzip"
+            else
+              echo "WARNING: nginx config test failed — removing the gzip fragment and leaving nginx untouched"
+              sudo rm -f /etc/nginx/conf.d/zz-gzip.conf
+            fi
+
+            echo "==> Ensuring opcache is tuned for production..."
+            # opcache is INSTALLED but entirely unconfigured on this host, so it
+            # runs stock: validate_timestamps=1 means a stat() per file per
+            # request across ~1,000 files, and interned_strings_buffer was
+            # measured 100% full (8MB of 8MB), which forces opcache to stop
+            # interning and waste memory on duplicate strings.
+            #
+            # validate_timestamps=0 means PHP will NOT notice changed files, so
+            # the php-fpm reload below is mandatory on every deploy — it already
+            # runs further down this workflow.
+            #
+            # opcache.* are PHP_INI_SYSTEM, so .user.ini cannot set them; it has
+            # to be a conf.d fragment.
+            PHP_CONF_DIR=$(php -i | awk -F'=> ' '/Scan this dir for additional .ini files/{print $2}' | tr -d ' ')
+            if [ -n "$PHP_CONF_DIR" ] && [ -d "$PHP_CONF_DIR" ]; then
+              sudo tee "$PHP_CONF_DIR/zz-opcache.ini" >/dev/null <<'OPCACHECONF'
+            opcache.enable=1
+            opcache.validate_timestamps=0
+            opcache.max_accelerated_files=20000
+            opcache.memory_consumption=256
+            opcache.interned_strings_buffer=32
+            opcache.save_comments=1
+            OPCACHECONF
+              echo "opcache config written to $PHP_CONF_DIR/zz-opcache.ini"
+            else
+              echo "WARNING: could not locate PHP conf.d — opcache left at stock defaults"
+            fi
 
             echo "==> Restoring www-data ownership for PHP-FPM..."
             sudo chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true
