@@ -117,6 +117,20 @@ final class ProductController extends ApiController
             return;
         }
 
+        // The index is NOT guaranteed to exist. Every FULLTEXT/index migration in
+        // this repo wraps itself in try/catch and swallows failures, so a green
+        // migration history proves nothing — and MATCH against a missing index is
+        // a hard SQL error, not an empty result.
+        //
+        // This was not hypothetical: the first version of this method assumed the
+        // index and returned HTTP 500 on staging, where products_fulltext turned
+        // out to be absent. Ask the schema, once per process.
+        if (! $this->hasFulltextIndex()) {
+            $query->where('name', 'like', '%'.$clean.'%');
+
+            return;
+        }
+
         // `+token*` per term: every term is REQUIRED (+) and prefix-matched (*).
         //
         // The + matters. Boolean mode defaults to OR, so a bare "snake plant"
@@ -128,6 +142,38 @@ final class ProductController extends ApiController
         $expr = implode(' ', array_map(fn (string $t) => '+'.$t.'*', $tokens));
 
         $query->whereRaw('MATCH(name, sku) AGAINST (? IN BOOLEAN MODE)', [$expr]);
+    }
+
+    /**
+     * Is the products FULLTEXT index actually present on THIS database?
+     *
+     * Memoised per process: one information_schema lookup on the first search a
+     * worker serves, then free. Deliberately not cached across processes — a
+     * stale "no" would silently keep search on the slow path after the index was
+     * added, and a stale "yes" would 500.
+     */
+    private function hasFulltextIndex(): bool
+    {
+        static $present = null;
+
+        if ($present !== null) {
+            return $present;
+        }
+
+        try {
+            $present = (bool) \Illuminate\Support\Facades\DB::selectOne(
+                'SELECT 1 FROM information_schema.STATISTICS
+                  WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
+                    AND INDEX_NAME = ? AND INDEX_TYPE = ? LIMIT 1',
+                ['products', 'products_fulltext', 'FULLTEXT']
+            );
+        } catch (\Throwable) {
+            // Cannot read the schema (restricted grants, unexpected engine) —
+            // assume the index is absent and use the path that always works.
+            $present = false;
+        }
+
+        return $present;
     }
 
     private function canSeeUnpublished(Request $request): bool
