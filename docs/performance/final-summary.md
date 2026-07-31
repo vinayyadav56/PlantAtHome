@@ -61,3 +61,13 @@ node tests/Performance/capacity_model.mjs
 # rebuild the admin report
 node tests/Performance/build_report.mjs > ../admin/rest/public/performance-report.json
 ```
+
+## Failure mode under overload
+
+Measured at 500 concurrent: **zero** failures were error responses — all 564 were `ETIMEDOUT` at the
+connection layer. The application does not return 5xx under overload, does not accumulate an unbounded
+queue, and recovers to its baseline latency within 1–2 seconds of the load being removed.
+
+Capacity is therefore bounded, but the boundary is graceful: excess load is shed at the edge of the
+accept queue rather than degrading everyone already inside. Worth knowing before choosing an
+autoscaling policy — the system tolerates brief overshoot well.

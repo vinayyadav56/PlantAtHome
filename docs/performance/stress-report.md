@@ -44,3 +44,46 @@ Scales with workers until it reaches the core count, then flattens — CPU-bound
 | `/api/products?limit=100` | 363.8 | 131.9 | 175.5 |
 
 A trivial handler reaches **487.2 RPS**; the heaviest real endpoint reaches **363.8**. Every endpoint sits within 25% of the floor, so per-request overhead — not endpoint logic — sets throughput.
+
+## Spike behaviour
+
+Instant jumps from a 5-user baseline (p95 20ms), then straight back.
+
+| Spike to | RPS | p95 | p99 worst | Failures | Recovery |
+|---:|---:|---:|---:|---:|---:|
+| 100 VUs | 407 | 268 ms | 919 ms | 0 | 2 s |
+| 500 VUs | 369 | 574 ms | 6491 ms | 661 | 2 s |
+| 1000 VUs | 398 | 950 ms | 6232 ms | 1631 | 1 s |
+
+Throughput sits at roughly 400 RPS regardless of spike size — ten times the offered load produces no
+additional throughput, which is the saturation ceiling seen from a different angle. Failures begin
+about seven seconds into any spike above capacity.
+
+**The failure mode is a healthy one.** Sampled separately at 500 concurrent: **zero** non-2xx
+responses and 564 `ETIMEDOUT`. The application never returned a 5xx, never built an unbounded queue,
+and was back to its 20ms baseline within 1–2 seconds of each spike ending. It sheds load rather than
+collapsing under it.
+
+⚠️ That shedding is partly a property of PHP's CLI server accept queue. Production sits behind nginx,
+which would more likely return 502/504 than time out silently — expect the same capacity ceiling with
+a different-looking symptom.
+
+## Endurance
+
+25 concurrent users held for 35 minutes: **450,573 requests, 0% errors**.
+
+| Metric | Trend per minute | Reading |
+|---|---:|---|
+| Worker RSS | -0.203 MB | no memory leak |
+| MySQL threads | +0.276 | no connection leak |
+| `cache` rows | +0 | no unbounded cache growth |
+| `jobs` rows | +0 | no queue backlog |
+
+The soak's purpose is leak detection, and on that it is conclusive: no memory leak, no connection
+leak, no queue growth, and not one error in 450,573 requests.
+
+⚠️ **The throughput trend from this run is NOT usable.** Lighthouse and a production build ran on the
+same machine during the soak, taking the host to a load average of 13 on 8 cores. The RPS and latency
+drift over the run is that contention, not the application degrading. The leak findings above are
+unaffected — host contention cannot manufacture stable memory — but a clean endurance figure needs an
+idle host.
