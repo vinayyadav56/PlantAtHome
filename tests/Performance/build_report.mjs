@@ -85,6 +85,41 @@ const floor = Object.entries(floorFiles).map(([route, f]) => {
 // ── A/B under load ─────────────────────────────────────────────────────────
 const abBefore = raw('ab3-before.json'), abAfter = raw('ab3-after.json');
 
+// ── optional sections: present only if those runs have been done ───────────
+const optional = (f, fn) => {
+  try { return fn(raw(f)); } catch { return null; }
+};
+
+const soak = optional('soak.json', (d) => ({
+  vus: d.vus, minutes: d.minutes, requests: d.total_requests,
+  error_rate: d.error_rate, trends: d.trends_per_minute,
+  samples: d.samples.map((s) => ({
+    t: s.t_min, rps: s.rps, p95: s.p95, rss_mb: s.rss_mb,
+    mysql_threads: s.mysql_threads, cache_rows: s.cache_rows,
+  })),
+}));
+
+const spike = optional('spike.json', (d) => ({
+  baseline_vus: d.baseline_vus, baseline_p95_ms: d.baseline_p95_ms,
+  results: d.results,
+  series: d.series.map((s) => ({ t: s.t, phase: s.phase, vus: s.vus, rps: s.rps, p95: s.p95 })),
+}));
+
+let frontend = null;
+try {
+  const lh = JSON.parse(fs.readFileSync(P('lighthouse/summary.json'), 'utf8'));
+  const K = {
+    'first-contentful-paint': 'fcp', 'largest-contentful-paint': 'lcp',
+    'total-blocking-time': 'tbt', 'cumulative-layout-shift': 'cls',
+    'speed-index': 'si', interactive: 'tti', 'server-response-time': 'ttfb',
+  };
+  frontend = Object.entries(lh).map(([page, v]) => {
+    const row = { page, score: Math.round(v.perf * 100) };
+    for (const [k, short] of Object.entries(K)) if (v[k] != null) row[short] = +v[k].toFixed(k === 'cumulative-layout-shift' ? 3 : 0);
+    return row;
+  });
+} catch { /* lighthouse not run */ }
+
 const report = {
   meta: {
     generated_at: new Date().toISOString(),
@@ -150,6 +185,9 @@ const report = {
   sweep,
   workers,
   floor,
+  soak,
+  spike,
+  frontend,
   ab_under_load: {
     endpoint: '/api/popular-products?limit=10',
     conditions: '50 VUs, 8 workers, opcache on, database cache warm, identical dataset',
