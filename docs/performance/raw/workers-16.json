@@ -1,0 +1,21 @@
+{
+  "label": "workers-16",
+  "url": "http://127.0.0.1:8080/api/products?limit=20&language=en",
+  "vus": 50,
+  "duration_s": 8.1,
+  "requests": 3423,
+  "rps": 422.6,
+  "ok": 3423,
+  "non2xx": 0,
+  "errors": {},
+  "error_rate": 0,
+  "p50": 115.6,
+  "p90": 144,
+  "p95": 157.5,
+  "p99": 195.2,
+  "max": 426.5,
+  "mbps": 117.68,
+  "max_in_flight": 50,
+  "generator_cpu_pct_of_one_core": 24,
+  "generator_cores": 8
+}

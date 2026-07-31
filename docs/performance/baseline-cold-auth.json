@@ -1,0 +1,343 @@
+{
+    "generated_at": "2026-07-31T12:32:02+05:30",
+    "env": "perf",
+    "cache_driver": "database",
+    "db": "pah_perf",
+    "php": "8.1.32",
+    "iterations": 3,
+    "warm": false,
+    "auth": true,
+    "results": [
+        {
+            "name": "settings",
+            "uri": "/api/settings?language=en",
+            "status": 200,
+            "queries": 3,
+            "dupe_groups": 0,
+            "dupe_total": 0,
+            "top_dupes": [],
+            "bytes": 5192,
+            "db_ms": 1.03,
+            "mem_mb": 0,
+            "wall_min": 1.19,
+            "wall_med": 1.73,
+            "wall_max": 7.31
+        },
+        {
+            "name": "types",
+            "uri": "/api/types?limit=100&language=en",
+            "status": 200,
+            "queries": 13,
+            "dupe_groups": 2,
+            "dupe_total": 10,
+            "top_dupes": [
+                {
+                    "n": 6,
+                    "sql": "select * from `types` where `slug` = ?"
+                },
+                {
+                    "n": 6,
+                    "sql": "select * from `banners` where `banners`.`type_id` = ? and `banners`.`type_id` is not null"
+                }
+            ],
+            "bytes": 1312,
+            "db_ms": 0.76,
+            "mem_mb": 2,
+            "wall_min": 1.47,
+            "wall_med": 1.6,
+            "wall_max": 4.49
+        },
+        {
+            "name": "categories.root",
+            "uri": "/api/categories?parent=null&limit=100&language=en",
+            "status": 200,
+            "queries": 108,
+            "dupe_groups": 2,
+            "dupe_total": 100,
+            "top_dupes": [
+                {
+                    "n": 100,
+                    "sql": "select * from `categories` where `slug` = ?"
+                },
+                {
+                    "n": 2,
+                    "sql": "select * from `cache` where `key` = ? limit 1"
+                }
+            ],
+            "bytes": 59254,
+            "db_ms": 14.41,
+            "mem_mb": 2,
+            "wall_min": 24.92,
+            "wall_med": 27.21,
+            "wall_max": 27.25
+        },
+        {
+            "name": "categories.home",
+            "uri": "/api/categories?type=plants&parent=null&limit=12&home=1&language=en",
+            "status": 200,
+            "queries": 4,
+            "dupe_groups": 1,
+            "dupe_total": 1,
+            "top_dupes": [
+                {
+                    "n": 2,
+                    "sql": "select * from `cache` where `key` = ? limit 1"
+                }
+            ],
+            "bytes": 288,
+            "db_ms": 0.47,
+            "mem_mb": 0,
+            "wall_min": 1.07,
+            "wall_med": 1.11,
+            "wall_max": 1.17
+        },
+        {
+            "name": "products.list.20",
+            "uri": "/api/products?limit=20&language=en",
+            "status": 200,
+            "queries": 62,
+            "dupe_groups": 3,
+            "dupe_total": 48,
+            "top_dupes": [
+                {
+                    "n": 20,
+                    "sql": "select * from `products` where `slug` = ? and `products`.`deleted_at` is null"
+                },
+                {
+                    "n": 20,
+                    "sql": "select * from `products_meta` where `product_id` = ? and `product_id` is not null"
+                },
+                {
+                    "n": 11,
+                    "sql": "select * from `cache` where `key` = ? limit 1"
+                }
+            ],
+            "bytes": 36484,
+            "db_ms": 4.62,
+            "mem_mb": 2,
+            "wall_min": 11.35,
+            "wall_med": 11.6,
+            "wall_max": 14.42
+        },
+        {
+            "name": "products.list.100",
+            "uri": "/api/products?limit=100&language=en",
+            "status": 200,
+            "queries": 222,
+            "dupe_groups": 3,
+            "dupe_total": 208,
+            "top_dupes": [
+                {
+                    "n": 100,
+                    "sql": "select * from `products` where `slug` = ? and `products`.`deleted_at` is null"
+                },
+                {
+                    "n": 100,
+                    "sql": "select * from `products_meta` where `product_id` = ? and `product_id` is not null"
+                },
+                {
+                    "n": 11,
+                    "sql": "select * from `cache` where `key` = ? limit 1"
+                }
+            ],
+            "bytes": 174573,
+            "db_ms": 15.21,
+            "mem_mb": 4,
+            "wall_min": 44.22,
+            "wall_med": 44.5,
+            "wall_max": 44.51
+        },
+        {
+            "name": "products.by_type",
+            "uri": "/api/products?limit=20&type=plants&language=en",
+            "status": 200,
+            "queries": 62,
+            "dupe_groups": 3,
+            "dupe_total": 48,
+            "top_dupes": [
+                {
+                    "n": 20,
+                    "sql": "select * from `products` where `slug` = ? and `products`.`deleted_at` is null"
+                },
+                {
+                    "n": 20,
+                    "sql": "select * from `products_meta` where `product_id` = ? and `product_id` is not null"
+                },
+                {
+                    "n": 11,
+                    "sql": "select * from `cache` where `key` = ? limit 1"
+                }
+            ],
+            "bytes": 36520,
+            "db_ms": 4.59,
+            "mem_mb": 0,
+            "wall_min": 11.54,
+            "wall_med": 11.67,
+            "wall_max": 11.71
+        },
+        {
+            "name": "products.page50",
+            "uri": "/api/products?limit=20&page=50&language=en",
+            "status": 200,
+            "queries": 62,
+            "dupe_groups": 3,
+            "dupe_total": 48,
+            "top_dupes": [
+                {
+                    "n": 20,
+                    "sql": "select * from `products` where `slug` = ? and `products`.`deleted_at` is null"
+                },
+                {
+                    "n": 20,
+                    "sql": "select * from `products_meta` where `product_id` = ? and `product_id` is not null"
+                },
+                {
+                    "n": 11,
+                    "sql": "select * from `cache` where `key` = ? limit 1"
+                }
+            ],
+            "bytes": 35712,
+            "db_ms": 5.79,
+            "mem_mb": 2,
+            "wall_min": 12.69,
+            "wall_med": 12.89,
+            "wall_max": 13.32
+        },
+        {
+            "name": "products.facets",
+            "uri": "/api/products/filter-facets?type=plants&language=en",
+            "status": 200,
+            "queries": 31,
+            "dupe_groups": 2,
+            "dupe_total": 14,
+            "top_dupes": [
+                {
+                    "n": 13,
+                    "sql": "select * from `cache` where `key` = ? limit 1"
+                },
+                {
+                    "n": 3,
+                    "sql": "insert into `cache` (`key`, `value`, `expiration`) values (?, ?, ?)"
+                }
+            ],
+            "bytes": 1347,
+            "db_ms": 16.82,
+            "mem_mb": 2,
+            "wall_min": 19.8,
+            "wall_med": 19.94,
+            "wall_max": 23.46
+        },
+        {
+            "name": "popular-products",
+            "uri": "/api/popular-products?limit=10&language=en",
+            "status": 200,
+            "queries": 139,
+            "dupe_groups": 10,
+            "dupe_total": 124,
+            "top_dupes": [
+                {
+                    "n": 31,
+                    "sql": "select * from `personal_access_tokens` where `token` = ? limit 1"
+                },
+                {
+                    "n": 20,
+                    "sql": "select * from `availabilities` where `product_id` = ? and `bookable_type` = ? and date(`to`) >= ?"
+                },
+                {
+                    "n": 11,
+                    "sql": "select count(*) as aggregate from `feedbacks` where `feedbacks`.`model_type` = ? and `feedbacks`.`model_id` is null and `feedbacks`.`model_id` is not "
+                }
+            ],
+            "bytes": 24248,
+            "db_ms": 28.5,
+            "mem_mb": 0,
+            "wall_min": 40.34,
+            "wall_med": 53.66,
+            "wall_max": 68.54
+        },
+        {
+            "name": "best-selling",
+            "uri": "/api/best-selling-products?limit=10&language=en",
+            "status": 200,
+            "queries": 150,
+            "dupe_groups": 10,
+            "dupe_total": 136,
+            "top_dupes": [
+                {
+                    "n": 34,
+                    "sql": "select * from `personal_access_tokens` where `token` = ? limit 1"
+                },
+                {
+                    "n": 20,
+                    "sql": "select * from `availabilities` where `product_id` = ? and `bookable_type` = ? and date(`to`) >= ?"
+                },
+                {
+                    "n": 14,
+                    "sql": "select count(*) as aggregate from `feedbacks` where `feedbacks`.`model_type` = ? and `feedbacks`.`model_id` is null and `feedbacks`.`model_id` is not "
+                }
+            ],
+            "bytes": 24281,
+            "db_ms": 83.56,
+            "mem_mb": 2,
+            "wall_min": 92.4,
+            "wall_med": 94.4,
+            "wall_max": 95.26
+        },
+        {
+            "name": "top-rated",
+            "uri": "/api/top-rated-products?limit=10&language=en",
+            "status": 200,
+            "queries": 174,
+            "dupe_groups": 10,
+            "dupe_total": 160,
+            "top_dupes": [
+                {
+                    "n": 40,
+                    "sql": "select * from `personal_access_tokens` where `token` = ? limit 1"
+                },
+                {
+                    "n": 20,
+                    "sql": "select * from `availabilities` where `product_id` = ? and `bookable_type` = ? and date(`to`) >= ?"
+                },
+                {
+                    "n": 20,
+                    "sql": "select count(*) as aggregate from `feedbacks` where `feedbacks`.`model_type` = ? and `feedbacks`.`model_id` is null and `feedbacks`.`model_id` is not "
+                }
+            ],
+            "bytes": 25332,
+            "db_ms": 16.34,
+            "mem_mb": 2,
+            "wall_min": 28.72,
+            "wall_med": 33.31,
+            "wall_max": 107.68
+        },
+        {
+            "name": "product.show",
+            "uri": "/api/products/money-plant?language=en",
+            "status": 200,
+            "queries": 48,
+            "dupe_groups": 7,
+            "dupe_total": 25,
+            "top_dupes": [
+                {
+                    "n": 9,
+                    "sql": "select * from `products` where `slug` = ? and `products`.`deleted_at` is null"
+                },
+                {
+                    "n": 7,
+                    "sql": "select * from `personal_access_tokens` where `token` = ? limit 1"
+                },
+                {
+                    "n": 4,
+                    "sql": "select count(*) as aggregate from `feedbacks` where `feedbacks`.`model_type` = ? and `feedbacks`.`model_id` is null and `feedbacks`.`model_id` is not "
+                }
+            ],
+            "bytes": 5730,
+            "db_ms": 3.43,
+            "mem_mb": 2,
+            "wall_min": 7.36,
+            "wall_med": 7.76,
+            "wall_max": 8.96
+        }
+    ]
+}

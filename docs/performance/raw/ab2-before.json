@@ -1,0 +1,21 @@
+{
+  "label": "before",
+  "url": "http://127.0.0.1:8080/api/popular-products?limit=10&language=en",
+  "vus": 50,
+  "duration_s": 10.21,
+  "requests": 2199,
+  "rps": 215.4,
+  "ok": 2199,
+  "non2xx": 0,
+  "errors": {},
+  "error_rate": 0,
+  "p50": 227.1,
+  "p90": 249.8,
+  "p95": 275.3,
+  "p99": 317.3,
+  "max": 695.2,
+  "mbps": 39.84,
+  "max_in_flight": 50,
+  "generator_cpu_pct_of_one_core": 11.7,
+  "generator_cores": 8
+}

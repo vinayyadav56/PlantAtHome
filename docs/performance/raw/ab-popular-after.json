@@ -1,0 +1,21 @@
+{
+  "label": "popular-AFTER",
+  "url": "http://127.0.0.1:8080/api/popular-products?limit=10&language=en",
+  "vus": 50,
+  "duration_s": 10.11,
+  "requests": 4562,
+  "rps": 451.3,
+  "ok": 4562,
+  "non2xx": 0,
+  "errors": {},
+  "error_rate": 0,
+  "p50": 108.9,
+  "p90": 121.3,
+  "p95": 126,
+  "p99": 178.6,
+  "max": 427.9,
+  "mbps": 83.49,
+  "max_in_flight": 50,
+  "generator_cpu_pct_of_one_core": 23.3,
+  "generator_cores": 8
+}

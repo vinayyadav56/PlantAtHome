@@ -10,20 +10,39 @@ use Marvel\Exceptions\MarvelException;
 trait TranslationTrait
 {
 
+    /** Per-instance memo — see the accessor below. */
+    protected ?array $translatedLanguagesMemo = null;
+
     /**
      * Get all translations for the model.
      *
-     * @return string
+     * This is an appended attribute, so it runs once per row every time a model
+     * is serialised. Two things were making that expensive at list scale:
+     *
+     *  1. It hydrated FULL models (`->get()`) only to read one column. On
+     *     `products` that drags the LONGTEXT `description` across the wire for
+     *     every row — measured at 100 such queries on a 100-item product list.
+     *     `pluck()` on the builder issues `SELECT language` instead.
+     *  2. Accessors are not memoised by Eloquent, so a shared eager-loaded
+     *     relation (the same Type instance reused across 100 products)
+     *     re-queried on every single row. The memo makes that once.
+     *
+     * Return shape is unchanged: a plain array of language codes.
+     *
+     * @return array
      */
     public function getTranslatedLanguagesAttribute()
     {
-        if ($this->table === 'coupons') {
-            $translatedProducts = $this->where('code', $this->code)->get();
-            return $translatedProducts->pluck('language')->toArray();
+        if ($this->translatedLanguagesMemo !== null) {
+            return $this->translatedLanguagesMemo;
         }
 
-        $translatedProducts = $this->where('slug', $this->slug)->get();
-        return $translatedProducts->pluck('language')->toArray();
+        $column = $this->table === 'coupons' ? 'code' : 'slug';
+
+        return $this->translatedLanguagesMemo = static::query()
+            ->where($column, $this->{$column})
+            ->pluck('language')
+            ->all();
     }
 
 

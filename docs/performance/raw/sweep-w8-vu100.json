@@ -1,0 +1,21 @@
+{
+  "label": "products20-w8-vu100",
+  "url": "http://127.0.0.1:8080/api/products?limit=20&language=en",
+  "vus": 100,
+  "duration_s": 8.22,
+  "requests": 3417,
+  "rps": 415.4,
+  "ok": 3417,
+  "non2xx": 0,
+  "errors": {},
+  "error_rate": 0,
+  "p50": 233.8,
+  "p90": 260.7,
+  "p95": 280.5,
+  "p99": 306.6,
+  "max": 887.7,
+  "mbps": 115.64,
+  "max_in_flight": 100,
+  "generator_cpu_pct_of_one_core": 24.3,
+  "generator_cores": 8
+}

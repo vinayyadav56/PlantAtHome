@@ -1,0 +1,23 @@
+{
+  "label": "",
+  "url": "http://127.0.0.1:8080/api/health",
+  "vus": 50,
+  "duration_s": 8.09,
+  "requests": 3942,
+  "rps": 487.2,
+  "ok": 59,
+  "non2xx": 3883,
+  "errors": {
+    "HTTP 429": 3883
+  },
+  "error_rate": 197.007,
+  "p50": 101.1,
+  "p90": 113.5,
+  "p95": 117.4,
+  "p99": 129.4,
+  "max": 384.6,
+  "mbps": 0.15,
+  "max_in_flight": 50,
+  "generator_cpu_pct_of_one_core": 24.9,
+  "generator_cores": 8
+}

@@ -1,0 +1,21 @@
+{
+  "label": "",
+  "url": "http://127.0.0.1:8080/api/products?limit=100&language=en",
+  "vus": 50,
+  "duration_s": 8.12,
+  "requests": 2953,
+  "rps": 363.8,
+  "ok": 2953,
+  "non2xx": 0,
+  "errors": {},
+  "error_rate": 0,
+  "p50": 131.9,
+  "p90": 156.3,
+  "p95": 175.5,
+  "p99": 256.3,
+  "max": 472.7,
+  "mbps": 484.6,
+  "max_in_flight": 50,
+  "generator_cpu_pct_of_one_core": 25.6,
+  "generator_cores": 8
+}

@@ -25,3 +25,6 @@ Thumbs.db
 .env.*
 !.env.*.example
 .env.backup
+
+# Perf harness local artefacts
+/.env.perf

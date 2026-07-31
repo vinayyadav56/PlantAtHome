@@ -1,0 +1,23 @@
+{
+  "label": "products20-w8-vu400",
+  "url": "http://127.0.0.1:8080/api/products?limit=20&language=en",
+  "vus": 400,
+  "duration_s": 9.94,
+  "requests": 3536,
+  "rps": 355.7,
+  "ok": 3536,
+  "non2xx": 0,
+  "errors": {
+    "ETIMEDOUT": 180
+  },
+  "error_rate": 5.09,
+  "p50": 353.5,
+  "p90": 700.2,
+  "p95": 1430,
+  "p99": 5879.5,
+  "max": 6219,
+  "mbps": 99,
+  "max_in_flight": 400,
+  "generator_cpu_pct_of_one_core": 23.5,
+  "generator_cores": 8
+}
