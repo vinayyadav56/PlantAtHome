@@ -119,9 +119,10 @@ Route::post('/verify-otp-code', [UserController::class, 'verifyOtpCode'])->middl
 Route::post('/otp-login', [UserController::class, 'otpLogin'])->middleware('throttle:10,1');
 Route::get('top-authors', [AuthorController::class, 'topAuthor']);
 Route::get('top-manufacturers', [ManufacturerController::class, 'topManufacturer']);
-Route::get('popular-products', [ProductController::class, 'popularProducts']);
-Route::get('best-selling-products', [ProductController::class, 'bestSellingProducts']);
-Route::get('top-rated-products', [ProductController::class, 'topRatedProducts']);
+// ETag only — see the note on the products/types/categories resources below.
+Route::get('popular-products', [ProductController::class, 'popularProducts'])->middleware('cache.headers:etag');
+Route::get('best-selling-products', [ProductController::class, 'bestSellingProducts'])->middleware('cache.headers:etag');
+Route::get('top-rated-products', [ProductController::class, 'topRatedProducts'])->middleware('cache.headers:etag');
 Route::get('check-availability', [ProductController::class, 'checkAvailability']);
 Route::get("products/calculate-rental-price", [ProductController::class, 'calculateRentalPrice']);
 // PlantAtHome — distinct plant-attribute values + counts + price histogram for the
@@ -294,18 +295,29 @@ Route::get('orders/{tracking}/shipments', [OrderAssignmentController::class, 'tr
 
 Route::get('store-notices', [StoreNoticeController::class, 'index'])->name('store-notices.index');
 
+// `cache.headers:etag` on the public read surface.
+//
+// The SetCacheHeaders middleware was already registered in Kernel.php and no
+// route used it. With only `etag` (and deliberately NO max_age/public options)
+// it adds an ETag and answers a matching If-None-Match with 304, while leaving
+// the Cache-Control these controllers already emit via ApiResponseCache
+// untouched — passing cache directives here would overwrite them.
+//
+// This saves BANDWIDTH, not CPU: the response is still rendered in order to
+// hash it. It pairs with gzip rather than replacing it — a 304 sends no body at
+// all, which beats even a 14x-compressed one.
 Route::apiResource('products', ProductController::class, [
     'only' => ['index', 'show'],
-]);
+])->middleware('cache.headers:etag');
 Route::apiResource('types', TypeController::class, [
     'only' => ['index', 'show'],
-]);
+])->middleware('cache.headers:etag');
 Route::apiResource('attachments', AttachmentController::class, [
     'only' => ['index', 'show'],
 ]);
 Route::apiResource('categories', CategoryController::class, [
     'only' => ['index', 'show'],
-]);
+])->middleware('cache.headers:etag');
 Route::apiResource('delivery-times', DeliveryTimeController::class, [
     'only' => ['index', 'show']
 ]);
