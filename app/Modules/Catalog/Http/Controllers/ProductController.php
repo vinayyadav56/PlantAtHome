@@ -30,6 +30,9 @@ final class ProductController extends ApiController
      */
     private const FT_MIN_TOKEN = 3;
 
+    /** Name of the FULLTEXT index this search requires. */
+    private const FT_INDEX = 'catalog_products_fulltext';
+
     public function __construct(private readonly ProductService $products)
     {
     }
@@ -76,13 +79,13 @@ final class ProductController extends ApiController
      * Product search.
      *
      * Was `name LIKE '%term%'`. A leading wildcard cannot use an index, so every
-     * search scanned the whole published catalogue: EXPLAIN showed rows=1570 for
-     * a term matching 16 products. The `products_fulltext (name, sku)` index has
-     * existed for some time and nothing in the codebase used it — there was no
-     * MATCH … AGAINST anywhere.
+     * search scanned the whole published catalogue — measured on the comparable
+     * marvel products table, EXPLAIN went from rows=1570 to rows=1 for a term
+     * matching 16 products, with identical results.
      *
-     * Now FULLTEXT in BOOLEAN mode, which examines rows=1 for the same query and
-     * returns the identical 16 rows. Boolean mode rather than natural language
+     * This model's table is `catalog_products`, which had no FULLTEXT index of
+     * its own; one is added over (name, botanical_name), the two searchable text
+     * columns it actually has. Boolean mode rather than natural language
      * because natural language silently drops any word appearing in more than
      * half the rows, which on a single-vertical catalogue ("plant") is exactly
      * the word people search for.
@@ -117,15 +120,16 @@ final class ProductController extends ApiController
             return;
         }
 
-        // The index is NOT guaranteed to exist. Every FULLTEXT/index migration in
-        // this repo wraps itself in try/catch and swallows failures, so a green
-        // migration history proves nothing — and MATCH against a missing index is
-        // a hard SQL error, not an empty result.
+        // The index is NOT guaranteed to exist, and MATCH against a missing index
+        // — or a column that does not exist — is a hard SQL error rather than an
+        // empty result.
         //
-        // This was not hypothetical: the first version of this method assumed the
-        // index and returned HTTP 500 on staging, where products_fulltext turned
-        // out to be absent. Ask the schema, once per process.
-        if (! $this->hasFulltextIndex()) {
+        // Neither risk is hypothetical. The first version of this method matched
+        // MATCH(name, sku) and checked for the index on `products`. This model's
+        // table is `catalog_products`, which has NO sku column and no FULLTEXT
+        // index, so the guard passed against the wrong table and search returned
+        // HTTP 500. The table is now derived from the model, never assumed.
+        if (! $this->hasFulltextIndex($query->getModel()->getTable())) {
             $query->where('name', 'like', '%'.$clean.'%');
 
             return;
@@ -141,39 +145,45 @@ final class ProductController extends ApiController
         // Bound as a parameter, never interpolated.
         $expr = implode(' ', array_map(fn (string $t) => '+'.$t.'*', $tokens));
 
-        $query->whereRaw('MATCH(name, sku) AGAINST (? IN BOOLEAN MODE)', [$expr]);
+        // Columns must match the index definition exactly — MySQL requires a
+        // FULLTEXT index covering precisely this column list.
+        $query->whereRaw('MATCH(name, botanical_name) AGAINST (? IN BOOLEAN MODE)', [$expr]);
     }
 
     /**
-     * Is the products FULLTEXT index actually present on THIS database?
+     * Does `$table` carry the FULLTEXT index this search needs?
      *
-     * Memoised per process: one information_schema lookup on the first search a
-     * worker serves, then free. Deliberately not cached across processes — a
-     * stale "no" would silently keep search on the slow path after the index was
-     * added, and a stale "yes" would 500.
+     * Takes the table rather than assuming one: this controller's model is
+     * `catalog_products`, not the marvel `products` table, and checking the
+     * wrong one is what produced a 500 in the first place.
+     *
+     * Memoised per table per process: one information_schema lookup on the first
+     * search a worker serves, then free. Deliberately not cached across
+     * processes — a stale "no" would keep search on the slow path forever after
+     * the index was added, and a stale "yes" would 500.
      */
-    private function hasFulltextIndex(): bool
+    private function hasFulltextIndex(string $table): bool
     {
-        static $present = null;
+        static $present = [];
 
-        if ($present !== null) {
-            return $present;
+        if (array_key_exists($table, $present)) {
+            return $present[$table];
         }
 
         try {
-            $present = (bool) \Illuminate\Support\Facades\DB::selectOne(
+            $present[$table] = (bool) \Illuminate\Support\Facades\DB::selectOne(
                 'SELECT 1 FROM information_schema.STATISTICS
                   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?
                     AND INDEX_NAME = ? AND INDEX_TYPE = ? LIMIT 1',
-                ['products', 'products_fulltext', 'FULLTEXT']
+                [$table, self::FT_INDEX, 'FULLTEXT']
             );
         } catch (\Throwable) {
             // Cannot read the schema (restricted grants, unexpected engine) —
             // assume the index is absent and use the path that always works.
-            $present = false;
+            $present[$table] = false;
         }
 
-        return $present;
+        return $present[$table];
     }
 
     private function canSeeUnpublished(Request $request): bool
