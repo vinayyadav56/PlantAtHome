@@ -331,6 +331,36 @@ jobs:
             opcache.interned_strings_buffer=32
             opcache.save_comments=1
             OPCACHECONF
+
+              # ── opcache preload ──────────────────────────────────────────────
+              # MEASURED, interleaved A/B (8 rounds x 220 requests, arms
+              # alternated each round, paired medians):
+              #   preload OFF  median 18.874 ms   p95 31.107 ms
+              #   preload ON   median 17.651 ms   p95 24.767 ms
+              #   paired delta +0.627 ms (3.3%), preload ON won 7 of 8 rounds
+              # p95 is the bigger story: -20%. Unlike validate_timestamps (which
+              # won 2 of 8 and was reverted), this is consistently one-directional.
+              #
+              # Enabled ONLY if it survives a dry run, because the failure mode is
+              # the worst one available: a fatal inside a preload script means
+              # php-fpm's master REFUSES TO START. Not a 500 — no service at all.
+              # That is not hypothetical; the first version of preload.php
+              # referenced STDERR, which is undefined in the preload context, and
+              # fatalled immediately.
+              #
+              # So: compile it in a throwaway CLI process first. Only if that
+              # exits clean does the directive get written.
+              if php -d opcache.enable=1 -d opcache.enable_cli=1 \
+                     -d opcache.preload="/var/www/plantathome/api/preload.php" \
+                     -d opcache.preload_user="$(whoami)" \
+                     -r 'exit(0);' >/tmp/preload-check.log 2>&1; then
+                echo "opcache.preload=/var/www/plantathome/api/preload.php"  | sudo tee -a "$PHP_CONF_DIR/zz-opcache.ini" >/dev/null
+                echo "opcache.preload_user=www-data"         | sudo tee -a "$PHP_CONF_DIR/zz-opcache.ini" >/dev/null
+                echo "preload ENABLED (dry run clean)"
+              else
+                echo "WARNING: preload dry run FAILED — leaving preload off. Output:"
+                tail -20 /tmp/preload-check.log
+              fi
               echo "opcache config written to $PHP_CONF_DIR/zz-opcache.ini"
             else
               echo "WARNING: could not locate PHP conf.d — opcache left at stock defaults"
@@ -395,7 +425,27 @@ jobs:
             # A restart costs a sub-second window on a manually-dispatched
             # deploy, which is the right trade against applying nothing.
             echo "==> Restarting PHP-FPM (required to resize the opcache SHM)..."
-            sudo systemctl restart php8.1-fpm
+            sudo systemctl restart php8.1-fpm || true
+
+            # If php-fpm did not come back, the overwhelmingly likely cause is the
+            # opcache.preload directive written above — a fatal inside a preload
+            # script makes the master refuse to start, and the dry run cannot
+            # catch everything (it runs as a different user, with CLI settings).
+            #
+            # Strip preload and restart again rather than leaving the box with no
+            # PHP at all. The deploy still fails loudly afterwards.
+            if ! sudo systemctl is-active --quiet php8.1-fpm; then
+              echo "ERROR: php-fpm did not start. Removing opcache.preload and retrying..."
+              sudo sed -i '/opcache.preload/d' "$PHP_CONF_DIR/zz-opcache.ini" 2>/dev/null || true
+              sudo systemctl restart php8.1-fpm || true
+              if sudo systemctl is-active --quiet php8.1-fpm; then
+                echo "php-fpm recovered WITHOUT preload — preload is the culprit."
+              else
+                echo "php-fpm still down after removing preload — unrelated cause."
+                sudo journalctl -u php8.1-fpm -n 30 --no-pager || true
+              fi
+              exit 1
+            fi
             sudo systemctl is-active php8.1-fpm
 
             echo "==> Deploy complete"
