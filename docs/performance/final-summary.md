@@ -72,7 +72,45 @@ categories.slug, types.slug, tags.slug, attributes.slug, attribute_values.slug a
 - Absolute throughput is from a laptop CLI server, not php-fpm on EC2. Treat RPS/core as a relative constant for modelling, not as a production SLA.
 - The dataset is 8 MB and fits entirely in the InnoDB buffer pool, so these numbers isolate query and framework cost, not disk I/O.
 - Everything above the measured saturation point is MODELLED, not observed. 100k concurrent users was never generated — this machine has 16,384 ephemeral ports.
-- Production runs php-fpm with cached config and opcache preload; per-request overhead there is likely lower than measured here.
+- Production runs php-fpm with cached config. It does **not** run opcache preload, and until this pass
+  opcache had no configuration at all — that sentence previously claimed otherwise and was wrong.
+  Per-request overhead on production is therefore unlikely to be materially lower than measured here,
+  and the host is smaller than this laptop (2 cores vs 8).
+
+## Final scorecard
+
+| | Measured | Where |
+|---|---|---|
+| Saturation throughput | 444 RPS at 10 VUs, 8 workers | local rig |
+| Per-core throughput | ~61 RPS/core (~16 ms fixed cost/request) | local rig |
+| Latency at saturation | p50 105 ms · p95 123 ms · p99 164 ms | local rig |
+| Framework floor | 487 RPS trivial handler vs 364 heaviest endpoint | local rig |
+| Queries per request (feeds) | 105–132 → **2** on a cache hit | local rig |
+| Memory stability | RSS −0.2 MB/min over 35 min, 450,573 requests, 0 errors | local rig |
+| Overload behaviour | sheds at the accept queue; 0 5xx; recovers in 1–2 s | local rig |
+| **Response bytes** | **180,465 → 13,618 (−92.5%)** | **production** |
+| **Conditional requests** | **HTTP 304 on products/types/categories** | **production** |
+| **Storefront eager JS** | **2,034,939 → 1,632,528 B (−19.8%)** | **production** |
+| **Production host** | **2 cores / 1910 MB, 1341 MB available, worker RSS 175 MB** | **production** |
+| Cache hit ratio | not measured — Redis is deliberately inert on production | — |
+| Cost | unchanged; no instance was resized | — |
+| Max sustainable concurrency | bounded by 2 cores shared with php-fpm; not load-tested on production by instruction | — |
+
+### What remains, and why
+
+- **A bigger box, or a second one behind a load balancer.** The single largest
+  constraint, and the only one not addressable in this repository.
+- **opcache preload** — deferred. It could not be measured honestly on a host
+  under this much swap pressure, and it carries a real blast radius.
+- **81 service providers boot on every request** (43 explicit + 38 auto-discovered).
+  Untouched structural cost; the most promising remaining lever on the framework
+  floor.
+- **48 raw `<img>` tags serving unresized S3 originals.** Deliberately not
+  converted to `next/image`: on a 2-core box that would spend the exact CPU that
+  is already the bottleneck. The correct fix is resize-at-upload plus a CDN.
+- **Redis** — installed and working, left inert on production by instruction.
+- **The full k6 ladder to 50k** was never run: 16,384 ephemeral ports cap this
+  machine at roughly 5–10k, and production must not be load-tested.
 
 ## Reproducing
 
