@@ -79,7 +79,10 @@
     "_comment": "The five items previously listed as 'not done, deliberately'. Each was taken to a measurement rather than an opinion. Two shipped, two are null results that were NOT shipped, and one turned out to rest on a wrong premise.",
 
     "opcachePreload": {
-      "verdict": "SHIPPED — the only change in this whole pass with a clearly positive result",
+      "verdict": "MEASURED GOOD LOCALLY, BUT NOT ACTIVE ON PRODUCTION — the dry run caught a segfault and disabled it",
+      "productionOutcome": "The deploy's pre-flight compile of preload.php SEGFAULTED on the production PHP 8.1 build: 'Segmentation fault (core dumped)'. The guard did exactly its job — the directive was never written, php-fpm restarted normally, and all three services stayed up (API 200, storefront 200, admin 307). Without that dry run, php-fpm's master would have segfaulted at startup and the box would have served nothing at all.",
+      "productionStatus": "preload OFF; the machinery stays in place and is self-enabling — if the underlying build issue is fixed, the next deploy's dry run passes and preload turns itself on with no code change",
+      "whyItMayDiffer": "The A/B ran against macOS/homebrew PHP 8.1.32; production is Ubuntu PHP 8.1 with a different extension set. opcache preload is known to be sensitive to which classes can be eagerly linked, and the local run already emitted 'Can't preload unlinked class' warnings for Lighthouse and Excel interfaces. Narrowing the include list further may make it viable, but each attempt costs a production deploy and the upside is 3.3%.",
       "method": "interleaved A/B, 8 rounds x 220 requests, arms alternated per round, paired medians",
       "offMedianMs": 18.874,
       "onMedianMs": 17.651,
