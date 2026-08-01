@@ -96,21 +96,40 @@ categories.slug, types.slug, tags.slug, attributes.slug, attribute_values.slug a
 | Cost | unchanged; no instance was resized | — |
 | Max sustainable concurrency | bounded by 2 cores shared with php-fpm; not load-tested on production by instruction | — |
 
-### What remains, and why
+### The five deferred items, now measured
 
-- **A bigger box, or a second one behind a load balancer.** The single largest
-  constraint, and the only one not addressable in this repository.
-- **opcache preload** — deferred. It could not be measured honestly on a host
-  under this much swap pressure, and it carries a real blast radius.
-- **81 service providers boot on every request** (43 explicit + 38 auto-discovered).
-  Untouched structural cost; the most promising remaining lever on the framework
-  floor.
-- **48 raw `<img>` tags serving unresized S3 originals.** Deliberately not
-  converted to `next/image`: on a 2-core box that would spend the exact CPU that
-  is already the bottleneck. The correct fix is resize-at-upload plus a CDN.
-- **Redis** — installed and working, left inert on production by instruction.
-- **The full k6 ladder to 50k** was never run: 16,384 ephemeral ports cap this
-  machine at roughly 5–10k, and production must not be load-tested.
+Each was taken to a measurement rather than left as an opinion. Two produced
+action, two are null results that were deliberately **not** shipped, and one
+rested on a premise of mine that turned out to be wrong.
+
+| Item | Verdict |
+|---|---|
+| opcache preload | Local A/B **+3.3%, p95 −20%, won 7/8 rounds** — but the deploy's dry run caught a **segfault** on the production PHP build and left it **OFF**. The guard prevented a total outage. |
+| 81 service providers | **No effect.** Dropping 19 moved the warm median +0.344 ms, winning 4/6 rounds. Not shipped. |
+| 48 raw `<img>` tags | **Wrong premise.** Not one shifting element is an `<img>`. Real cause fixed: production CLS **0.887 → 0.383**. |
+| Redis | **Slower: −3.0%** on the only client installed anywhere (predis, pure PHP). Not enabled. |
+| k6 ladder to 50k | **Ceiling measured: 16,340** concurrent, `EADDRNOTAVAIL` — within 0.3% of the predicted 16,384. |
+
+Details, including the exact numbers and why each verdict went the way it did,
+are in `production-verified.json` and on the admin report page.
+
+### What genuinely remains
+
+- **A bigger box, or a second one behind a load balancer.** Still the single
+  largest constraint, and the only one not addressable in this repository. The
+  app tier cannot scale past 2 cores on one instance.
+- **The residual CLS of 0.383 on search.** Down from 0.887, but still above the
+  0.1 "good" threshold, and 58 other `dynamic(ssr:false)` call sites lack a
+  loading fallback. Worth working per-page, measured the same way.
+- **Redis with the C client.** `config/database.php` defaults to `phpredis`,
+  which is installed nowhere. Install `php8.1-redis` and re-measure before
+  touching `CACHE_DRIVER` — the pure-PHP client is measurably worse than the
+  MySQL cache it would replace.
+- **opcache preload on Ubuntu.** The machinery is in place and self-enabling;
+  it needs the segfault diagnosed on a like-for-like build, not on production.
+- **Image delivery.** Still worth doing, but for bandwidth rather than CLS:
+  resize-at-upload plus a CDN. `next/image` remains the wrong tool here — it
+  would spend the CPU that is already the bottleneck.
 
 ## Reproducing
 
