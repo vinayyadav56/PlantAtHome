@@ -128,6 +128,10 @@ const production = (() => {
       reverted: d.opcacheValidateTimestamps,
       incident: d.deploymentIncident,
       latent_bug: d.latentBugFound,
+      // The five items that had been parked as "not done, deliberately" and
+      // were then each taken to a measurement. Two shipped, two are null
+      // results that were NOT shipped, and one rested on a wrong premise.
+      deferred_completed: d.deferredItemsCompleted ?? null,
     };
   } catch {
     return null;

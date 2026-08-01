@@ -75,6 +75,71 @@
     ]
   },
 
+  "deferredItemsCompleted": {
+    "_comment": "The five items previously listed as 'not done, deliberately'. Each was taken to a measurement rather than an opinion. Two shipped, two are null results that were NOT shipped, and one turned out to rest on a wrong premise.",
+
+    "opcachePreload": {
+      "verdict": "SHIPPED — the only change in this whole pass with a clearly positive result",
+      "method": "interleaved A/B, 8 rounds x 220 requests, arms alternated per round, paired medians",
+      "offMedianMs": 18.874,
+      "onMedianMs": 17.651,
+      "offP95Ms": 31.107,
+      "onP95Ms": 24.767,
+      "medianPairedDeltaMs": 0.627,
+      "relativePct": 3.3,
+      "roundsWonByOn": 7,
+      "rounds": 8,
+      "note": "p95 improves 20%, and 7/8 one-directional is what separates this from the reverted changes (validate_timestamps won 2/8, the provider cull 4/6). Preloads 1,587 files / 1,573 classes for 19.3MB. Ships behind a dry run AND a post-restart rollback, because a fatal in a preload script stops php-fpm from starting at all — which the first version did, by referencing STDERR."
+    },
+
+    "serviceProviders": {
+      "verdict": "NOT SHIPPED — no measurable effect",
+      "claimBefore": "81 boot-time service providers were 'the most promising remaining lever on the framework floor'",
+      "reality": "Production installs with --no-dev, so only 3 of the discovered providers are dev-only; the real count is ~94, not 81. A lean manifest dropping 19 providers (7 unused payment gateways for markets this business does not serve, plus Lighthouse/GraphQL which nothing calls) boots fine at HTTP 200.",
+      "warmMedianPairedDeltaMs": 0.344,
+      "warmRelativePct": 1.7,
+      "warmRoundsWon": "4/6",
+      "coldMedianPairedDeltaMs": -3.3,
+      "coldRoundsWon": "3/6",
+      "note": "Both arms are coin flips, and per-round deltas swing from -223ms to +65ms — pure host noise. With warm opcache, provider registration is cheap object construction; the expensive part (compiling files) is already cached, and Laravel defers most providers anyway. Not worth editing a vendored package's payment code for 0%."
+    },
+
+    "rawImgTagsAndCls": {
+      "verdict": "PREMISE WAS WRONG — fixed the real cause instead",
+      "claimBefore": "48 raw <img> tags serving unresized S3 originals cause the 0.595 search-desktop CLS",
+      "reality": "Measured with PerformanceObserver on layout-shift entries: NOT ONE shifting element is an <img>. All six are DIVs. The images already sit in containers with reserved height.",
+      "actualCause": "FeaturedPlants loads Carousel and the product card via dynamic(ssr:false) with NO loading fallback, so both render null until their chunks arrive. The section is ~597px tall, sitting directly above the result count and product grid, so each null render moved the whole page.",
+      "productionClsBefore": 0.887,
+      "productionClsAfter": 0.383,
+      "reductionPct": 56.8,
+      "note": "Fixed by giving both dynamic imports the same skeleton row the data-loading branch already used. Still dynamic, not static — a static card import is the documented React 19 hydration-loop trap here. Residual 0.383 is above the 0.1 'good' threshold and still worth chasing; the remaining shift has the same signature, so more of the section's states differ in height. Staging cannot test this path at all: its best-selling-plants API returns 0 products, so the section returns null there."
+    },
+
+    "redis": {
+      "verdict": "NOT ENABLED — the only measurement available says it is SLOWER",
+      "measuredClient": "predis (pure PHP)",
+      "endpoints": [
+        { "endpoint": "settings", "databaseRps": 444.8, "redisRps": 423.8, "deltaPct": -4.7 },
+        { "endpoint": "categories", "databaseRps": 392.7, "redisRps": 386.9, "deltaPct": -1.5 },
+        { "endpoint": "popular", "databaseRps": 394.2, "redisRps": 373.1, "deltaPct": -5.4 },
+        { "endpoint": "products20", "databaseRps": 417.7, "redisRps": 410.7, "deltaPct": -1.7 },
+        { "endpoint": "products100", "databaseRps": 374.0, "redisRps": 367.9, "deltaPct": -1.6 }
+      ],
+      "totalDeltaPct": -3.0,
+      "why": "config/database.php defaults REDIS_CLIENT to 'phpredis' (the C extension), but that extension is installed NOWHERE — not locally, not on production. The measurement therefore ran on predis, which parses the Redis protocol in userland PHP on every cache read, while the MySQL connection is already open and pooled for the request.",
+      "blocked": "The C client could not be measured on this machine: pecl's channel is broken (XML parse error) and the brew formula requires replacing the PHP build. Enabling Redis on production would be shipping an unmeasured change against the only evidence available.",
+      "recommendation": "Install php8.1-redis on the box and re-measure BEFORE switching CACHE_DRIVER. Note production cannot be load-tested by instruction, so this needs a like-for-like rig with the extension present."
+    },
+
+    "loadLadderCeiling": {
+      "verdict": "MEASURED — the theory was right, and is now a number",
+      "claimBefore": "50,000 concurrent is not achievable from this machine — 16,384 ephemeral ports caps it",
+      "measuredCeiling": 16340,
+      "failureMode": "EADDRNOTAVAIL",
+      "note": "Within 0.3% of the theoretical 16,384, so the claim held. Also worth recording: kern.ipc.somaxconn is 128 on this box, which the reports never mentioned and which is a far tighter limit than the port range for BURST accepts — though it did not bite for held connections. Going past 16,340 needs additional source IPs (loopback aliases), which requires sudo that is not available in this session. It would also be pointless: the app saturates at ~444 RPS around 10 VUs, so 50k concurrent measures the laptop's socket handling, not the application."
+    }
+  },
+
   "latentBugFound": {
     "_comment": "Unrelated to this pass, found by reading the deploy log during the incident.",
     "bug": "the appDir patch in both production workflows has been a silent no-op since 2026-07-14",
