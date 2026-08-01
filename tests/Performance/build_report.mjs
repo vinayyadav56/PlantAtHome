@@ -90,6 +90,50 @@ const optional = (f, fn) => {
   try { return fn(raw(f)); } catch { return null; }
 };
 
+/**
+ * Measurements taken against LIVE PRODUCTION after the promotion.
+ *
+ * Everything else in this file comes from the local isolated rig, which is the
+ * only place it is safe to generate load. These are different in kind: they are
+ * single observations of the real system, so they are reported as facts about
+ * production rather than folded into the throughput tables.
+ *
+ * Optional like the rest — the report still builds before this run exists.
+ */
+const production = (() => {
+  try {
+    const d = JSON.parse(fs.readFileSync(P('production-verified.json'), 'utf8'));
+    const c = d.compression;
+    return {
+      measured_at: d.measuredAt,
+      target: d.target,
+      host: d.host,
+      compression: {
+        rows: c.endpoints.map((e) => ({
+          endpoint: e.endpoint,
+          identity: e.identity,
+          gzip: e.gzip,
+          saved_pct: +((1 - e.gzip / e.identity) * 100).toFixed(1),
+        })),
+        total_identity: c.totalIdentity,
+        total_gzip: c.totalGzip,
+        total_saved_pct: +((1 - c.totalGzip / c.totalIdentity) * 100).toFixed(1),
+      },
+      conditional_requests: d.conditionalRequests,
+      storefront_bundle: {
+        ...d.storefrontBundle,
+        saved_bytes: d.storefrontBundle.beforeEagerJs - d.storefrontBundle.afterEagerJs,
+        saved_pct: +((1 - d.storefrontBundle.afterEagerJs / d.storefrontBundle.beforeEagerJs) * 100).toFixed(1),
+      },
+      reverted: d.opcacheValidateTimestamps,
+      incident: d.deploymentIncident,
+      latent_bug: d.latentBugFound,
+    };
+  } catch {
+    return null;
+  }
+})();
+
 const soak = optional('soak.json', (d) => ({
   vus: d.vus, minutes: d.minutes, requests: d.total_requests,
   error_rate: d.error_rate, trends: d.trends_per_minute,
@@ -207,8 +251,10 @@ const report = {
     })),
   },
 
+  production,
+
   roadmap: [
-    { step: 1, action: 'PM2 cluster mode (pm2 start -i max) for shop and admin', why: 'One flag. Today a single core serves all SSR and all proxied API traffic per app.', unblocks: 'Linear scale to the box core count', effort: 'minutes' },
+    { step: 1, action: 'A bigger box, or a second one behind a load balancer', why: 'Production turned out to be 2 cores / 1910MB running the storefront, admin, php-fpm, six queue workers and nginx. Cluster mode is now live but there is only room for ONE worker per app, so the 4.03x measured on 8 cores does not transfer — it buys zero-downtime reloads, not throughput. This is the binding constraint and it is not in this repository.', unblocks: 'Everything below it', effort: 'hours' },
     { step: 2, action: 'Replace the 7s cart poll with on-demand fetch or a push channel', why: 'Modelled at 65% of origin RPS at 100k users, and it is uncacheable.', unblocks: '~65% reduction in app tier', effort: 'days' },
     { step: 3, action: 'Install Redis and move CACHE_DRIVER off database', why: '13-15 MySQL round trips per request just for cache reads, on the storefront database.', unblocks: 'Removes cache load from the primary DB', effort: 'hours' },
     { step: 4, action: 'Put a CDN in front of the public read API', why: 'The API already emits s-maxage=300; the model is most sensitive to this single factor (232 cores at 80% offload vs 555 at 0%).', unblocks: 'Largest single lever in the model', effort: 'days' },

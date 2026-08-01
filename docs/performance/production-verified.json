@@ -1,0 +1,85 @@
+{
+  "_comment": "Measured against LIVE PRODUCTION after the promotion on 2026-08-01, not modelled and not extrapolated. Byte counts are wire bytes: fetched twice, once with Accept-Encoding: identity and once with gzip, writing the raw stream to disk and using its length (curl's size_download reports POST-decompression bytes and would show no saving at all).",
+  "measuredAt": "2026-08-01",
+  "target": "https://api.plantathome.in + https://www.plantathome.in",
+
+  "host": {
+    "_comment": "Read off the box during deploy via os.cpus()/os.totalmem() and free -m. Nothing in the repo recorded this before; the AWS report says 'read it off the box' and nobody had. This is the binding constraint on the whole app tier.",
+    "cores": 2,
+    "totalMemMb": 1910,
+    "usedMemMb": 343,
+    "availableMemMb": 1341,
+    "shopWorkerRssMb": 175,
+    "shopWorkers": 1,
+    "adminWorkers": 1,
+    "execMode": "cluster_mode",
+    "colocated": "storefront + admin + php-fpm + 6 systemd queue workers + nginx"
+  },
+
+  "compression": {
+    "_comment": "nginx had no gzip and there was no Laravel middleware, so every JSON response went out uncompressed.",
+    "endpoints": [
+      { "endpoint": "settings", "identity": 5710, "gzip": 2347 },
+      { "endpoint": "types?limit=10", "identity": 4237, "gzip": 817 },
+      { "endpoint": "categories?parent=null", "identity": 9393, "gzip": 1268 },
+      { "endpoint": "products?limit=20", "identity": 19410, "gzip": 1294 },
+      { "endpoint": "products?limit=100", "identity": 93200, "gzip": 3489 },
+      { "endpoint": "popular-products?limit=10", "identity": 48515, "gzip": 4403 }
+    ],
+    "totalIdentity": 180465,
+    "totalGzip": 13618
+  },
+
+  "conditionalRequests": {
+    "_comment": "cache.headers:etag on the public read routes. A repeat request with If-None-Match costs headers instead of a body.",
+    "routes": ["products", "types", "categories"],
+    "status": 304
+  },
+
+  "storefrontBundle": {
+    "_comment": "The agentation dev toolbar was imported statically, so it shipped in the eager chunk graph on every route despite a hostname gate that stops it ever rendering for a customer. Before is staging's served HTML; after is production's served HTML. Both counted the same way: parse <script> tags out of the delivered HTML, fetch each chunk, sum the bytes.",
+    "beforeEagerJs": 2034939,
+    "afterEagerJs": 1632528,
+    "beforeAgentationBytes": 443873,
+    "afterAgentationBytes": 0,
+    "toolbarStillWorksOnStaging": true
+  },
+
+  "opcacheValidateTimestamps": {
+    "_comment": "Reverted. Justified as 'saves a stat() per file per request', which is wrong: opcache re-stats a file at most once per opcache.revalidate_freq seconds, default 2, so under load it amortises to nothing. Measured with an interleaved A/B because this host produced a 6.7x swing between two runs of an identical config; arms alternate each round so drift cancels, and the reported delta is the median of per-round paired differences, not a difference of means.",
+    "rounds": 8,
+    "requestsPerRound": 220,
+    "onMedianMs": 10.663,
+    "offMedianMs": 10.737,
+    "onP95Ms": 11.604,
+    "offP95Ms": 11.646,
+    "medianPairedDeltaMs": -0.084,
+    "roundsWonByOff": 2,
+    "verdict": "reverted — no measurable gain, and it risks serving stale bytecode if a deploy fails to cycle php-fpm"
+  },
+
+  "deploymentIncident": {
+    "_comment": "Recorded because it is the most expensive thing that happened during this pass and the fixes are load-bearing.",
+    "impact": "storefront and admin returned 502; the API was unaffected throughout",
+    "causes": [
+      "pm2 reload cannot change a running app's exec_mode, so the fork->cluster conversion silently did nothing and the cluster assert failed the deploy with the app stopped",
+      "the ecosystem files pointed logs at /var/log/pm2, which does not exist and the deploy user cannot create; PM2 treats that as a fatal start error, and it fired after pm2 delete had already removed the app",
+      "the admin's next binary is hoisted by yarn to admin-src/node_modules, so the hardcoded rest/node_modules path could never resolve"
+    ],
+    "fixes": [
+      "branch on exec_mode and convert with delete + start",
+      "resolve the next binary through Node's resolver instead of hardcoding a path",
+      "drop the custom log paths and use PM2's default, which always exists",
+      "restore the previous fork-mode process if the clustered start fails, so a failed deploy cannot leave the app down",
+      "readiness loop curls the port until it answers, so 'PM2 started it' is never reported as 'it serves'"
+    ]
+  },
+
+  "latentBugFound": {
+    "_comment": "Unrelated to this pass, found by reading the deploy log during the incident.",
+    "bug": "the appDir patch in both production workflows has been a silent no-op since 2026-07-14",
+    "detail": "required-server-files.json is pretty-printed ('\"appDir\": \"...\"' with a space) while the sed pattern had none, so it never matched; the admin's echo printed a hardcoded success message either way",
+    "fix": "apply the edit as JSON and assert the result",
+    "verified": "appDir: /home/runner/work/shop/shop -> /var/www/plantathome/shop-src"
+  }
+}

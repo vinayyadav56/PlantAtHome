@@ -6,6 +6,31 @@
 
 ## Findings
 
+### [CRITICAL] Production is a 2-core / 1,910 MB box running everything
+
+Read off the host during the promotion, not modelled. Every capacity number in
+these reports was produced without it, because nothing in the repo records the
+instance size — the AWS report says as much ("`pm.max_children` not in the repo
+— read it off the box").
+
+That single box carries the storefront, the admin, php-fpm, six systemd queue
+workers and nginx, in **1.9 GB of RAM across 2 cores**.
+
+Two consequences that change how the rest of this document should be read:
+
+1. **The 4.03× cluster-mode gain does not transfer.** It was measured on an
+   8-core machine. This host has room for **one** storefront worker, so cluster
+   mode here buys genuinely zero-downtime reloads, not throughput. The
+   ecosystem files size themselves from `os.cpus()` / `os.totalmem()` on the
+   target rather than assuming; on this box that resolves to 1 worker for the
+   shop and 1 for the admin. Had it still said `instances: 'max'` the deploy
+   would have started 2 workers with a 900 MB ceiling each on a 1.9 GB box.
+2. **This is the binding constraint, not the code.** Every optimisation in this
+   pass reduces work per request, but the app tier cannot scale past 2 cores on
+   one instance. The cheapest real capacity win available is not in this
+   repository — it is a larger instance, or a second one behind a load
+   balancer.
+
 ### [CRITICAL] Production runs one Node process per app, on one box
 
 The storefront and admin each start under PM2 in fork mode with no -i flag, so SSR and the /rest-api proxy share a single CPU core per app. No amount of query tuning changes this ceiling.

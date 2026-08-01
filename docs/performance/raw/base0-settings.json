@@ -1,0 +1,21 @@
+{
+  "label": "",
+  "url": "http://127.0.0.1:8080/api/settings?language=en",
+  "vus": 50,
+  "duration_s": 10.1,
+  "requests": 4377,
+  "rps": 433.2,
+  "ok": 4377,
+  "non2xx": 0,
+  "errors": {},
+  "error_rate": 0,
+  "p50": 113.1,
+  "p90": 128.2,
+  "p95": 136.5,
+  "p99": 183.4,
+  "max": 387.3,
+  "mbps": 17.16,
+  "max_in_flight": 50,
+  "generator_cpu_pct_of_one_core": 22.3,
+  "generator_cores": 8
+}
