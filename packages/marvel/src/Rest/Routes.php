@@ -754,6 +754,11 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // switches, e.g. Porter's paid get_quote/track). No secrets — those stay env-only.
     Route::get('courier/partners/{code}/config', [CourierPartnerProxyController::class, 'show']);
     Route::put('courier/partners/{code}/config', [CourierPartnerProxyController::class, 'update']);
+    // Force a fresh partner login (Shiprocket's 10-day session token) and report the new expiry.
+    // Throttled harder than config reads because each call authenticates against the partner for
+    // real — which is also what makes it the credential check.
+    Route::post('courier/partners/{code}/token/refresh', [CourierPartnerProxyController::class, 'refreshToken'])
+        ->middleware('throttle:10,1');
     // Partner DEBUG CONSOLE, proxied 1:1 to the same service. Returns the service's `exchange`
     // (exact upstream request/response, credentials masked service-side) so a partner integration
     // can be debugged from the admin UI. The test/* calls hit LIVE partner APIs and cost money, so

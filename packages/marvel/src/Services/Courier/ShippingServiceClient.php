@@ -236,6 +236,19 @@ class ShippingServiceClient
         return $this->request('put', '/v1/partners/' . rawurlencode($code) . '/config', $payload);
     }
 
+    /**
+     * Force a partner holding an expiring session token (Shiprocket) to authenticate again.
+     *
+     * Doubles as the credential check: the service performs a real login, so a failure here means
+     * the stored email/password do not work — answerable without placing an order to find out.
+     * Partners that authenticate per-request with a static key report "nothing to refresh" rather
+     * than an error.
+     */
+    public function refreshPartnerToken(string $code): array
+    {
+        return $this->request('post', '/v1/partners/' . rawurlencode($code) . '/token/refresh');
+    }
+
     // ── partner debug console (super-admin) ───────────────────────
     // These back the admin's per-partner debug console. The service answers each test/* call with a
     // { ok, ..., exchange } envelope, where `exchange` is the EXACT upstream request/response with
