@@ -874,6 +874,11 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('shipments/{id}/shipping-quotes', [CourierShipmentController::class, 'quotes']);
     Route::post('shipments/{id}/dispatch', [CourierShipmentController::class, 'dispatchShipment']);
     Route::post('shipments/{id}/cancel-shipment', [CourierShipmentController::class, 'cancelShipment']);
+    // Override which lane a shipment ships on. Partners are mode-exclusive
+    // (Shiprocket = courier; Porter/Borzo = instant/same_city), so this is what
+    // legitimately makes a different set of partners quotable for an order that
+    // was classified into the wrong lane.
+    Route::post('shipments/{id}/shipping-mode', [CourierShipmentController::class, 'updateMode']);
 
     // Marketplace analytics widgets (admin dashboard, D1).
     Route::get('analytics/city-sales', [AnalyticsController::class, 'cityWiseSales']);

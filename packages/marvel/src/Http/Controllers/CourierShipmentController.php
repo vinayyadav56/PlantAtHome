@@ -65,6 +65,42 @@ class CourierShipmentController extends CoreController
         return response()->json($res, !empty($res['ok']) ? 200 : 409);
     }
 
+    /**
+     * POST shipments/{id}/shipping-mode — override which lane this shipment ships on.
+     *
+     * Partners are mode-exclusive: Shiprocket serves `courier`, Porter and Borzo serve
+     * `instant`/`same_city`. So a shipment classified into the wrong lane can never be
+     * quoted by the partner that should carry it, which is what "why is Shiprocket not
+     * showing" turned out to be. This sets `shipment.mode`, which CourierService::modeOf()
+     * already prefers over the derived `fulfillment_mode` — no new mapping.
+     *
+     * Refused once the shipment is booked: the mode is what the partner was chosen on,
+     * and changing it afterwards would leave the record describing a lane the live
+     * booking is not on.
+     */
+    public function updateMode(Request $request, $id)
+    {
+        $mode = (string) $request->input('mode');
+        if (!in_array($mode, ['instant', 'same_city', 'courier'], true)) {
+            return response()->json([
+                'ok'    => false,
+                'error' => 'mode must be one of: instant, same_city, courier.',
+            ], 422);
+        }
+
+        $shipment = $this->shipment($id);
+        if ($shipment->provider_order_id || $shipment->awb_number) {
+            return response()->json([
+                'ok'    => false,
+                'error' => 'This shipment is already booked. Cancel it before changing its shipping mode.',
+            ], 409);
+        }
+
+        $shipment->forceFill(['mode' => $mode])->save();
+
+        return response()->json(['ok' => true, 'shipment' => $shipment->fresh()]);
+    }
+
     /** POST shipments/{id}/cancel-shipment — cancel via whichever partner placed it. */
     public function cancelShipment(Request $request, $id)
     {
