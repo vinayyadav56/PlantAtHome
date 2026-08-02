@@ -20,6 +20,22 @@
 return [
     'sync_to_shipping' => env('INTEGRATIONS_SYNC_TO_SHIPPING', true),
 
+    /*
+     * The environment label stamped on integration rows AND sent with credential pushes.
+     *
+     * The Go shipping-service refuses a push whose environment differs from its own APP_ENV —
+     * a guard so a prod monolith can never overwrite a staging service's credentials. But the
+     * two sides never agreed on vocabulary: IntegrationService::environment() falls back to
+     * "sandbox" on any non-production app, while the service runs as "staging". Every non-prod
+     * credential push was therefore refused with
+     *
+     *   409 "this service runs environment staging, refusing a credential push for sandbox"
+     *
+     * On production both sides already say "production", so only non-prod needed this override.
+     * Set INTEGRATIONS_ENVIRONMENT to the shipping service's APP_ENV (staging → "staging").
+     */
+    'environment' => env('INTEGRATIONS_ENVIRONMENT', ''),
+
     // Fallback only. CredentialSync::syncKey() prefers a DB-stored value on the
     // 'shipping_service' provider row (set via Settings → Integrations); this is
     // what lets the sync work purely from environment before any admin has
