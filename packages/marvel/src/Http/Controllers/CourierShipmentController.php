@@ -53,7 +53,15 @@ class CourierShipmentController extends CoreController
     {
         $shipment = $this->shipment($id);
         $this->assertCustomerLocation($shipment);
-        $res = $this->courier()->book($shipment);
+        // Optional `partner` books the specific quote the operator chose instead of
+        // letting the service re-route. Not validated against a list here on purpose:
+        // the shipping service already checks the code against the same candidacy
+        // rules (mode, COD, master switch) and returns "partner not available: X",
+        // so a second allowlist in PHP would be a copy of those rules that can drift.
+        $partner = $request->input('partner');
+        $partner = is_string($partner) && $partner !== '' ? $partner : null;
+
+        $res = $this->courier()->book($shipment, $partner);
         return response()->json($res, !empty($res['ok']) ? 200 : 409);
     }
 

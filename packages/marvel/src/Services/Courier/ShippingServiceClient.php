@@ -163,10 +163,17 @@ class ShippingServiceClient
         return ['ok' => true, 'results' => $results];
     }
 
-    /** Book via the service (idempotent on shipment_ref) + persist the returned provider fields. */
-    public function book(Shipment $shipment, string $mode, bool $cod, float $codAmount): array
+    /**
+     * Book via the service (idempotent on shipment_ref) + persist the returned provider fields.
+     *
+     * $partnerCode books a SPECIFIC partner instead of letting the service route by
+     * mode/price. The service still validates it against the same candidacy path, so an
+     * override cannot bypass the runtime master switch or mode/COD eligibility — an
+     * ineligible code comes back as "partner not available: X" rather than booking.
+     */
+    public function book(Shipment $shipment, string $mode, bool $cod, float $codAmount, ?string $partnerCode = null): array
     {
-        $res = $this->request('post', '/v1/shipments', $this->buildRequest($shipment, $mode, $cod, $codAmount));
+        $res = $this->request('post', '/v1/shipments', $this->buildRequest($shipment, $mode, $cod, $codAmount, $partnerCode));
         if (empty($res['ok'])) {
             $shipment->forceFill(['last_status' => 'book_failed', 'failure_reason' => $res['error'] ?? 'shipping service'])->save();
             return ['ok' => false, 'error' => $res['error'] ?? 'Shipping service book failed.'];
@@ -280,11 +287,14 @@ class ShippingServiceClient
 
     // ── request building ──────────────────────────────────────────
 
-    private function buildRequest(Shipment $shipment, string $mode, bool $cod, float $codAmount): array
+    private function buildRequest(Shipment $shipment, string $mode, bool $cod, float $codAmount, ?string $partnerCode = null): array
     {
         $order = $shipment->order;
         $shop = $shipment->shop;
         return [
+            // Empty string, not null: the service treats "" as "no override" and
+            // routes normally, whereas a null would have to be special-cased there.
+            'partner_code'    => (string) ($partnerCode ?? ''),
             'shipment_ref'    => (string) $shipment->id,
             'order_ref'       => (string) ($order->tracking_number ?? $order->id ?? $shipment->id),
             'shop_ref'        => (string) $shipment->shop_id,

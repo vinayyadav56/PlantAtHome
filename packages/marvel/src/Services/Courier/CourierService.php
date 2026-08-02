@@ -182,7 +182,7 @@ class CourierService
      * (courier → Shiprocket; instant/same-city → cheapest of Borzo/Porter), idempotent on
      * shipment_ref so a retry never double-books.
      */
-    public function book(Shipment $shipment): array
+    public function book(Shipment $shipment, ?string $partnerCode = null): array
     {
         if (!$this->shippingServiceEnabled()) {
             return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
@@ -192,7 +192,7 @@ class CourierService
         // one of them booked a 'CASH' order as PREPAID, so the rider was never told to collect and
         // the order value was simply lost. Always ask the enum.
         $cod = $order && PaymentGatewayType::isCashOnDelivery($order->payment_gateway);
-        return $this->shippingClient()->book($shipment, $this->modeOf($shipment), (bool) $cod, $this->shipmentCodAmount($shipment, $order));
+        return $this->shippingClient()->book($shipment, $this->modeOf($shipment), (bool) $cod, $this->shipmentCodAmount($shipment, $order), $partnerCode);
     }
 
     /** Cancel a booked shipment (the service cancels at whichever partner placed it). */
