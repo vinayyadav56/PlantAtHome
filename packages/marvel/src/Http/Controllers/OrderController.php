@@ -59,7 +59,17 @@ class OrderController extends CoreController
     public function index(Request $request)
     {
         $limit = $request->limit ? $request->limit : 10;
-        $orders = $this->fetchOrders($request)->paginate($limit)->withQueryString();
+        $repository = $this->fetchOrders($request);
+        // ?has_rto=1 — only orders with at least one bounced (return-to-origin)
+        // shipment. RTO is a SHIPMENT state, deliberately not an order status
+        // (what happens to the order after a bounce is the operator's decision),
+        // so it cannot ride the normal order_status search and filters here.
+        if ($request->boolean('has_rto')) {
+            $repository = $repository->scopeQuery(
+                fn ($q) => $q->whereHas('shipments', fn ($s) => $s->where('status', 'rto'))
+            );
+        }
+        $orders = $repository->paginate($limit)->withQueryString();
 
         // The order LIST grew large enough to get truncated mid-stream (the admin
         // orders list then showed empty). The Order model eager-loads

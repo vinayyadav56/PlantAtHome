@@ -101,6 +101,39 @@ class CourierShipmentController extends CoreController
         return response()->json(['ok' => true, 'shipment' => $shipment->fresh()]);
     }
 
+    /**
+     * POST shipments/{id}/mark-rto — record that this shipment bounced back to origin.
+     *
+     * The manual half of RTO tracking: webhooks mark it automatically when the partner
+     * reports an RTO stage, but a phone call from a rider or a partner dashboard is often
+     * how the operator actually learns. Goes through applyNormalizedStatus — the same seam
+     * as webhooks — so terminal-stickiness and the order-completion guard apply identically;
+     * a manual mark cannot do anything a webhook couldn't.
+     *
+     * Deliberately does NOT restock or refund. The operator decides what happens to the
+     * order after a bounce.
+     */
+    public function markRto(Request $request, $id)
+    {
+        $shipment = $this->shipment($id);
+
+        if (in_array((string) $shipment->status, ['delivered', 'cancelled', 'rto'], true)) {
+            return response()->json([
+                'ok'    => false,
+                'error' => "This shipment is already {$shipment->status}.",
+            ], 409);
+        }
+
+        $reason = trim((string) $request->input('reason', ''));
+        if ($reason !== '') {
+            $shipment->forceFill(['failure_reason' => $reason])->save();
+        }
+
+        $this->courier()->applyNormalizedStatus($shipment, ['shipment_status' => 'rto', 'order_status' => null]);
+
+        return response()->json(['ok' => true, 'shipment' => $shipment->fresh()]);
+    }
+
     /** POST shipments/{id}/cancel-shipment — cancel via whichever partner placed it. */
     public function cancelShipment(Request $request, $id)
     {

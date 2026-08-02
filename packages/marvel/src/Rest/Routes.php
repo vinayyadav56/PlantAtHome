@@ -879,6 +879,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // legitimately makes a different set of partners quotable for an order that
     // was classified into the wrong lane.
     Route::post('shipments/{id}/shipping-mode', [CourierShipmentController::class, 'updateMode']);
+    // Manual RTO: webhooks record partner-reported bounces automatically; this is for
+    // the ones the operator learns about by phone. Track-and-act-manually by design —
+    // no automatic restock or refund.
+    Route::post('shipments/{id}/mark-rto', [CourierShipmentController::class, 'markRto']);
 
     // Marketplace analytics widgets (admin dashboard, D1).
     Route::get('analytics/city-sales', [AnalyticsController::class, 'cityWiseSales']);

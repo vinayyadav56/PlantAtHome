@@ -156,6 +156,11 @@ class CourierService
                 return ['shipment_status' => 'out_for_delivery', 'order_status' => 'order-out-for-delivery'];
             case 'shipped':
                 return ['shipment_status' => 'shipped', 'order_status' => 'order-at-local-facility'];
+            case 'rto':
+                // Terminal bounce. order_status stays null: what happens to the
+                // ORDER after an RTO (refund / re-ship / restock) is an operator
+                // decision, not a webhook's.
+                return ['shipment_status' => 'rto', 'order_status' => null];
             case 'cancelled':
                 return ['shipment_status' => 'cancelled', 'order_status' => null];
             case 'assigned':
@@ -284,6 +289,17 @@ class CourierService
         $s = strtolower(trim($providerStatus));
         $has = fn (string $needle) => str_contains($s, $needle);
 
+        // RTO must be matched FIRST. Shiprocket's RTO stages embed later keywords —
+        // "RTO DELIVERED" contains "delivered", "RTO IN TRANSIT" contains "in transit" —
+        // so with delivered checked first, a parcel arriving back at the ORIGIN was
+        // recorded as delivered to the customer and the order advanced to completed,
+        // firing settlement on a bounced shipment. rto is its own status (not folded
+        // into cancelled) so the operator can find and act on returns distinctly;
+        // order_status stays null — what happens to the ORDER after a bounce
+        // (refund / re-ship / restock) is deliberately an operator decision.
+        if ($has('rto') || $has('return to origin')) {
+            return ['shipment_status' => 'rto', 'order_status' => null];
+        }
         if ($has('delivered')) {
             return ['shipment_status' => 'delivered', 'order_status' => 'order-completed'];
         }
@@ -296,7 +312,7 @@ class CourierService
         if ($has('pickup') || $has('manifest') || $has('awb')) {
             return ['shipment_status' => 'assigned', 'order_status' => null];
         }
-        if ($has('rto') || $has('return')) {
+        if ($has('return')) {
             return ['shipment_status' => 'cancelled', 'order_status' => null];
         }
         if ($has('cancel')) {
@@ -339,11 +355,15 @@ class CourierService
         // delivered_at or fires settlement-reversing order downgrades.
         $rank = ['pending' => 0, 'assigned' => 1, 'packed' => 1, 'shipped' => 2, 'out_for_delivery' => 3, 'delivered' => 4];
         $cur = (string) $shipment->status;
-        if (in_array($cur, ['delivered', 'cancelled'], true)) {
+        // rto is terminal like delivered/cancelled: a bounced parcel never becomes
+        // delivered, and what happens next is an operator decision, not a webhook's.
+        if (in_array($cur, ['delivered', 'cancelled', 'rto'], true)) {
             $shipment->forceFill(['last_status_at' => $now])->save();
             return $map; // terminal → sticky
         }
-        if ($target !== 'cancelled' && ($rank[$target] ?? 0) <= ($rank[$cur] ?? 0)) {
+        // rto interrupts like cancelled — a shipment bounces AFTER it has shipped,
+        // so the forward-only rank comparison would never admit it.
+        if (!in_array($target, ['cancelled', 'rto'], true) && ($rank[$target] ?? 0) <= ($rank[$cur] ?? 0)) {
             $shipment->forceFill(['last_status_at' => $now])->save();
             return $map; // same or backward → no-op
         }
@@ -354,6 +374,12 @@ class CourierService
         }
         if ($target === 'delivered') {
             $fill['delivered_at'] = $now;
+        }
+        if ($target === 'rto' && !$shipment->failure_reason) {
+            // Reuses the existing failure_reason column rather than adding an
+            // rto_reason migration — one nullable free-text field is enough for
+            // "track it and let the operator act".
+            $fill['failure_reason'] = 'Returned to origin (RTO)';
         }
         $shipment->forceFill($fill)->save();
 
@@ -367,9 +393,11 @@ class CourierService
             if ($order) {
                 $dest = $map['order_status'];
                 if ($dest === 'order-completed') {
-                    // Terminal = delivered OR cancelled; an in-flight leg keeps the order open.
+                    // Terminal = delivered, cancelled OR rto; an in-flight leg keeps the
+                    // order open. rto must be in this list — with it missing, one bounced
+                    // leg would hold every multi-leg order at out-for-delivery forever.
                     $inFlight = Shipment::where('order_id', $order->id)
-                        ->whereNotIn('status', ['delivered', 'cancelled'])->exists();
+                        ->whereNotIn('status', ['delivered', 'cancelled', 'rto'])->exists();
                     if ($inFlight) {
                         $dest = 'order-out-for-delivery';
                     }

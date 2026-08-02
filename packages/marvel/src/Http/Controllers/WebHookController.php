@@ -106,7 +106,7 @@ class WebHookController extends CoreController
 
             // Sync the provider identifiers/tracking the service learned — but NEVER clobber a row
             // that is already terminal (a stale/replayed event must not overwrite live tracking).
-            if (!in_array($shipment->status, ['delivered', 'cancelled'], true)) {
+            if (!in_array($shipment->status, ['delivered', 'cancelled', 'rto'], true)) {
                 $fill = [];
                 foreach (['provider_order_id', 'awb_number', 'tracking_url'] as $k) {
                     if (!empty($data[$k])) {
