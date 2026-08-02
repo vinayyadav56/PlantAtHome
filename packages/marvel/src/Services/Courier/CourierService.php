@@ -246,16 +246,26 @@ class CourierService
         return $this->book($shipment);
     }
 
-    /** Label generation is a shipping-service concern now (label_url arrives via callbacks). */
+    /**
+     * Mint the shipping label via the service (Shiprocket only — instant lanes carry none).
+     * These were stubs returning ok:false while Capabilities claimed Label:true; the shipments
+     * table's label_url column had been waiting unwritten since June.
+     */
     public function generateLabel(Shipment $shipment): array
     {
-        return ['ok' => false, 'error' => 'Label generation is handled by the shipping service.'];
+        if (!$this->shippingServiceEnabled()) {
+            return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
+        }
+        return $this->shippingClient()->generateLabel($shipment);
     }
 
-    /** Pickup scheduling is a shipping-service concern now. */
+    /** Schedule the courier pickup via the service. */
     public function schedulePickup(Shipment $shipment): array
     {
-        return ['ok' => false, 'error' => 'Pickup scheduling is handled by the shipping service.'];
+        if (!$this->shippingServiceEnabled()) {
+            return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
+        }
+        return $this->shippingClient()->schedulePickup($shipment);
     }
 
     public function track(Shipment $shipment): array

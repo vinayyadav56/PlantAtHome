@@ -45,6 +45,11 @@ class ShippingServiceClient
             'cod'      => $cod,
             'quotes'   => $d['quotes'] ?? [],
             'cheapest' => $d['cheapest'] ?? null,
+            // Why partners are missing from `quotes` (mode/COD/credentials/switched off) and which
+            // eligible ones errored. This whitelist used to STRIP both, so the service could
+            // explain itself and the admin still showed a bare list.
+            'ineligible' => $d['ineligible'] ?? [],
+            'failed'     => $d['failed'] ?? [],
         ];
     }
 
@@ -210,6 +215,35 @@ class ShippingServiceClient
             'cancelled_reason' => $reason,
         ])->save();
         return ['ok' => true];
+    }
+
+    /**
+     * Mint (or fetch the stored) shipping label for a booked shipment, persisting label_url.
+     * The service is idempotent — a second call returns the stored URL without a partner call —
+     * so retry-after-timeout is safe.
+     */
+    public function generateLabel(Shipment $shipment): array
+    {
+        $res = $this->request('post', '/v1/shipments/' . rawurlencode((string) $shipment->id) . '/label');
+        if (empty($res['ok']) || empty($res['data']['ok'])) {
+            return ['ok' => false, 'error' => $res['data']['error'] ?? $res['error'] ?? 'Label generation failed.'];
+        }
+        $labelUrl = (string) ($res['data']['label_url'] ?? '');
+        if ($labelUrl !== '' && $labelUrl !== $shipment->label_url) {
+            // The column has existed since 2026_06_23 and was written by nothing until now.
+            $shipment->forceFill(['label_url' => $labelUrl, 'last_status_at' => Carbon::now()])->save();
+        }
+        return ['ok' => true, 'label_url' => $labelUrl, 'shipment' => $shipment->fresh()];
+    }
+
+    /** Schedule the courier pickup for a booked shipment. */
+    public function schedulePickup(Shipment $shipment): array
+    {
+        $res = $this->request('post', '/v1/shipments/' . rawurlencode((string) $shipment->id) . '/pickup');
+        if (empty($res['ok']) || empty($res['data']['ok'])) {
+            return ['ok' => false, 'error' => $res['data']['error'] ?? $res['error'] ?? 'Pickup scheduling failed.'];
+        }
+        return ['ok' => true, 'pickup' => $res['data']['pickup'] ?? null];
     }
 
     public function track(Shipment $shipment): array
