@@ -177,24 +177,27 @@ class SettingsSeeder extends Seeder
                     "paymentOrder" => false
                 ]
             ],
+            // Default ON: a store that installs the platform expects order/payment
+            // emails to work out of the box (they were all seeded false, which
+            // read as "emails are broken"). Admin can switch any of them off.
             "emailEvent" => [
                 "admin" => [
-                    "statusChangeOrder" => false,
-                    "refundOrder" => false,
-                    "paymentOrder" => false
+                    "statusChangeOrder" => true,
+                    "refundOrder" => true,
+                    "paymentOrder" => true
                 ],
                 "vendor" => [
-                    "createQuestion" => false,
-                    "statusChangeOrder" => false,
-                    "refundOrder" => false,
-                    "paymentOrder" => false,
-                    "createReview" => false
+                    "createQuestion" => true,
+                    "statusChangeOrder" => true,
+                    "refundOrder" => true,
+                    "paymentOrder" => true,
+                    "createReview" => true
                 ],
                 "customer" => [
-                    "statusChangeOrder" => false,
-                    "refundOrder" => false,
-                    "paymentOrder" => false,
-                    "answerQuestion" => false
+                    "statusChangeOrder" => true,
+                    "refundOrder" => true,
+                    "paymentOrder" => true,
+                    "answerQuestion" => true
                 ]
             ],
             "pushNotification" => [

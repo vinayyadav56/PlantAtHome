@@ -3,6 +3,7 @@
 namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\Shipment;
 use Marvel\Facades\Payment;
@@ -129,4 +130,58 @@ class WebHookController extends CoreController
             return response()->json(['ok' => false], 200); // never 5xx to the service relay
         }
     }
+
+    /**
+     * SendGrid Event Webhook → advances email_logs rows. Correlates by the
+     * email_log_id custom arg attached at send time (EmailService::tagMessage).
+     * Out-of-order protection: a status only advances (rank map), and terminal
+     * failure states always win. Never 5xxes — SendGrid retries on non-2xx and
+     * we'd rather drop one event than build a retry storm.
+     */
+    public function sendgridEvents(Request $request)
+    {
+        // Progression rank; failures are terminal and always override.
+        $rank = ['queued' => 0, 'sent' => 1, 'delivered' => 2, 'opened' => 3, 'clicked' => 4];
+        $map = [
+            'processed' => 'sent', 'delivered' => 'delivered', 'open' => 'opened',
+            'click' => 'clicked', 'bounce' => 'bounced', 'dropped' => 'failed',
+            'deferred' => null, 'spamreport' => 'spam',
+        ];
+
+        $events = $request->json()->all();
+        if (!is_array($events)) {
+            return response()->json(['ok' => true]);
+        }
+
+        foreach ($events as $e) {
+            try {
+                $logId = (int) ($e['email_log_id'] ?? 0);
+                if ($logId <= 0) {
+                    continue; // not one of ours (marketing has its own pipeline)
+                }
+                $status = $map[(string) ($e['event'] ?? '')] ?? null;
+                if ($status === null) {
+                    continue;
+                }
+                $row = DB::table('email_logs')->where('id', $logId)->first();
+                if ($row === null) {
+                    continue;
+                }
+                $terminalFailure = in_array($status, ['bounced', 'failed', 'spam'], true);
+                $advances = isset($rank[$status], $rank[$row->status]) && $rank[$status] > $rank[$row->status];
+                if ($terminalFailure || $advances) {
+                    DB::table('email_logs')->where('id', $logId)->update([
+                        'status' => $status,
+                        'error' => $terminalFailure ? mb_substr((string) ($e['reason'] ?? $e['type'] ?? $status), 0, 2000) : $row->error,
+                        'updated_at' => now(),
+                    ]);
+                }
+            } catch (\Throwable $t) {
+                Log::warning('sendgrid webhook event skipped: ' . $t->getMessage());
+            }
+        }
+
+        return response()->json(['ok' => true]);
+    }
+
 }

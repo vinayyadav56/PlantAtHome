@@ -91,18 +91,18 @@ class NurseryService
         // Guard on a usable mail config (a mailer + a from address).
         $sent = false;
         if ($ownerCreated && ! empty($data['owner_password']) && config('mail.default') && config('mail.from.address')) {
-            try {
-                Mail::to($data['owner_email'])->send(new VendorCredentials(
-                    $data['owner_email'],
-                    $data['owner_password'],
-                    $nursery->name,
-                    $owner->name,
+            $logId = app(\Marvel\Services\EmailService::class)->send('vendor.credentials', $data['owner_email'], [
+                'vendor_name' => $owner->name,
+                'vendor_email' => $data['owner_email'],
+                'shop_name' => $nursery->name,
+                'temp_password' => $data['owner_password'],
+            ], [
+                'fallback' => fn () => Mail::to($data['owner_email'])->queue(new VendorCredentials(
+                    $data['owner_email'], $data['owner_password'], $nursery->name, $owner->name,
                     rtrim((string) (config('shop.dashboard_url') ?: ''), '/'),
-                ));
-                $sent = true;
-            } catch (\Throwable) {
-                $sent = false;
-            }
+                )),
+            ]);
+            $sent = $logId !== null;
         }
         $nursery->setAttribute('credentials_email_sent', $sent);
 

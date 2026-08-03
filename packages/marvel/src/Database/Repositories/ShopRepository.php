@@ -232,19 +232,20 @@ class ShopRepository extends BaseRepository
             // back the shop). Email failure is non-fatal because the admin UI shows the
             // credentials for manual sharing; credentials_email_sent tells it whether to.
             if ($owner) {
-                try {
-                    Mail::to($owner->email)->send(new VendorCredentials(
-                        $owner->email,
-                        $request->owner_password,
-                        $shop->name,
-                        $owner->name,
+                // Queued through the engine; "sent" now means "accepted by the
+                // engine" — the email log page shows the real outcome.
+                $logId = app(\Marvel\Services\EmailService::class)->send('vendor.credentials', $owner->email, [
+                    'vendor_name' => $owner->name,
+                    'vendor_email' => $owner->email,
+                    'shop_name' => $shop->name,
+                    'temp_password' => $request->owner_password,
+                ], [
+                    'fallback' => fn () => Mail::to($owner->email)->queue(new VendorCredentials(
+                        $owner->email, $request->owner_password, $shop->name, $owner->name,
                         rtrim(config('shop.dashboard_url') ?: '', '/')
-                    ));
-                    $sent = true;
-                } catch (\Exception $e) {
-                    $sent = false;
-                }
-                $shop->setAttribute('credentials_email_sent', $sent);
+                    )),
+                ]);
+                $shop->setAttribute('credentials_email_sent', $logId !== null);
             }
 
             return $shop;

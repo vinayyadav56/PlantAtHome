@@ -9,6 +9,7 @@ use Marvel\Http\Controllers\AddressController;
 use Marvel\Http\Controllers\AiController;
 use Marvel\Http\Controllers\AnalyticsController;
 use Marvel\Http\Controllers\CommandCenterController;
+use Marvel\Http\Controllers\EmailAdminController;
 use Marvel\Http\Controllers\MarketIntelligenceController;
 use Marvel\Http\Controllers\LocationController;
 use Marvel\Http\Controllers\TrackingController;
@@ -168,6 +169,8 @@ Route::post('webhooks/xendit', [WebHookController::class, 'xendit']);
 Route::post('webhooks/iyzico', [WebHookController::class, 'iyzico']);
 Route::post('webhooks/bkash', [WebHookController::class, 'bkash']);
 Route::post('webhooks/flutterwave', [WebHookController::class, 'flutterwave']);
+// SendGrid Event Webhook → email_logs status (delivered/opened/bounced…). Throttled; never 5xxes.
+Route::post('webhooks/sendgrid', [WebHookController::class, 'sendgridEvents'])->middleware('throttle:240,1');
 // Partner shipping webhooks (Borzo/Shiprocket/Porter) are received by the Go shipping-service
 // (/webhooks/{partner} there); the monolith gets status ONLY via shipping/callback below.
 // Dedicated shipping microservice → monolith callback (status/COD). Token-verified (x-api-key)
@@ -918,6 +921,23 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('command-center/event-stream', [CommandCenterController::class, 'eventStream']);
     Route::get('command-center/pulse', [CommandCenterController::class, 'pulse']);
     Route::get('command-center/executive', [CommandCenterController::class, 'executive']);
+
+    // ── Email engine admin (Settings → Notifications) ────────────────────────
+    Route::get('notifications/templates', [EmailAdminController::class, 'templates']);
+    Route::post('notifications/templates', [EmailAdminController::class, 'storeTemplate']);
+    Route::put('notifications/templates/{id}', [EmailAdminController::class, 'updateTemplate'])->whereNumber('id');
+    Route::delete('notifications/templates/{id}', [EmailAdminController::class, 'deleteTemplate'])->whereNumber('id');
+    Route::post('notifications/templates/{id}/duplicate', [EmailAdminController::class, 'duplicateTemplate'])->whereNumber('id');
+    Route::get('notifications/templates/{id}/versions', [EmailAdminController::class, 'versions'])->whereNumber('id');
+    Route::post('notifications/templates/{id}/versions/{version}/restore', [EmailAdminController::class, 'restoreVersion'])->whereNumber('id')->whereNumber('version');
+    Route::post('notifications/templates/{id}/preview', [EmailAdminController::class, 'preview'])->whereNumber('id');
+    Route::post('notifications/templates/{id}/test-send', [EmailAdminController::class, 'testSend'])->whereNumber('id');
+    Route::get('notifications/events', [EmailAdminController::class, 'events']);
+    Route::put('notifications/events/{id}', [EmailAdminController::class, 'updateEvent'])->whereNumber('id');
+    Route::get('notifications/logs/summary', [EmailAdminController::class, 'logsSummary']);
+    Route::get('notifications/logs/export', [EmailAdminController::class, 'exportLogs']);
+    Route::post('notifications/logs/retry', [EmailAdminController::class, 'retryLog']);
+    Route::get('notifications/logs', [EmailAdminController::class, 'logs']);
 
     // Market Intelligence — competitor-catalogue name import + price watchlist/snapshots.
     Route::get('market/watchlist', [MarketIntelligenceController::class, 'index']);

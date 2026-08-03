@@ -34,14 +34,22 @@ class SendOrderCreationNotification implements ShouldQueue
         $emailReceiver = $this->getWhichUserWillGetEmail(EventType::ORDER_CREATED, $order->language);
         // A mailer failure must never break the order — swallow + log.
         try {
+            $engine = app(\Marvel\Services\EmailService::class);
+            $vars = \Marvel\Services\OrderEmailVars::from($order);
             if ($customer && $emailReceiver['customer'] && $order->parent_id == null) {
-                $customer->notify(new OrderPlacedSuccessfully($event->invoiceData));
+                $engine->send('order.placed.customer', $customer->email, $vars, [
+                    'fallback' => fn () => $customer->notify(new OrderPlacedSuccessfully($event->invoiceData)),
+                ]);
             }
             if ($emailReceiver['admin']) {
                 $admins = $this->adminList();
-                foreach ($admins as $admin) {
-                    $admin->notify(new NewOrderReceived($order, 'admin'));
-                }
+                $engine->send('order.placed.admin', $admins->pluck('email')->all(), $vars, [
+                    'fallback' => function () use ($admins, $order) {
+                        foreach ($admins as $admin) {
+                            $admin->notify(new NewOrderReceived($order, 'admin'));
+                        }
+                    },
+                ]);
             }
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning('Order-creation email failed', [

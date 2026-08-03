@@ -36,6 +36,7 @@ class PruneLogTablesCommand extends Command
         'voice_search_logs'         => ['days' => 30, 'col' => 'created_at'],
         'plant_doctor_logs'         => ['days' => 30, 'col' => 'created_at'],
         'notify_logs'               => ['days' => 30, 'col' => 'created_at'],
+        'email_logs'                => ['days' => 90, 'col' => 'created_at'],
         'service_availability_logs' => ['days' => 90, 'col' => 'created_at'],
         'coverage_audit_logs'       => ['days' => 90, 'col' => 'created_at'],
         // Only PUBLISHED outbox rows are prunable — pending/failed are work.

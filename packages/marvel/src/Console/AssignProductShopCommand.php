@@ -25,7 +25,7 @@ class AssignProductShopCommand extends Command
 
     public function handle(): int
     {
-        $owner = User::where('email', env('ADMIN_EMAIL', 'yadavvinay9996@gmail.com'))->first()
+        $owner = User::where('email', env('ADMIN_EMAIL', config('mail.from.address')))->first()
             ?? User::first();
 
         $shop = Shop::firstOrCreate(

@@ -22,7 +22,14 @@ class SendOrderReceivedNotification implements ShouldQueue
         $emailReceiver = $this->getWhichUserWillGetEmail(EventType::ORDER_CREATED, $event->order->language);
         if ($emailReceiver['vendor']) {
             $vendor = $event->order->shop->owner;
-            $vendor->notify(new NewOrderReceived($event->order));
+            if ($vendor) {
+                app(\Marvel\Services\EmailService::class)->send(
+                    'order.placed.vendor',
+                    $vendor->email,
+                    \Marvel\Services\OrderEmailVars::from($event->order),
+                    ['fallback' => fn () => $vendor->notify(new NewOrderReceived($event->order))]
+                );
+            }
         }
     }
 }

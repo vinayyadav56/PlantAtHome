@@ -749,7 +749,14 @@ class UserController extends CoreController
             if (empty($emailTo)) {
                 return ['message' => EMAIL_SENT_SUCCESSFUL, 'success' => true];
             }
-            Mail::to($emailTo)->send(new ContactAdmin($details));
+            app(\Marvel\Services\EmailService::class)->send('admin.contact_form', $emailTo, [
+                'sender_name' => (string) ($details['name'] ?? ''),
+                'sender_email' => (string) ($details['email'] ?? ''),
+                'subject_line' => (string) ($details['subject'] ?? 'Contact form'),
+                'message' => (string) ($details['description'] ?? ''),
+            ], [
+                'fallback' => fn () => Mail::to($emailTo)->queue(new ContactAdmin($details)),
+            ]);
             return ['message' => EMAIL_SENT_SUCCESSFUL, 'success' => true];
         } catch (\Exception $e) {
             throw new MarvelException(SOMETHING_WENT_WRONG);

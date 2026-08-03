@@ -55,7 +55,7 @@ class RefundRequested extends Notification implements ShouldQueue
             $url = config('shop.dashboard_url') . '/refunds/' . $this->refund->id;
             return (new MailMessage)
                 ->subject($subject)
-                ->markdown('emails.refund.refund-updated', [
+                ->markdown('emails.refund.refund-requested', [
                     'order'    => $order,
                     'refund'   => $this->refund,
                     'url'      => $url,

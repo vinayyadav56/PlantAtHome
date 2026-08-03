@@ -36,8 +36,13 @@ class SendOrderStatusChangedNotification implements ShouldQueue
             if ($vendor)
                 $vendor->notify(new OrderStatusChangedNotification($event->order));
         }
-        if ($emailReceiver['customer'] && $order->parent_id == null) {
-            $customer->notify(new OrderStatusChangedNotification($event->order));
+        if ($customer && $emailReceiver['customer'] && $order->parent_id == null) {
+            app(\Marvel\Services\EmailService::class)->send(
+                'order.status_changed.customer',
+                $customer->email,
+                \Marvel\Services\OrderEmailVars::from($order),
+                ['fallback' => fn () => $customer->notify(new OrderStatusChangedNotification($event->order))]
+            );
         }
         if ($emailReceiver['admin']) {
             $admins = $this->adminList();

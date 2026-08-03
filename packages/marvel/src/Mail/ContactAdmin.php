@@ -30,6 +30,10 @@ class ContactAdmin extends Mailable
      */
     public function build()
     {
-        return $this->from($this->details['email'])->markdown('emails.contact-admin');
+        // From must be OUR verified sender — SendGrid 403s a client-supplied From
+        // (so this form never delivered), and it's a spoofing surface besides.
+        // The submitter goes in Reply-To so "Reply" still reaches them.
+        return $this->replyTo($this->details['email'], $this->details['name'] ?? null)
+            ->markdown('emails.contact-admin');
     }
 }
