@@ -48,6 +48,12 @@ class CommandCenterController extends CoreController
         return $this->activity->pulse();
     }
 
+    /** Executive dashboard payload: revenue series, compares, finance/marketing strips (cached 60s). */
+    public function executive(Request $request)
+    {
+        return $this->metrics->executive();
+    }
+
     public function overview(Request $request)
     {
         return $this->metrics->overview();

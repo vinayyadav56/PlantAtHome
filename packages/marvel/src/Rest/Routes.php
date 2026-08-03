@@ -917,6 +917,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('command-center/platform-health', [CommandCenterController::class, 'platformHealth']);
     Route::get('command-center/event-stream', [CommandCenterController::class, 'eventStream']);
     Route::get('command-center/pulse', [CommandCenterController::class, 'pulse']);
+    Route::get('command-center/executive', [CommandCenterController::class, 'executive']);
 
     // Market Intelligence — competitor-catalogue name import + price watchlist/snapshots.
     Route::get('market/watchlist', [MarketIntelligenceController::class, 'index']);
