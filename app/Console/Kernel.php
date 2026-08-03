@@ -30,6 +30,10 @@ class Kernel extends ConsoleKernel
         $schedule->command('marvel:recompute-city-availability')->dailyAt('03:30')->withoutOverlapping();
 
         // Settle vendor earnings past their T+N hold into per-vendor settlements.
+        // One retention story for every log/audit table (request_logs days come from
+        // the admin setting). Slotted between the 03:30 and 04:00 heavy jobs.
+        $schedule->command('logs:prune')->dailyAt('03:45')->withoutOverlapping(30);
+
         $schedule->command('marvel:run-settlements')->dailyAt('04:00')->withoutOverlapping();
 
         // Re-track open courier shipments + re-apply status (recovers missed/failed webhooks).

@@ -912,6 +912,9 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // Phase 4 — Inventory + Customer Intelligence.
     Route::get('command-center/inventory', [CommandCenterController::class, 'inventory']);
     Route::get('command-center/customer-intelligence', [CommandCenterController::class, 'customerIntelligence']);
+    // Mission Control health bar: platform report + shipping /health + integration
+    // health + kill switches + computed incidents. Cached 10s server-side.
+    Route::get('command-center/platform-health', [CommandCenterController::class, 'platformHealth']);
 
     // Market Intelligence — competitor-catalogue name import + price watchlist/snapshots.
     Route::get('market/watchlist', [MarketIntelligenceController::class, 'index']);
@@ -1146,6 +1149,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::put('admin-tasks/{id}', [SystemController::class, 'updateTask']);
     Route::delete('admin-tasks/{id}', [SystemController::class, 'destroyTask']);
     Route::get('request-logs', [SystemController::class, 'logs']);
+    // Literal paths BEFORE the {id} route or Laravel matches 'summary' as an id.
+    Route::get('request-logs/summary', [SystemController::class, 'logsSummary']);
+    Route::get('request-logs/exceptions', [SystemController::class, 'logExceptions']);
+    Route::get('request-logs/{id}', [SystemController::class, 'logDetail'])->whereNumber('id');
     Route::get('request-logs/settings', [SystemController::class, 'logSettings']);
     Route::post('request-logs/settings', [SystemController::class, 'updateLogSettings']);
     Route::post('request-logs/clear', [SystemController::class, 'clearLogs']);
