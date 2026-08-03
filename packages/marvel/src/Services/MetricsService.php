@@ -375,7 +375,7 @@ class MetricsService
     }
 
     /** PHP-side city extraction from a shipping_address JSON string/array. */
-    private function cityFromJson($shippingAddress): ?string
+    public function cityFromJson($shippingAddress): ?string
     {
         if (empty($shippingAddress)) {
             return null;

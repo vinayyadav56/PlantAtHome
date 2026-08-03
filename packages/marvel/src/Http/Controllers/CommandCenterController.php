@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
+use Marvel\Services\ActivityStreamService;
 use Marvel\Services\CustomerMetricsService;
 use Marvel\Services\InventoryMetricsService;
 use Marvel\Services\MetricsService;
@@ -26,7 +27,25 @@ class CommandCenterController extends CoreController
         protected VisitorMetricsService $visitors,
         protected InventoryMetricsService $inventory,
         protected CustomerMetricsService $customers,
+        protected ActivityStreamService $activity,
     ) {
+    }
+
+    // ── Live Activity NOC — merged event stream + pulse metrics ─────────────
+
+    /** Delta-pollable event stream: ?since=<server_time from the last poll>. */
+    public function eventStream(Request $request)
+    {
+        return $this->activity->events(
+            $request->get('since') ?: null,
+            min(100, max(10, (int) ($request->get('limit') ?: 80)))
+        );
+    }
+
+    /** Per-minute sparkline series + computed insights (cached 12s). */
+    public function pulse(Request $request)
+    {
+        return $this->activity->pulse();
     }
 
     public function overview(Request $request)

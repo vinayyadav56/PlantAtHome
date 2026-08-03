@@ -915,6 +915,8 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // Mission Control health bar: platform report + shipping /health + integration
     // health + kill switches + computed incidents. Cached 10s server-side.
     Route::get('command-center/platform-health', [CommandCenterController::class, 'platformHealth']);
+    Route::get('command-center/event-stream', [CommandCenterController::class, 'eventStream']);
+    Route::get('command-center/pulse', [CommandCenterController::class, 'pulse']);
 
     // Market Intelligence — competitor-catalogue name import + price watchlist/snapshots.
     Route::get('market/watchlist', [MarketIntelligenceController::class, 'index']);
