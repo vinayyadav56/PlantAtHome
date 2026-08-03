@@ -42,8 +42,14 @@ class EmailService
 
     private const RETRY_BACKOFF = [60, 300, 900, 3600, 86400];
 
-    /** Send a registered event's email. Returns the email_logs id, or null when nothing was queued. */
-    public function send(string $eventKey, string|array $to, array $data = [], array $opts = []): ?int
+    /**
+     * Send a registered event's email.
+     * Returns: the email_logs id when the engine queued it, TRUE when the
+     * legacy fallback handled it (e.g. pre-migration environments), null when
+     * nothing was sent. Callers wanting "was an email handed off?" should
+     * truthy-check the result, not compare to null.
+     */
+    public function send(string $eventKey, string|array $to, array $data = [], array $opts = []): int|bool|null
     {
         try {
             $recipients = $this->recipients($to);
@@ -292,11 +298,13 @@ class EmailService
         }
     }
 
-    private function runFallback(array $opts): ?int
+    /** Runs the caller's legacy path. TRUE = it executed cleanly (mail handed off). */
+    private function runFallback(array $opts): ?bool
     {
         if (isset($opts['fallback']) && is_callable($opts['fallback'])) {
             try {
                 ($opts['fallback'])();
+                return true;
             } catch (\Throwable $e) {
                 Log::warning('EmailService legacy fallback failed: ' . $e->getMessage());
             }

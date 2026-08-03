@@ -245,7 +245,7 @@ class ShopRepository extends BaseRepository
                         rtrim(config('shop.dashboard_url') ?: '', '/')
                     )),
                 ]);
-                $shop->setAttribute('credentials_email_sent', $logId !== null);
+                $shop->setAttribute('credentials_email_sent', (bool) $logId);
             }
 
             return $shop;

@@ -101,7 +101,7 @@ class VendorController extends ShopController
                 rtrim(config('shop.dashboard_url') ?: '', '/')
             )),
         ]);
-        return ['success' => true, 'credentials_email_sent' => $logId !== null];
+        return ['success' => true, 'credentials_email_sent' => (bool) $logId];
     }
 
     /**

@@ -102,7 +102,7 @@ class NurseryService
                     rtrim((string) (config('shop.dashboard_url') ?: ''), '/'),
                 )),
             ]);
-            $sent = $logId !== null;
+            $sent = (bool) $logId;
         }
         $nursery->setAttribute('credentials_email_sent', $sent);
 
