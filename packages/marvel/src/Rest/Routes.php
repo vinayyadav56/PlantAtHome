@@ -1152,6 +1152,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // Literal paths BEFORE the {id} route or Laravel matches 'summary' as an id.
     Route::get('request-logs/summary', [SystemController::class, 'logsSummary']);
     Route::get('request-logs/exceptions', [SystemController::class, 'logExceptions']);
+    Route::get('request-logs/export', [SystemController::class, 'exportLogs']);
     Route::get('request-logs/{id}', [SystemController::class, 'logDetail'])->whereNumber('id');
     Route::get('request-logs/settings', [SystemController::class, 'logSettings']);
     Route::post('request-logs/settings', [SystemController::class, 'updateLogSettings']);

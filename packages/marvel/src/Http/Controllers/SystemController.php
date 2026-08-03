@@ -122,7 +122,7 @@ class SystemController extends CoreController
         return response()->json($q->paginate(min((int) $request->query('limit', 50), 100)));
     }
 
-    /** Full row + correlated exceptions — the detail drawer\'s single fetch. */
+    /** Full row + correlated exceptions + geo — the detail drawer's single fetch. */
     public function logDetail($id): JsonResponse
     {
         $row = RequestLog::findOrFail($id);
@@ -133,7 +133,67 @@ class SystemController extends CoreController
                 ->orderBy('id')
                 ->get(['class', 'message', 'file', 'line', 'created_at']);
         }
-        return response()->json(['data' => array_merge($row->toArray(), ['exceptions' => $exceptions])]);
+        // Geo comes from the ip_locations cache the scheduled enricher maintains —
+        // null until the ~10-min sweep has seen this IP, and that is fine.
+        $location = null;
+        if ($row->ip && Schema::hasTable('ip_locations')) {
+            $location = DB::table('ip_locations')->where('ip', $row->ip)
+                ->first(['country_code', 'country', 'region', 'city', 'isp']);
+        }
+        return response()->json(['data' => array_merge($row->toArray(), [
+            'exceptions' => $exceptions,
+            'location' => $location,
+        ])]);
+    }
+
+    /**
+     * CSV export of the CURRENT filter set — same filters as logs(), hard cap
+     * 10k rows, never the body columns. Streamed so memory stays flat.
+     */
+    public function exportLogs(Request $request)
+    {
+        [$from, $to] = $this->logWindow($request);
+        $q = RequestLog::query()
+            ->select(self::LOG_LIST_COLUMNS)
+            ->whereBetween('created_at', [$from, $to])
+            ->latest('id');
+        if ($m = $request->query('method')) {
+            $q->where('method', strtoupper($m));
+        }
+        if ($request->boolean('errors')) {
+            $q->where('status', '>=', 400);
+        }
+        if ($s = $request->query('status')) {
+            $q->where('status', (int) $s);
+        }
+        if ($mod = $request->query('module')) {
+            $q->where('module', strtolower($mod));
+        }
+        if ($uid = $request->query('user_id')) {
+            $q->where('user_id', (int) $uid);
+        }
+        if ($ip = $request->query('ip')) {
+            $q->where('ip', $ip);
+        }
+        if ($term = $request->query('q')) {
+            $q->where('path', 'like', '%' . $term . '%');
+        }
+
+        return response()->streamDownload(function () use ($q) {
+            $out = fopen('php://output', 'w');
+            fputcsv($out, self::LOG_LIST_COLUMNS);
+            $q->limit(10000)->chunk(1000, function ($rows) use ($out) {
+                foreach ($rows as $row) {
+                    fputcsv($out, array_map(
+                        fn ($col) => $row->{$col} instanceof \DateTimeInterface
+                            ? $row->{$col}->format('Y-m-d H:i:s')
+                            : $row->{$col},
+                        self::LOG_LIST_COLUMNS
+                    ));
+                }
+            });
+            fclose($out);
+        }, 'request-logs-' . now()->format('Ymd-His') . '.csv', ['Content-Type' => 'text/csv']);
     }
 
     /**

@@ -33,6 +33,10 @@ class Kernel extends ConsoleKernel
         // One retention story for every log/audit table (request_logs days come from
         // the admin setting). Slotted between the 03:30 and 04:00 heavy jobs.
         $schedule->command('logs:prune')->dailyAt('03:45')->withoutOverlapping(30);
+        // Geo enrichment for the logs drawer: batch-resolves DISTINCT recent IPs;
+        // request path never does lookups. 20-min scan > 10-min cadence = overlap
+        // margin so an IP seen during a slow sweep is not missed.
+        $schedule->command('logs:enrich-ips')->everyTenMinutes()->withoutOverlapping(5);
 
         $schedule->command('marvel:run-settlements')->dailyAt('04:00')->withoutOverlapping();
 
