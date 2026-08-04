@@ -224,6 +224,13 @@ class ShopRepository extends BaseRepository
                 }
                 $this->syncServiceAreas($shop, $request);
 
+                // Start the KYC clock: a vendor may register without documents
+                // (deliberate — paperwork must never stall onboarding), but the
+                // gap gets a deadline, after which the nightly sweep holds the
+                // account. Complete documents at create ⇒ no clock at all.
+                app(\Marvel\Services\VendorKycService::class)->syncDeadline($shop);
+                $shop->save();
+
                 return $shop;
             });
 
@@ -280,6 +287,15 @@ class ShopRepository extends BaseRepository
                 $data['updated_by'] = $request->user()->id ?? null;
                 $shop->update($data);
                 $this->syncServiceAreas($shop, $request);
+
+                // Keep the KYC clock honest on every settings write: uploading
+                // the last missing document clears the deadline (and releases a
+                // KYC hold); deleting one starts the clock. No-op when nothing
+                // about the document set changed.
+                if (array_key_exists('settings', $data)) {
+                    app(\Marvel\Services\VendorKycService::class)->syncDeadline($shop->refresh());
+                    $shop->save();
+                }
 
             // TODO : why this code is needed
             // $shop->categories = $shop->categories;

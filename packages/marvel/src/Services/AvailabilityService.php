@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Cache;
 use Marvel\Database\Models\City;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\ProductCityAvailability;
+use Marvel\Database\Models\Shop;
 use Marvel\Database\Models\VendorProductPrice;
 use Marvel\Database\Models\VendorServiceArea;
 
@@ -22,6 +23,29 @@ class AvailabilityService
     public function __construct(private ?PricingService $pricing = null)
     {
         $this->pricing = $pricing ?: new PricingService();
+    }
+
+    /**
+     * Drop rows belonging to a vendor who is on hold.
+     *
+     * This is what gives "on hold" teeth. `is_active` was never checked here —
+     * it only gates the vendor dashboard — so before this a suspended vendor's
+     * stock kept being sold and assigned like nothing had happened. Since the
+     * single-master-shop change vendors own no products of their own, they
+     * supply purely through vendor_product_prices, which makes this the one
+     * place the whole selling path funnels through.
+     *
+     * `whereDoesntHave` rather than `where(... '!=', 'on_hold')` on purpose:
+     * the latter is a NOT EXISTS that also silently drops every row whose shop
+     * has a NULL approval_status (legacy rows) — i.e. it would stop selling
+     * perfectly good inventory. This only ever excludes an explicit hold.
+     */
+    private function excludeHeldVendors($query)
+    {
+        return $query->whereDoesntHave(
+            'shop',
+            fn ($s) => $s->where('approval_status', Shop::STATUS_ON_HOLD),
+        );
     }
 
     /** Scope a vendor_product_prices query to rows effective today. */
@@ -44,7 +68,11 @@ class AvailabilityService
         if (!is_null($variationOptionId)) {
             $q->where('variation_option_id', $variationOptionId);
         }
-        $rows = $this->effective($q)->get();
+        // Held vendors are excluded here rather than only in candidatesFor,
+        // because ItemAssignmentService::candidatesFor() calls THIS method to
+        // build its candidate list — so this single filter covers both the
+        // admin supply view and live order assignment.
+        $rows = $this->effective($this->excludeHeldVendors($q))->get();
 
         $shopIds = $rows->pluck('shop_id')->unique()->values()->all();
         $areas = VendorServiceArea::whereIn('shop_id', $shopIds)->where('is_active', true)->get()->groupBy('shop_id');
@@ -88,10 +116,12 @@ class AvailabilityService
         // sellable. When track_stock = 1 the vendor IS managing stock, so a row with no free
         // stock (stock_qty - reserved_qty <= 0) is out of stock and excluded.
         $rows = $this->effective(
-            VendorProductPrice::where('product_id', $productId)
-                ->where('is_available', true)
-                ->where(fn ($q) => $q->where('vendor_selling_price', '>', 0)->orWhere('cost_price', '>', 0))
-                ->where(fn ($q) => $q->where('track_stock', false)->orWhereRaw('(stock_qty - reserved_qty) > 0'))
+            $this->excludeHeldVendors(
+                VendorProductPrice::where('product_id', $productId)
+                    ->where('is_available', true)
+                    ->where(fn ($q) => $q->where('vendor_selling_price', '>', 0)->orWhere('cost_price', '>', 0))
+                    ->where(fn ($q) => $q->where('track_stock', false)->orWhereRaw('(stock_qty - reserved_qty) > 0'))
+            )
         )->get();
 
         $product = Product::with('categories:id')->find($productId);

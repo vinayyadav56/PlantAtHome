@@ -1042,6 +1042,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('vendors/check-unique', [VendorController::class, 'checkUnique']);
     // F3a — vendor document review (approve/reject/pending), stored in shop settings.
     Route::post('shops/{id}/documents/status', [ShopController::class, 'setDocumentStatus']);
+    // KYC grace period: push a vendor's document deadline out (and lift a
+    // deadline-caused hold). The deadline column is deliberately NOT
+    // client-writable through shop update — this is its only writer.
+    Route::post('shops/{id}/extend-kyc', [ShopController::class, 'extendKycDeadline']);
     Route::post('approve-withdraw', [WithdrawController::class, 'approveWithdraw']);
     Route::post('add-points', [UserController::class, 'addPoints']);
     Route::post('users/make-admin', [UserController::class, 'makeOrRevokeAdmin']);

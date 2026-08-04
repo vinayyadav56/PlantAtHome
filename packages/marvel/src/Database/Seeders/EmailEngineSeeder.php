@@ -140,6 +140,13 @@ class EmailEngineSeeder extends Seeder
              'cta' => ['label' => 'Sign in', 'url' => '{{login_url}}'],
              'vars' => ['vendor_name', 'vendor_email', 'shop_name', 'temp_password']],
 
+            ['slug' => 'vendor-kyc-deadline', 'name' => 'Vendor KYC deadline reminder', 'category' => 'vendor',
+             'subject' => 'Action needed: documents due by {{due_date}}', 'preview' => 'Your vendor account needs its KYC documents',
+             'heading' => 'Documents due soon',
+             'body' => '<p>Your vendor account for <strong>{{shop_name}}</strong> is missing: <strong>{{missing}}</strong>.</p><p>Please upload them by <strong>{{due_date}}</strong>. If they are not on file by then, your account will be placed on hold and your inventory will stop being offered to customers until the documents arrive.</p>',
+             'cta' => ['label' => 'Upload documents', 'url' => '{{login_url}}'],
+             'vars' => ['shop_name', 'due_date', 'missing']],
+
             ['slug' => 'contact-admin', 'name' => 'Contact form submission', 'category' => 'admin',
              'subject' => 'Contact form: {{subject_line}}', 'preview' => 'New message from the storefront',
              'heading' => 'New contact message',
@@ -224,6 +231,7 @@ class EmailEngineSeeder extends Seeder
             $wired('auth.otp', 'Email OTP code', 'authentication', 'auth-otp', 'ContactController::sendEmailOtp'),
             $wired('auth.forgot_password', 'Password reset link', 'authentication', 'auth-forgot-password', 'UserRepository::sendResetEmail'),
             $wired('vendor.credentials', 'Vendor account credentials', 'vendor', 'vendor-credentials', 'ShopRepository / VendorController / NurseryService'),
+            $wired('vendor.kyc_deadline', 'Vendor KYC deadline reminder', 'vendor', 'vendor-kyc-deadline', 'SweepKycDeadlinesCommand'),
             $wired('admin.contact_form', 'Contact form submission', 'admin', 'contact-admin', 'UserController::contactAdmin'),
             $wired('order.placed.customer', 'Order confirmation → customer', 'orders', 'order-placed-customer', 'SendOrderCreationNotification'),
             $wired('order.placed.admin', 'New order → admins', 'orders', 'order-placed-admin', 'SendOrderCreationNotification'),
