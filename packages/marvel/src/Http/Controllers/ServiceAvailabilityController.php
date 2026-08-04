@@ -36,7 +36,33 @@ class ServiceAvailabilityController extends CoreController
             return ['available' => true, 'status' => 'active', 'reason' => null, 'message' => null];
         }
         $city = $request->get('city');
-        return $this->availability->resolve($vertical, $city !== null ? (string) $city : null);
+        $result = $this->availability->resolve($vertical, $city !== null ? (string) $city : null);
+
+        // City-level blocks carry the city's configured takeover content so ONE
+        // endpoint drives the web and app screens. `city_maintenance` gets the
+        // admin-authored maintenance block (cities.settings.maintenance);
+        // `city_paused`/`city_disabled` get nothing extra — the clients render
+        // their plain "not serviceable here" state. Fail-soft: content is
+        // garnish, the block itself must never depend on it.
+        if (
+            !$result['available']
+            && is_string($result['reason'] ?? null)
+            && str_starts_with($result['reason'], 'city_')
+            && !str_starts_with($result['reason'], 'city_vertical')
+            && $city
+        ) {
+            try {
+                $cityRow = City::whereRaw('LOWER(name) = ?', [ServiceAvailabilityService::norm((string) $city)])
+                    ->orderByDesc('is_serviceable')
+                    ->first();
+                if ($cityRow && $result['reason'] === 'city_maintenance') {
+                    $result['maintenance'] = (array) data_get($cityRow->settings, 'maintenance', []);
+                }
+            } catch (\Throwable $e) {
+                // content lookup must never break the check
+            }
+        }
+        return $result;
     }
 
     // ── Reads ───────────────────────────────────────────────────────────────
@@ -46,7 +72,9 @@ class ServiceAvailabilityController extends CoreController
     {
         try {
             $verticals = GVS::where('vertical_slug', '!=', GVS::PLATFORM_SLUG)->get();
-            $citiesActive = City::whereIn('status', [City::STATUS_ACTIVE, City::STATUS_MAINTENANCE])
+            // ACTIVE only — maintenance stopped counting as "taking orders"
+            // when City::acceptsOrders() dropped it (2026-08 policy change).
+            $citiesActive = City::where('status', City::STATUS_ACTIVE)
                 ->where('is_serviceable', true)->count();
             $citiesTotal = City::count();
 

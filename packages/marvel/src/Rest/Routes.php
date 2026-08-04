@@ -230,8 +230,10 @@ Route::middleware(['auth:sanctum', 'throttle:20,1'])->group(function () {
 // and the Razorpay payment-link webhook. Lead capture is rate-limited per IP to
 // stop form-spam from flooding the leads table.
 Route::post('garden-leads', [GardenController::class, 'storeLead'])
+    ->middleware('service.available')
     ->middleware('throttle:10,1');
 Route::post('corporate-leads', [GardenController::class, 'storeLead'])
+    ->middleware('service.available')
     ->middleware('throttle:10,1');
 Route::get('garden-package-templates', [GardenController::class, 'templates']);
 Route::post('webhooks/razorpay-garden', [GardenController::class, 'razorpayWebhook']);
@@ -265,7 +267,8 @@ Route::post('track', [TrackingController::class, 'ingest'])->middleware('throttl
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('my-garden-packages', [GardenController::class, 'myPackages']);
     Route::get('my-garden-packages/{id}', [GardenController::class, 'showMyPackage']);
-    Route::post('garden-packages/{id}/pay', [GardenController::class, 'pay']);
+    Route::post('garden-packages/{id}/pay', [GardenController::class, 'pay'])
+        ->middleware('service.available:orders');
     Route::post('gifting/checkout', [GardenController::class, 'giftingCheckout']);
 });
 

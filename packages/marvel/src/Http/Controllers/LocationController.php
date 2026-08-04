@@ -183,6 +183,7 @@ class LocationController extends CoreController
     {
         $request->validate(['status' => ['required', Rule::in(City::STATUSES)]]);
         $city = City::findOrFail($id);
+        $old = ['status' => $city->status, 'is_serviceable' => (bool) $city->is_serviceable];
         $city->status = $request->input('status');
         // Disabling a city also makes it non-serviceable; re-enabling restores it.
         if ($city->status === City::STATUS_DISABLED) {
@@ -191,6 +192,19 @@ class LocationController extends CoreController
             $city->is_serviceable = true;
         }
         $city->save();
+        // Audit through the same event every other availability change uses —
+        // this flip can silence an entire city and used to leave no trace.
+        // The listener also busts the caches, so no separate bust needed; the
+        // explicit call stays as belt-and-braces (it's idempotent).
+        event(new \Marvel\Events\ServiceAvailabilityChanged(
+            'city',
+            (string) $city->id,
+            $old,
+            ['status' => $city->status, 'is_serviceable' => (bool) $city->is_serviceable],
+            'city_status_change',
+            $request->user()?->id,
+            $request->ip(),
+        ));
         $this->bustServiceAvailability();
         return $city->fresh('state');
     }
@@ -210,6 +224,17 @@ class LocationController extends CoreController
             'status'         => ['nullable', Rule::in(City::STATUSES)],
             'is_serviceable' => 'nullable|boolean',
             'settings'       => 'nullable|array',
+            // Per-city MAINTENANCE screen content (rendered by the storefront
+            // takeover when status = maintenance). Typed rules, not a blind
+            // array passthrough — this is a trust boundary and the strings
+            // land in customer-facing UI.
+            'settings.maintenance'                => 'nullable|array',
+            'settings.maintenance.title'          => 'nullable|string|max:120',
+            'settings.maintenance.description'    => 'nullable|string|max:600',
+            'settings.maintenance.image'          => 'nullable|url|max:2048',
+            'settings.maintenance.until'          => 'nullable|date',
+            'settings.maintenance.supportContact' => 'nullable|string|max:120',
+            'settings.maintenance.buttonTitle'    => 'nullable|string|max:60',
             'display_order'  => 'nullable|integer',
         ]);
     }
