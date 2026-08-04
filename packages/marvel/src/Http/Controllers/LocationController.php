@@ -3,8 +3,10 @@
 namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Validation\Rule;
 use Marvel\Database\Models\City;
+use Marvel\Database\Models\Shop;
 use Marvel\Database\Models\State;
 use Marvel\Database\Models\Warehouse;
 use Marvel\Exceptions\MarvelException;
@@ -207,6 +209,90 @@ class LocationController extends CoreController
         ));
         $this->bustServiceAvailability();
         return $city->fresh('state');
+    }
+
+    /**
+     * GET cities/{id}/vendors — every vendor serving this city, with catalogue
+     * and inventory counts. Powers the City Command Center vendor section.
+     * Reads only the projection/service-area tables — no per-vendor N+1.
+     */
+    public function cityVendors(Request $request, $id)
+    {
+        $city = City::findOrFail($id);
+        $key = mb_strtolower(trim($city->name));
+
+        $shopIds = \Marvel\Database\Models\VendorServiceArea::whereRaw('LOWER(city) = ?', [$key])
+            ->where('is_active', true)
+            ->distinct()
+            ->pluck('shop_id');
+
+        $perPage = min(50, max(5, (int) $request->input('limit', 20)));
+        $shops = Shop::whereIn('id', $shopIds)
+            ->select('id', 'name', 'slug', 'logo', 'is_active', 'approval_status', 'vendor_rating', 'contact_person', 'mobile')
+            ->orderByDesc('is_active')
+            ->orderBy('name')
+            ->paginate($perPage);
+
+        // Counts in two grouped queries, not one per vendor.
+        $productCounts = \Marvel\Database\Models\VendorProductPrice::whereIn('shop_id', $shops->pluck('id'))
+            ->select('shop_id', DB::raw('COUNT(DISTINCT product_id) as products'), DB::raw('SUM(CASE WHEN track_stock = 1 THEN GREATEST(stock_qty - reserved_qty, 0) ELSE 0 END) as stock'))
+            ->groupBy('shop_id')
+            ->get()
+            ->keyBy('shop_id');
+
+        $shops->getCollection()->transform(function ($s) use ($productCounts) {
+            $c = $productCounts[$s->id] ?? null;
+            $s->setAttribute('product_count', (int) ($c->products ?? 0));
+            $s->setAttribute('tracked_stock', (int) ($c->stock ?? 0));
+            return $s;
+        });
+
+        return $shops;
+    }
+
+    /**
+     * GET cities/{id}/products — the catalogue as this city sees it, straight
+     * from the product_city_availability rollup rows (variant 0): city price,
+     * aggregated stock, vendor count. Admin-only; vendor names come from the
+     * existing catalog-product-vendors endpoint per product.
+     */
+    public function cityProducts(Request $request, $id)
+    {
+        $city = City::findOrFail($id);
+        $key = mb_strtolower(trim($city->name));
+
+        $perPage = min(50, max(5, (int) $request->input('limit', 20)));
+        $q = \Marvel\Database\Models\ProductCityAvailability::query()
+            ->where('city', $key)
+            ->where('variation_option_id', 0)
+            ->join('products', 'products.id', '=', 'product_city_availability.product_id')
+            ->select(
+                'product_city_availability.product_id',
+                'product_city_availability.min_price',
+                'product_city_availability.stock',
+                'product_city_availability.stock_override',
+                'product_city_availability.vendor_count',
+                'product_city_availability.has_local',
+                'product_city_availability.has_courier',
+                'product_city_availability.updated_at',
+                'products.name',
+                'products.slug',
+                'products.image',
+                'products.status',
+                'products.product_type',
+            );
+
+        if ($request->filled('search')) {
+            $q->where('products.name', 'like', '%' . $request->input('search') . '%');
+        }
+        // Insight filters for the ops board — cheap flags on the projection.
+        if ($request->input('filter') === 'single_vendor') {
+            $q->where('vendor_count', 1);
+        } elseif ($request->input('filter') === 'low_stock') {
+            $q->whereNotNull('stock')->where('stock', '<=', (int) $request->input('threshold', 5));
+        }
+
+        return $q->orderByDesc('product_city_availability.updated_at')->paginate($perPage);
     }
 
     protected function validateCity(Request $request, $ignoreId = null): array

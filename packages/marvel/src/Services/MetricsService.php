@@ -123,13 +123,19 @@ class MetricsService
             ->groupBy('city')
             ->pluck('vendors', 'city');
 
+        // Real city status from the master cities table (was hardcoded 'active',
+        // which made the health board lie about paused/maintenance cities).
+        $statusByCity = DB::table('cities')
+            ->select(DB::raw('LOWER(name) as city'), 'status')
+            ->pluck('status', 'city');
+
         return $rows->map(fn ($r) => [
             'city'      => $r->city ?: 'Unknown',
             'orders'    => (int) $r->orders,
             'revenue'   => (float) $r->revenue,
             'customers' => (int) $r->customers,
             'vendors'   => (int) ($vendorsByCity[$r->city] ?? 0),
-            'status'    => 'active', // read-only in v1; real activation = Phase 2 master cities
+            'status'    => (string) ($statusByCity[strtolower((string) $r->city)] ?? 'active'),
         ])->all();
     }
 

@@ -1151,6 +1151,13 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('cities', [LocationController::class, 'cityStore']);
     Route::put('cities/{id}', [LocationController::class, 'cityUpdate']);
     Route::post('cities/{id}/status', [LocationController::class, 'citySetStatus']);
+    // City Command Center reads (vendor roster + city-eye catalogue view).
+    Route::get('cities/{id}/vendors', [LocationController::class, 'cityVendors']);
+    Route::get('cities/{id}/products', [LocationController::class, 'cityProducts']);
+    // Vendor-allocation strategy picker (VendorSelectionManager::available()).
+    Route::get('vendor-selection/strategies', function () {
+        return \Marvel\Services\VendorSelection\VendorSelectionManager::available();
+    });
     Route::delete('cities/{id}', [LocationController::class, 'cityDestroy']);
 
     Route::get('warehouses', [LocationController::class, 'warehouseIndex']);
