@@ -137,6 +137,9 @@ class ProductController extends CoreController
             }
             $cityPrices = \Marvel\Database\Models\ProductCityAvailability::whereIn('product_id', $ids)
                 ->where('city', $key)
+                // The projection is per-variant now; the card reads the
+                // PRODUCT ROLLUP row (variant 0 = "from ₹" price).
+                ->where('variation_option_id', 0)
                 ->whereNotNull('min_price')
                 ->pluck('min_price', 'product_id');
             if ($cityPrices->isEmpty()) {
