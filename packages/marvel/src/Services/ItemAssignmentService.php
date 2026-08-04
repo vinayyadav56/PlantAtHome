@@ -236,8 +236,15 @@ class ItemAssignmentService
         $marginPercent = null;
         if (!empty($rates)) {
             $typeId = \Marvel\Database\Models\Product::where('id', $productId)->value('type_id');
-            $marginPercent = (new MarginResolver())->marginPercent($cityN !== '' ? $cityN : null, $typeId ? (int) $typeId : null);
-            $sellingPrice = round(max($rates) * (1 + $marginPercent / 100), 2);
+            $resolver = new MarginResolver();
+            $cityArg = $cityN !== '' ? $cityN : null;
+            $typeArg = $typeId ? (int) $typeId : null;
+            $topRate = (float) max($rates);
+            // The margin formula (percent OR flat-₹) lives in MarginResolver::apply.
+            // The snapshot column stays a percent: for flat rules we store the
+            // EFFECTIVE percent of this rate, so finance reporting is unchanged.
+            $sellingPrice = $resolver->apply($topRate, $cityArg, $typeArg);
+            $marginPercent = $resolver->effectivePercent($topRate, $cityArg, $typeArg);
         }
 
         $maxShipping = max(array_map(fn ($c) => $c['shipping_cost'], $candidates)) ?: 0.0;

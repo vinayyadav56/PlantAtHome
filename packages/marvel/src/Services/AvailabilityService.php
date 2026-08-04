@@ -171,12 +171,13 @@ class AvailabilityService
         $resolver = new MarginResolver();
         $typeId = ($product && $product->type_id) ? (int) $product->type_id : null;
         foreach ($cities as $city => $info) {
-            // The card "from ₹" price = the cheapest VARIANT's city price, where each
-            // variant's city price is MAX-over-vendors rate × (1 + margin(city, vertical)).
-            $margin = $resolver->marginPercent($city, $typeId);
+            // The card "from ₹" price = the cheapest VARIANT's city price, where
+            // each variant's city price is the margin rule applied to its
+            // MAX-over-vendors rate (percent or flat — MarginResolver::apply owns
+            // the formula).
             $minVariantMaxRate = !empty($info['max_rate']) ? min($info['max_rate']) : null;
             $minPrice = $minVariantMaxRate !== null
-                ? round($minVariantMaxRate * (1 + $margin / 100), 2)
+                ? $resolver->apply((float) $minVariantMaxRate, $city, $typeId)
                 : null;
             ProductCityAvailability::updateOrCreate(
                 ['product_id' => $productId, 'city' => $city],
