@@ -112,7 +112,8 @@ class ShopRepository extends BaseRepository
         // The cities a vendor serves feed the city-availability projection — refresh
         // every product this vendor supplies so the storefront reflects the change.
         if (VendorProductPrice::where('shop_id', $shop->id)->exists()) {
-            (new AvailabilityService())->recomputeForShop((int) $shop->id);
+            // Queued + deduped: a shop save can touch hundreds of products.
+            \Marvel\Jobs\RecomputeShopAvailabilityJob::dispatch((int) $shop->id);
         }
 
         // Onboarding a vendor in a city must surface that city in the storefront

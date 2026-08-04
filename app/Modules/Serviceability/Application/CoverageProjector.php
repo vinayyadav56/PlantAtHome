@@ -229,7 +229,7 @@ class CoverageProjector
     {
         if (class_exists(\Marvel\Services\AvailabilityService::class)) {
             try {
-                app()->make(\Marvel\Services\AvailabilityService::class)->recomputeForShop($shopId);
+                \Marvel\Jobs\RecomputeShopAvailabilityJob::dispatch($shopId);
             } catch (\Throwable $e) {
                 Log::warning('coverage-sync: recomputeForShop failed', ['shop_id' => $shopId, 'error' => $e->getMessage()]);
             }
