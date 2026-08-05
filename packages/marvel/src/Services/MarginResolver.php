@@ -22,8 +22,14 @@ use Marvel\Database\Models\Settings;
  * Fallback when no row matches: legacy settings.options.vendorPricing.globalMarginPercent, else 0.
  *
  * The map is loaded ONCE per request into a static (services are new'd ad hoc across
- * controllers/repositories, so an instance cache would reload repeatedly). Plain FPM —
- * the static dies with the request. flush() after any margin mutation.
+ * controllers/repositories, so an instance cache would reload repeatedly). Under FPM
+ * the static dies with the request, so flush() after any margin mutation is enough.
+ *
+ * ⚠️ In a LONG-RUNNING process the static does NOT die: a queue worker lives for an
+ * hour and would reuse the margins it happened to load on its first job, so a margin
+ * edit would silently never reach the projection. Every recompute entry point that
+ * can run in a worker therefore flushes first — see RecomputeShopAvailabilityJob and
+ * RecomputeCityAvailabilityCommand. Add the same call to any new long-lived caller.
  */
 class MarginResolver
 {

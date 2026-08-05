@@ -9,6 +9,7 @@ use Illuminate\Foundation\Bus\Dispatchable;
 use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Marvel\Services\AvailabilityService;
+use Marvel\Services\MarginResolver;
 
 /**
  * Rebuild the city-availability projection for one vendor's whole catalogue.
@@ -46,6 +47,12 @@ class RecomputeShopAvailabilityJob implements ShouldQueue, ShouldBeUnique
 
     public function handle(AvailabilityService $availability): void
     {
+        // MarginResolver caches the margin matrix in a STATIC, on the assumption
+        // that "the static dies with the request". That holds under FPM and is
+        // false here: a queue worker lives for an hour, so without this flush a
+        // job reuses whatever margins were loaded the first time this process
+        // ran one — and a margin edit silently never reaches the projection.
+        MarginResolver::flush();
         $availability->recomputeForShop($this->shopId);
     }
 }
