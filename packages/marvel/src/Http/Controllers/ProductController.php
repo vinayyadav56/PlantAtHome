@@ -687,7 +687,14 @@ class ProductController extends CoreController
             }
             $svc = new \Marvel\Services\AvailabilityService();
             $key = $svc->normalizeCityKey((string) $request->city);
-            $productId = (int) \Illuminate\Support\Arr::get($data, 'data.id');
+
+            // This response is UNWRAPPED (JsonResource::withoutWrapping is on),
+            // so the product fields sit at the root — but attachAvailability
+            // writes a `data.availability` key, and a future config flip could
+            // wrap it again. Resolve the root once and address everything
+            // through it rather than hardcoding either shape.
+            $root = isset($data['data']['id']) ? 'data.' : '';
+            $productId = (int) \Illuminate\Support\Arr::get($data, $root . 'id');
             if ($key === '' || !$productId) {
                 return $data;
             }
@@ -700,7 +707,7 @@ class ProductController extends CoreController
                 return $data;
             }
 
-            $options = \Illuminate\Support\Arr::get($data, 'data.variation_options');
+            $options = \Illuminate\Support\Arr::get($data, $root . 'variation_options');
             $variantPrices = [];
             if (is_array($options) && $options) {
                 foreach ($options as $i => $opt) {
@@ -717,27 +724,27 @@ class ProductController extends CoreController
                         $options[$i]['city_available'] = false;
                     }
                 }
-                \Illuminate\Support\Arr::set($data, 'data.variation_options', $options);
+                \Illuminate\Support\Arr::set($data, $root . 'variation_options', $options);
             }
 
             $rollup = $rows[0] ?? null;
             if ($variantPrices) {
-                \Illuminate\Support\Arr::set($data, 'data.min_price', min($variantPrices));
-                \Illuminate\Support\Arr::set($data, 'data.max_price', max($variantPrices));
-                \Illuminate\Support\Arr::set($data, 'data.price', min($variantPrices));
-                \Illuminate\Support\Arr::set($data, 'data.sale_price', null);
+                \Illuminate\Support\Arr::set($data, $root . 'min_price', min($variantPrices));
+                \Illuminate\Support\Arr::set($data, $root . 'max_price', max($variantPrices));
+                \Illuminate\Support\Arr::set($data, $root . 'price', min($variantPrices));
+                \Illuminate\Support\Arr::set($data, $root . 'sale_price', null);
             } elseif ($rollup && $rollup->display_price !== null && (float) $rollup->display_price > 0) {
                 $p = (float) $rollup->display_price;
                 foreach (['price', 'min_price', 'max_price'] as $f) {
-                    \Illuminate\Support\Arr::set($data, "data.$f", $p);
+                    \Illuminate\Support\Arr::set($data, $root . $f, $p);
                 }
-                \Illuminate\Support\Arr::set($data, 'data.sale_price', null);
+                \Illuminate\Support\Arr::set($data, $root . 'sale_price', null);
             }
 
             if ($rollup) {
                 // Safe aggregates only — never the vendor rate or the margin.
-                \Illuminate\Support\Arr::set($data, 'data.vendor_count', (int) $rollup->vendor_count);
-                \Illuminate\Support\Arr::set($data, 'data.city_stock', $rollup->effectiveStock());
+                \Illuminate\Support\Arr::set($data, $root . 'vendor_count', (int) $rollup->vendor_count);
+                \Illuminate\Support\Arr::set($data, $root . 'city_stock', $rollup->effectiveStock());
             }
         } catch (\Throwable $e) {
             // fail open — a pricing fault must never blank the PDP
@@ -751,9 +758,14 @@ class ProductController extends CoreController
             if (!$request->filled('city')) {
                 return $data;
             }
-            $slug = \Illuminate\Support\Arr::get($data, 'data.type.slug');
+            // Same unwrapped-payload trap as attachCityPricing: `data.type.slug`
+            // is always null here, so this silently fell through to the
+            // two-query lookup below on EVERY PDP hit. The WRITE below stays at
+            // `data.availability` — that path is the storefront's contract.
+            $root = isset($data['data']['id']) ? 'data.' : '';
+            $slug = \Illuminate\Support\Arr::get($data, $root . 'type.slug');
             if (!$slug) {
-                $pslug = \Illuminate\Support\Arr::get($data, 'data.slug') ?? $request->input('slug');
+                $pslug = \Illuminate\Support\Arr::get($data, $root . 'slug') ?? $request->input('slug');
                 $typeId = \Marvel\Database\Models\Product::where('slug', $pslug)->value('type_id');
                 $slug = $typeId ? \Marvel\Database\Models\Type::where('id', $typeId)->value('slug') : null;
             }
