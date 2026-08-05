@@ -135,17 +135,24 @@ class ProductController extends CoreController
             if (empty($ids)) {
                 return;
             }
-            $rows = \Marvel\Database\Models\ProductCityAvailability::whereIn('product_id', $ids)
+            // ALL rows for the page in one query — the rollup (variant 0) for the
+            // card price and aggregates, plus the variant rows, because a card
+            // that renders "₹min – ₹max" needs BOTH ends in city terms. Setting
+            // only min_price left max_price at the master catalogue value, so
+            // the range read "₹1,199 – ₹3,109" (half city, half master) and
+            // looked like the city price had never applied.
+            $all = \Marvel\Database\Models\ProductCityAvailability::whereIn('product_id', $ids)
                 ->where('city', $key)
-                // The projection is per-variant now; the card reads the
-                // PRODUCT ROLLUP row (variant 0 = "from ₹" price).
-                ->where('variation_option_id', 0)
-                ->whereNotNull('min_price')
-                ->get(['product_id', 'min_price', 'stock', 'stock_override', 'vendor_count'])
-                ->keyBy('product_id');
-            if ($rows->isEmpty()) {
+                ->whereNotNull('display_price')
+                ->get(['product_id', 'variation_option_id', 'min_price', 'display_price', 'stock', 'stock_override', 'vendor_count']);
+            if ($all->isEmpty()) {
                 return;
             }
+            $rows = $all->where('variation_option_id', 0)->keyBy('product_id');
+            $variantMax = $all->where('variation_option_id', '>', 0)
+                ->groupBy('product_id')
+                ->map(fn ($g) => (float) $g->max('display_price'));
+
             foreach ($items as $p) {
                 $row = $rows[$p->id] ?? null;
                 if (!$row || (float) $row->min_price <= 0) {
@@ -155,6 +162,11 @@ class ProductController extends CoreController
                 $p->sale_price = null;
                 if ((float) ($p->min_price ?? 0) > 0) {
                     $p->min_price = (float) $row->min_price; // variable: "from ₹" = city price
+                }
+                // Only when this city actually prices the sizes — otherwise the
+                // master max stands and the range stays internally consistent.
+                if (isset($variantMax[$p->id]) && (float) ($p->max_price ?? 0) > 0) {
+                    $p->max_price = $variantMax[$p->id];
                 }
                 // Safe aggregates only. How many vendors and how much stock is
                 // useful ("3 sellers", "only 2 left"); the MAX vendor rate and
@@ -617,6 +629,7 @@ class ProductController extends CoreController
             if (!$cacheable) {
                 $product = $this->fetchSingleProduct($request);
                 $data = (new GetSingleProductResource($product))->response()->getData(true);
+                $data = $this->attachCityPricing($data, $request);
                 $data = $this->attachAvailability($data, $request);
                 return response()->json($data);
             }
@@ -627,8 +640,11 @@ class ProductController extends CoreController
             $data = Cache::remember($key, 300, function () use ($request) {
                 return (new GetSingleProductResource($this->fetchSingleProduct($request)))->response()->getData(true);
             });
-            // Operations Control Center — availability depends on the request's
-            // city (not in the cache key), so it's resolved + attached per-request.
+            // City price and availability both depend on the request's city,
+            // which is NOT in the cache key — so both are applied per-request,
+            // outside Cache::remember. Caching a city-specific price under a
+            // city-less key would serve Delhi's price to a Mumbai customer.
+            $data = $this->attachCityPricing($data, $request);
             $data = $this->attachAvailability($data, $request);
             return response()->json($data)->header('Cache-Control', $this->cacheControl());
         } catch (MarvelException $e) {
@@ -642,6 +658,93 @@ class ProductController extends CoreController
      * error ⇒ no block, never throws). The storefront reads it to gate
      * add-to-cart + show the maintenance message.
      */
+    /**
+     * Rewrite a PDP payload's prices to the customer's CITY prices.
+     *
+     * The listing overlay only ever touched `price`/`min_price`, so the PDP —
+     * which renders `min_price – max_price` and a price per size — kept showing
+     * the master catalogue range while the card beside it showed the city
+     * price. Same product, two different numbers on two adjacent screens.
+     *
+     * Per the marketplace rule, a city's price for a SIZE is MAX(vendor rate
+     * for that size) + margin, which is exactly what the per-variant projection
+     * rows store. So:
+     *   - each variation_option takes its OWN variant row's price
+     *   - min_price / max_price become the min and max ACROSS those sizes
+     *   - a simple (non-variable) product takes the rollup row
+     *
+     * A size with no vendor supply in this city keeps its master price and is
+     * flagged `city_available: false` — silently repricing something nobody can
+     * actually deliver would be worse than showing it as unavailable.
+     *
+     * Fail-open: any fault leaves the master prices untouched.
+     */
+    private function attachCityPricing(array $data, Request $request): array
+    {
+        try {
+            if (!$request->filled('city')) {
+                return $data;
+            }
+            $svc = new \Marvel\Services\AvailabilityService();
+            $key = $svc->normalizeCityKey((string) $request->city);
+            $productId = (int) \Illuminate\Support\Arr::get($data, 'data.id');
+            if ($key === '' || !$productId) {
+                return $data;
+            }
+
+            $rows = \Marvel\Database\Models\ProductCityAvailability::where('product_id', $productId)
+                ->where('city', $key)
+                ->get()
+                ->keyBy('variation_option_id');
+            if ($rows->isEmpty()) {
+                return $data;
+            }
+
+            $options = \Illuminate\Support\Arr::get($data, 'data.variation_options');
+            $variantPrices = [];
+            if (is_array($options) && $options) {
+                foreach ($options as $i => $opt) {
+                    $row = $rows[(int) ($opt['id'] ?? 0)] ?? null;
+                    $price = $row && $row->display_price !== null ? (float) $row->display_price : null;
+                    if ($price !== null && $price > 0) {
+                        $variantPrices[] = $price;
+                        $options[$i]['price'] = $price;
+                        $options[$i]['sale_price'] = null;
+                        $options[$i]['city_available'] = true;
+                        $options[$i]['city_stock'] = $row->effectiveStock();
+                        $options[$i]['vendor_count'] = (int) $row->vendor_count;
+                    } else {
+                        $options[$i]['city_available'] = false;
+                    }
+                }
+                \Illuminate\Support\Arr::set($data, 'data.variation_options', $options);
+            }
+
+            $rollup = $rows[0] ?? null;
+            if ($variantPrices) {
+                \Illuminate\Support\Arr::set($data, 'data.min_price', min($variantPrices));
+                \Illuminate\Support\Arr::set($data, 'data.max_price', max($variantPrices));
+                \Illuminate\Support\Arr::set($data, 'data.price', min($variantPrices));
+                \Illuminate\Support\Arr::set($data, 'data.sale_price', null);
+            } elseif ($rollup && $rollup->display_price !== null && (float) $rollup->display_price > 0) {
+                $p = (float) $rollup->display_price;
+                foreach (['price', 'min_price', 'max_price'] as $f) {
+                    \Illuminate\Support\Arr::set($data, "data.$f", $p);
+                }
+                \Illuminate\Support\Arr::set($data, 'data.sale_price', null);
+            }
+
+            if ($rollup) {
+                // Safe aggregates only — never the vendor rate or the margin.
+                \Illuminate\Support\Arr::set($data, 'data.vendor_count', (int) $rollup->vendor_count);
+                \Illuminate\Support\Arr::set($data, 'data.city_stock', $rollup->effectiveStock());
+            }
+        } catch (\Throwable $e) {
+            // fail open — a pricing fault must never blank the PDP
+        }
+        return $data;
+    }
+
     private function attachAvailability(array $data, Request $request): array
     {
         try {

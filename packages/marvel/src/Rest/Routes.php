@@ -240,6 +240,12 @@ Route::post('webhooks/razorpay-garden', [GardenController::class, 'razorpayWebho
 
 // Delivery serviceability — public pincode check (storefront blocks unserviceable
 // pincodes at checkout). Rate-limited.
+// PDP "check delivery" — local + live courier ETAs side by side for a pincode.
+// Throttled hard: the courier leg is a PAID call at the partner, and this route
+// is public. The controller also caches per (pincode, product) for 10 minutes.
+Route::get('delivery-options', [\Marvel\Http\Controllers\DeliveryOptionsController::class, 'check'])
+    ->middleware('throttle:30,1');
+
 Route::get('delivery-pincodes/check', [DeliveryPincodeController::class, 'check'])
     ->middleware('throttle:60,1');
 
