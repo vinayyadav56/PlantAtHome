@@ -65,4 +65,27 @@ class CityKeyAliasTest extends TestCase
     {
         $this->assertSame(['panipat'], $this->svc->cityKeyVariants('Panipat'));
     }
+
+    /**
+     * @test
+     *
+     * The stock gate is a raw OR inside a WHERE full of ANDs. Unparenthesised,
+     * SQL precedence reassociates it into
+     *   (city = X AND ... AND stock IS NULL) OR (stock > 0)
+     * and every OTHER city's in-stock rows satisfy the second branch — the city
+     * scope silently returns the whole catalogue. This shipped once; it asserts
+     * on the generated SQL so it cannot ship again.
+     */
+    public function the_stock_gate_is_parenthesised_so_it_cannot_leak_other_cities(): void
+    {
+        $sql = $this->svc->availabilityProductIdQuery('Delhi')->toSql();
+
+        $this->assertStringContainsString('COALESCE(stock_override, stock)', $sql);
+        // The OR must sit inside its own group, ANDed onto the city predicates.
+        $this->assertMatchesRegularExpression(
+            '/and\s+\(COALESCE\(stock_override, stock\) IS NULL OR/i',
+            $sql,
+            "the stock gate lost its parentheses — the city scope now leaks:\n$sql",
+        );
+    }
 }

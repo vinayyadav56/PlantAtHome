@@ -468,7 +468,13 @@ class AvailabilityService
             // (unlimited), and the recompute never writes a computed 0 — every
             // out-of-stock tracked row is filtered out before aggregation — so
             // this excludes nothing that wasn't deliberately zeroed by a human.
-            ->whereRaw('COALESCE(stock_override, stock) IS NULL OR COALESCE(stock_override, stock) > 0');
+            //
+            // PARENTHESISED, and it must stay that way: OR binds looser than
+            // AND, so a bare `A IS NULL OR A > 0` reassociates the whole WHERE
+            // into `(city = X AND ... AND A IS NULL) OR (A > 0)` — every OTHER
+            // city's in-stock rows then satisfy the second branch and the city
+            // scope leaks the entire catalogue. Locked by CityKeyAliasTest.
+            ->whereRaw('(COALESCE(stock_override, stock) IS NULL OR COALESCE(stock_override, stock) > 0)');
         if ($localOnly) {
             $q->where('has_local', true);
         } else {
