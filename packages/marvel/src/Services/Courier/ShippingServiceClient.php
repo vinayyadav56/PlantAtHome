@@ -71,6 +71,13 @@ class ShippingServiceClient
             'mode'     => $d['mode'] ?? null,
             'quotes'   => $d['quotes'] ?? [],
             'cheapest' => $d['cheapest'] ?? null,
+            // Why partners are missing (mode/COD/credentials/switched off) and
+            // which eligible ones errored. quoteShipment already passes these
+            // through; stripping them here left every caller staring at an
+            // empty list with no way to tell "no partner covers this route"
+            // from "the request was wrong".
+            'ineligible' => $d['ineligible'] ?? [],
+            'failed'     => $d['failed'] ?? [],
         ];
     }
 
