@@ -67,7 +67,7 @@ class DeliveryOptionsController extends CoreController
             return response()->json($this->resolve($pincode, $productId) + ['_debug' => $this->debug]);
         }
 
-        $key = "delivery-options:v4:{$pincode}:{$productId}";
+        $key = "delivery-options:v5:{$pincode}:{$productId}";
 
         return response()->json(
             Cache::remember($key, self::TTL, fn () => $this->resolve($pincode, $productId))
@@ -231,7 +231,7 @@ class DeliveryOptionsController extends CoreController
                 'state'   => (string) ($geo['state'] ?? ''),
                 'lat'     => $geo['lat'],
                 'lng'     => $geo['lng'],
-            ], $this->weightFor($productId), 4000);
+            ], $this->weightFor($productId), 4000, $this->quoteItem($productId));
 
             if ($this->debug !== null) {
                 $this->debug['quote_result'] = $res;
@@ -257,6 +257,25 @@ class DeliveryOptionsController extends CoreController
                 $this->debug['exception'] = $e->getMessage();
             }
             return $fallback;
+        }
+    }
+
+    /** A representative line for the quote — partners size the package from it. */
+    private function quoteItem(int $productId): array
+    {
+        if ($productId <= 0) {
+            return [];
+        }
+        try {
+            $p = \Marvel\Database\Models\Product::find($productId, ['id', 'name', 'sku', 'price']);
+            return $p ? [
+                'name'       => (string) $p->name,
+                'sku'        => (string) ($p->sku ?: ('SKU-' . $p->id)),
+                'qty'        => 1,
+                'unit_price' => (float) ($p->price ?? 0),
+            ] : [];
+        } catch (\Throwable $e) {
+            return [];
         }
     }
 

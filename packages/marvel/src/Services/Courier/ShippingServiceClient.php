@@ -92,8 +92,11 @@ class ShippingServiceClient
      * a static estimate while the partner was answering fine.
      *
      * @param  array  $drop  at minimum ['pincode' => '110001']; lat/lng/city/state when known
+     * @param  array  $item  optional single line {name, sku, qty, unit_price} — a
+     *                       partner sizing the package from `items` returns nothing
+     *                       for an empty one, so a representative line is sent.
      */
-    public function quoteProspective($shop, array $drop, int $weightG, ?int $timeoutMs = 4000): array
+    public function quoteProspective($shop, array $drop, int $weightG, ?int $timeoutMs = 4000, array $item = []): array
     {
         if (!$shop || !$this->configured()) {
             return ['ok' => false, 'quotes' => [], 'cheapest' => null];
@@ -121,7 +124,13 @@ class ShippingServiceClient
                 'lat'     => (float) ($drop['lat'] ?? 0),
                 'lng'     => (float) ($drop['lng'] ?? 0),
             ],
-            'items'           => [],
+            'items'           => [[
+                'name'       => (string) ($item['name'] ?? 'Plant'),
+                'sku'        => (string) ($item['sku'] ?? 'QUOTE'),
+                'qty'        => max(1, (int) ($item['qty'] ?? 1)),
+                'unit_price' => (float) ($item['unit_price'] ?? 0),
+                'weight_g'   => max(1, $weightG),
+            ]],
             'weight_g'        => max(1, $weightG),
             'pickup_location' => (string) ($shop->pickup_location_name ?? ''),
         ], $timeoutMs);
