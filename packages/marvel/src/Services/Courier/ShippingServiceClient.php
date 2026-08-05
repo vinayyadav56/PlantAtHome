@@ -45,6 +45,8 @@ class ShippingServiceClient
             'cod'      => $cod,
             'quotes'   => $d['quotes'] ?? [],
             'cheapest' => $d['cheapest'] ?? null,
+            // Our own malformed request, refused before any partner was asked (see quoteRaw).
+            'error'    => $d['error'] ?? null,
             // Why partners are missing from `quotes` (mode/COD/credentials/switched off) and which
             // eligible ones errored. This whitelist used to STRIP both, so the service could
             // explain itself and the admin still showed a bare list.
@@ -71,6 +73,13 @@ class ShippingServiceClient
             'mode'     => $d['mode'] ?? null,
             'quotes'   => $d['quotes'] ?? [],
             'cheapest' => $d['cheapest'] ?? null,
+            // The service's own account of an empty list when the fault is OURS — a
+            // malformed request refused before any partner was asked. It answers 200
+            // with quotes:[] and this field set, so the transport-level check above
+            // never sees it; dropping it here is what made a validation refusal look
+            // like "no partner serves this route" and sent the last diagnosis chasing
+            // vendor onboarding data.
+            'error'    => $d['error'] ?? null,
             // Why partners are missing (mode/COD/credentials/switched off) and
             // which eligible ones errored. quoteShipment already passes these
             // through; stripping them here left every caller staring at an
@@ -96,13 +105,14 @@ class ShippingServiceClient
      *                       partner sizing the package from `items` returns nothing
      *                       for an empty one, so a representative line is sent.
      *
-     * ⚠️ An answer of `quotes:[] ineligible:[] failed:[]` means the service
-     * considered ZERO partners — not that they were filtered out. Verified on
-     * staging: Shiprocket quotes this exact leg fine through
-     * POST courier/partners/shiprocket/test/quote, but the ranked path returns
-     * nothing while the shop has NO registered pickup location
-     * (shops.pickup_location_name / pickup_postcode are null). That is vendor
-     * onboarding data, not a bug in this client — check it before debugging code.
+     * ⚠️ An answer of `quotes:[] ineligible:[] failed:[]` means the service refused
+     * the request itself and asked NOBODY — read the `error` field, which now comes
+     * through. The cause here was never the missing pickup location it looked like:
+     * the service validated a quote as if it were a booking and demanded a contact
+     * phone at each end, while a prospective quote has no customer yet and sends
+     * `phone => ''` below by definition. Fixed in shipping-service
+     * (ValidateQuoteRequest — coordinates only); pickup_location_name still matters
+     * for BOOKING, just not for this.
      */
     public function quoteProspective($shop, array $drop, int $weightG, ?int $timeoutMs = 4000, array $item = []): array
     {
