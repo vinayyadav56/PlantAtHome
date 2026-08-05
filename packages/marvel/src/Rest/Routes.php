@@ -1154,6 +1154,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // City Command Center reads (vendor roster + city-eye catalogue view).
     Route::get('cities/{id}/vendors', [LocationController::class, 'cityVendors']);
     Route::get('cities/{id}/products', [LocationController::class, 'cityProducts']);
+    // Manual per-city inventory override (the "Manual" aggregation strategy).
+    Route::put('cities/{id}/products/{productId}/stock', [LocationController::class, 'citySetProductStock']);
+    Route::get('cities/{id}/metrics', [LocationController::class, 'cityMetrics']);
+    Route::get('cities/{id}/insights', [LocationController::class, 'cityInsights']);
     // Vendor-allocation strategy picker (VendorSelectionManager::available()).
     Route::get('vendor-selection/strategies', function () {
         return \Marvel\Services\VendorSelection\VendorSelectionManager::available();

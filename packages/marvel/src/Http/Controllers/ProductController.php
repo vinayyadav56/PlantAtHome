@@ -135,26 +135,34 @@ class ProductController extends CoreController
             if (empty($ids)) {
                 return;
             }
-            $cityPrices = \Marvel\Database\Models\ProductCityAvailability::whereIn('product_id', $ids)
+            $rows = \Marvel\Database\Models\ProductCityAvailability::whereIn('product_id', $ids)
                 ->where('city', $key)
                 // The projection is per-variant now; the card reads the
                 // PRODUCT ROLLUP row (variant 0 = "from ₹" price).
                 ->where('variation_option_id', 0)
                 ->whereNotNull('min_price')
-                ->pluck('min_price', 'product_id');
-            if ($cityPrices->isEmpty()) {
+                ->get(['product_id', 'min_price', 'stock', 'stock_override', 'vendor_count'])
+                ->keyBy('product_id');
+            if ($rows->isEmpty()) {
                 return;
             }
             foreach ($items as $p) {
-                $cp = $cityPrices[$p->id] ?? null;
-                if ($cp === null || (float) $cp <= 0) {
+                $row = $rows[$p->id] ?? null;
+                if (!$row || (float) $row->min_price <= 0) {
                     continue;
                 }
-                $p->price = (float) $cp;
+                $p->price = (float) $row->min_price;
                 $p->sale_price = null;
                 if ((float) ($p->min_price ?? 0) > 0) {
-                    $p->min_price = (float) $cp; // variable products: "from ₹" = city price
+                    $p->min_price = (float) $row->min_price; // variable: "from ₹" = city price
                 }
+                // Safe aggregates only. How many vendors and how much stock is
+                // useful ("3 sellers", "only 2 left"); the MAX vendor rate and
+                // the margin behind this price are NOT — exposing those on a
+                // public endpoint leaks the cost structure, which is exactly
+                // the leak `a959daf` closed.
+                $p->vendor_count = (int) $row->vendor_count;
+                $p->city_stock = $row->effectiveStock(); // null = untracked = unlimited
             }
         } catch (\Throwable $e) {
             // overlay is best-effort — never break the listing

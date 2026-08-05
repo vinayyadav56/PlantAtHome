@@ -4,6 +4,7 @@ namespace Marvel\Services;
 
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\City;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\ProductCityAvailability;
@@ -49,8 +50,15 @@ class AvailabilityService
         );
     }
 
-    /** Scope a vendor_product_prices query to rows effective today. */
-    private function effective($query)
+    /**
+     * Scope a vendor_product_prices query to rows effective today.
+     *
+     * Public so admin surfaces (the city command center's vendor counts) can
+     * apply the SAME window the projection uses — counting without it reports
+     * expired price sheets as live catalogue and disagrees with the product
+     * list rendered beside it.
+     */
+    public function effective($query)
     {
         $today = Carbon::today()->toDateString();
         return $query
@@ -106,6 +114,60 @@ class AvailabilityService
     }
 
     /**
+     * Vendor names supplying each of these products IN a city — ONE grouped
+     * query for a whole page, not vendorsForProduct() per row.
+     *
+     * Carries the SAME predicates the projection is built with (held vendors
+     * excluded, effective window, is_available, active service area), because
+     * a name list that disagrees with the vendor_count beside it is worse than
+     * no name list: it points operators at vendors who aren't actually selling.
+     *
+     * @param  int[]  $productIds
+     * @return array<int, array<int, array{id:int,name:string}>> product_id => vendors
+     */
+    public function vendorNamesForProducts(array $productIds, string $cityKey): array
+    {
+        if (empty($productIds)) {
+            return [];
+        }
+        try {
+            $shopIds = VendorServiceArea::whereIn(
+                DB::raw('LOWER(city)'),
+                $this->cityKeyVariants($cityKey),
+            )->where('is_active', true)->distinct()->pluck('shop_id');
+
+            if ($shopIds->isEmpty()) {
+                return [];
+            }
+
+            // Pairs first, names second — two flat queries. A join to `shops`
+            // here would collide with the `shops` subquery excludeHeldVendors
+            // builds, and the second query is a single indexed IN.
+            $pairs = $this->effective(
+                $this->excludeHeldVendors(
+                    VendorProductPrice::whereIn('product_id', $productIds)
+                        ->whereIn('shop_id', $shopIds)
+                        ->where('is_available', true)
+                )
+            )->select('product_id', 'shop_id')->distinct()->get();
+
+            $names = Shop::whereIn('id', $pairs->pluck('shop_id')->unique())
+                ->pluck('name', 'id');
+
+            $out = [];
+            foreach ($pairs as $p) {
+                $out[(int) $p->product_id][] = [
+                    'id'   => (int) $p->shop_id,
+                    'name' => (string) ($names[$p->shop_id] ?? ''),
+                ];
+            }
+            return $out;
+        } catch (\Throwable $e) {
+            return []; // names are decoration — never fail the catalogue panel
+        }
+    }
+
+    /**
      * Rebuild the product_city_availability rows for one master product from its
      * available + in-stock vendor inventory crossed with each vendor's service areas.
      * City is stored normalized (lowercase) so customer-city lookups match reliably.
@@ -139,7 +201,15 @@ class AvailabilityService
                 if ($vendorRows->isEmpty()) {
                     continue;
                 }
-                $key = strtolower(trim((string) $area->city));
+                // CANONICAL key — normalizeCityKey, not a bare strtolower.
+                // Every READER of this projection normalizes (overlayCityPrices,
+                // availabilityProductIdQuery, cityHasSupply), so writing a raw
+                // key made a vendor invisible in their own city whenever the
+                // service area used an alias: a "Gurgaon" area wrote `gurgaon`
+                // while every lookup asked for `gurugram` and found nothing.
+                // Same for Bangalore/Bombay/Calcutta/Madras and all nine Delhi
+                // NCT sub-districts.
+                $key = $this->normalizeCityKey((string) $area->city);
                 if ($key === '') {
                     continue;
                 }
@@ -324,9 +394,42 @@ class AvailabilityService
      * Indian endonym/exonym aliases (e.g. an IP/GPS lookup returning "Gurgaon"
      * while the city is stored as "Gurugram") so we don't wrongly empty the store.
      */
+    /**
+     * Every raw city spelling that normalises to $key — the reverse of
+     * normalizeCityKey. `vendor_service_areas.city` stores what the vendor
+     * typed ("Gurgaon"), so matching a canonical key ("gurugram") against that
+     * table needs the alias set, not an equality test.
+     *
+     * @return string[] lowercase spellings, canonical key first
+     */
+    public function cityKeyVariants(string $key): array
+    {
+        $key = $this->normalizeCityKey($key);
+        $variants = [$key];
+        foreach ($this->cityAliases() as $from => $to) {
+            if ($to === $key) {
+                $variants[] = $from;
+            }
+        }
+        return array_values(array_unique($variants));
+    }
+
+    /** @return array<string,string> raw spelling => canonical key */
+    public function cityAliases(): array
+    {
+        return $this->aliasMap();
+    }
+
     public function normalizeCityKey(string $city): string
     {
         $key = strtolower(trim($city));
+        $aliases = $this->aliasMap();
+        return $aliases[$key] ?? $key;
+    }
+
+    /** The one alias table (kept private so both helpers above share it). */
+    private function aliasMap(): array
+    {
         static $aliases = [
             'gurgaon'   => 'gurugram',
             'bangalore' => 'bengaluru',
@@ -349,7 +452,7 @@ class AvailabilityService
             'west delhi'       => 'delhi',
             'shahdara'         => 'delhi',
         ];
-        return $aliases[$key] ?? $key;
+        return $aliases;
     }
 
     public function availabilityProductIdQuery(string $city, bool $localOnly = false)
@@ -359,7 +462,13 @@ class AvailabilityService
         // variant row's coverage flags mirror its rollup anyway.
         $q = ProductCityAvailability::query()->select('product_id')
             ->where('city', $key)
-            ->where('variation_option_id', 0);
+            ->where('variation_option_id', 0)
+            // What gives a manual stock override teeth: an operator who sets 0
+            // takes the product off the shelf IN THIS CITY. NULL means untracked
+            // (unlimited), and the recompute never writes a computed 0 — every
+            // out-of-stock tracked row is filtered out before aggregation — so
+            // this excludes nothing that wasn't deliberately zeroed by a human.
+            ->whereRaw('COALESCE(stock_override, stock) IS NULL OR COALESCE(stock_override, stock) > 0');
         if ($localOnly) {
             $q->where('has_local', true);
         } else {

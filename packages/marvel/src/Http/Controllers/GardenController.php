@@ -12,6 +12,42 @@ use Marvel\Database\Models\GardenPackageVisit;
 
 class GardenController extends CoreController
 {
+    /**
+     * Refuse work in a city that isn't accepting it.
+     *
+     * The `service.available` middleware on these routes does NOT do this — it
+     * reads the PLATFORM kill-switch flags only (CheckServiceAvailability
+     * calls platformFlags(), never resolve()), so city ACTIVE/MAINTENANCE never
+     * reached this controller. These were the last two genuinely city-blind
+     * write paths: everything else (checkout verify, order create, vendor
+     * assignment) resolves the city itself.
+     *
+     * FAIL OPEN, deliberately and twice over: no city on the lead ⇒ no gate (we
+     * would rather take a lead we can't serve than lose one we can), and any
+     * fault inside resolve() lets the write through. A lead form must never 500.
+     */
+    private function assertCityAcceptsWork(?string $city, string $context): void
+    {
+        if (empty(trim((string) $city))) {
+            return;
+        }
+        try {
+            $res = app(\Marvel\Services\ServiceAvailabilityService::class)
+                ->resolve('garden_services', (string) $city);
+        } catch (\Throwable $e) {
+            return;
+        }
+        if (!($res['available'] ?? true)) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(
+                response()->json([
+                    'message'     => $res['message'] ?: "We've paused {$context} bookings in {$city} right now. Please check back shortly.",
+                    'serviceable' => false,
+                    'reason'      => $res['reason'] ?? 'service_unavailable',
+                ], 422)
+            );
+        }
+    }
+
     // ---------------------------------------------------------------- LEADS
     /** Public — landing-page lead capture. */
     public function storeLead(Request $request): JsonResponse
@@ -33,6 +69,7 @@ class GardenController extends CoreController
         ]);
         // The /corporate-leads route is authoritative for the source.
         $source = $request->is('*corporate-leads') ? 'corporate' : ($data['source'] ?? 'garden');
+        $this->assertCityAcceptsWork($data['city'] ?? null, $source);
         $lead = GardenLead::create($data + ['status' => 'new', 'source' => $source]);
         $msg = $source === 'corporate'
             ? 'Thanks! Our gifting team will reach out with a tailored proposal.'
@@ -239,6 +276,10 @@ class GardenController extends CoreController
             ->where('is_active', true)
             ->findOrFail($data['template_id']);
         $user = $request->user();
+        // No city in the request body — the customer's chosen delivery city IS
+        // the city this work happens in, and it was already validated against
+        // acceptsOrders() when they picked it (UserController::preferred_city).
+        $this->assertCityAcceptsWork($user->preferred_city ?? null, 'gifting');
 
         $pkg = GardenPackage::create([
             'user_id' => $user->id,
