@@ -52,7 +52,7 @@ class DeliveryOptionsController extends CoreController
         }
 
         $productId = (int) ($data['product_id'] ?? 0);
-        $key = "delivery-options:v3:{$pincode}:{$productId}";
+        $key = "delivery-options:v4:{$pincode}:{$productId}";
 
         return response()->json(
             Cache::remember($key, self::TTL, fn () => $this->resolve($pincode, $productId))
@@ -196,27 +196,15 @@ class DeliveryOptionsController extends CoreController
                 return $fallback;
             }
             $shop = Shop::whereIn('id', $shopIds)->first();
-            $pickupPin = (string) (is_array($shop->address ?? null) ? ($shop->address['zip'] ?? '') : '');
-            // The PINCODE pair is what the quote actually needs — Shiprocket's
-            // serviceability call takes pickup_postcode/delivery_postcode and
-            // never looks at coordinates. Coords are best-effort for the
-            // partners that do use them (Borzo/Porter are point-to-point).
-            if ($pickupPin === '') {
-                return $fallback;
-            }
-            $pickup = ($this->shopCoords($shop) ?? []) + ['pincode' => $pickupPin];
 
-            $res = $client->quoteRaw([
-                'mode'   => 'courier',
-                'cod'    => false,
-                'pickup' => $pickup,
-                'drop'   => array_filter([
-                    'lat'     => $geo['lat'] !== null ? (float) $geo['lat'] : null,
-                    'lng'     => $geo['lng'] !== null ? (float) $geo['lng'] : null,
-                    'pincode' => (string) $geo['pincode'],
-                ], fn ($v) => $v !== null),
-                'weight_g' => $this->weightFor($productId),
-            ], 4000); // tight: a PDP must not wait on a slow partner
+            // 4s: a PDP must not sit waiting on a slow partner.
+            $res = $client->quoteProspective($shop, [
+                'pincode' => (string) $geo['pincode'],
+                'city'    => (string) ($geo['city'] ?? ''),
+                'state'   => (string) ($geo['state'] ?? ''),
+                'lat'     => $geo['lat'],
+                'lng'     => $geo['lng'],
+            ], $this->weightFor($productId), 4000);
 
             $cheapest = $res['cheapest'] ?? null;
             $days = $cheapest ? (int) ($cheapest['eta_days'] ?? 0) : 0;
@@ -255,21 +243,6 @@ class DeliveryOptionsController extends CoreController
             $days === 1 => 'Tomorrow',
             default    => "In {$days} days",
         };
-    }
-
-    /** Shop coordinates, reading all three shapes the onboarding writes. */
-    private function shopCoords(?Shop $shop): ?array
-    {
-        if (!$shop) {
-            return null;
-        }
-        $loc = is_array($shop->settings ?? null) ? (array) ($shop->settings['location'] ?? []) : [];
-        $lat = $shop->lat ?? ($loc['lat'] ?? null);
-        $lng = $shop->lng ?? ($loc['lng'] ?? null);
-        if (!$lat || !$lng) {
-            return null;
-        }
-        return ['lat' => (float) $lat, 'lng' => (float) $lng];
     }
 
     /**

@@ -75,6 +75,52 @@ class ShippingServiceClient
     }
 
     /**
+     * Quote a prospective courier leg for a shop → destination, with no order
+     * and no Shipment behind it — the PDP "check delivery" entry point.
+     *
+     * Lives here rather than in the caller so leg-building stays in ONE place:
+     * /v1/quotes validates full pickup/drop objects (name, phone, address,
+     * city, state, pincode, lat, lng) plus the refs, and a hand-rolled minimal
+     * body is silently rejected — which is exactly how the PDP ended up showing
+     * a static estimate while the partner was answering fine.
+     *
+     * @param  array  $drop  at minimum ['pincode' => '110001']; lat/lng/city/state when known
+     */
+    public function quoteProspective($shop, array $drop, int $weightG, ?int $timeoutMs = 4000): array
+    {
+        if (!$shop || !$this->configured()) {
+            return ['ok' => false, 'quotes' => [], 'cheapest' => null];
+        }
+
+        return $this->quoteRaw([
+            'partner_code'    => '',
+            // Prospective: no shipment/order exists yet. The refs are required
+            // fields, so they carry a stable, obviously-synthetic token rather
+            // than an id that would collide with a real shipment.
+            'shipment_ref'    => 'quote-' . $shop->id . '-' . ($drop['pincode'] ?? ''),
+            'order_ref'       => 'prospective',
+            'shop_ref'        => (string) $shop->id,
+            'mode'            => 'courier',
+            'cod'             => false,
+            'cod_amount'      => 0,
+            'pickup'          => $this->addressFromShop($shop),
+            'drop'            => [
+                'name'    => 'Customer',
+                'phone'   => '',
+                'address' => (string) ($drop['address'] ?? ''),
+                'city'    => (string) ($drop['city'] ?? ''),
+                'state'   => (string) ($drop['state'] ?? ''),
+                'pincode' => (string) ($drop['pincode'] ?? ''),
+                'lat'     => (float) ($drop['lat'] ?? 0),
+                'lng'     => (float) ($drop['lng'] ?? 0),
+            ],
+            'items'           => [],
+            'weight_g'        => max(1, $weightG),
+            'pickup_location' => (string) ($shop->pickup_location_name ?? ''),
+        ], $timeoutMs);
+    }
+
+    /**
      * Quote MANY prospective legs at once. Each $body must carry a 'ref' (idempotency token).
      * Prefers POST /v1/quotes/batch; until the service ships that route, falls back to an
      * Http::pool of parallel singles. Returns ['ok'=>bool, 'results'=>[{ref,ok,quotes,cheapest}]].
