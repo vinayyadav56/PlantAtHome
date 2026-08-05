@@ -582,6 +582,10 @@ class SystemController extends CoreController
         'content:sweep-batches'     => \Marvel\Console\SweepContentBatchesCommand::class,
         'inventory:release-expired' => \App\Modules\Inventory\Console\ReleaseExpiredReservationsCommand::class,
         'outbox:relay'              => \App\Console\Commands\OutboxRelayCommand::class,
+        // One-time / on-demand projection rebuild (fills the per-variant rows
+        // after the 2026-08 pca migration) and the vendor-KYC sweep.
+        'marvel:recompute-city-availability' => \Marvel\Console\RecomputeCityAvailabilityCommand::class,
+        'marvel:sweep-kyc-deadlines'         => \Marvel\Console\SweepKycDeadlinesCommand::class,
         'marketing:dispatch-due'    => \App\Modules\Marketing\Console\DispatchDueCampaignsCommand::class,
     ];
 
