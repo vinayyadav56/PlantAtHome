@@ -52,12 +52,30 @@ class DeliveryOptionsController extends CoreController
         }
 
         $productId = (int) ($data['product_id'] ?? 0);
+
+        // ?debug=1, SUPER-ADMIN ONLY: bypass the cache and attach why the
+        // courier leg answered the way it did. The client never throws — a
+        // rejected body and an unreachable service both degrade to the same
+        // silent estimate, so without this the only way to tell them apart is
+        // to guess. Never available to the public: it echoes the partner's
+        // raw response.
+        $debug = $request->boolean('debug')
+            && $request->user()
+            && $request->user()->hasPermissionTo(\Marvel\Enums\Permission::SUPER_ADMIN);
+        if ($debug) {
+            $this->debug = [];
+            return response()->json($this->resolve($pincode, $productId) + ['_debug' => $this->debug]);
+        }
+
         $key = "delivery-options:v4:{$pincode}:{$productId}";
 
         return response()->json(
             Cache::remember($key, self::TTL, fn () => $this->resolve($pincode, $productId))
         );
     }
+
+    /** Populated only on a super-admin ?debug=1 request. */
+    private ?array $debug = null;
 
     private function resolve(string $pincode, int $productId): array
     {
@@ -193,11 +211,20 @@ class DeliveryOptionsController extends CoreController
         try {
             $client = app(ShippingServiceClient::class);
             if (!$client->configured()) {
+                if ($this->debug !== null) {
+                    $this->debug['configured'] = false;
+                }
                 return $fallback;
             }
             $shop = Shop::whereIn('id', $shopIds)->first();
 
             // 4s: a PDP must not sit waiting on a slow partner.
+            if ($this->debug !== null) {
+                $this->debug['shop_id'] = $shop?->id;
+                $this->debug['configured'] = true;
+                $this->debug['drop'] = ['pincode' => $geo['pincode'], 'lat' => $geo['lat'], 'lng' => $geo['lng']];
+            }
+
             $res = $client->quoteProspective($shop, [
                 'pincode' => (string) $geo['pincode'],
                 'city'    => (string) ($geo['city'] ?? ''),
@@ -205,6 +232,10 @@ class DeliveryOptionsController extends CoreController
                 'lat'     => $geo['lat'],
                 'lng'     => $geo['lng'],
             ], $this->weightFor($productId), 4000);
+
+            if ($this->debug !== null) {
+                $this->debug['quote_result'] = $res;
+            }
 
             $cheapest = $res['cheapest'] ?? null;
             $days = $cheapest ? (int) ($cheapest['eta_days'] ?? 0) : 0;
@@ -222,6 +253,9 @@ class DeliveryOptionsController extends CoreController
                 'note'      => 'Shipped to your door by our courier partner.',
             ];
         } catch (\Throwable $e) {
+            if ($this->debug !== null) {
+                $this->debug['exception'] = $e->getMessage();
+            }
             return $fallback;
         }
     }
