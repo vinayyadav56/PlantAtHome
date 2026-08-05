@@ -78,21 +78,39 @@ class DeliveryOptionsController extends CoreController
             return $out;
         }
 
+        $availability = app(AvailabilityService::class);
+        $cityKey = $availability->normalizeCityKey($cityName);
+        $variants = $availability->cityKeyVariants($cityKey);
+
+        // Resolve the CANONICAL city, not the postal label. 110001 comes back
+        // as "Central Delhi" — a real cities row that is not serviceable on its
+        // own — while the vendors, the projection and the operating city are
+        // all "Delhi". Matching the raw name blocked the whole of central Delhi
+        // with a `city_active` reason that made no sense. Prefer the canonical
+        // row and fall back to any alias spelling that exists.
+        $city = City::whereRaw('LOWER(name) = ?', [$cityKey])->first()
+            ?: City::whereIn(DB::raw('LOWER(name)'), $variants)
+                ->orderByDesc('is_serviceable')->first();
+
+        if ($city) {
+            // Display the operating city, so "Delivering to Delhi" matches the
+            // city the customer picked and the price they were quoted.
+            $cityName = $city->name;
+            $out['city'] = $cityName;
+        }
+
         // A paused/maintenance city answers before anything else — quoting a
         // courier for a city we aren't serving today would be a lie with a
         // number attached.
-        $city = City::where('name', $cityName)->first();
         if ($city && !$city->acceptsOrders()) {
-            $out['reason'] = 'city_' . $city->status;
+            $out['reason'] = $city->status === City::STATUS_ACTIVE
+                ? 'city_not_serviceable'
+                : 'city_' . $city->status;
             $out['message'] = $city->status === City::STATUS_MAINTENANCE
                 ? "We've paused deliveries in {$cityName} for a short while."
                 : "We don't deliver to {$cityName} yet.";
             return $out;
         }
-
-        $availability = app(AvailabilityService::class);
-        $cityKey = $availability->normalizeCityKey($cityName);
-        $variants = $availability->cityKeyVariants($cityKey);
 
         // Vendors who supply THIS product here (or any vendor serving the city
         // when the caller didn't name a product).
