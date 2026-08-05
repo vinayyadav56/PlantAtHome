@@ -560,10 +560,12 @@ class LocationController extends CoreController
         $shopIds = \Marvel\Database\Models\VendorServiceArea::whereIn(DB::raw('LOWER(city)'), $variants)
             ->where('is_active', true)->distinct()->pluck('shop_id');
 
-        $pca = fn () => \Marvel\Database\Models\ProductCityAvailability::where('city', $key)
-            ->where('variation_option_id', 0);
+        $pca = fn () => \Marvel\Database\Models\ProductCityAvailability::where('product_city_availability.city', $key)
+            ->where('product_city_availability.variation_option_id', 0);
 
-        $effectiveStock = 'COALESCE(stock_override, stock)';
+        // Table-qualified: every one of these queries joins `products`, and an
+        // unqualified column is an ambiguity waiting to happen.
+        $effectiveStock = 'COALESCE(product_city_availability.stock_override, product_city_availability.stock)';
 
         // Low inventory — on the EFFECTIVE stock, so a row an operator has
         // manually overridden reads the same here as it does in the catalogue.
@@ -626,8 +628,9 @@ class LocationController extends CoreController
             ->select('id', 'name', 'slug')
             ->limit($limit)->get();
 
-        $recentPriceUpdates = \Marvel\Database\Models\VendorProductPrice::whereIn('shop_id', $shopIds)
-            ->where('updated_at', '>=', Carbon::now()->subDays(7))
+        // `products` also has a shop_id — qualify or MySQL rejects the WHERE.
+        $recentPriceUpdates = \Marvel\Database\Models\VendorProductPrice::whereIn('vendor_product_prices.shop_id', $shopIds)
+            ->where('vendor_product_prices.updated_at', '>=', Carbon::now()->subDays(7))
             ->join('products', 'products.id', '=', 'vendor_product_prices.product_id')
             ->select(
                 'products.name',
