@@ -95,6 +95,14 @@ class ShippingServiceClient
      * @param  array  $item  optional single line {name, sku, qty, unit_price} — a
      *                       partner sizing the package from `items` returns nothing
      *                       for an empty one, so a representative line is sent.
+     *
+     * ⚠️ An answer of `quotes:[] ineligible:[] failed:[]` means the service
+     * considered ZERO partners — not that they were filtered out. Verified on
+     * staging: Shiprocket quotes this exact leg fine through
+     * POST courier/partners/shiprocket/test/quote, but the ranked path returns
+     * nothing while the shop has NO registered pickup location
+     * (shops.pickup_location_name / pickup_postcode are null). That is vendor
+     * onboarding data, not a bug in this client — check it before debugging code.
      */
     public function quoteProspective($shop, array $drop, int $weightG, ?int $timeoutMs = 4000, array $item = []): array
     {
