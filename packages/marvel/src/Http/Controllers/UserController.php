@@ -534,6 +534,30 @@ class UserController extends CoreController
     }
 
     /**
+     * Revoke EVERY token for the current user — the "I think someone has my session" button.
+     *
+     * logout() above deletes only the token presented, which is right for signing out one
+     * device but useless against a stolen one: the thief's token survives. Until token
+     * expiry is switched on (config/sanctum.php), this is the ONLY way to invalidate a
+     * leaked token, and it stays useful afterwards because expiry is measured in weeks.
+     */
+    public function logoutAllDevices(Request $request)
+    {
+        $user = $request->user();
+        if (!$user) {
+            return response()->json(['revoked' => 0], 200);
+        }
+
+        $revoked = $user->tokens()->count();
+        $user->tokens()->delete();
+
+        return response()->json([
+            'revoked' => $revoked,
+            'message' => 'Signed out of all devices.',
+        ]);
+    }
+
+    /**
      * Self-serve account deletion (Google Play / App Store requirement). Revokes
      * all tokens, removes the profile + addresses (PII), and anonymises +
      * deactivates the user — order history stays intact but the account is gone

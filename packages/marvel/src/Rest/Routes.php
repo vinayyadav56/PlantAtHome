@@ -108,6 +108,10 @@ Route::get('/email/verify/{id}/{hash}', [UserController::class, 'verifyEmail'])-
 Route::post('/register', [UserController::class, 'register'])->middleware('throttle:5,1');
 Route::post('/token', [UserController::class, 'token'])->middleware('throttle:10,1');
 Route::post('/logout', [UserController::class, 'logout']);
+// Revokes every token for the caller — the remedy for a stolen session. `logout` above only
+// drops the token presented, which does nothing about a copy someone else is holding.
+Route::post('/logout-all-devices', [UserController::class, 'logoutAllDevices'])
+    ->middleware(['auth:sanctum', 'throttle:10,1']);
 Route::delete('/account', [UserController::class, 'deleteAccount'])->middleware('auth:sanctum');
 Route::post('/forget-password', [UserController::class, 'forgetPassword'])->middleware('throttle:5,1');
 Route::post('/verify-forget-password-token', [UserController::class, 'verifyForgetPasswordToken'])->middleware('throttle:10,1');
