@@ -50,8 +50,10 @@ class OrderPlacedSuccessfully extends Notification implements ShouldQueue
         $invoiceData = $this->invoiceData;
         $pdf = PDF::loadView('pdf.order-invoice', $invoiceData);
         $options = new Options();
-        $options->setIsPhpEnabled(true);
-        $options->setIsJavascriptEnabled(true);
+        // Same reasoning as OrderController::downloadInvoice — the renderer must not execute
+        // <script type="text/php">, and this path renders the same customer-supplied order data.
+        $options->setIsPhpEnabled(false);
+        $options->setIsJavascriptEnabled(false);
         $pdf->getDomPDF()->setOptions($options);
 
         return (new MailMessage)

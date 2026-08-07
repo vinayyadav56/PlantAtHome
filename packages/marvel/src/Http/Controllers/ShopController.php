@@ -19,6 +19,7 @@ use Marvel\Http\Requests\ShopCreateRequest;
 use Marvel\Http\Requests\ShopUpdateRequest;
 use Marvel\Http\Requests\TransferShopOwnerShipRequest;
 use Marvel\Http\Requests\UserCreateRequest;
+use Marvel\Http\Resources\PublicShopResource;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Support\Facades\Cache;
@@ -104,10 +105,15 @@ class ShopController extends CoreController
             $shop = $shop->whereDoesntHave('serviceAreas');
         }
         try {
-            return match (true) {
+            $model = match (true) {
                 is_numeric($slug) => $shop->where('id', $slug)->firstOrFail(),
                 is_string($slug)  => $shop->where('slug', $slug)->firstOrFail(),
             };
+            // An anonymous caller gets the allowlisted view. Returning the raw model here
+            // shipped `settings` whole (banking/compliance/documents) plus the owner's email,
+            // phone and geolocation columns to anyone who knew a slug. Admins and the shop's
+            // own owner keep the full model — that is what the admin shop page reads.
+            return $privileged ? $model : new PublicShopResource($model);
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
         }
@@ -579,16 +585,19 @@ class ShopController extends CoreController
             // filters distance in PHP — heavy on a public storefront lookup. Cache by a coarse
             // lat/lng grid for 120s; "nearby shops" tolerates that staleness and a newly
             // activated shop appears within the window.
-            $cacheKey = 'shops:near:' . round((float) $lat, 2) . ':' . round((float) $lng, 2) . ':' . $maxShopDistance;
+            // v2 prefix: the pre-2026-08-07 key holds raw shop models complete with banking
+            // settings and owner PII. Without the bump, that payload keeps being served from
+            // cache for 120s after this fix deploys.
+            $cacheKey = 'shops:near:v2:' . round((float) $lat, 2) . ':' . round((float) $lng, 2) . ':' . $maxShopDistance;
             return Cache::remember($cacheKey, 120, function () use ($lat, $lng, $maxShopDistance) {
-                return Shop::where('settings->location->lat', '!=', null)
+                $shops = Shop::where('settings->location->lat', '!=', null)
                 ->where('settings->location->lng', '!=', null)
                 ->select(
                     "shops.*",
-                    DB::raw("6371 * acos(cos(radians(" . $lat . ")) 
-        * cos(radians(json_unquote(json_extract(`shops`.`settings`, '$.\"location\".\"lat\"')))) 
-        * cos(radians(json_unquote(json_extract(`shops`.`settings`, '$.\"location\".\"lng\"'))) - radians(" . $lng . ")) 
-        + sin(radians(" . $lat . ")) 
+                    DB::raw("6371 * acos(cos(radians(" . $lat . "))
+        * cos(radians(json_unquote(json_extract(`shops`.`settings`, '$.\"location\".\"lat\"'))))
+        * cos(radians(json_unquote(json_extract(`shops`.`settings`, '$.\"location\".\"lng\"'))) - radians(" . $lng . "))
+        + sin(radians(" . $lat . "))
         * sin(radians(json_unquote(json_extract(`shops`.`settings`, '$.\"location\".\"lat\"'))))) AS distance")
                 )
                 ->orderBy('distance', 'ASC')
@@ -597,6 +606,12 @@ class ShopController extends CoreController
                     ->get()
                     ->where('distance', '<', $maxShopDistance)
                     ->values();
+
+                // `select("shops.*")` above pulls the settings JSON — banking, compliance,
+                // documents — so this public, cached lookup must not return raw models.
+                // Resolved to an array inside the closure so what gets CACHED is the
+                // allowlisted payload, not the models it was built from.
+                return PublicShopResource::collection($shops)->resolve();
             });
         } catch (MarvelException $e) {
             throw new MarvelException(SOMETHING_WENT_WRONG);
