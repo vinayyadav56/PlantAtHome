@@ -83,5 +83,48 @@ class RouteServiceProvider extends ServiceProvider
                 Limit::perMinute(30)->by('auth-ip:'.$request->ip()),
             ];
         });
+
+        // OTP send/verify. Same two-axis shape as 'auth' and for the same reason, but keyed on
+        // the PHONE NUMBER — the OTP routes were throttle:10,1, i.e. by IP only, so an attacker
+        // rotating source addresses got unlimited attempts at one number's code. That matters
+        // more here than for passwords: an OTP is a handful of digits, and the code itself is
+        // verified by MSG91, so this application-layer limit is the only per-number control we own.
+        //
+        // The phone axis is IP-INDEPENDENT, so it holds even when TrustProxies resolves a
+        // spoofable client address (see app/Http/Middleware/TrustProxies.php).
+        RateLimiter::for('otp', function (Request $request) {
+            if (app()->environment('testing')) {
+                return Limit::none();
+            }
+
+            return self::otpLimits($request);
+        });
+    }
+
+    /**
+     * The OTP limits themselves, split out from the registration above so the testing bypass
+     * does not make them untestable — a rate limit nobody can assert on is how the IP-only
+     * version survived this long.
+     *
+     * @return array<int, Limit>
+     */
+    public static function otpLimits(Request $request): array
+    {
+        return [
+            Limit::perMinute(5)->by('otp-phone:'.(self::otpPhoneKey($request) ?: 'none')),
+            Limit::perMinute(20)->by('otp-ip:'.$request->ip()),
+        ];
+    }
+
+    /**
+     * Normalised phone key. +91-98765 43210, 919876543210 and 9876543210 must share one
+     * counter, or the limit is bypassed by simply reformatting the same number.
+     */
+    public static function otpPhoneKey(Request $request): string
+    {
+        $raw = (string) ($request->input('phone_number') ?: $request->input('phone'));
+        $digits = (string) preg_replace('/\D+/', '', $raw);
+
+        return $digits === '' ? '' : substr($digits, -10);
     }
 }

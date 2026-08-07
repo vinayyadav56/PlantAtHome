@@ -115,9 +115,12 @@ Route::post('/reset-password', [UserController::class, 'resetPassword'])->middle
 Route::post('/contact-us', [UserController::class, 'contactAdmin'])->middleware('throttle:5,1');
 Route::post('/social-login-token', [UserController::class, 'socialLogin'])->middleware('throttle:15,1');
 Route::post('/social-login/linkedin/exchange', [UserController::class, 'linkedinExchange'])->middleware('throttle:15,1');
-Route::post('/send-otp-code', [UserController::class, 'sendOtpCode'])->middleware('throttle:5,1');
-Route::post('/verify-otp-code', [UserController::class, 'verifyOtpCode'])->middleware('throttle:10,1');
-Route::post('/otp-login', [UserController::class, 'otpLogin'])->middleware('throttle:10,1');
+// `throttle:otp` (RouteServiceProvider) rather than a bare per-minute count: the plain
+// throttle keys on IP alone, so rotating source addresses bought unlimited guesses at ONE
+// number's code. The named limiter adds an IP-independent per-phone axis.
+Route::post('/send-otp-code', [UserController::class, 'sendOtpCode'])->middleware('throttle:otp');
+Route::post('/verify-otp-code', [UserController::class, 'verifyOtpCode'])->middleware('throttle:otp');
+Route::post('/otp-login', [UserController::class, 'otpLogin'])->middleware('throttle:otp');
 Route::get('top-authors', [AuthorController::class, 'topAuthor']);
 Route::get('top-manufacturers', [ManufacturerController::class, 'topManufacturer']);
 // ETag only — see the note on the products/types/categories resources below.

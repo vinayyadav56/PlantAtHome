@@ -137,9 +137,36 @@ class WebHookController extends CoreController
      * Out-of-order protection: a status only advances (rank map), and terminal
      * failure states always win. Never 5xxes — SendGrid retries on non-2xx and
      * we'd rather drop one event than build a retry storm.
+     *
+     * SECURITY 2026-08-07: this route had NO authentication of any kind. An anonymous POST
+     * with a guessed email_log_id could mark any message bounced/failed/spam — the terminal
+     * states below deliberately override everything, so it was a write primitive over the
+     * whole delivery log, and the operational picture it feeds.
+     *
+     * Verified with a shared secret in the URL (SendGrid lets you set an arbitrary callback
+     * URL, so the secret can ride in the query string) or a header, compared with hash_equals
+     * exactly as shippingCallback does above.
+     *
+     * Rollout is deliberately tolerant: with no secret configured we accept and log a warning,
+     * so turning this on cannot silently break delivery tracking for an integration that is
+     * already pointed here. Set SENDGRID_WEBHOOK_TOKEN and update the URL in the SendGrid
+     * console and it becomes strict — see the ops note in the security report.
      */
     public function sendgridEvents(Request $request)
     {
+        $expected = (string) config('services.sendgrid.webhook_token');
+        if ($expected === '') {
+            Log::warning('sendgrid webhook accepted UNVERIFIED — set SENDGRID_WEBHOOK_TOKEN to enforce');
+        } else {
+            $presented = (string) ($request->header('x-webhook-token')
+                ?: $request->header('x-api-key')
+                ?: $request->query('token', ''));
+            if (!hash_equals($expected, $presented)) {
+                // 401, never 5xx: a rejected event must not trigger SendGrid's retry storm.
+                return response()->json(['message' => 'Unauthorized.'], 401);
+            }
+        }
+
         // Progression rank; failures are terminal and always override.
         $rank = ['queued' => 0, 'sent' => 1, 'delivered' => 2, 'opened' => 3, 'clicked' => 4];
         $map = [
