@@ -25,7 +25,12 @@ class SendRefundUpdateNotification implements ShouldQueue
         $emailReceiver = $this->getWhichUserWillGetEmail(EventType::ORDER_REFUND, $event->refund->order->language);
 
         if ($emailReceiver['customer'] && $refund->customer()) {
-            $refund->customer->notify(new RefundUpdate($refund, 'customer'));
+            app(\Marvel\Services\EmailService::class)->send(
+                'refund.updated.customer',
+                $refund->customer->email,
+                \Marvel\Services\OrderEmailVars::from($refund->order) + ['refund_status' => ucwords(str_replace('-', ' ', (string) $refund->status))],
+                ['fallback' => fn () => $refund->customer->notify(new RefundUpdate($refund, 'customer'))]
+            );
         }
 
         if ($emailReceiver['admin']) {

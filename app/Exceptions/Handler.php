@@ -36,8 +36,39 @@ class Handler extends ExceptionHandler
      */
     public function register()
     {
+        // Slim DB capture so exceptions are visible in the admin observability
+        // center, correlated to their request row via the middleware's ULID.
+        // Console/queue throwables land too (request_id null) — free queue-failure
+        // visibility. Guarded against self-DoS: one row per exception signature
+        // per 10s, and a global 120/min cap, so an error storm cannot flood the
+        // table or add a write to every failing request. Insert failures are
+        // swallowed (table may predate the migration).
         $this->reportable(function (Throwable $e) {
-            //
+            try {
+                $sig = 'exlog:' . substr(md5(get_class($e) . $e->getFile() . $e->getLine()), 0, 16);
+                if (!\Illuminate\Support\Facades\Cache::add($sig, 1, 10)) {
+                    return;
+                }
+                $minute = 'exlog:m' . intdiv(time(), 60);
+                if (\Illuminate\Support\Facades\Cache::increment($minute) > 120) {
+                    return;
+                }
+                \Illuminate\Support\Facades\Cache::put($minute, \Illuminate\Support\Facades\Cache::get($minute), 120);
+
+                $request = app()->runningInConsole() ? null : request();
+                \Illuminate\Support\Facades\DB::table('request_log_exceptions')->insert([
+                    'request_id' => $request?->attributes->get('_log_id'),
+                    'class' => mb_substr(get_class($e), 0, 191),
+                    'message' => mb_substr($e->getMessage(), 0, 500),
+                    'file' => mb_substr($e->getFile(), 0, 255),
+                    'line' => (int) $e->getLine(),
+                    'user_id' => $request?->user()?->id,
+                    'path' => $request ? mb_substr('/' . ltrim($request->path(), '/'), 0, 255) : null,
+                    'created_at' => now(),
+                ]);
+            } catch (\Throwable) {
+                // capturing an exception must never throw one
+            }
         });
     }
 

@@ -29,7 +29,21 @@ class Kernel extends ConsoleKernel
         // Flush lapsed vendor price-sheet windows from the city-availability projection.
         $schedule->command('marvel:recompute-city-availability')->dailyAt('03:30')->withoutOverlapping();
 
+        // Vendor KYC clock: warn vendors whose document deadline is near, put
+        // overdue vendors on hold. 04:15 to stay clear of the 03:30/03:45/04:00/
+        // 04:30 slots. The 30-min mutex expiry matters: bare withoutOverlapping()
+        // holds its lock for 24 HOURS if a container dies mid-run.
+        $schedule->command('marvel:sweep-kyc-deadlines')->dailyAt('04:15')->withoutOverlapping(30);
+
         // Settle vendor earnings past their T+N hold into per-vendor settlements.
+        // One retention story for every log/audit table (request_logs days come from
+        // the admin setting). Slotted between the 03:30 and 04:00 heavy jobs.
+        $schedule->command('logs:prune')->dailyAt('03:45')->withoutOverlapping(30);
+        // Geo enrichment for the logs drawer: batch-resolves DISTINCT recent IPs;
+        // request path never does lookups. 20-min scan > 10-min cadence = overlap
+        // margin so an IP seen during a slow sweep is not missed.
+        $schedule->command('logs:enrich-ips')->everyTenMinutes()->withoutOverlapping(5);
+
         $schedule->command('marvel:run-settlements')->dailyAt('04:00')->withoutOverlapping();
 
         // Re-track open courier shipments + re-apply status (recovers missed/failed webhooks).

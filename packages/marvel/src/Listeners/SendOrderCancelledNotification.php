@@ -26,7 +26,12 @@ class SendOrderCancelledNotification implements ShouldQueue
     {
         $emailReceiver = $this->getWhichUserWillGetEmail(EventType::ORDER_CANCELLED, $event->order->language);
         if ($emailReceiver['customer'] && $event->order->customer && $event->order->parent_id == null) {
-            $event->order->customer->notify(new OrderCancelledNotification($event->order));
+            app(\Marvel\Services\EmailService::class)->send(
+                'order.cancelled.customer',
+                $event->order->customer->email,
+                \Marvel\Services\OrderEmailVars::from($event->order),
+                ['fallback' => fn () => $event->order->customer->notify(new OrderCancelledNotification($event->order))]
+            );
         }
         if ($emailReceiver['vendor']) {
             if ($event->order->parent_id == null) {

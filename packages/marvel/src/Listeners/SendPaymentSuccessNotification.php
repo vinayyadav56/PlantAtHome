@@ -33,7 +33,12 @@ class SendPaymentSuccessNotification implements ShouldQueue
 
         $customer = $event->order->customer;
         if (isset($customer) && $emailReceiver['customer']) {
-            $customer->notify(new PaymentSuccessfulNotification($event->order));
+            app(\Marvel\Services\EmailService::class)->send(
+                'payment.success.customer',
+                $customer->email,
+                \Marvel\Services\OrderEmailVars::from($event->order),
+                ['fallback' => fn () => $customer->notify(new PaymentSuccessfulNotification($event->order))]
+            );
         }
 
 

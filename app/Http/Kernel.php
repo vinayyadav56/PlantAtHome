@@ -42,6 +42,12 @@ class Kernel extends HttpKernel
         'api' => [
             'throttle:api',
             \Illuminate\Routing\Middleware\SubstituteBindings::class,
+            // Request logging for EVERY surface. All 16 /api/v1 module providers
+            // and SharedKernelServiceProvider register with ->middleware(['api',...])
+            // so they inherit this — before it, the entire v2 architecture wrote
+            // zero log rows. The legacy marvel group lists the same class
+            // explicitly; Laravel dedupes, so no double logging.
+            \Marvel\Http\Middleware\LogRequests::class,
         ],
     ];
 

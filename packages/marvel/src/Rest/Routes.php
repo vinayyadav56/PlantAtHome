@@ -9,6 +9,7 @@ use Marvel\Http\Controllers\AddressController;
 use Marvel\Http\Controllers\AiController;
 use Marvel\Http\Controllers\AnalyticsController;
 use Marvel\Http\Controllers\CommandCenterController;
+use Marvel\Http\Controllers\EmailAdminController;
 use Marvel\Http\Controllers\MarketIntelligenceController;
 use Marvel\Http\Controllers\LocationController;
 use Marvel\Http\Controllers\TrackingController;
@@ -107,6 +108,10 @@ Route::get('/email/verify/{id}/{hash}', [UserController::class, 'verifyEmail'])-
 Route::post('/register', [UserController::class, 'register'])->middleware('throttle:5,1');
 Route::post('/token', [UserController::class, 'token'])->middleware('throttle:10,1');
 Route::post('/logout', [UserController::class, 'logout']);
+// Revokes every token for the caller — the remedy for a stolen session. `logout` above only
+// drops the token presented, which does nothing about a copy someone else is holding.
+Route::post('/logout-all-devices', [UserController::class, 'logoutAllDevices'])
+    ->middleware(['auth:sanctum', 'throttle:10,1']);
 Route::delete('/account', [UserController::class, 'deleteAccount'])->middleware('auth:sanctum');
 Route::post('/forget-password', [UserController::class, 'forgetPassword'])->middleware('throttle:5,1');
 Route::post('/verify-forget-password-token', [UserController::class, 'verifyForgetPasswordToken'])->middleware('throttle:10,1');
@@ -114,9 +119,12 @@ Route::post('/reset-password', [UserController::class, 'resetPassword'])->middle
 Route::post('/contact-us', [UserController::class, 'contactAdmin'])->middleware('throttle:5,1');
 Route::post('/social-login-token', [UserController::class, 'socialLogin'])->middleware('throttle:15,1');
 Route::post('/social-login/linkedin/exchange', [UserController::class, 'linkedinExchange'])->middleware('throttle:15,1');
-Route::post('/send-otp-code', [UserController::class, 'sendOtpCode'])->middleware('throttle:5,1');
-Route::post('/verify-otp-code', [UserController::class, 'verifyOtpCode'])->middleware('throttle:10,1');
-Route::post('/otp-login', [UserController::class, 'otpLogin'])->middleware('throttle:10,1');
+// `throttle:otp` (RouteServiceProvider) rather than a bare per-minute count: the plain
+// throttle keys on IP alone, so rotating source addresses bought unlimited guesses at ONE
+// number's code. The named limiter adds an IP-independent per-phone axis.
+Route::post('/send-otp-code', [UserController::class, 'sendOtpCode'])->middleware('throttle:otp');
+Route::post('/verify-otp-code', [UserController::class, 'verifyOtpCode'])->middleware('throttle:otp');
+Route::post('/otp-login', [UserController::class, 'otpLogin'])->middleware('throttle:otp');
 Route::get('top-authors', [AuthorController::class, 'topAuthor']);
 Route::get('top-manufacturers', [ManufacturerController::class, 'topManufacturer']);
 // ETag only — see the note on the products/types/categories resources below.
@@ -168,6 +176,8 @@ Route::post('webhooks/xendit', [WebHookController::class, 'xendit']);
 Route::post('webhooks/iyzico', [WebHookController::class, 'iyzico']);
 Route::post('webhooks/bkash', [WebHookController::class, 'bkash']);
 Route::post('webhooks/flutterwave', [WebHookController::class, 'flutterwave']);
+// SendGrid Event Webhook → email_logs status (delivered/opened/bounced…). Throttled; never 5xxes.
+Route::post('webhooks/sendgrid', [WebHookController::class, 'sendgridEvents'])->middleware('throttle:240,1');
 // Partner shipping webhooks (Borzo/Shiprocket/Porter) are received by the Go shipping-service
 // (/webhooks/{partner} there); the monolith gets status ONLY via shipping/callback below.
 // Dedicated shipping microservice → monolith callback (status/COD). Token-verified (x-api-key)
@@ -227,14 +237,22 @@ Route::middleware(['auth:sanctum', 'throttle:20,1'])->group(function () {
 // and the Razorpay payment-link webhook. Lead capture is rate-limited per IP to
 // stop form-spam from flooding the leads table.
 Route::post('garden-leads', [GardenController::class, 'storeLead'])
+    ->middleware('service.available')
     ->middleware('throttle:10,1');
 Route::post('corporate-leads', [GardenController::class, 'storeLead'])
+    ->middleware('service.available')
     ->middleware('throttle:10,1');
 Route::get('garden-package-templates', [GardenController::class, 'templates']);
 Route::post('webhooks/razorpay-garden', [GardenController::class, 'razorpayWebhook']);
 
 // Delivery serviceability — public pincode check (storefront blocks unserviceable
 // pincodes at checkout). Rate-limited.
+// PDP "check delivery" — local + live courier ETAs side by side for a pincode.
+// Throttled hard: the courier leg is a PAID call at the partner, and this route
+// is public. The controller also caches per (pincode, product) for 10 minutes.
+Route::get('delivery-options', [\Marvel\Http\Controllers\DeliveryOptionsController::class, 'check'])
+    ->middleware('throttle:30,1');
+
 Route::get('delivery-pincodes/check', [DeliveryPincodeController::class, 'check'])
     ->middleware('throttle:60,1');
 
@@ -262,7 +280,8 @@ Route::post('track', [TrackingController::class, 'ingest'])->middleware('throttl
 Route::middleware('auth:sanctum')->group(function () {
     Route::get('my-garden-packages', [GardenController::class, 'myPackages']);
     Route::get('my-garden-packages/{id}', [GardenController::class, 'showMyPackage']);
-    Route::post('garden-packages/{id}/pay', [GardenController::class, 'pay']);
+    Route::post('garden-packages/{id}/pay', [GardenController::class, 'pay'])
+        ->middleware('service.available:orders');
     Route::post('gifting/checkout', [GardenController::class, 'giftingCheckout']);
 });
 
@@ -774,6 +793,11 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // switches, e.g. Porter's paid get_quote/track). No secrets — those stay env-only.
     Route::get('courier/partners/{code}/config', [CourierPartnerProxyController::class, 'show']);
     Route::put('courier/partners/{code}/config', [CourierPartnerProxyController::class, 'update']);
+    // Force a fresh partner login (Shiprocket's 10-day session token) and report the new expiry.
+    // Throttled harder than config reads because each call authenticates against the partner for
+    // real — which is also what makes it the credential check.
+    Route::post('courier/partners/{code}/token/refresh', [CourierPartnerProxyController::class, 'refreshToken'])
+        ->middleware('throttle:10,1');
     // Partner DEBUG CONSOLE, proxied 1:1 to the same service. Returns the service's `exchange`
     // (exact upstream request/response, credentials masked service-side) so a partner integration
     // can be debugged from the admin UI. The test/* calls hit LIVE partner APIs and cost money, so
@@ -894,6 +918,15 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('shipments/{id}/shipping-quotes', [CourierShipmentController::class, 'quotes']);
     Route::post('shipments/{id}/dispatch', [CourierShipmentController::class, 'dispatchShipment']);
     Route::post('shipments/{id}/cancel-shipment', [CourierShipmentController::class, 'cancelShipment']);
+    // Override which lane a shipment ships on. Partners are mode-exclusive
+    // (Shiprocket = courier; Porter/Borzo = instant/same_city), so this is what
+    // legitimately makes a different set of partners quotable for an order that
+    // was classified into the wrong lane.
+    Route::post('shipments/{id}/shipping-mode', [CourierShipmentController::class, 'updateMode']);
+    // Manual RTO: webhooks record partner-reported bounces automatically; this is for
+    // the ones the operator learns about by phone. Track-and-act-manually by design —
+    // no automatic restock or refund.
+    Route::post('shipments/{id}/mark-rto', [CourierShipmentController::class, 'markRto']);
 
     // Marketplace analytics widgets (admin dashboard, D1).
     Route::get('analytics/city-sales', [AnalyticsController::class, 'cityWiseSales']);
@@ -918,6 +951,29 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // Phase 4 — Inventory + Customer Intelligence.
     Route::get('command-center/inventory', [CommandCenterController::class, 'inventory']);
     Route::get('command-center/customer-intelligence', [CommandCenterController::class, 'customerIntelligence']);
+    // Mission Control health bar: platform report + shipping /health + integration
+    // health + kill switches + computed incidents. Cached 10s server-side.
+    Route::get('command-center/platform-health', [CommandCenterController::class, 'platformHealth']);
+    Route::get('command-center/event-stream', [CommandCenterController::class, 'eventStream']);
+    Route::get('command-center/pulse', [CommandCenterController::class, 'pulse']);
+    Route::get('command-center/executive', [CommandCenterController::class, 'executive']);
+
+    // ── Email engine admin (Settings → Notifications) ────────────────────────
+    Route::get('notifications/templates', [EmailAdminController::class, 'templates']);
+    Route::post('notifications/templates', [EmailAdminController::class, 'storeTemplate']);
+    Route::put('notifications/templates/{id}', [EmailAdminController::class, 'updateTemplate'])->whereNumber('id');
+    Route::delete('notifications/templates/{id}', [EmailAdminController::class, 'deleteTemplate'])->whereNumber('id');
+    Route::post('notifications/templates/{id}/duplicate', [EmailAdminController::class, 'duplicateTemplate'])->whereNumber('id');
+    Route::get('notifications/templates/{id}/versions', [EmailAdminController::class, 'versions'])->whereNumber('id');
+    Route::post('notifications/templates/{id}/versions/{version}/restore', [EmailAdminController::class, 'restoreVersion'])->whereNumber('id')->whereNumber('version');
+    Route::post('notifications/templates/{id}/preview', [EmailAdminController::class, 'preview'])->whereNumber('id');
+    Route::post('notifications/templates/{id}/test-send', [EmailAdminController::class, 'testSend'])->whereNumber('id');
+    Route::get('notifications/events', [EmailAdminController::class, 'events']);
+    Route::put('notifications/events/{id}', [EmailAdminController::class, 'updateEvent'])->whereNumber('id');
+    Route::get('notifications/logs/summary', [EmailAdminController::class, 'logsSummary']);
+    Route::get('notifications/logs/export', [EmailAdminController::class, 'exportLogs']);
+    Route::post('notifications/logs/retry', [EmailAdminController::class, 'retryLog']);
+    Route::get('notifications/logs', [EmailAdminController::class, 'logs']);
 
     // Market Intelligence — competitor-catalogue name import + price watchlist/snapshots.
     Route::get('market/watchlist', [MarketIntelligenceController::class, 'index']);
@@ -1022,6 +1078,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('vendors/check-unique', [VendorController::class, 'checkUnique']);
     // F3a — vendor document review (approve/reject/pending), stored in shop settings.
     Route::post('shops/{id}/documents/status', [ShopController::class, 'setDocumentStatus']);
+    // KYC grace period: push a vendor's document deadline out (and lift a
+    // deadline-caused hold). The deadline column is deliberately NOT
+    // client-writable through shop update — this is its only writer.
+    Route::post('shops/{id}/extend-kyc', [ShopController::class, 'extendKycDeadline']);
     Route::post('approve-withdraw', [WithdrawController::class, 'approveWithdraw']);
     Route::post('add-points', [UserController::class, 'addPoints']);
     Route::post('users/make-admin', [UserController::class, 'makeOrRevokeAdmin']);
@@ -1124,6 +1184,17 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('cities', [LocationController::class, 'cityStore']);
     Route::put('cities/{id}', [LocationController::class, 'cityUpdate']);
     Route::post('cities/{id}/status', [LocationController::class, 'citySetStatus']);
+    // City Command Center reads (vendor roster + city-eye catalogue view).
+    Route::get('cities/{id}/vendors', [LocationController::class, 'cityVendors']);
+    Route::get('cities/{id}/products', [LocationController::class, 'cityProducts']);
+    // Manual per-city inventory override (the "Manual" aggregation strategy).
+    Route::put('cities/{id}/products/{productId}/stock', [LocationController::class, 'citySetProductStock']);
+    Route::get('cities/{id}/metrics', [LocationController::class, 'cityMetrics']);
+    Route::get('cities/{id}/insights', [LocationController::class, 'cityInsights']);
+    // Vendor-allocation strategy picker (VendorSelectionManager::available()).
+    Route::get('vendor-selection/strategies', function () {
+        return \Marvel\Services\VendorSelection\VendorSelectionManager::available();
+    });
     Route::delete('cities/{id}', [LocationController::class, 'cityDestroy']);
 
     Route::get('warehouses', [LocationController::class, 'warehouseIndex']);
@@ -1152,6 +1223,11 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::put('admin-tasks/{id}', [SystemController::class, 'updateTask']);
     Route::delete('admin-tasks/{id}', [SystemController::class, 'destroyTask']);
     Route::get('request-logs', [SystemController::class, 'logs']);
+    // Literal paths BEFORE the {id} route or Laravel matches 'summary' as an id.
+    Route::get('request-logs/summary', [SystemController::class, 'logsSummary']);
+    Route::get('request-logs/exceptions', [SystemController::class, 'logExceptions']);
+    Route::get('request-logs/export', [SystemController::class, 'exportLogs']);
+    Route::get('request-logs/{id}', [SystemController::class, 'logDetail'])->whereNumber('id');
     Route::get('request-logs/settings', [SystemController::class, 'logSettings']);
     Route::post('request-logs/settings', [SystemController::class, 'updateLogSettings']);
     Route::post('request-logs/clear', [SystemController::class, 'clearLogs']);

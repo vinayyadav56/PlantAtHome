@@ -255,18 +255,11 @@ class ShopController extends CoreController
         $owner = $shop->owner_id ? User::find($shop->owner_id) : null;
         $ownerIsSuperAdmin = $owner && $owner->getPermissionNames()->contains(Permission::SUPER_ADMIN);
         if (!$ownerIsSuperAdmin) {
-            $documents = data_get($shop->settings, 'documents', []);
-            $required = [
-                'gstCertificate' => 'GST Certificate',
-                'pan'            => 'PAN card',
-                'cheque'         => 'Cancelled cheque',
-            ];
-            $missing = [];
-            foreach ($required as $key => $label) {
-                if (empty(data_get($documents, $key))) {
-                    $missing[] = $label;
-                }
-            }
+            // One source of truth for the required set — the KYC service also
+            // drives the registration deadline and the nightly hold sweep, so
+            // the approve gate and the sweep can never disagree about what
+            // "complete paperwork" means.
+            $missing = app(\Marvel\Services\VendorKycService::class)->missingDocuments($shop);
             if (!empty($missing)) {
                 throw new HttpResponseException(response()->json([
                     'message' => 'Cannot approve this vendor yet — the following KYC document(s) are still missing: ' . implode(', ', $missing) . '. Ask the vendor to upload them (or add them from the shop edit page), then approve.',
@@ -283,6 +276,10 @@ class ShopController extends CoreController
                 $shop->approval_status = 'approved';
                 $shop->approved_at = now();
             }
+            // Approval implies the paperwork gate passed — make sure no stale
+            // KYC clock survives (it should already be clear, but the deadline
+            // and the approval must never disagree).
+            app(\Marvel\Services\VendorKycService::class)->syncDeadline($shop);
             $shop->save();
 
             // Publish ONLY products awaiting approval — never republish items the vendor has
@@ -351,6 +348,46 @@ class ShopController extends CoreController
 
             return $shop;
         });
+    }
+
+    /**
+     * POST shops/{id}/extend-kyc { days, reason } — give a vendor more time to
+     * supply their KYC documents.
+     *
+     * Pushes the deadline out from TODAY (not from the old deadline — "give
+     * them 15 more days" means 15 days from now, whatever the old date was),
+     * clears the reminder stamp so the warning email fires again near the new
+     * date, and lifts a deadline-caused hold. Distinct from disapprove on
+     * purpose: rejected is a decision, held is just "out of time".
+     */
+    public function extendKycDeadline(Request $request, $id)
+    {
+        if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
+            throw new MarvelException(NOT_AUTHORIZED);
+        }
+        $request->validate([
+            'days'   => ['required', 'integer', 'min:1', 'max:365'],
+            'reason' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        try {
+            $shop = $this->repository->findOrFail($id);
+        } catch (\Exception $e) {
+            throw new ModelNotFoundException(NOT_FOUND);
+        }
+
+        $kyc = app(\Marvel\Services\VendorKycService::class);
+
+        $shop->documents_due_at = now()->addDays((int) $request->days);
+        $shop->kyc_reminded_at = null;
+        if ($shop->approval_status === \Marvel\Database\Models\Shop::STATUS_ON_HOLD) {
+            // release() saves and refreshes availability.
+            $kyc->release($shop, 'KYC deadline extended: ' . ($request->reason ?: 'grace period'));
+        } else {
+            $shop->save();
+        }
+
+        return $shop->refresh();
     }
 
     public function addStaff(UserCreateRequest $request)

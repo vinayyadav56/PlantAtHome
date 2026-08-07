@@ -3,6 +3,7 @@
 namespace Marvel\Services;
 
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\User;
@@ -122,13 +123,19 @@ class MetricsService
             ->groupBy('city')
             ->pluck('vendors', 'city');
 
+        // Real city status from the master cities table (was hardcoded 'active',
+        // which made the health board lie about paused/maintenance cities).
+        $statusByCity = DB::table('cities')
+            ->select(DB::raw('LOWER(name) as city'), 'status')
+            ->pluck('status', 'city');
+
         return $rows->map(fn ($r) => [
             'city'      => $r->city ?: 'Unknown',
             'orders'    => (int) $r->orders,
             'revenue'   => (float) $r->revenue,
             'customers' => (int) $r->customers,
             'vendors'   => (int) ($vendorsByCity[$r->city] ?? 0),
-            'status'    => 'active', // read-only in v1; real activation = Phase 2 master cities
+            'status'    => (string) ($statusByCity[strtolower((string) $r->city)] ?? 'active'),
         ])->all();
     }
 
@@ -258,6 +265,198 @@ class MetricsService
     // ── private helpers ─────────────────────────────────────────────────────
 
     /** All (non-deleted) orders. */
+    // ── Executive dashboard ─────────────────────────────────────────────────
+
+    /**
+     * Everything the executive dashboard needs that the other command-center
+     * feeds don't already carry: revenue time-series, period compares, and
+     * one-query strips for finance / satisfaction / marketing / referrers.
+     * Whole payload cached 60s; every block try/caught so schema drift on one
+     * table never blanks the dashboard. Revenue convention matches the class
+     * header: COMPLETED parent orders, SUM(paid_total).
+     */
+    public function executive(): array
+    {
+        return Cache::remember('cc_executive', 60, function () {
+            $out = [
+                'revenue_daily_30' => [],
+                'revenue_monthly_12' => [],
+                'compares' => null,
+                'aov_30d' => 0,
+                'gross_profit_30d' => null,
+                'finance' => null,
+                'satisfaction' => null,
+                'marketing' => null,
+                'top_referrers' => [],
+                'insights' => [],
+                'generated_at' => now()->toIso8601String(),
+            ];
+
+            $completed = fn () => $this->customerOrders()->where('order_status', OrderStatus::COMPLETED);
+
+            try {
+                $rows = $completed()->where('created_at', '>=', Carbon::today()->subDays(29))
+                    ->selectRaw('DATE(created_at) d, SUM(paid_total) revenue, COUNT(*) orders')
+                    ->groupBy('d')->pluck('revenue', 'd');
+                $counts = $completed()->where('created_at', '>=', Carbon::today()->subDays(29))
+                    ->selectRaw('DATE(created_at) d, COUNT(*) c')->groupBy('d')->pluck('c', 'd');
+                for ($i = 29; $i >= 0; $i--) {
+                    $d = Carbon::today()->subDays($i)->toDateString();
+                    $out['revenue_daily_30'][] = [
+                        'd' => $d,
+                        'revenue' => round((float) ($rows[$d] ?? 0), 2),
+                        'orders' => (int) ($counts[$d] ?? 0),
+                    ];
+                }
+            } catch (\Throwable) {
+            }
+
+            try {
+                $rows = $completed()->where('created_at', '>=', Carbon::now()->startOfMonth()->subMonths(11))
+                    ->selectRaw("DATE_FORMAT(created_at, '%Y-%m') m, SUM(paid_total) revenue, COUNT(*) orders")
+                    ->groupBy('m')->get()->keyBy('m');
+                for ($i = 11; $i >= 0; $i--) {
+                    $m = Carbon::now()->startOfMonth()->subMonths($i)->format('Y-m');
+                    $out['revenue_monthly_12'][] = [
+                        'm' => $m,
+                        'revenue' => round((float) ($rows[$m]->revenue ?? 0), 2),
+                        'orders' => (int) ($rows[$m]->orders ?? 0),
+                    ];
+                }
+            } catch (\Throwable) {
+            }
+
+            try {
+                $window = function (Carbon $from, Carbon $to) use ($completed) {
+                    $r = $completed()->where('created_at', '>=', $from)->where('created_at', '<', $to)
+                        ->selectRaw('COALESCE(SUM(paid_total),0) revenue, COUNT(*) orders')->first();
+                    return ['revenue' => round((float) $r->revenue, 2), 'orders' => (int) $r->orders];
+                };
+                $now = now();
+                $out['compares'] = [
+                    'today' => $window(Carbon::today(), $now->copy()->addMinute()),
+                    'yesterday' => $window(Carbon::yesterday(), Carbon::today()),
+                    'same_day_last_week' => $window(Carbon::today()->subDays(7), Carbon::today()->subDays(6)),
+                    'this_month' => $window($now->copy()->startOfMonth(), $now->copy()->addMinute()),
+                    // last month up to the SAME day-of-month/time — an honest pace compare
+                    'last_month_to_date' => $window($now->copy()->subMonthNoOverflow()->startOfMonth(), $now->copy()->subMonthNoOverflow()),
+                    'last_month_full' => $window($now->copy()->subMonthNoOverflow()->startOfMonth(), $now->copy()->startOfMonth()),
+                ];
+                $d30 = $window($now->copy()->subDays(30), $now->copy()->addMinute());
+                $out['aov_30d'] = $d30['orders'] > 0 ? round($d30['revenue'] / $d30['orders'], 2) : 0;
+            } catch (\Throwable) {
+            }
+
+            try {
+                $out['gross_profit_30d'] = round((float) DB::table('vendor_ledger_entries')
+                    ->where('earned_at', '>=', now()->subDays(30))->sum('vendor_profit'), 2);
+            } catch (\Throwable) {
+            }
+
+            try {
+                $out['finance'] = [
+                    'pending_withdrawals' => [
+                        'sum' => round((float) DB::table('withdraws')->whereNull('deleted_at')->where('status', 'pending')->sum('amount'), 2),
+                        'count' => DB::table('withdraws')->whereNull('deleted_at')->where('status', 'pending')->count(),
+                    ],
+                    'refunds_30d' => [
+                        'sum' => round((float) DB::table('refunds')->where('created_at', '>=', now()->subDays(30))->sum('amount'), 2),
+                        'count' => DB::table('refunds')->where('created_at', '>=', now()->subDays(30))->count(),
+                        'pending' => DB::table('refunds')->where('status', 'pending')->count(),
+                    ],
+                    'vendor_balances_total' => round((float) DB::table('balances')->sum('current_balance'), 2),
+                    'unsettled_ledger' => round((float) DB::table('vendor_ledger_entries')->where('status', 'pending')->sum('amount'), 2),
+                ];
+            } catch (\Throwable) {
+            }
+
+            try {
+                $out['satisfaction'] = [
+                    'avg_rating_30d' => round((float) DB::table('reviews')->whereNull('deleted_at')
+                        ->where('created_at', '>=', now()->subDays(30))->avg('rating'), 2),
+                    'reviews_30d' => DB::table('reviews')->whereNull('deleted_at')
+                        ->where('created_at', '>=', now()->subDays(30))->count(),
+                    'unanswered_questions' => DB::table('questions')->whereNull('deleted_at')->whereNull('answer')->count(),
+                ];
+            } catch (\Throwable) {
+            }
+
+            try {
+                $sent7 = DB::table('marketing_notifications')->where('sent_at', '>=', now()->subDays(7));
+                $out['marketing'] = [
+                    'sent_7d' => (clone $sent7)->count(),
+                    'delivered_7d' => (clone $sent7)->whereIn('status', ['delivered', 'read'])->count(),
+                    'failed_7d' => DB::table('marketing_notifications')->where('queued_at', '>=', now()->subDays(7))->where('status', 'failed')->count(),
+                    'active_campaigns' => DB::table('marketing_campaigns')->whereIn('status', ['scheduled', 'running'])->count(),
+                    'top_coupons' => DB::table('orders')->whereNull('orders.deleted_at')->whereNull('orders.parent_id')
+                        ->whereNotNull('orders.coupon_id')->where('orders.created_at', '>=', now()->subDays(30))
+                        ->join('coupons', 'coupons.id', '=', 'orders.coupon_id')
+                        ->selectRaw('coupons.code, COUNT(*) uses, SUM(orders.paid_total) revenue')
+                        ->groupBy('coupons.code')->orderByDesc('uses')->limit(5)->get()
+                        ->map(fn ($c) => ['code' => $c->code, 'uses' => (int) $c->uses, 'revenue' => round((float) $c->revenue, 2)])
+                        ->all(),
+                ];
+            } catch (\Throwable) {
+            }
+
+            try {
+                $out['top_referrers'] = DB::table('visitors')
+                    ->where('last_seen', '>=', now()->subDays(30))
+                    ->whereNotNull('referrer')->where('referrer', '!=', '')
+                    ->pluck('referrer')
+                    ->map(fn ($r) => strtolower(parse_url((string) $r, PHP_URL_HOST) ?: (string) $r))
+                    ->filter()
+                    ->countBy()
+                    ->sortDesc()
+                    ->take(6)
+                    ->map(fn ($n, $domain) => ['domain' => $domain, 'visitors' => $n])
+                    ->values()
+                    ->all();
+            } catch (\Throwable) {
+            }
+
+            // Rule-based insights from what was just computed (no extra queries).
+            try {
+                $c = $out['compares'];
+                if ($c) {
+                    $today = $c['today']['revenue'];
+                    $lastWeek = $c['same_day_last_week']['revenue'];
+                    if ($lastWeek > 0 && abs($today - $lastWeek) / $lastWeek >= 0.2) {
+                        $pct = round((($today - $lastWeek) / $lastWeek) * 100);
+                        $out['insights'][] = [
+                            'severity' => $pct >= 0 ? 'info' : 'medium',
+                            'text' => sprintf('Revenue today is %s%% vs the same day last week', ($pct >= 0 ? '+' : '') . $pct),
+                        ];
+                    }
+                    $pace = $c['this_month']['revenue'];
+                    $lastToDate = $c['last_month_to_date']['revenue'];
+                    if ($lastToDate > 0) {
+                        $pct = round((($pace - $lastToDate) / $lastToDate) * 100);
+                        $out['insights'][] = [
+                            'severity' => $pct >= 0 ? 'info' : 'medium',
+                            'text' => sprintf('This month is pacing %s%% vs last month at the same point', ($pct >= 0 ? '+' : '') . $pct),
+                        ];
+                    }
+                }
+                if (($out['finance']['refunds_30d']['pending'] ?? 0) > 0) {
+                    $out['insights'][] = [
+                        'severity' => 'medium',
+                        'text' => $out['finance']['refunds_30d']['pending'] . ' refund request(s) awaiting a decision',
+                    ];
+                }
+                if (($out['satisfaction']['unanswered_questions'] ?? 0) > 0) {
+                    $out['insights'][] = [
+                        'severity' => 'low',
+                        'text' => $out['satisfaction']['unanswered_questions'] . ' product question(s) still unanswered',
+                    ];
+                }
+            } catch (\Throwable) {
+            }
+
+            return $out;
+        });
+    }
+
     private function orders()
     {
         return DB::table('orders')->whereNull('deleted_at');
@@ -375,7 +574,7 @@ class MetricsService
     }
 
     /** PHP-side city extraction from a shipping_address JSON string/array. */
-    private function cityFromJson($shippingAddress): ?string
+    public function cityFromJson($shippingAddress): ?string
     {
         if (empty($shippingAddress)) {
             return null;

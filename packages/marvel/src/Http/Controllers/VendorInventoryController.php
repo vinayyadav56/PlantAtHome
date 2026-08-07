@@ -374,7 +374,9 @@ class VendorInventoryController extends CoreController
             ['shop_id' => $shopId, 'city' => trim((string) $request->city), 'pincode' => $request->pincode],
             ['fulfillment_mode' => $request->fulfillment_mode, 'eta_days' => $request->eta_days, 'is_active' => true]
         );
-        (new AvailabilityService())->recomputeForShop($shopId);
+        // Whole-catalogue rebuild → queued (deduped per shop); the projection
+        // is a cache, seconds of staleness is fine.
+        \Marvel\Jobs\RecomputeShopAvailabilityJob::dispatch($shopId);
         return $area;
     }
 
@@ -384,7 +386,7 @@ class VendorInventoryController extends CoreController
         $shopId = $this->resolveShopId($request);
         $area = VendorServiceArea::where('shop_id', $shopId)->findOrFail($id);
         $area->delete();
-        (new AvailabilityService())->recomputeForShop($shopId);
+        \Marvel\Jobs\RecomputeShopAvailabilityJob::dispatch($shopId);
         return ['success' => true];
     }
 }

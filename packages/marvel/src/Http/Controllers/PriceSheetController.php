@@ -128,12 +128,63 @@ class PriceSheetController extends CoreController
     public function productVendors(Request $request, $productId)
     {
         $service = new \Marvel\Services\AvailabilityService();
+        $vendors = $service->vendorsForProduct(
+            (int) $productId,
+            $request->filled('variation_option_id') ? (int) $request->input('variation_option_id') : null
+        );
+
+        // Variant titles — without them a 3-size × 2-vendor product renders six
+        // identical-looking rows and the panel is unreadable.
+        $variantIds = collect($vendors)->pluck('variation_option_id')->filter()->unique()->values();
+        $titles = $variantIds->isEmpty()
+            ? collect()
+            : \Illuminate\Support\Facades\DB::table('variation_options')
+                ->whereIn('id', $variantIds)->pluck('title', 'id');
+        $vendors = array_map(function ($v) use ($titles) {
+            $v['variant_title'] = $v['variation_option_id']
+                ? ($titles[$v['variation_option_id']] ?? null)
+                : null;
+            return $v;
+        }, $vendors);
+
         return [
             'product_id' => (int) $productId,
-            'vendors'    => $service->vendorsForProduct(
-                (int) $productId,
-                $request->filled('variation_option_id') ? (int) $request->input('variation_option_id') : null
-            ),
+            'vendors'    => $vendors,
+            // What the CUSTOMER sees, per city per variant, straight from the
+            // projection. The margin is not recoverable from it (only the
+            // post-margin price is stored), so it is resolved alongside.
+            'city_prices' => $this->cityPricesFor((int) $productId, $titles),
         ];
+    }
+
+    /** @return array<int,array<string,mixed>> projection rows + resolved margin */
+    private function cityPricesFor(int $productId, $titles): array
+    {
+        try {
+            $product = \Marvel\Database\Models\Product::find($productId);
+            $typeId = ($product && $product->type_id) ? (int) $product->type_id : null;
+            $resolver = new \Marvel\Services\MarginResolver();
+
+            return \Marvel\Database\Models\ProductCityAvailability::where('product_id', $productId)
+                ->orderBy('city')->orderBy('variation_option_id')
+                ->get()
+                ->map(fn ($r) => [
+                    'city'                => $r->city,
+                    'variation_option_id' => (int) $r->variation_option_id,
+                    'variant_title'       => $r->variation_option_id
+                        ? ($titles[$r->variation_option_id] ?? null)
+                        : 'All sizes',
+                    'display_price'  => $r->display_price !== null ? (float) $r->display_price : null,
+                    'stock'          => $r->effectiveStock(),
+                    'stock_override' => $r->stock_override,
+                    'vendor_count'   => (int) $r->vendor_count,
+                    'margin_percent' => $resolver->marginPercent($r->city, $typeId),
+                    'has_local'      => (bool) $r->has_local,
+                    'has_courier'    => (bool) $r->has_courier,
+                ])
+                ->all();
+        } catch (\Throwable $e) {
+            return [];
+        }
     }
 }

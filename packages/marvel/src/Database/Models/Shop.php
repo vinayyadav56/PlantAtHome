@@ -22,6 +22,8 @@ class Shop extends Model
         'cover_image' => 'json',
         'address' => 'json',
         'settings' => 'json',
+        'documents_due_at' => 'datetime',
+        'kyc_reminded_at' => 'datetime',
         'vendor_rating' => 'float',
         'vendor_rating_count' => 'integer',
         'vendor_priority_score' => 'integer',
@@ -44,6 +46,19 @@ class Shop extends Model
 
     /** The master PlantAtHome shop's canonical slug (single-shop model). */
     public const MASTER_SLUG = 'plantathome';
+
+    /**
+     * `approval_status` values. Plain varchar, no DB constraint.
+     *
+     * ON_HOLD is distinct from 'rejected': the vendor missed the KYC deadline
+     * and is suspended until the documents arrive, whereas rejected is a
+     * decision. Only ON_HOLD is enforced on the selling path — see
+     * AvailabilityService::excludeHeldVendors().
+     */
+    public const STATUS_PENDING  = 'pending';
+    public const STATUS_APPROVED = 'approved';
+    public const STATUS_REJECTED = 'rejected';
+    public const STATUS_ON_HOLD  = 'on_hold';
 
     /**
      * Single-shop model: every catalog product belongs to THE master PlantAtHome

@@ -168,12 +168,18 @@ final class ShoppingCityGateTest extends TestCase
 
     public function test_city_without_supply_is_out_of_stock_gated(): void
     {
+        // Mirrors the real table — see the note in CartValidateCityTest. The
+        // projection is per-variant now; 0 is the product-level rollup row.
         Schema::create('product_city_availability', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->unsignedBigInteger('product_id');
             $t->string('city');
+            $t->unsignedBigInteger('variation_option_id')->default(0);
             $t->boolean('has_local')->default(false);
             $t->boolean('has_courier')->default(false);
+            $t->decimal('display_price', 14, 2)->nullable();
+            $t->integer('stock')->nullable();
+            $t->integer('stock_override')->nullable();
         });
 
         $repo = new CheckoutRepository();
@@ -190,7 +196,7 @@ final class ShoppingCityGateTest extends TestCase
         // A single supplied product flips the city back to orderable — including
         // via the Gurgaon alias.
         DB::table('product_city_availability')->insert([
-            ['product_id' => 11, 'city' => 'gurugram', 'has_local' => 1, 'has_courier' => 0],
+            ['product_id' => 11, 'city' => 'gurugram', 'variation_option_id' => 0, 'has_local' => 1, 'has_courier' => 0],
         ]);
         $this->assertNull($repo->shoppingCityOutOfStock(['shopping_city' => 'Gurgaon']));
     }

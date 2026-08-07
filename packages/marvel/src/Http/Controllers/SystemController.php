@@ -65,9 +65,39 @@ class SystemController extends CoreController
     }
 
     // -------------------------------------------------------- REQUEST LOGS
+
+    /** Columns the LIST returns — never the mediumText bodies (those are drawer-only). */
+    private const LOG_LIST_COLUMNS = [
+        'id', 'request_id', 'method', 'path', 'module', 'status',
+        'user_id', 'ip', 'device', 'duration_ms', 'created_at',
+    ];
+
+    /**
+     * Every list query is bounded by a created_at window (default 24h, clamped
+     * to retention). That bound is what makes the composite indexes usable and
+     * keeps the free-text LIKE an in-window scan instead of a full-table one.
+     */
+    private function logWindow(Request $request): array
+    {
+        $retention = max(1, (int) (RequestLogSetting::first()?->retention_days ?? 30));
+        $to = $request->query('to') ? \Carbon\Carbon::parse($request->query('to'))->endOfDay() : now();
+        $from = $request->query('from')
+            ? \Carbon\Carbon::parse($request->query('from'))->startOfDay()
+            : now()->subDay();
+        $floor = now()->subDays($retention);
+        if ($from->lt($floor)) {
+            $from = $floor;
+        }
+        return [$from, $to];
+    }
+
     public function logs(Request $request): JsonResponse
     {
-        $q = RequestLog::query()->latest('id');
+        [$from, $to] = $this->logWindow($request);
+        $q = RequestLog::query()
+            ->select(self::LOG_LIST_COLUMNS)
+            ->whereBetween('created_at', [$from, $to])
+            ->latest('id');
         if ($m = $request->query('method')) {
             $q->where('method', strtoupper($m));
         }
@@ -77,20 +107,186 @@ class SystemController extends CoreController
         if ($s = $request->query('status')) {
             $q->where('status', (int) $s);
         }
+        if ($mod = $request->query('module')) {
+            $q->where('module', strtolower($mod));
+        }
+        if ($uid = $request->query('user_id')) {
+            $q->where('user_id', (int) $uid);
+        }
+        if ($ip = $request->query('ip')) {
+            $q->where('ip', $ip);
+        }
         if ($term = $request->query('q')) {
             $q->where('path', 'like', '%' . $term . '%');
         }
-        return response()->json($q->paginate(min((int) $request->query('limit', 50), 200)));
+        return response()->json($q->paginate(min((int) $request->query('limit', 50), 100)));
+    }
+
+    /** Full row + correlated exceptions + geo — the detail drawer's single fetch. */
+    public function logDetail($id): JsonResponse
+    {
+        $row = RequestLog::findOrFail($id);
+        $exceptions = [];
+        if ($row->request_id && Schema::hasTable('request_log_exceptions')) {
+            $exceptions = DB::table('request_log_exceptions')
+                ->where('request_id', $row->request_id)
+                ->orderBy('id')
+                ->get(['class', 'message', 'file', 'line', 'created_at']);
+        }
+        // Geo comes from the ip_locations cache the scheduled enricher maintains —
+        // null until the ~10-min sweep has seen this IP, and that is fine.
+        $location = null;
+        if ($row->ip && Schema::hasTable('ip_locations')) {
+            $location = DB::table('ip_locations')->where('ip', $row->ip)
+                ->first(['country_code', 'country', 'region', 'city', 'isp']);
+        }
+        return response()->json(['data' => array_merge($row->toArray(), [
+            'exceptions' => $exceptions,
+            'location' => $location,
+        ])]);
+    }
+
+    /**
+     * CSV export of the CURRENT filter set — same filters as logs(), hard cap
+     * 10k rows, never the body columns. Streamed so memory stays flat.
+     */
+    public function exportLogs(Request $request)
+    {
+        [$from, $to] = $this->logWindow($request);
+        $q = RequestLog::query()
+            ->select(self::LOG_LIST_COLUMNS)
+            ->whereBetween('created_at', [$from, $to])
+            ->latest('id');
+        if ($m = $request->query('method')) {
+            $q->where('method', strtoupper($m));
+        }
+        if ($request->boolean('errors')) {
+            $q->where('status', '>=', 400);
+        }
+        if ($s = $request->query('status')) {
+            $q->where('status', (int) $s);
+        }
+        if ($mod = $request->query('module')) {
+            $q->where('module', strtolower($mod));
+        }
+        if ($uid = $request->query('user_id')) {
+            $q->where('user_id', (int) $uid);
+        }
+        if ($ip = $request->query('ip')) {
+            $q->where('ip', $ip);
+        }
+        if ($term = $request->query('q')) {
+            $q->where('path', 'like', '%' . $term . '%');
+        }
+
+        return response()->streamDownload(function () use ($q) {
+            $out = fopen('php://output', 'w');
+            fputcsv($out, self::LOG_LIST_COLUMNS);
+            $q->limit(10000)->chunk(1000, function ($rows) use ($out) {
+                foreach ($rows as $row) {
+                    fputcsv($out, array_map(
+                        fn ($col) => $row->{$col} instanceof \DateTimeInterface
+                            ? $row->{$col}->format('Y-m-d H:i:s')
+                            : $row->{$col},
+                        self::LOG_LIST_COLUMNS
+                    ));
+                }
+            });
+            fclose($out);
+        }, 'request-logs-' . now()->format('Ymd-His') . '.csv', ['Content-Type' => 'text/csv']);
+    }
+
+    /**
+     * The dashboard numbers: totals, status classes, a time-bucketed series and
+     * the top error/slow paths. Cached 15s so N open admin tabs share one
+     * computation; every GROUP BY is bounded by the window and rides the
+     * (status, created_at) / created_at indexes.
+     */
+    public function logsSummary(Request $request): JsonResponse
+    {
+        $window = in_array($request->query('window'), ['1h', '24h', '7d'], true) ? $request->query('window') : '24h';
+        $payload = Cache::remember("request_log_summary:$window", 15, function () use ($window) {
+            [$from, $bucketExpr] = match ($window) {
+                '1h' => [now()->subHour(), "DATE_FORMAT(created_at, '%Y-%m-%dT%H:%i:00')"],
+                '7d' => [now()->subDays(7), "DATE_FORMAT(created_at, '%Y-%m-%dT00:00:00')"],
+                default => [now()->subDay(), "DATE_FORMAT(created_at, '%Y-%m-%dT%H:00:00')"],
+            };
+            $base = RequestLog::where('created_at', '>=', $from);
+
+            $totals = (clone $base)->selectRaw(
+                'COUNT(*) c, SUM(status >= 400) e, AVG(duration_ms) avg_ms, MAX(duration_ms) max_ms, SUM(duration_ms > 1000) slow'
+            )->first();
+
+            $classes = (clone $base)->selectRaw("CONCAT(FLOOR(status/100), 'xx') k, COUNT(*) c")
+                ->whereNotNull('status')->groupBy('k')->pluck('c', 'k');
+
+            $buckets = (clone $base)->selectRaw("$bucketExpr t, COUNT(*) c, SUM(status >= 400) e")
+                ->groupBy('t')->orderBy('t')->get();
+
+            $topErrors = (clone $base)->where('status', '>=', 400)
+                ->selectRaw('path, COUNT(*) c')->groupBy('path')->orderByDesc('c')->limit(8)
+                ->get(['path', 'c']);
+
+            $topSlow = (clone $base)->whereNotNull('duration_ms')
+                ->selectRaw('path, AVG(duration_ms) avg_ms, COUNT(*) c')
+                ->groupBy('path')->orderByDesc('avg_ms')->limit(8)->get();
+
+            $count = (int) ($totals->c ?? 0);
+            return [
+                'window' => $window,
+                'totals' => [
+                    'count' => $count,
+                    'errors' => (int) ($totals->e ?? 0),
+                    'error_rate' => $count > 0 ? round(($totals->e ?? 0) / $count * 100, 2) : 0,
+                    'avg_ms' => (int) round($totals->avg_ms ?? 0),
+                    'max_ms' => (int) ($totals->max_ms ?? 0),
+                    'slow_count' => (int) ($totals->slow ?? 0),
+                ],
+                'status_classes' => $classes,
+                'per_bucket' => $buckets->map(fn ($b) => ['t' => $b->t, 'count' => (int) $b->c, 'errors' => (int) $b->e]),
+                'top_error_paths' => $topErrors->map(fn ($r) => ['path' => $r->path, 'count' => (int) $r->c]),
+                'top_slow_paths' => $topSlow->map(fn ($r) => ['path' => $r->path, 'avg_ms' => (int) round($r->avg_ms), 'count' => (int) $r->c]),
+            ];
+        });
+        return response()->json(['data' => $payload]);
+    }
+
+    /** Captured exceptions (request-correlated AND console/queue ones). */
+    public function logExceptions(Request $request): JsonResponse
+    {
+        if (!Schema::hasTable('request_log_exceptions')) {
+            return response()->json(['data' => [], 'total' => 0]);
+        }
+        [$from, $to] = $this->logWindow($request);
+        $q = DB::table('request_log_exceptions')
+            ->whereBetween('created_at', [$from, $to])
+            ->orderByDesc('id');
+        if ($c = $request->query('class')) {
+            $q->where('class', 'like', '%' . $c . '%');
+        }
+        return response()->json($q->paginate(min((int) $request->query('limit', 50), 100)));
     }
 
     public function logSettings(): JsonResponse
     {
-        $s = RequestLogSetting::firstOrCreate([], ['enabled' => true, 'retention_days' => 7, 'log_get' => false]);
+        $s = RequestLogSetting::firstOrCreate([], ['enabled' => true, 'retention_days' => 30, 'log_get' => false]);
+        // TABLE_ROWS is an estimate, but the old exact COUNT(*) was an unbounded
+        // full count on every settings fetch — the estimate is the honest trade.
+        $approx = 0;
+        try {
+            $row = DB::selectOne(
+                'SELECT TABLE_ROWS r FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ?',
+                ['request_logs']
+            );
+            $approx = (int) ($row->r ?? 0);
+        } catch (\Throwable) {
+        }
         return response()->json(['data' => [
             'enabled' => (bool) $s->enabled,
             'retention_days' => (int) $s->retention_days,
             'log_get' => (bool) $s->log_get,
-            'total_logs' => RequestLog::count(),
+            'store_response_bodies' => (bool) ($s->store_response_bodies ?? false),
+            'total_logs' => $approx,
             'errors_24h' => RequestLog::where('status', '>=', 400)->where('created_at', '>=', now()->subDay())->count(),
         ]]);
     }
@@ -98,7 +294,7 @@ class SystemController extends CoreController
     public function updateLogSettings(Request $request): JsonResponse
     {
         $s = RequestLogSetting::firstOrFail();
-        $s->fill($request->only(['enabled', 'retention_days', 'log_get']))->save();
+        $s->fill($request->only(['enabled', 'retention_days', 'log_get', 'store_response_bodies']))->save();
         Cache::forget('request_log_settings');
         return response()->json(['data' => $s]);
     }
@@ -386,6 +582,10 @@ class SystemController extends CoreController
         'content:sweep-batches'     => \Marvel\Console\SweepContentBatchesCommand::class,
         'inventory:release-expired' => \App\Modules\Inventory\Console\ReleaseExpiredReservationsCommand::class,
         'outbox:relay'              => \App\Console\Commands\OutboxRelayCommand::class,
+        // One-time / on-demand projection rebuild (fills the per-variant rows
+        // after the 2026-08 pca migration) and the vendor-KYC sweep.
+        'marvel:recompute-city-availability' => \Marvel\Console\RecomputeCityAvailabilityCommand::class,
+        'marvel:sweep-kyc-deadlines'         => \Marvel\Console\SweepKycDeadlinesCommand::class,
         'marketing:dispatch-due'    => \App\Modules\Marketing\Console\DispatchDueCampaignsCommand::class,
     ];
 

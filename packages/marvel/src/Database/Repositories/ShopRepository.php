@@ -112,7 +112,8 @@ class ShopRepository extends BaseRepository
         // The cities a vendor serves feed the city-availability projection — refresh
         // every product this vendor supplies so the storefront reflects the change.
         if (VendorProductPrice::where('shop_id', $shop->id)->exists()) {
-            (new AvailabilityService())->recomputeForShop((int) $shop->id);
+            // Queued + deduped: a shop save can touch hundreds of products.
+            \Marvel\Jobs\RecomputeShopAvailabilityJob::dispatch((int) $shop->id);
         }
 
         // Onboarding a vendor in a city must surface that city in the storefront
@@ -224,6 +225,13 @@ class ShopRepository extends BaseRepository
                 }
                 $this->syncServiceAreas($shop, $request);
 
+                // Start the KYC clock: a vendor may register without documents
+                // (deliberate — paperwork must never stall onboarding), but the
+                // gap gets a deadline, after which the nightly sweep holds the
+                // account. Complete documents at create ⇒ no clock at all.
+                app(\Marvel\Services\VendorKycService::class)->syncDeadline($shop);
+                $shop->save();
+
                 return $shop;
             });
 
@@ -232,19 +240,20 @@ class ShopRepository extends BaseRepository
             // back the shop). Email failure is non-fatal because the admin UI shows the
             // credentials for manual sharing; credentials_email_sent tells it whether to.
             if ($owner) {
-                try {
-                    Mail::to($owner->email)->send(new VendorCredentials(
-                        $owner->email,
-                        $request->owner_password,
-                        $shop->name,
-                        $owner->name,
+                // Queued through the engine; "sent" now means "accepted by the
+                // engine" — the email log page shows the real outcome.
+                $logId = app(\Marvel\Services\EmailService::class)->send('vendor.credentials', $owner->email, [
+                    'vendor_name' => $owner->name,
+                    'vendor_email' => $owner->email,
+                    'shop_name' => $shop->name,
+                    'temp_password' => $request->owner_password,
+                ], [
+                    'fallback' => fn () => Mail::to($owner->email)->queue(new VendorCredentials(
+                        $owner->email, $request->owner_password, $shop->name, $owner->name,
                         rtrim(config('shop.dashboard_url') ?: '', '/')
-                    ));
-                    $sent = true;
-                } catch (\Exception $e) {
-                    $sent = false;
-                }
-                $shop->setAttribute('credentials_email_sent', $sent);
+                    )),
+                ]);
+                $shop->setAttribute('credentials_email_sent', (bool) $logId);
             }
 
             return $shop;
@@ -279,6 +288,15 @@ class ShopRepository extends BaseRepository
                 $data['updated_by'] = $request->user()->id ?? null;
                 $shop->update($data);
                 $this->syncServiceAreas($shop, $request);
+
+                // Keep the KYC clock honest on every settings write: uploading
+                // the last missing document clears the deadline (and releases a
+                // KYC hold); deleting one starts the clock. No-op when nothing
+                // about the document set changed.
+                if (array_key_exists('settings', $data)) {
+                    app(\Marvel\Services\VendorKycService::class)->syncDeadline($shop->refresh());
+                    $shop->save();
+                }
 
             // TODO : why this code is needed
             // $shop->categories = $shop->categories;

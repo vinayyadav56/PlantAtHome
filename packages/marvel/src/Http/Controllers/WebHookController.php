@@ -3,6 +3,7 @@
 namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\Shipment;
 use Marvel\Facades\Payment;
@@ -106,7 +107,7 @@ class WebHookController extends CoreController
 
             // Sync the provider identifiers/tracking the service learned — but NEVER clobber a row
             // that is already terminal (a stale/replayed event must not overwrite live tracking).
-            if (!in_array($shipment->status, ['delivered', 'cancelled'], true)) {
+            if (!in_array($shipment->status, ['delivered', 'cancelled', 'rto'], true)) {
                 $fill = [];
                 foreach (['provider_order_id', 'awb_number', 'tracking_url'] as $k) {
                     if (!empty($data[$k])) {
@@ -129,4 +130,85 @@ class WebHookController extends CoreController
             return response()->json(['ok' => false], 200); // never 5xx to the service relay
         }
     }
+
+    /**
+     * SendGrid Event Webhook → advances email_logs rows. Correlates by the
+     * email_log_id custom arg attached at send time (EmailService::tagMessage).
+     * Out-of-order protection: a status only advances (rank map), and terminal
+     * failure states always win. Never 5xxes — SendGrid retries on non-2xx and
+     * we'd rather drop one event than build a retry storm.
+     *
+     * SECURITY 2026-08-07: this route had NO authentication of any kind. An anonymous POST
+     * with a guessed email_log_id could mark any message bounced/failed/spam — the terminal
+     * states below deliberately override everything, so it was a write primitive over the
+     * whole delivery log, and the operational picture it feeds.
+     *
+     * Verified with a shared secret in the URL (SendGrid lets you set an arbitrary callback
+     * URL, so the secret can ride in the query string) or a header, compared with hash_equals
+     * exactly as shippingCallback does above.
+     *
+     * Rollout is deliberately tolerant: with no secret configured we accept and log a warning,
+     * so turning this on cannot silently break delivery tracking for an integration that is
+     * already pointed here. Set SENDGRID_WEBHOOK_TOKEN and update the URL in the SendGrid
+     * console and it becomes strict — see the ops note in the security report.
+     */
+    public function sendgridEvents(Request $request)
+    {
+        $expected = (string) config('services.sendgrid.webhook_token');
+        if ($expected === '') {
+            Log::warning('sendgrid webhook accepted UNVERIFIED — set SENDGRID_WEBHOOK_TOKEN to enforce');
+        } else {
+            $presented = (string) ($request->header('x-webhook-token')
+                ?: $request->header('x-api-key')
+                ?: $request->query('token', ''));
+            if (!hash_equals($expected, $presented)) {
+                // 401, never 5xx: a rejected event must not trigger SendGrid's retry storm.
+                return response()->json(['message' => 'Unauthorized.'], 401);
+            }
+        }
+
+        // Progression rank; failures are terminal and always override.
+        $rank = ['queued' => 0, 'sent' => 1, 'delivered' => 2, 'opened' => 3, 'clicked' => 4];
+        $map = [
+            'processed' => 'sent', 'delivered' => 'delivered', 'open' => 'opened',
+            'click' => 'clicked', 'bounce' => 'bounced', 'dropped' => 'failed',
+            'deferred' => null, 'spamreport' => 'spam',
+        ];
+
+        $events = $request->json()->all();
+        if (!is_array($events)) {
+            return response()->json(['ok' => true]);
+        }
+
+        foreach ($events as $e) {
+            try {
+                $logId = (int) ($e['email_log_id'] ?? 0);
+                if ($logId <= 0) {
+                    continue; // not one of ours (marketing has its own pipeline)
+                }
+                $status = $map[(string) ($e['event'] ?? '')] ?? null;
+                if ($status === null) {
+                    continue;
+                }
+                $row = DB::table('email_logs')->where('id', $logId)->first();
+                if ($row === null) {
+                    continue;
+                }
+                $terminalFailure = in_array($status, ['bounced', 'failed', 'spam'], true);
+                $advances = isset($rank[$status], $rank[$row->status]) && $rank[$status] > $rank[$row->status];
+                if ($terminalFailure || $advances) {
+                    DB::table('email_logs')->where('id', $logId)->update([
+                        'status' => $status,
+                        'error' => $terminalFailure ? mb_substr((string) ($e['reason'] ?? $e['type'] ?? $status), 0, 2000) : $row->error,
+                        'updated_at' => now(),
+                    ]);
+                }
+            } catch (\Throwable $t) {
+                Log::warning('sendgrid webhook event skipped: ' . $t->getMessage());
+            }
+        }
+
+        return response()->json(['ok' => true]);
+    }
+
 }

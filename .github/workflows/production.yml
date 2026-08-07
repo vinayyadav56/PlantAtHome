@@ -391,6 +391,17 @@ jobs:
             # is worse than silent: SweepContentBatchesCommand re-dispatches every 2 minutes with no
             # termination condition, so a batch nobody consumes grows ~720 orphan rows a day on a DB
             # that has already filled its volume once.
+            # Per-queue flags via EnvironmentFile — MUST mirror .railway/supervisord.conf.
+            # Without --timeout, Laravel defaults to 60s: careplans/images jobs budgeted
+            # at 900s were being SIGALRM'd at 60s, retried, and dumped in failed_jobs.
+            # config/queue.php retry_after=960 must stay > the longest --timeout (900).
+            sudo mkdir -p /etc/plantathome
+            sudo tee /etc/plantathome/queue-default.env        > /dev/null <<<'WORKER_FLAGS=--tries=3 --timeout=120 --backoff=10'
+            sudo tee /etc/plantathome/queue-careplans.env      > /dev/null <<<'WORKER_FLAGS=--tries=2 --timeout=900 --backoff=30'
+            sudo tee /etc/plantathome/queue-marketing.env      > /dev/null <<<'WORKER_FLAGS=--tries=3 --timeout=280 --backoff=10'
+            sudo tee /etc/plantathome/queue-images.env         > /dev/null <<<'WORKER_FLAGS=--tries=2 --timeout=900 --backoff=30'
+            sudo tee /etc/plantathome/queue-images-instant.env > /dev/null <<<'WORKER_FLAGS=--tries=2 --timeout=320 --backoff=15'
+            sudo tee /etc/plantathome/queue-content.env        > /dev/null <<<'WORKER_FLAGS=--tries=2 --timeout=600 --backoff=15'
             sudo tee /etc/systemd/system/plantathome-queue@.service > /dev/null <<'UNIT'
             [Unit]
             Description=PlantAtHome API queue worker (%i)
@@ -400,7 +411,8 @@ jobs:
             User=www-data
             Group=www-data
             WorkingDirectory=/var/www/plantathome/api
-            ExecStart=/usr/bin/php /var/www/plantathome/api/artisan queue:work database --queue=%i --sleep=3 --tries=3 --max-time=3600
+            EnvironmentFile=-/etc/plantathome/queue-%i.env
+            ExecStart=/usr/bin/php /var/www/plantathome/api/artisan queue:work database --queue=%i --sleep=3 --max-time=3600 $WORKER_FLAGS
             Restart=always
             RestartSec=5
 

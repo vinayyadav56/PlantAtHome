@@ -4,9 +4,12 @@ namespace Marvel\Services;
 
 use Carbon\Carbon;
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\City;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\ProductCityAvailability;
+use Marvel\Database\Models\Settings;
+use Marvel\Database\Models\Shop;
 use Marvel\Database\Models\VendorProductPrice;
 use Marvel\Database\Models\VendorServiceArea;
 
@@ -24,8 +27,38 @@ class AvailabilityService
         $this->pricing = $pricing ?: new PricingService();
     }
 
-    /** Scope a vendor_product_prices query to rows effective today. */
-    private function effective($query)
+    /**
+     * Drop rows belonging to a vendor who is on hold.
+     *
+     * This is what gives "on hold" teeth. `is_active` was never checked here —
+     * it only gates the vendor dashboard — so before this a suspended vendor's
+     * stock kept being sold and assigned like nothing had happened. Since the
+     * single-master-shop change vendors own no products of their own, they
+     * supply purely through vendor_product_prices, which makes this the one
+     * place the whole selling path funnels through.
+     *
+     * `whereDoesntHave` rather than `where(... '!=', 'on_hold')` on purpose:
+     * the latter is a NOT EXISTS that also silently drops every row whose shop
+     * has a NULL approval_status (legacy rows) — i.e. it would stop selling
+     * perfectly good inventory. This only ever excludes an explicit hold.
+     */
+    private function excludeHeldVendors($query)
+    {
+        return $query->whereDoesntHave(
+            'shop',
+            fn ($s) => $s->where('approval_status', Shop::STATUS_ON_HOLD),
+        );
+    }
+
+    /**
+     * Scope a vendor_product_prices query to rows effective today.
+     *
+     * Public so admin surfaces (the city command center's vendor counts) can
+     * apply the SAME window the projection uses — counting without it reports
+     * expired price sheets as live catalogue and disagrees with the product
+     * list rendered beside it.
+     */
+    public function effective($query)
     {
         $today = Carbon::today()->toDateString();
         return $query
@@ -44,7 +77,11 @@ class AvailabilityService
         if (!is_null($variationOptionId)) {
             $q->where('variation_option_id', $variationOptionId);
         }
-        $rows = $this->effective($q)->get();
+        // Held vendors are excluded here rather than only in candidatesFor,
+        // because ItemAssignmentService::candidatesFor() calls THIS method to
+        // build its candidate list — so this single filter covers both the
+        // admin supply view and live order assignment.
+        $rows = $this->effective($this->excludeHeldVendors($q))->get();
 
         $shopIds = $rows->pluck('shop_id')->unique()->values()->all();
         $areas = VendorServiceArea::whereIn('shop_id', $shopIds)->where('is_active', true)->get()->groupBy('shop_id');
@@ -77,6 +114,60 @@ class AvailabilityService
     }
 
     /**
+     * Vendor names supplying each of these products IN a city — ONE grouped
+     * query for a whole page, not vendorsForProduct() per row.
+     *
+     * Carries the SAME predicates the projection is built with (held vendors
+     * excluded, effective window, is_available, active service area), because
+     * a name list that disagrees with the vendor_count beside it is worse than
+     * no name list: it points operators at vendors who aren't actually selling.
+     *
+     * @param  int[]  $productIds
+     * @return array<int, array<int, array{id:int,name:string}>> product_id => vendors
+     */
+    public function vendorNamesForProducts(array $productIds, string $cityKey): array
+    {
+        if (empty($productIds)) {
+            return [];
+        }
+        try {
+            $shopIds = VendorServiceArea::whereIn(
+                DB::raw('LOWER(city)'),
+                $this->cityKeyVariants($cityKey),
+            )->where('is_active', true)->distinct()->pluck('shop_id');
+
+            if ($shopIds->isEmpty()) {
+                return [];
+            }
+
+            // Pairs first, names second — two flat queries. A join to `shops`
+            // here would collide with the `shops` subquery excludeHeldVendors
+            // builds, and the second query is a single indexed IN.
+            $pairs = $this->effective(
+                $this->excludeHeldVendors(
+                    VendorProductPrice::whereIn('product_id', $productIds)
+                        ->whereIn('shop_id', $shopIds)
+                        ->where('is_available', true)
+                )
+            )->select('product_id', 'shop_id')->distinct()->get();
+
+            $names = Shop::whereIn('id', $pairs->pluck('shop_id')->unique())
+                ->pluck('name', 'id');
+
+            $out = [];
+            foreach ($pairs as $p) {
+                $out[(int) $p->product_id][] = [
+                    'id'   => (int) $p->shop_id,
+                    'name' => (string) ($names[$p->shop_id] ?? ''),
+                ];
+            }
+            return $out;
+        } catch (\Throwable $e) {
+            return []; // names are decoration — never fail the catalogue panel
+        }
+    }
+
+    /**
      * Rebuild the product_city_availability rows for one master product from its
      * available + in-stock vendor inventory crossed with each vendor's service areas.
      * City is stored normalized (lowercase) so customer-city lookups match reliably.
@@ -88,10 +179,12 @@ class AvailabilityService
         // sellable. When track_stock = 1 the vendor IS managing stock, so a row with no free
         // stock (stock_qty - reserved_qty <= 0) is out of stock and excluded.
         $rows = $this->effective(
-            VendorProductPrice::where('product_id', $productId)
-                ->where('is_available', true)
-                ->where(fn ($q) => $q->where('vendor_selling_price', '>', 0)->orWhere('cost_price', '>', 0))
-                ->where(fn ($q) => $q->where('track_stock', false)->orWhereRaw('(stock_qty - reserved_qty) > 0'))
+            $this->excludeHeldVendors(
+                VendorProductPrice::where('product_id', $productId)
+                    ->where('is_available', true)
+                    ->where(fn ($q) => $q->where('vendor_selling_price', '>', 0)->orWhere('cost_price', '>', 0))
+                    ->where(fn ($q) => $q->where('track_stock', false)->orWhereRaw('(stock_qty - reserved_qty) > 0'))
+            )
         )->get();
 
         $product = Product::with('categories:id')->find($productId);
@@ -108,12 +201,24 @@ class AvailabilityService
                 if ($vendorRows->isEmpty()) {
                     continue;
                 }
-                $key = strtolower(trim((string) $area->city));
+                // CANONICAL key — normalizeCityKey, not a bare strtolower.
+                // Every READER of this projection normalizes (overlayCityPrices,
+                // availabilityProductIdQuery, cityHasSupply), so writing a raw
+                // key made a vendor invisible in their own city whenever the
+                // service area used an alias: a "Gurgaon" area wrote `gurgaon`
+                // while every lookup asked for `gurugram` and found nothing.
+                // Same for Bangalore/Bombay/Calcutta/Madras and all nine Delhi
+                // NCT sub-districts.
+                $key = $this->normalizeCityKey((string) $area->city);
                 if ($key === '') {
                     continue;
                 }
                 if (!isset($cities[$key])) {
-                    $cities[$key] = ['has_local' => false, 'has_courier' => false, 'vendors' => [], 'max_rate' => []];
+                    $cities[$key] = [
+                        'has_local' => false, 'has_courier' => false,
+                        'vendors' => [], 'max_rate' => [],
+                        'variant_vendors' => [], 'stock' => [],
+                    ];
                 }
                 $mode = $area->fulfillment_mode;
                 if ($mode === 'local' || $mode === 'both') {
@@ -122,16 +227,45 @@ class AvailabilityService
                 if ($mode === 'courier' || $mode === 'both') {
                     $cities[$key]['has_courier'] = true;
                 }
+                // Fold each vendor's PRICE/STOCK rows into a city ONCE.
+                // vendor_service_areas is unique per (shop, city, PINCODE), so a
+                // vendor covering three pincodes in one city appears three times
+                // here — max() wouldn't care, but SUM-aggregated stock would
+                // triple-count. The mode flags above still run for every row, so
+                // a second local/courier pincode row keeps widening coverage.
+                if (isset($cities[$key]['vendors'][$area->shop_id])) {
+                    continue;
+                }
                 $cities[$key]['vendors'][$area->shop_id] = true;
-                // Selling price per variant in a city = MAX vendor rate (+ margin below).
+                // Per VARIANT in a city: MAX vendor rate (price), aggregated
+                // stock, and the distinct vendors supplying that variant.
                 foreach ($vendorRows as $r) {
-                    $variant = $r->variation_option_id ?? 0; // 0 = simple/base row
+                    $variant = (int) ($r->variation_option_id ?? 0); // 0 = simple/base row
                     $rate = (float) $rateByRowId[$r->id];
                     $cities[$key]['max_rate'][$variant] = max($cities[$key]['max_rate'][$variant] ?? 0.0, $rate);
+                    $cities[$key]['variant_vendors'][$variant][$r->shop_id] = true;
+                    // Stock: NULL means "a supplying vendor doesn't track stock"
+                    // — effectively unlimited, and it stays NULL no matter what
+                    // tracked vendors add. Tracked rows contribute free stock.
+                    if (!array_key_exists($variant, $cities[$key]['stock'] ?? [])) {
+                        $cities[$key]['stock'][$variant] = 0;
+                    }
+                    if (!$r->track_stock) {
+                        $cities[$key]['stock'][$variant] = null;
+                    } elseif ($cities[$key]['stock'][$variant] !== null) {
+                        $free = max(0, (int) $r->stock_qty - (int) $r->reserved_qty);
+                        $cities[$key]['stock'][$variant] = $this->aggregateStock(
+                            (int) $cities[$key]['stock'][$variant],
+                            $free,
+                        );
+                    }
                 }
             }
         }
 
+        // Prune per (city, variant): a city that lost supply disappears whole;
+        // a variant a vendor stopped selling disappears from its city. Same
+        // delete-what-wasn't-recomputed contract as before, one level deeper.
         $keep = array_keys($cities);
         ProductCityAvailability::where('product_id', $productId)
             ->when(!empty($keep), fn ($q) => $q->whereNotIn('city', $keep))
@@ -141,24 +275,100 @@ class AvailabilityService
         $resolver = new MarginResolver();
         $typeId = ($product && $product->type_id) ? (int) $product->type_id : null;
         foreach ($cities as $city => $info) {
-            // The card "from ₹" price = the cheapest VARIANT's city price, where each
-            // variant's city price is MAX-over-vendors rate × (1 + margin(city, vertical)).
-            $margin = $resolver->marginPercent($city, $typeId);
-            $minVariantMaxRate = !empty($info['max_rate']) ? min($info['max_rate']) : null;
-            $minPrice = $minVariantMaxRate !== null
-                ? round($minVariantMaxRate * (1 + $margin / 100), 2)
-                : null;
+            // Each variant's city price = the margin rule applied to its
+            // MAX-over-vendors rate (percent or flat — MarginResolver::apply
+            // owns the formula). Both rule types preserve rate order, so the
+            // cheapest variant by rate is also cheapest by price.
+            $variantPrices = [];
+            foreach ($info['max_rate'] as $variant => $rate) {
+                $variantPrices[$variant] = $resolver->apply((float) $rate, $city, $typeId);
+            }
+
+            // Variant rows (skip 0 here — it's written below as the rollup).
+            foreach ($variantPrices as $variant => $price) {
+                if ($variant === 0) {
+                    continue;
+                }
+                ProductCityAvailability::updateOrCreate(
+                    ['product_id' => $productId, 'city' => $city, 'variation_option_id' => $variant],
+                    [
+                        'has_local'     => $info['has_local'],
+                        'has_courier'   => $info['has_courier'],
+                        'min_price'     => $price,
+                        'display_price' => $price,
+                        'stock'         => $info['stock'][$variant] ?? null,
+                        'vendor_count'  => count($info['variant_vendors'][$variant] ?? []),
+                        'updated_at'    => $now,
+                    ]
+                );
+            }
+
+            // The 0-row rollup keeps the EXACT pre-variant semantics every
+            // existing reader depends on: min_price = cheapest variant's city
+            // price, vendor_count = distinct vendors product-wide. Rollup stock:
+            // NULL if ANY variant is untracked, else the max across variants
+            // (variants share physical plants often enough that summing across
+            // them would overstate; max is the honest single number).
+            $rollupStock = null;
+            $stocks = $info['stock'] ?? [];
+            if (!in_array(null, $stocks, true) && $stocks !== []) {
+                $rollupStock = max($stocks);
+            }
             ProductCityAvailability::updateOrCreate(
-                ['product_id' => $productId, 'city' => $city],
+                ['product_id' => $productId, 'city' => $city, 'variation_option_id' => 0],
                 [
-                    'has_local'    => $info['has_local'],
-                    'has_courier'  => $info['has_courier'],
-                    'min_price'    => $minPrice,
-                    'vendor_count' => count($info['vendors']),
-                    'updated_at'   => $now,
+                    'has_local'     => $info['has_local'],
+                    'has_courier'   => $info['has_courier'],
+                    'min_price'     => !empty($variantPrices) ? min($variantPrices) : null,
+                    'display_price' => !empty($variantPrices) ? min($variantPrices) : null,
+                    'stock'         => $rollupStock,
+                    'vendor_count'  => count($info['vendors']),
+                    'updated_at'    => $now,
                 ]
             );
+
+            // Variant-level prune inside a surviving city.
+            $keepVariants = array_keys($variantPrices);
+            $keepVariants[] = 0;
+            ProductCityAvailability::where('product_id', $productId)
+                ->where('city', $city)
+                ->whereNotIn('variation_option_id', $keepVariants)
+                ->delete();
         }
+    }
+
+    /**
+     * Fold one vendor's free stock into a variant's city aggregate, per the
+     * configured strategy. Default SUM — "23 across three vendors" is what the
+     * business asked to show; max/min exist for operators who prefer a
+     * conservative or single-vendor-capacity read.
+     *
+     * The `min` seed works because the row query already excludes tracked rows
+     * with no free stock — every folded contribution is >= 1, so current === 0
+     * can only be the initial seed, never a real zero.
+     *
+     * NOTE the static: cached per PROCESS. FPM forgets it per request; a queue
+     * worker does not — after changing the strategy setting, `queue:restart`
+     * (the same rule this codebase already has for ConfigOverlay).
+     */
+    private function aggregateStock(int $current, int $free): int
+    {
+        static $strategy = null;
+        if ($strategy === null) {
+            try {
+                $opts = (array) (Settings::getData()->options['inventoryAggregation'] ?? []);
+                $strategy = in_array($opts['strategy'] ?? 'sum', ['sum', 'max', 'min'], true)
+                    ? ($opts['strategy'] ?? 'sum')
+                    : 'sum';
+            } catch (\Throwable $e) {
+                $strategy = 'sum';
+            }
+        }
+        return match ($strategy) {
+            'max' => max($current, $free),
+            'min' => $current === 0 ? $free : min($current, $free),
+            default => $current + $free,
+        };
     }
 
     /** Recompute every product a vendor supplies (after a service-area / inventory change). */
@@ -184,9 +394,42 @@ class AvailabilityService
      * Indian endonym/exonym aliases (e.g. an IP/GPS lookup returning "Gurgaon"
      * while the city is stored as "Gurugram") so we don't wrongly empty the store.
      */
+    /**
+     * Every raw city spelling that normalises to $key — the reverse of
+     * normalizeCityKey. `vendor_service_areas.city` stores what the vendor
+     * typed ("Gurgaon"), so matching a canonical key ("gurugram") against that
+     * table needs the alias set, not an equality test.
+     *
+     * @return string[] lowercase spellings, canonical key first
+     */
+    public function cityKeyVariants(string $key): array
+    {
+        $key = $this->normalizeCityKey($key);
+        $variants = [$key];
+        foreach ($this->cityAliases() as $from => $to) {
+            if ($to === $key) {
+                $variants[] = $from;
+            }
+        }
+        return array_values(array_unique($variants));
+    }
+
+    /** @return array<string,string> raw spelling => canonical key */
+    public function cityAliases(): array
+    {
+        return $this->aliasMap();
+    }
+
     public function normalizeCityKey(string $city): string
     {
         $key = strtolower(trim($city));
+        $aliases = $this->aliasMap();
+        return $aliases[$key] ?? $key;
+    }
+
+    /** The one alias table (kept private so both helpers above share it). */
+    private function aliasMap(): array
+    {
         static $aliases = [
             'gurgaon'   => 'gurugram',
             'bangalore' => 'bengaluru',
@@ -209,13 +452,29 @@ class AvailabilityService
             'west delhi'       => 'delhi',
             'shahdara'         => 'delhi',
         ];
-        return $aliases[$key] ?? $key;
+        return $aliases;
     }
 
     public function availabilityProductIdQuery(string $city, bool $localOnly = false)
     {
         $key = $this->normalizeCityKey($city);
-        $q = ProductCityAvailability::query()->select('product_id')->where('city', $key);
+        // Rollup rows only: id-scoping wants one row per product, and every
+        // variant row's coverage flags mirror its rollup anyway.
+        $q = ProductCityAvailability::query()->select('product_id')
+            ->where('city', $key)
+            ->where('variation_option_id', 0)
+            // What gives a manual stock override teeth: an operator who sets 0
+            // takes the product off the shelf IN THIS CITY. NULL means untracked
+            // (unlimited), and the recompute never writes a computed 0 — every
+            // out-of-stock tracked row is filtered out before aggregation — so
+            // this excludes nothing that wasn't deliberately zeroed by a human.
+            //
+            // PARENTHESISED, and it must stay that way: OR binds looser than
+            // AND, so a bare `A IS NULL OR A > 0` reassociates the whole WHERE
+            // into `(city = X AND ... AND A IS NULL) OR (A > 0)` — every OTHER
+            // city's in-stock rows then satisfy the second branch and the city
+            // scope leaks the entire catalogue. Locked by CityKeyAliasTest.
+            ->whereRaw('(COALESCE(stock_override, stock) IS NULL OR COALESCE(stock_override, stock) > 0)');
         if ($localOnly) {
             $q->where('has_local', true);
         } else {

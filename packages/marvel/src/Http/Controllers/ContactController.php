@@ -65,11 +65,12 @@ class ContactController extends CoreController
             'expires_at' => Carbon::now()->addMinutes(10),
         ]);
 
-        try {
-            Mail::to($email)->send(new EmailOtpMail($code));
-        } catch (\Throwable $e) {
-            return response()->json(['message' => 'Could not send the verification email. Please try again.'], 500);
-        }
+        // Queued through the engine (never blocks or 500s the request — the OTP
+        // row is already stored, a transient mail hiccup retries in the queue);
+        // legacy Mailable stays as the no-template fallback.
+        app(\Marvel\Services\EmailService::class)->send('auth.otp', $email, ['otp' => $code], [
+            'fallback' => fn () => Mail::to($email)->queue(new EmailOtpMail($code)),
+        ]);
 
         return response()->json(['data' => ['sent' => true, 'slot' => $slot]]);
     }

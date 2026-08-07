@@ -27,7 +27,12 @@ class SendOrderDeliveredNotification implements ShouldQueue
         $order = $event->order;
         $emailReceiver = $this->getWhichUserWillGetEmail(EventType::ORDER_DELIVERED, $order->language);
         if ($emailReceiver['customer'] && $order->customer && $order->parent_id == null) {
-            $order->customer->notify(new OrderDeliveredNotification($order));
+            app(\Marvel\Services\EmailService::class)->send(
+                'order.delivered.customer',
+                $order->customer->email,
+                \Marvel\Services\OrderEmailVars::from($order),
+                ['fallback' => fn () => $order->customer->notify(new OrderDeliveredNotification($order))]
+            );
         }
         if ($emailReceiver['vendor']) {
             if ($order->parent_id) {

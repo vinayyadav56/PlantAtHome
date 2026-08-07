@@ -100,6 +100,16 @@ return [
     // Partner credentials (Borzo / Shiprocket / Porter) live EXCLUSIVELY in the Go shipping-service
     // env — the monolith holds only the service link below and never calls a partner API directly.
 
+    // SendGrid Event Webhook (POST /api/webhooks/sendgrid). The token is the shared secret that
+    // proves an inbound event actually came from our SendGrid account — without it the route is
+    // an anonymous write primitive over email_logs. Ride it in the callback URL SendGrid calls
+    // (…/api/webhooks/sendgrid?token=…) or send it as X-Webhook-Token.
+    // Empty = accept unverified + log a warning, so enabling this cannot break an existing
+    // integration mid-flight. Set it and the check becomes mandatory.
+    'sendgrid' => [
+        'webhook_token' => env('SENDGRID_WEBHOOK_TOKEN', ''),
+    ],
+
     // Dedicated Go shipping microservice — the ONLY shipping path. CourierService delegates
     // quote/book/cancel/track to it (X-Api-Key); status/COD flow back via POST /api/shipping/callback.
     // Gated solely by the admin master switch (settings.options.courier.enabled) + this link.

@@ -43,10 +43,20 @@ class City extends Model
         return $this->hasMany(Warehouse::class, 'city_id');
     }
 
-    /** Can this city currently take orders? (active or maintenance; not paused/disabled). */
+    /**
+     * Can this city currently take orders? ACTIVE only.
+     *
+     * MAINTENANCE used to slip through here, which made it purely cosmetic —
+     * the maintenance screen showed while orders kept flowing underneath.
+     * Policy decision (2026-08): maintenance is a full stop, exactly like
+     * paused/disabled, and the storefront takes over with the city's
+     * configured maintenance screen (settings.maintenance). Every enforcement
+     * site inherits this through ServiceAvailabilityService Tier 2 — the
+     * blocked reason becomes `city_maintenance` with no further changes.
+     */
     public function acceptsOrders(): bool
     {
         return $this->is_serviceable
-            && in_array($this->status, [self::STATUS_ACTIVE, self::STATUS_MAINTENANCE], true);
+            && $this->status === self::STATUS_ACTIVE;
     }
 }

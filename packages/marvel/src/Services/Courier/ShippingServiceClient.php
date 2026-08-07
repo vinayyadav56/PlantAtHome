@@ -45,6 +45,13 @@ class ShippingServiceClient
             'cod'      => $cod,
             'quotes'   => $d['quotes'] ?? [],
             'cheapest' => $d['cheapest'] ?? null,
+            // Our own malformed request, refused before any partner was asked (see quoteRaw).
+            'error'    => $d['error'] ?? null,
+            // Why partners are missing from `quotes` (mode/COD/credentials/switched off) and which
+            // eligible ones errored. This whitelist used to STRIP both, so the service could
+            // explain itself and the admin still showed a bare list.
+            'ineligible' => $d['ineligible'] ?? [],
+            'failed'     => $d['failed'] ?? [],
         ];
     }
 
@@ -66,7 +73,85 @@ class ShippingServiceClient
             'mode'     => $d['mode'] ?? null,
             'quotes'   => $d['quotes'] ?? [],
             'cheapest' => $d['cheapest'] ?? null,
+            // The service's own account of an empty list when the fault is OURS — a
+            // malformed request refused before any partner was asked. It answers 200
+            // with quotes:[] and this field set, so the transport-level check above
+            // never sees it; dropping it here is what made a validation refusal look
+            // like "no partner serves this route" and sent the last diagnosis chasing
+            // vendor onboarding data.
+            'error'    => $d['error'] ?? null,
+            // Why partners are missing (mode/COD/credentials/switched off) and
+            // which eligible ones errored. quoteShipment already passes these
+            // through; stripping them here left every caller staring at an
+            // empty list with no way to tell "no partner covers this route"
+            // from "the request was wrong".
+            'ineligible' => $d['ineligible'] ?? [],
+            'failed'     => $d['failed'] ?? [],
         ];
+    }
+
+    /**
+     * Quote a prospective courier leg for a shop → destination, with no order
+     * and no Shipment behind it — the PDP "check delivery" entry point.
+     *
+     * Lives here rather than in the caller so leg-building stays in ONE place:
+     * /v1/quotes validates full pickup/drop objects (name, phone, address,
+     * city, state, pincode, lat, lng) plus the refs, and a hand-rolled minimal
+     * body is silently rejected — which is exactly how the PDP ended up showing
+     * a static estimate while the partner was answering fine.
+     *
+     * @param  array  $drop  at minimum ['pincode' => '110001']; lat/lng/city/state when known
+     * @param  array  $item  optional single line {name, sku, qty, unit_price} — a
+     *                       partner sizing the package from `items` returns nothing
+     *                       for an empty one, so a representative line is sent.
+     *
+     * ⚠️ An answer of `quotes:[] ineligible:[] failed:[]` means the service refused
+     * the request itself and asked NOBODY — read the `error` field, which now comes
+     * through. The cause here was never the missing pickup location it looked like:
+     * the service validated a quote as if it were a booking and demanded a contact
+     * phone at each end, while a prospective quote has no customer yet and sends
+     * `phone => ''` below by definition. Fixed in shipping-service
+     * (ValidateQuoteRequest — coordinates only); pickup_location_name still matters
+     * for BOOKING, just not for this.
+     */
+    public function quoteProspective($shop, array $drop, int $weightG, ?int $timeoutMs = 4000, array $item = []): array
+    {
+        if (!$shop || !$this->configured()) {
+            return ['ok' => false, 'quotes' => [], 'cheapest' => null];
+        }
+
+        return $this->quoteRaw([
+            'partner_code'    => '',
+            // Prospective: no shipment/order exists yet. The refs are required
+            // fields, so they carry a stable, obviously-synthetic token rather
+            // than an id that would collide with a real shipment.
+            'shipment_ref'    => 'quote-' . $shop->id . '-' . ($drop['pincode'] ?? ''),
+            'order_ref'       => 'prospective',
+            'shop_ref'        => (string) $shop->id,
+            'mode'            => 'courier',
+            'cod'             => false,
+            'cod_amount'      => 0,
+            'pickup'          => $this->addressFromShop($shop),
+            'drop'            => [
+                'name'    => 'Customer',
+                'phone'   => '',
+                'address' => (string) ($drop['address'] ?? ''),
+                'city'    => (string) ($drop['city'] ?? ''),
+                'state'   => (string) ($drop['state'] ?? ''),
+                'pincode' => (string) ($drop['pincode'] ?? ''),
+                'lat'     => (float) ($drop['lat'] ?? 0),
+                'lng'     => (float) ($drop['lng'] ?? 0),
+            ],
+            'items'           => [[
+                'name'       => (string) ($item['name'] ?? 'Plant'),
+                'sku'        => (string) ($item['sku'] ?? 'QUOTE'),
+                'qty'        => max(1, (int) ($item['qty'] ?? 1)),
+                'unit_price' => (float) ($item['unit_price'] ?? 0),
+                'weight_g'   => max(1, $weightG),
+            ]],
+            'weight_g'        => max(1, $weightG),
+            'pickup_location' => (string) ($shop->pickup_location_name ?? ''),
+        ], $timeoutMs);
     }
 
     /**
@@ -163,10 +248,17 @@ class ShippingServiceClient
         return ['ok' => true, 'results' => $results];
     }
 
-    /** Book via the service (idempotent on shipment_ref) + persist the returned provider fields. */
-    public function book(Shipment $shipment, string $mode, bool $cod, float $codAmount): array
+    /**
+     * Book via the service (idempotent on shipment_ref) + persist the returned provider fields.
+     *
+     * $partnerCode books a SPECIFIC partner instead of letting the service route by
+     * mode/price. The service still validates it against the same candidacy path, so an
+     * override cannot bypass the runtime master switch or mode/COD eligibility — an
+     * ineligible code comes back as "partner not available: X" rather than booking.
+     */
+    public function book(Shipment $shipment, string $mode, bool $cod, float $codAmount, ?string $partnerCode = null): array
     {
-        $res = $this->request('post', '/v1/shipments', $this->buildRequest($shipment, $mode, $cod, $codAmount));
+        $res = $this->request('post', '/v1/shipments', $this->buildRequest($shipment, $mode, $cod, $codAmount, $partnerCode));
         if (empty($res['ok'])) {
             $shipment->forceFill(['last_status' => 'book_failed', 'failure_reason' => $res['error'] ?? 'shipping service'])->save();
             return ['ok' => false, 'error' => $res['error'] ?? 'Shipping service book failed.'];
@@ -205,6 +297,35 @@ class ShippingServiceClient
         return ['ok' => true];
     }
 
+    /**
+     * Mint (or fetch the stored) shipping label for a booked shipment, persisting label_url.
+     * The service is idempotent — a second call returns the stored URL without a partner call —
+     * so retry-after-timeout is safe.
+     */
+    public function generateLabel(Shipment $shipment): array
+    {
+        $res = $this->request('post', '/v1/shipments/' . rawurlencode((string) $shipment->id) . '/label');
+        if (empty($res['ok']) || empty($res['data']['ok'])) {
+            return ['ok' => false, 'error' => $res['data']['error'] ?? $res['error'] ?? 'Label generation failed.'];
+        }
+        $labelUrl = (string) ($res['data']['label_url'] ?? '');
+        if ($labelUrl !== '' && $labelUrl !== $shipment->label_url) {
+            // The column has existed since 2026_06_23 and was written by nothing until now.
+            $shipment->forceFill(['label_url' => $labelUrl, 'last_status_at' => Carbon::now()])->save();
+        }
+        return ['ok' => true, 'label_url' => $labelUrl, 'shipment' => $shipment->fresh()];
+    }
+
+    /** Schedule the courier pickup for a booked shipment. */
+    public function schedulePickup(Shipment $shipment): array
+    {
+        $res = $this->request('post', '/v1/shipments/' . rawurlencode((string) $shipment->id) . '/pickup');
+        if (empty($res['ok']) || empty($res['data']['ok'])) {
+            return ['ok' => false, 'error' => $res['data']['error'] ?? $res['error'] ?? 'Pickup scheduling failed.'];
+        }
+        return ['ok' => true, 'pickup' => $res['data']['pickup'] ?? null];
+    }
+
     public function track(Shipment $shipment): array
     {
         return $this->request('get', '/v1/shipments/' . rawurlencode((string) $shipment->id) . '/track');
@@ -227,6 +348,19 @@ class ShippingServiceClient
     public function putPartnerConfig(string $code, array $payload): array
     {
         return $this->request('put', '/v1/partners/' . rawurlencode($code) . '/config', $payload);
+    }
+
+    /**
+     * Force a partner holding an expiring session token (Shiprocket) to authenticate again.
+     *
+     * Doubles as the credential check: the service performs a real login, so a failure here means
+     * the stored email/password do not work — answerable without placing an order to find out.
+     * Partners that authenticate per-request with a static key report "nothing to refresh" rather
+     * than an error.
+     */
+    public function refreshPartnerToken(string $code): array
+    {
+        return $this->request('post', '/v1/partners/' . rawurlencode($code) . '/token/refresh');
     }
 
     // ── partner debug console (super-admin) ───────────────────────
@@ -280,11 +414,14 @@ class ShippingServiceClient
 
     // ── request building ──────────────────────────────────────────
 
-    private function buildRequest(Shipment $shipment, string $mode, bool $cod, float $codAmount): array
+    private function buildRequest(Shipment $shipment, string $mode, bool $cod, float $codAmount, ?string $partnerCode = null): array
     {
         $order = $shipment->order;
         $shop = $shipment->shop;
         return [
+            // Empty string, not null: the service treats "" as "no override" and
+            // routes normally, whereas a null would have to be special-cased there.
+            'partner_code'    => (string) ($partnerCode ?? ''),
             'shipment_ref'    => (string) $shipment->id,
             'order_ref'       => (string) ($order->tracking_number ?? $order->id ?? $shipment->id),
             'shop_ref'        => (string) $shipment->shop_id,

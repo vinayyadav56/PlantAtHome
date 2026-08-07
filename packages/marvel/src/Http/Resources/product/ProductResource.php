@@ -74,6 +74,14 @@ class ProductResource extends Resource
             // PlantAtHome — bundle support (only meaningful for product_type=bundle)
             'bundle_items'         => $this->whenLoaded('bundleItems', fn () => static::mapInclusions($this->bundleItems)),
             'bundle_total_value'   => $this->relationLoaded('bundleItems') ? $this->bundle_total_value : null,
+            // Marketplace aggregates for the customer's city, set by
+            // ProductController::overlayCityPrices when a city is in scope.
+            // Absent (null) when it isn't — the storefront treats that as
+            // "unknown", not "zero sellers / out of stock". The MAX vendor rate
+            // and the margin behind the price stay ADMIN-ONLY: putting them on
+            // a public endpoint is the leak a959daf closed.
+            'vendor_count'         => $this->vendor_count ?? null,
+            'city_stock'           => $this->city_stock ?? null,
         ];
     }
 

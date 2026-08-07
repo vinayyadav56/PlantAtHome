@@ -127,6 +127,22 @@ class CourierPartnerProxyController extends CoreController
     }
 
     /** Live quote against the partner API — read-only, but a PAID call on some partners. */
+    /**
+     * Force a fresh partner login (Shiprocket's session token) and report the new expiry.
+     *
+     * Not needed to keep the token healthy — the service caches for 9 days against Shiprocket's
+     * 10-day expiry, re-logins on the next call after that, and retries once on a 401/403. This is
+     * for what automation cannot do: validate the stored credentials on demand, and recover
+     * immediately after a password reset instead of waiting out the cache.
+     */
+    public function refreshToken(Request $request, string $code)
+    {
+        $this->assertAdmin($request);
+        $code = $this->assertPartner($code);
+
+        return $this->passthrough(fn (ShippingServiceClient $c) => $c->refreshPartnerToken($code));
+    }
+
     public function testQuote(Request $request, string $code)
     {
         $this->assertAdmin($request);

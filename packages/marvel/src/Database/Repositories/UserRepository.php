@@ -162,8 +162,13 @@ class UserRepository extends BaseRepository
 
     public function sendResetEmail($email, $token)
     {
+        // Queued via the engine (was a SYNC send inside the request — a slow
+        // provider stalled the endpoint). reset_token is redact-listed so it
+        // never lands in email_logs.meta.
         try {
-            Mail::to($email)->send(new ForgetPassword($token));
+            app(\Marvel\Services\EmailService::class)->send('auth.forgot_password', $email, ['reset_token' => $token], [
+                'fallback' => fn () => Mail::to($email)->queue(new ForgetPassword($token)),
+            ]);
             return true;
         } catch (\Exception $e) {
             return false;

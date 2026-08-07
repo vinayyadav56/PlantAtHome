@@ -14,6 +14,23 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Vendor KYC deadline
+    |--------------------------------------------------------------------------
+    |
+    | Vendors may register without their documents so onboarding is never
+    | blocked. `window_days` is how long they then have to supply them before
+    | marvel:sweep-kyc-deadlines puts the account on hold; `warn_before_days`
+    | is how far ahead of that the warning email goes out. Admins can extend an
+    | individual vendor's deadline from the vendor page.
+    |
+    */
+    'kyc' => [
+        'window_days'      => (int) env('VENDOR_KYC_WINDOW_DAYS', 15),
+        'warn_before_days' => (int) env('VENDOR_KYC_WARN_BEFORE_DAYS', 3),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Shop url configuration
     |--------------------------------------------------------------------------
     |

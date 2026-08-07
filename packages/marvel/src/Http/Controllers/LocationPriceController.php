@@ -3,6 +3,7 @@
 namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Arr;
 use Carbon\Carbon;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Shop;
@@ -44,7 +45,16 @@ class LocationPriceController extends CoreController
                 (string) $request->input('city')
             );
         }
-        return array_merge(['product_id' => $product->id], $result, ['fulfillment' => $fulfillment]);
+        // SECURITY: this route is public. `max_vendor_rate` is the top vendor
+        // SUPPLY rate and `margin_percent` is the exact platform margin —
+        // together they reconstruct our cost structure for the whole catalogue
+        // one throttled request at a time. Internal callers keep the full
+        // PricingService result; the wire response does not.
+        return array_merge(
+            ['product_id' => $product->id],
+            Arr::except($result, ['max_vendor_rate', 'margin_percent']),
+            ['fulfillment' => $fulfillment]
+        );
     }
 
     /**
@@ -69,11 +79,15 @@ class LocationPriceController extends CoreController
             if (!$pid || !isset($products[$pid])) {
                 continue;
             }
-            $results[$pid] = $service->sellingPrice(
-                $products[$pid],
-                isset($item['variation_option_id']) ? (int) $item['variation_option_id'] : null,
-                $latLng,
-                $city
+            // Same public-route redaction as show() — see the comment there.
+            $results[$pid] = Arr::except(
+                $service->sellingPrice(
+                    $products[$pid],
+                    isset($item['variation_option_id']) ? (int) $item['variation_option_id'] : null,
+                    $latLng,
+                    $city
+                ),
+                ['max_vendor_rate', 'margin_percent']
             );
         }
         return ['results' => $results];

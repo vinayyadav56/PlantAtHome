@@ -54,6 +54,16 @@ class ConfigOverlay
 
             self::set($def->configurationConfigKeys(), (array) $row->configuration);
         }
+
+        // Transport fix: whenever a SendGrid key is available (overlay or env), the
+        // DEFAULT mailer becomes the HTTPS transport. Railway blackholes outbound
+        // SMTP, so with MAIL_MAILER=smtp every Notification/Mailable that didn't
+        // hand-pick the sendgrid mailer silently never delivered. This one flip
+        // routes ALL of them over 443. MAIL_FORCE_MAILER escapes the behavior
+        // (e.g. 'log' locally, or a deliberate smtp box off-Railway).
+        if (config('mail.mailers.sendgrid.key') && !env('MAIL_FORCE_MAILER')) {
+            config(['mail.default' => 'sendgrid']);
+        }
     }
 
     /** The cache key holding the overlay row set for an environment. */

@@ -114,19 +114,18 @@ class VendorController extends ShopController
         $owner->save();
         // Kill existing sessions so only the new credentials work from now on.
         $owner->tokens()->delete();
-        try {
-            Mail::to($owner->email)->send(new VendorCredentials(
-                $owner->email,
-                $request->new_password,
-                $shop->name,
-                $owner->name,
+        $logId = app(\Marvel\Services\EmailService::class)->send('vendor.credentials', $owner->email, [
+            'vendor_name' => $owner->name,
+            'vendor_email' => $owner->email,
+            'shop_name' => $shop->name,
+            'temp_password' => $request->new_password,
+        ], [
+            'fallback' => fn () => Mail::to($owner->email)->queue(new VendorCredentials(
+                $owner->email, $request->new_password, $shop->name, $owner->name,
                 rtrim(config('shop.dashboard_url') ?: '', '/')
-            ));
-            $sent = true;
-        } catch (\Exception $e) {
-            $sent = false;
-        }
-        return ['success' => true, 'credentials_email_sent' => $sent];
+            )),
+        ]);
+        return ['success' => true, 'credentials_email_sent' => (bool) $logId];
     }
 
     /**

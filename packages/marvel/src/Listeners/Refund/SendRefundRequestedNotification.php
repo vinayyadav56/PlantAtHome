@@ -33,7 +33,12 @@ class SendRefundRequestedNotification implements ShouldQueue
             }
         }
         if ($emailReceiver['customer']) {
-            $customer->notify(new RefundRequested($refund, 'customer'));
+            app(\Marvel\Services\EmailService::class)->send(
+                'refund.requested.customer',
+                $customer->email,
+                \Marvel\Services\OrderEmailVars::from($refund->order),
+                ['fallback' => fn () => $customer->notify(new RefundRequested($refund, 'customer'))]
+            );
         }
         $this->sendRefundRequestedSms($refund);
     }

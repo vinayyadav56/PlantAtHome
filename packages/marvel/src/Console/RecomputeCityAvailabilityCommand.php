@@ -20,6 +20,11 @@ class RecomputeCityAvailabilityCommand extends Command
 
     public function handle(): int
     {
+        // Long-running contexts (queue worker via Artisan::queue, scheduler)
+        // reuse MarginResolver's static margin map across runs — flush so a
+        // margin edit made since the last run is actually applied.
+        \Marvel\Services\MarginResolver::flush();
+
         $svc = new AvailabilityService();
 
         if ($single = $this->option('product')) {

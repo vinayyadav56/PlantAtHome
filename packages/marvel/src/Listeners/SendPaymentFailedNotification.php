@@ -33,7 +33,14 @@ class SendPaymentFailedNotification implements ShouldQueue
 
         if ($emailReceiver['customer']) {
             $customer = $event->order->customer;
-            $customer?->notify(new PaymentFailedNotification($event->order));
+            if ($customer) {
+                app(\Marvel\Services\EmailService::class)->send(
+                    'payment.failed.customer',
+                    $customer->email,
+                    \Marvel\Services\OrderEmailVars::from($event->order),
+                    ['fallback' => fn () => $customer->notify(new PaymentFailedNotification($event->order))]
+                );
+            }
         }
         $this->sendPaymentFailedSms($event->order);
     }

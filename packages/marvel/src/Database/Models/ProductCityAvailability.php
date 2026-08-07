@@ -19,12 +19,22 @@ class ProductCityAvailability extends Model
     public $timestamps = false;
 
     protected $casts = [
-        'has_local'    => 'boolean',
-        'has_courier'  => 'boolean',
-        'min_price'    => 'float',
-        'vendor_count' => 'integer',
-        'updated_at'   => 'datetime',
+        'has_local'           => 'boolean',
+        'has_courier'         => 'boolean',
+        'min_price'           => 'float',
+        'display_price'       => 'float',
+        'variation_option_id' => 'integer',
+        'stock'               => 'integer',
+        'stock_override'      => 'integer',
+        'vendor_count'        => 'integer',
+        'updated_at'          => 'datetime',
     ];
+
+    /** Effective sellable stock: admin override wins; NULL = untracked/unlimited. */
+    public function effectiveStock(): ?int
+    {
+        return $this->stock_override ?? $this->stock;
+    }
 
     public function product(): BelongsTo
     {

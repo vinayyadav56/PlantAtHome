@@ -18,6 +18,7 @@ class PricingMargin extends Model
 
     protected $casts = [
         'margin_percent' => 'float',
+        'margin_flat'    => 'float',
         'is_active'      => 'boolean',
     ];
 

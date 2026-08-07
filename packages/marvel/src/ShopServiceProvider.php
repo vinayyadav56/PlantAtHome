@@ -111,6 +111,7 @@ class ShopServiceProvider extends ServiceProvider
         \Marvel\Console\MarketPublishDraftsCommand::class,
         \Marvel\Console\ApplySizePricingCommand::class,
         \Marvel\Console\ApplyProdSizePricingCommand::class,
+        \Marvel\Console\SweepKycDeadlinesCommand::class,
         \Marvel\Console\CreateDemoBundleCommand::class,
         \Marvel\Console\ApplyPlantImageRepairCommand::class,
         \Marvel\Console\PruneNonSeedPlantsCommand::class,

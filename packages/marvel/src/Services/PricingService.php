@@ -45,9 +45,12 @@ class PricingService
 
         $rows = $this->coveredRows($product->id, $variationOptionId, $cityKey);
         if ($rows->isNotEmpty()) {
+            $typeId  = $product->type_id ? (int) $product->type_id : null;
             $maxRate = (float) $rows->max(fn ($r) => $this->vendorRate($product, $r));
-            $margin  = $this->margins->marginPercent($cityKey, $product->type_id ? (int) $product->type_id : null);
-            $price   = round($maxRate * (1 + $margin / 100), 2);
+            // The margin formula (percent OR flat-₹) lives in MarginResolver::apply
+            // — never reintroduce `* (1 + margin/100)` here.
+            $price   = $this->margins->apply($maxRate, $cityKey, $typeId);
+            $margin  = $this->margins->effectivePercent($maxRate, $cityKey, $typeId);
             return $this->result($price, true, null, $basePrice, true, $maxRate, $margin);
         }
 
