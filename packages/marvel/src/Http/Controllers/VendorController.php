@@ -27,9 +27,25 @@ use Marvel\Mail\VendorCredentials;
  */
 class VendorController extends ShopController
 {
+    /**
+     * Who may read supplier records. VendorResource flattens banking (account number, IFSC,
+     * UPI), compliance (PAN, GST) and the owner's login email into first-class fields, so
+     * "is logged in" is not a sufficient bar — a customer token must not read it. Staff who
+     * manage suppliers hold STORE_OWNER; super admins pass via the Gate::before bypass.
+     */
+    private function authorizeVendorRead(Request $request): void
+    {
+        $user = $request->user();
+        if (!$user || !($user->hasPermissionTo(Permission::SUPER_ADMIN) || $user->hasPermissionTo(Permission::STORE_OWNER))) {
+            throw new AuthorizationException(NOT_AUTHORIZED);
+        }
+    }
+
     /** GET /vendors — paginated vendor list (admin sees all suppliers). */
     public function index(Request $request)
     {
+        $this->authorizeVendorRead($request);
+
         $limit = $request->limit ? $request->limit : 15;
         $paginator = $this->fetchShops($request)
             ->with(['categories', 'owner'])
@@ -41,7 +57,15 @@ class VendorController extends ShopController
     /** GET /vendors/{idOrSlug}. */
     public function show($slug, Request $request)
     {
+        $this->authorizeVendorRead($request);
+
         $vendor = parent::show($slug, $request);
+        // parent::show returns a PublicShopResource for a non-privileged caller. Anyone who
+        // reaches this line is admin-or-store-owner, but a store owner is not "privileged"
+        // for a shop they do not own, so normalise before loading the vendor relations.
+        if ($vendor instanceof \Illuminate\Http\Resources\Json\JsonResource) {
+            $vendor = $vendor->resource;
+        }
         // parent::show eager-loads owner; loadMissing keeps owner_email serializing
         // even if that with() list ever changes.
         $vendor->loadMissing('owner');

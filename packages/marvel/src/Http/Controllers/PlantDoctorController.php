@@ -40,6 +40,35 @@ class PlantDoctorController extends CoreController
         return PlantDoctorSetting::first();
     }
 
+    /**
+     * Hosts we are willing to have the Plant Doctor service fetch an image from: our own
+     * media/CDN origins. Anything else is refused at this boundary rather than trusted to
+     * the microservice, which has historically fetched whatever it was handed.
+     */
+    private function isAllowedImageUrl(string $url): bool
+    {
+        $parts = parse_url($url);
+        if (!is_array($parts)) {
+            return false;
+        }
+
+        $allowed = collect([
+            (string) parse_url((string) config('app.url'), PHP_URL_HOST),
+            (string) parse_url((string) config('filesystems.disks.s3.url'), PHP_URL_HOST),
+        ])->filter()->map(fn ($h) => strtolower($h));
+
+        try {
+            $allowed->push(strtolower((string) parse_url(\Illuminate\Support\Facades\Storage::disk('s3')->url('probe'), PHP_URL_HOST)));
+        } catch (\Throwable) {
+            // No S3 disk configured — the app-url host still applies.
+        }
+
+        return strtolower((string) ($parts['scheme'] ?? '')) === 'https'
+            && $allowed->filter()->contains(strtolower((string) ($parts['host'] ?? '')))
+            && !isset($parts['port'])                       // a non-standard port is not our media host
+            && !isset($parts['user']) && !isset($parts['pass']); // user:pass@ hides the real host
+    }
+
     private function monthCostInr(): float
     {
         $usd = (float) PlantDoctorLog::where('created_at', '>=', now()->startOfMonth())
@@ -84,6 +113,17 @@ class PlantDoctorController extends CoreController
 
         if (empty($data['image_base64']) && empty($data['image_url']) && empty($data['symptoms'])) {
             return response()->json(['message' => 'Provide a photo or describe the symptoms.'], 422);
+        }
+
+        // SSRF boundary. image_url is customer-supplied and we hand it to a service that
+        // fetches it server-side, so an unchecked value here is a request for the microservice
+        // to read whatever the caller names — starting with the cloud metadata endpoint.
+        // Allowlist, not a blocklist: blocking 169.254.169.254 only invites DNS rebinding and
+        // decimal-encoded IPs. Same rule as LoraModelController::isAllowedMediaUrl.
+        if (!empty($data['image_url']) && !$this->isAllowedImageUrl($data['image_url'])) {
+            return response()->json([
+                'message' => 'That image link is not supported. Upload the photo instead.',
+            ], 422);
         }
 
         try {

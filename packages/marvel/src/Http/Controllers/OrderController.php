@@ -567,8 +567,13 @@ class OrderController extends CoreController
             ];
             $pdf = PDF::loadView('pdf.order-invoice', $invoiceData);
             $options = new Options();
-            $options->setIsPhpEnabled(true);
-            $options->setIsJavascriptEnabled(true);
+            // setIsPhpEnabled(true) let the renderer EXECUTE <script type="text/php"> inside
+            // the document, on a route reachable with only a download token, whose data
+            // includes customer-supplied address and note text. Nothing here needs it — the
+            // invoice templates carry no text/php block and escape every field — so it is off:
+            // otherwise the first future template edit that renders a raw field is RCE.
+            $options->setIsPhpEnabled(false);
+            $options->setIsJavascriptEnabled(false);
             $pdf->getDomPDF()->setOptions($options);
 
             $filename = 'invoice-order-' . $payloads['order_id'] . '.pdf';

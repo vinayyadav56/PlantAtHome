@@ -340,21 +340,41 @@ Route::post('coupons/verify', [CouponController::class, 'verify']);
 Route::apiResource('attributes', AttributeController::class, [
     'only' => ['index', 'show'],
 ]);
-Route::apiResource('shops', ShopController::class, [
-    'only' => ['index', 'show'],
-]);
+// SECURITY 2026-08-07: `shops` used to register index + show together, both public and both
+// returning the RAW Eloquent model — settings (banking/compliance/documents) plus the
+// eager-loaded owner's email, phone and geolocation. Verified live on prod: an anonymous
+// GET /shops returned all of it. `show` stays public because the storefront's maintenance
+// banner needs the shop name, but it now serialises through PublicShopResource; the LIST has
+// no public consumer at all (the only `useShops` in shop-v2 is imported by nothing), so it is
+// authenticated. Registered separately rather than as one apiResource so the two differ.
+Route::get('shops/{slug}', [ShopController::class, 'show']);
+Route::middleware('auth:sanctum')->group(function () {
+    Route::get('shops', [ShopController::class, 'index']);
+});
+
 // ── Canonical Vendor API (thin layer over the shop domain; see VendorController).
 // PlantAtHome is a single storefront — a "Vendor" is an internal supplier. The
 // legacy /shops routes stay as deprecated back-compat aliases. Read aliases below
 // map the vendor vocabulary onto the existing controllers (no logic duplication).
 // Constrain {vendor} so it never shadows the sibling literal `vendors/list`
 // (UserController@vendors, registered later in a super-admin group).
-Route::apiResource('vendors', VendorController::class, [
-    'only' => ['index', 'show'],
-    // Exclude literal sub-routes registered elsewhere (UserController@vendors'
-    // /vendors/list and the super-admin /vendors/check-unique) from being
-    // captured by the {vendor} show param — routes match in registration order.
-])->where(['vendor' => '(?!list$|check-unique$)[A-Za-z0-9._-]+']);
+//
+// SECURITY 2026-08-07: this resource had NO middleware, while VendorResource deliberately
+// flattens banking + compliance into first-class fields. An anonymous GET /vendors returned
+// account_number, ifsc, pan, gst_number, upi, account_holder, owner_email, mobile and
+// admin_commission_rate — on production. VendorResource is correct for its intended audience;
+// the bug was that anyone could be that audience. Authenticated here, and authorised in the
+// controller (a customer token is authenticated but must not read supplier banking).
+// The group must stay at THIS position: routes match in registration order and the where()
+// constraint below is what stops {vendor} shadowing the later literal /vendors/list.
+Route::middleware('auth:sanctum')->group(function () {
+    Route::apiResource('vendors', VendorController::class, [
+        'only' => ['index', 'show'],
+        // Exclude literal sub-routes registered elsewhere (UserController@vendors'
+        // /vendors/list and the super-admin /vendors/check-unique) from being
+        // captured by the {vendor} show param — routes match in registration order.
+    ])->where(['vendor' => '(?!list$|check-unique$)[A-Za-z0-9._-]+']);
+});
 Route::get('master-products', [ProductController::class, 'index'])->middleware('throttle:120,1');
 Route::get('pricing', [LocationPriceController::class, 'show'])->middleware('throttle:120,1');
 Route::post('pricing/batch', [LocationPriceController::class, 'batch'])->middleware('throttle:60,1');
