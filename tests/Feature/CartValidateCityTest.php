@@ -62,19 +62,29 @@ final class CartValidateCityTest extends TestCase
             ['id' => 3, 'name' => 'Shimla', 'state_name' => 'Himachal Pradesh', 'status' => 'active', 'is_serviceable' => 0],
         ]);
 
+        // Mirrors the real table (see 2026_08_05_000400_per_variant_product_city_availability).
+        // variation_option_id is NOT optional scaffolding: the projection became
+        // per-variant, with 0 meaning "the product-level rollup", and the query under
+        // test filters on it. A stub without it is a fictional database — which is
+        // exactly why this test started failing while production behaviour was fine.
         Schema::create('product_city_availability', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->unsignedBigInteger('product_id');
             $t->string('city');
+            $t->unsignedBigInteger('variation_option_id')->default(0);
             $t->boolean('has_local')->default(false);
             $t->boolean('has_courier')->default(false);
             $t->decimal('min_price', 12, 2)->nullable();
+            $t->decimal('display_price', 14, 2)->nullable();
+            $t->integer('stock')->nullable();
+            $t->integer('stock_override')->nullable();
             $t->integer('vendor_count')->default(0);
             $t->timestamp('updated_at')->nullable();
         });
         // Gurugram carries product 11 only (12 is NOT available there).
+        // variation_option_id 0 = the product-level rollup row.
         DB::table('product_city_availability')->insert([
-            ['product_id' => 11, 'city' => 'gurugram', 'has_local' => 1, 'has_courier' => 0, 'vendor_count' => 1],
+            ['product_id' => 11, 'city' => 'gurugram', 'variation_option_id' => 0, 'has_local' => 1, 'has_courier' => 0, 'vendor_count' => 1],
         ]);
     }
 

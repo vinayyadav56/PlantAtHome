@@ -43,6 +43,11 @@ final class RunCommandDiagnosticTest extends ImageBatchTestCase
             'content:sweep-batches',
             'inventory:release-expired',
             'outbox:relay',
+            // Added with the city-pricing engine: both are idempotent rebuilds
+            // (recompute derives the projection from current inventory; the KYC
+            // sweep re-evaluates deadlines), which is the bar this list guards.
+            'marvel:recompute-city-availability',
+            'marvel:sweep-kyc-deadlines',
             'marketing:dispatch-due',
         ], array_keys(SystemController::RUNNABLE_COMMANDS));
     }

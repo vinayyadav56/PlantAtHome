@@ -74,13 +74,29 @@ final class CityAvailabilityRecomputeTest extends TestCase
             $t->timestamps();
             $t->softDeletes();
         });
+        // AvailabilityService::excludeHeldVendors() joins vendor_product_prices →
+        // shop to drop suppliers whose KYC is on hold. Without this table the
+        // recompute cannot run at all here, even though production is fine.
+        Schema::create('shops', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->string('name')->nullable();
+            $t->string('approval_status')->nullable();
+            $t->timestamps();
+        });
+
+        // Per-variant projection (2026_08_05_000400): variation_option_id 0 is the
+        // product-level rollup row.
         Schema::create('product_city_availability', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->unsignedBigInteger('product_id');
             $t->string('city');
+            $t->unsignedBigInteger('variation_option_id')->default(0);
             $t->boolean('has_local')->default(false);
             $t->boolean('has_courier')->default(false);
             $t->decimal('min_price', 12, 2)->nullable();
+            $t->decimal('display_price', 14, 2)->nullable();
+            $t->integer('stock')->nullable();
+            $t->integer('stock_override')->nullable();
             $t->integer('vendor_count')->default(0);
             $t->timestamp('updated_at')->nullable();
         });
