@@ -102,7 +102,25 @@ class Product extends Model
 
     public function fetchBlockedDatesForAProduct()
     {
-        return  Availability::where('product_id', $this->id)->where('bookable_type', 'Marvel\Database\Models\Product')->whereDate('to', '>=', Carbon::now())->get();
+        // Prefer the eager-loaded relation (fetchProducts loads it for the whole page),
+        // else the direct query — one Availability round trip per row was part of the
+        // listing N+1.
+        if ($this->relationLoaded('blockedAvailabilities')) {
+            return $this->blockedAvailabilities;
+        }
+        return Availability::where('product_id', $this->id)->where('bookable_type', 'Marvel\Database\Models\Product')->whereDate('to', '>=', Carbon::now())->get();
+    }
+
+    /**
+     * Future/active blocked-date rows for this product. Exists so listings can eager-load
+     * blocked dates in one query instead of firing getBlockedDates() per row. `whereDate`
+     * on `to` uses today's date, which is stable within a request.
+     */
+    public function blockedAvailabilities(): HasMany
+    {
+        return $this->hasMany(Availability::class, 'product_id')
+            ->where('bookable_type', Product::class)
+            ->whereDate('to', '>=', Carbon::now());
     }
 
     /**
@@ -502,16 +520,37 @@ class Product extends Model
 
     public function getRatingsAttribute()
     {
-        return round($this->reviews()->avg('rating'), 2);
+        // PERF: on a listing the query builds ->withAvg('reviews','rating'), which lands
+        // as `reviews_avg_rating`. Prefer it — firing reviews()->avg() per row was an N+1
+        // that, at ?limit=100, meant ~100 extra COUNT/AVG round trips per page (a real
+        // contributor to the /api/products tail). Fall back to the query when the
+        // aggregate isn't loaded (PDP show, admin), so behaviour is unchanged there.
+        if (array_key_exists('reviews_avg_rating', $this->attributes)) {
+            return round((float) ($this->attributes['reviews_avg_rating'] ?? 0), 2);
+        }
+        return round((float) $this->reviews()->avg('rating'), 2);
     }
 
     public function getTotalReviewsAttribute()
     {
+        if (array_key_exists('reviews_count', $this->attributes)) {
+            return (int) $this->attributes['reviews_count'];
+        }
         return $this->reviews()->count();
     }
 
     public function getRatingCountAttribute()
     {
+        // Prefer an eager-loaded reviews collection (fetchProducts loads id,product_id,rating
+        // for the page in one query) and build the histogram in PHP. Same JSON shape as the
+        // SQL path: [{rating, total}], highest rating first.
+        if ($this->relationLoaded('reviews')) {
+            return $this->reviews
+                ->groupBy('rating')
+                ->map(fn ($group, $rating) => ['rating' => (int) $rating, 'total' => $group->count()])
+                ->sortByDesc('rating')
+                ->values();
+        }
         return $this->reviews()->orderBy('rating', 'DESC')->groupBy('rating')->select('rating', DB::raw('count(*) as total'))->get();
     }
 

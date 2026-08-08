@@ -100,7 +100,7 @@ class ProductController extends CoreController
         };
         $recursiveKsort($params);
         $key = 'products:v' . $this->cacheVersion('products') . ':' . $language . ':' . md5(json_encode($params));
-        $data = Cache::remember($key, 300, function () use ($request, $limit) {
+        $data = $this->rememberWithLock($key, 300, function () use ($request, $limit) {
             $products = $this->fetchProducts($request)->paginate($limit)->withQueryString();
             $this->overlayCityPrices($products, $request->filled('city') ? (string) $request->city : null);
             return ProductResource::collection($products)->response()->getData(true);
@@ -365,6 +365,21 @@ class ProductController extends CoreController
      * @param  mixed $request
      * @return object
      */
+    /**
+     * True when the caller already constrains status — via the Prettus `search=status:...`
+     * grammar or an explicit `status` param. If so we leave their filter alone rather than
+     * force `publish`; the storefront always sends `status:publish` and this only defends
+     * the bare `/api/products` call.
+     */
+    private function requestFiltersStatus(Request $request): bool
+    {
+        if ($request->filled('status')) {
+            return true;
+        }
+        $search = (string) $request->input('search', '');
+        return str_contains($search, 'status:');
+    }
+
     public function fetchProducts(Request $request)
     {
         $unavailableProducts = [];
@@ -375,7 +390,29 @@ class ProductController extends CoreController
         // `type` + `shop` are read by ProductResource (getResourceData) per row —
         // eager-load them too, else the listing fires 2 extra queries per product
         // (measured 68 queries for 20 rows → ~10 with these included).
-        $products_query = $this->repository->with(['type', 'shop', 'plantAttribute', 'bundleItems'])->where('language', DEFAULT_LANGUAGE);
+        //
+        // PERF (the /api/products tail): the Product $appends fired per-row queries on
+        // serialize — ratings/total_reviews/rating_count/blocked_dates — i.e. up to ~4×
+        // rows extra round trips at ?limit=100. Resolve them in bulk instead: withCount +
+        // withAvg land as reviews_count/reviews_avg_rating, and the reviews (rating only) +
+        // blockedAvailabilities relations feed the histogram and blocked-date accessors from
+        // memory. The accessors fall back to per-row queries when these aren't loaded, so
+        // the PDP/admin paths are unchanged.
+        $products_query = $this->repository
+            ->with(['type', 'shop', 'plantAttribute', 'bundleItems', 'reviews:id,product_id,rating', 'blockedAvailabilities'])
+            ->withCount('reviews')
+            ->withAvg('reviews', 'rating')
+            ->where('language', DEFAULT_LANGUAGE);
+
+        // PERF/correctness: this PUBLIC endpoint had no default status filter, so a caller
+        // that omitted `search=status:publish` got the whole draft pool too (thousands of
+        // imported-catalogue rows), which both leaked unpublished products and inflated the
+        // set that then got fully serialized — the dominant cause of the slow tail. Anonymous
+        // requests (no Bearer) default to published-only unless they explicitly ask for a
+        // status; admin/vendor tooling always carries a Bearer and is untouched.
+        if (empty($request->bearerToken()) && !$this->requestFiltersStatus($request)) {
+            $products_query = $products_query->where('products.status', 'publish');
+        }
 
         if (isset($request->date_range)) {
             $dateRange = explode('//', $request->date_range);
