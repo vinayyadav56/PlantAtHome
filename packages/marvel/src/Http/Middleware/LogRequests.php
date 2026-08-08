@@ -164,6 +164,10 @@ class LogRequests
 
     private function settings(): array
     {
+        // Called once per request from terminate(). The Cache::remember is a cache-store
+        // round trip on every request — a MySQL SELECT while CACHE_DRIVER=database, a fast
+        // GET once the store is Redis. That driver move (not an in-process memo, which
+        // PHP-FPM discards between requests) is what makes this cheap.
         return Cache::remember('request_log_settings', 30, function () {
             $s = RequestLogSetting::first();
             return [

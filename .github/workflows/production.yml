@@ -236,11 +236,27 @@ jobs:
             }
             set_env MEDIA_DISK s3
             set_env FILESYSTEM_DISK s3
+            # Queue stays on the database driver for now — the 6 live workers consume it, and
+            # moving the queue is a separate, higher-blast-radius change (runbook follow-up).
             set_env QUEUE_CONNECTION database
-            # Shared/persistent cache so RateLimiter (throttle:auth) actually
-            # counts across requests — the cache table is migrated above.
-            set_env CACHE_DRIVER database
-            set_env CACHE_STORE database
+            # Cache + rate-limiter on Redis (local redis-server + php8.1-redis, installed on the
+            # box). Every cache read and every RateLimiter increment was a MySQL round trip while
+            # this was `database` — ~9-11 statements/request incl. a row-lock on the primary DB.
+            # REDIS_CLIENT=phpredis (the C client) is deliberate: the pure-PHP predis client was
+            # measured SLOWER than the MySQL cache, so the extension is what makes this a win.
+            # Rollback = set these two back to `database` + redeploy (redis-server can stay).
+            set_env CACHE_DRIVER redis
+            set_env CACHE_STORE redis
+            set_env REDIS_CLIENT phpredis
+            set_env REDIS_HOST 127.0.0.1
+            set_env REDIS_PORT 6379
+            # Sessions stay file-backed — not part of the perf finding, and moving them would log
+            # everyone out for no measured gain. Token auth (Sanctum) does not use them.
+            #
+            # Sanctum token lifetime: tokens never expired, so a captured token was valid forever.
+            # 30 days (43200 min); revoke-all-devices already exists as the theft remedy. Enabling
+            # logs out sessions older than the window ONCE at deploy — accepted, near-zero users.
+            set_env SANCTUM_EXPIRATION_MINUTES 43200
             set_env AWS_ACCESS_KEY_ID "${{ secrets.AWS_ACCESS_KEY_ID }}"
             set_env AWS_SECRET_ACCESS_KEY "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
             set_env AWS_DEFAULT_REGION "${{ secrets.AWS_REGION }}"
