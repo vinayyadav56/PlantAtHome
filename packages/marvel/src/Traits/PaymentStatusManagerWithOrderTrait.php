@@ -515,6 +515,29 @@ trait PaymentStatusManagerWithOrderTrait
         $order->order_status = OrderStatus::FAILED;
         $order->payment_status = PaymentStatus::FAILED;
         $order->save();
+        // A failed payment must not permanently burn a single-use coupon — give the
+        // redemption back. Idempotent + no-op for unlimited/no coupon.
+        $this->releaseOrderCoupon($order);
         $this->orderStatusManagementOnPayment($order, $order->order_status, $order->payment_status);
+    }
+
+    /**
+     * Return a coupon redemption to the pool when a placed order does not go through
+     * (payment failed / order cancelled). Safe to call more than once for an order.
+     */
+    protected function releaseOrderCoupon($order): void
+    {
+        try {
+            if (!empty($order?->coupon_id) && !empty($order?->id)) {
+                app(\Marvel\Database\Repositories\CouponRepository::class)
+                    ->release((int) $order->coupon_id, (int) $order->id);
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('coupon release failed', [
+                'order_id'  => $order->id ?? null,
+                'coupon_id' => $order->coupon_id ?? null,
+                'error'     => $e->getMessage(),
+            ]);
+        }
     }
 }

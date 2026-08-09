@@ -976,6 +976,10 @@ class UserController extends CoreController
     public function sendOtpCode(Request $request)
     {
         $phoneNumber = $request->phone_number;
+        // Layered abuse protection (cooldown + daily cap) on top of throttle:otp. Throws 429
+        // before any SMS is sent. Runs OUTSIDE the try/catch below so its 429 isn't masked
+        // as INVALID_GATEWAY.
+        app(\Marvel\Otp\OtpAbuseGuard::class)->guardSend($phoneNumber);
         // Optional per-request channel ('sms' | 'whatsapp' | explicit gateway). The resolved
         // gateway name is echoed back so the client sends it again on verify/login.
         $channel = $request->channel;
@@ -1002,15 +1006,22 @@ class UserController extends CoreController
 
     public function verifyOtpCode(Request $request)
     {
+        // Brute-force lockout: 429 (before verifying) once a number has too many wrong codes.
+        // Outside the try so the 429 isn't swallowed into OTP_VERIFICATION_FAILED.
+        $guard = app(\Marvel\Otp\OtpAbuseGuard::class);
+        $guard->guardVerify($request->phone_number);
         try {
             if ($this->verifyOtp($request)) {
+                $guard->registerSuccess($request->phone_number);
                 return [
                     "message" => OTP_SEND_SUCCESSFUL,
                     "success" => true,
                 ];
             }
+            $guard->registerFailure($request->phone_number);
             throw new MarvelException(OTP_VERIFICATION_FAILED);
         } catch (\Throwable $e) {
+            $guard->registerFailure($request->phone_number);
             throw new MarvelException(OTP_VERIFICATION_FAILED);
         }
     }
@@ -1018,9 +1029,13 @@ class UserController extends CoreController
     public function otpLogin(Request $request)
     {
         $phoneNumber = $request->phone_number;
+        // Brute-force lockout before verifying (outside the try so the 429 propagates).
+        $guard = app(\Marvel\Otp\OtpAbuseGuard::class);
+        $guard->guardVerify($phoneNumber);
 
         try {
             if ($this->verifyOtp($request)) {
+                $guard->registerSuccess($phoneNumber);
                 // check if phone number exist
                 $profile = Profile::where('contact', $phoneNumber)->first();
                 $user = '';
@@ -1060,8 +1075,10 @@ class UserController extends CoreController
                     "role" => $user->getRoleNames()->first()
                 ];
             }
+            $guard->registerFailure($phoneNumber);
             return ['message' => OTP_VERIFICATION_FAILED, 'success' => false];
         } catch (\Throwable $e) {
+            $guard->registerFailure($phoneNumber);
             return response()->json(['error' => INVALID_GATEWAY], 422);
         }
     }

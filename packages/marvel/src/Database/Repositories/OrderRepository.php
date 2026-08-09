@@ -290,6 +290,17 @@ class OrderRepository extends BaseRepository
             if (!$coupon->is_approve || !$coupon->is_valid || $subtotal < (float) $coupon->minimum_cart_amount) {
                 throw new \Symfony\Component\HttpKernel\Exception\HttpException(422, 'This coupon is not valid for this order.');
             }
+            // Item 5 — an authenticated-only coupon (`target`) must not be applied by a guest.
+            // verifyCoupon enforces this in the preview, but a client can POST coupon_id
+            // straight to order-create and skip the preview; enforce it server-side here too.
+            if ($coupon->target && empty($user)) {
+                throw new \Symfony\Component\HttpKernel\Exception\HttpException(422, 'This coupon is only for signed-in customers.');
+            }
+            // Fail-fast on a clearly-exhausted usage-limited coupon before building the order.
+            // The authoritative, race-safe consume happens after the order row exists (below).
+            if ($coupon->isExhausted($user?->id)) {
+                throw new \Symfony\Component\HttpKernel\Exception\HttpException(422, 'This coupon has reached its usage limit.');
+            }
             // Clamp the discount so it can never exceed the subtotal (no negative totals).
             $request['discount'] = min((float) $this->calculateDiscount($coupon, $subtotal), $subtotal);
         }
@@ -336,6 +347,7 @@ class OrderRepository extends BaseRepository
                 $order = $this->createOrder($request);
                 $this->storeOrderWalletPoint($request['paid_total'], $order->id);
                 $this->manageWalletAmount($request['paid_total'], $user->id);
+                $this->consumeCouponIfAny($coupon ?? null, $order, $user);
                 return $order;
             }
         } else {
@@ -343,6 +355,7 @@ class OrderRepository extends BaseRepository
         }
 
         $order = $this->createOrder($request);
+        $this->consumeCouponIfAny($coupon ?? null, $order, $user);
 
         if (($useWalletPoints || $request->isFullWalletPayment) && $user) {
             $this->storeOrderWalletPoint(round($request['paid_total'], 2) - $amount, $order->id);
@@ -466,6 +479,22 @@ class OrderRepository extends BaseRepository
         } catch (Exception $e) {
             throw $e;
         }
+    }
+
+    /**
+     * Record the coupon redemption for a just-created order, race-safe and idempotent.
+     * Runs inside OrderController::store's DB::transaction, so CouponRepository::consume's
+     * row lock holds until the order commits — a concurrent order using the same
+     * single-use coupon blocks here and is rejected if the slot is already taken, which
+     * rolls its whole order back. No-op when the order carries no coupon.
+     */
+    private function consumeCouponIfAny($coupon, $order, $user): void
+    {
+        if (empty($coupon) || empty($order?->id)) {
+            return;
+        }
+        app(\Marvel\Database\Repositories\CouponRepository::class)
+            ->consume($coupon, (int) $order->id, $user?->id);
     }
 
     /**

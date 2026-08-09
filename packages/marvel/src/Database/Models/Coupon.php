@@ -23,8 +23,37 @@ class Coupon extends Model
     protected $appends = ['is_valid', 'translated_languages'];
 
     protected $casts = [
-        'image'   => 'json',
+        'image'                => 'json',
+        'usage_limit'          => 'integer',
+        'usage_limit_per_user' => 'integer',
+        'times_used'           => 'integer',
     ];
+
+    /** Redemptions of this coupon (one row per order). */
+    public function usages(): HasMany
+    {
+        return $this->hasMany(CouponUsage::class, 'coupon_id');
+    }
+
+    /**
+     * Cheap, advisory check for the checkout preview + a fail-fast gate before order
+     * creation. The AUTHORITATIVE, race-safe enforcement is CouponRepository::consume(),
+     * which runs under a row lock inside the order transaction — this is only UX so a
+     * clearly-exhausted coupon is rejected before we build the whole order.
+     */
+    public function isExhausted(?int $userId = null): bool
+    {
+        if ($this->usage_limit !== null && (int) $this->times_used >= (int) $this->usage_limit) {
+            return true;
+        }
+        if ($this->usage_limit_per_user !== null && $userId) {
+            $used = $this->usages()->where('user_id', $userId)->count();
+            if ($used >= (int) $this->usage_limit_per_user) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     protected static function boot()
     {
