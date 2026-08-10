@@ -1011,6 +1011,8 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('orders/{id}/auto-assign-items', [OrderAssignmentController::class, 'autoAssignItems']);
     Route::post('orders/{id}/assign-items', [OrderAssignmentController::class, 'assignItems']);
     Route::post('orders/{id}/assign', [OrderAssignmentController::class, 'assign']);
+    // Correct the delivery address before a courier dispatch (confirm-dispatch popup).
+    Route::put('orders/{id}/shipping-address', [OrderAssignmentController::class, 'updateShippingAddress']);
 
     // Delivery-partner payouts + profit (P4)
     Route::get('delivery-partner-withdraws', [DeliveryPartnerWithdrawController::class, 'index']);

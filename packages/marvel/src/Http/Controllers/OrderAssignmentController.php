@@ -89,13 +89,59 @@ class OrderAssignmentController extends CoreController
         $order = Order::with([
             'items.product:id,name,slug,sku',
             'items.assignedShop:id,name',
-            'shipments.shop:id,name',
+            // shop address + registered pickup fields drive the "confirm dispatch" popup's pickup panel.
+            'shipments.shop:id,name,address,pickup_location_name,pickup_postcode',
         ])->findOrFail($id);
         return [
             'order_id'  => $order->id,
             'items'     => $order->items,
             'shipments' => $order->shipments,
         ];
+    }
+
+    /**
+     * Admin: correct an order's delivery (shipping) address before dispatch. Merges over the
+     * existing address so untouched fields are preserved — a text-only edit never blanks the GPS
+     * pin, and a pin nudge never blanks the typed street. Deliberately does NOT touch order status,
+     * pricing, or the serviceable_city snapshot (an operator fixing a house-number typo before
+     * booking shouldn't re-run the city gate); it only persists the address the courier ships to.
+     */
+    public function updateShippingAddress($id, Request $request)
+    {
+        $order = Order::findOrFail($id);
+
+        $data = $request->validate([
+            'street_address'  => 'nullable|string|max:500',
+            'street_address2' => 'nullable|string|max:500',
+            'city'            => 'nullable|string|max:120',
+            'state'           => 'nullable|string|max:120',
+            'zip'             => 'nullable|string|max:20',
+            'country'         => 'nullable|string|max:120',
+            'landmark'        => 'nullable|string|max:255',
+            'location'        => 'nullable|array',
+            'location.lat'    => 'nullable|numeric',
+            'location.lng'    => 'nullable|numeric',
+        ]);
+
+        $current = is_array($order->shipping_address)
+            ? $order->shipping_address
+            : (array) ($order->shipping_address ?? []);
+
+        $location = $data['location'] ?? null;
+        unset($data['location']);
+
+        $merged = array_merge($current, $data); // overwrite only the provided text fields
+        if (is_array($location)) {
+            $merged['location'] = array_merge(
+                (array) ($current['location'] ?? []),
+                array_filter($location, fn ($v) => $v !== null)
+            );
+        }
+
+        $order->shipping_address = $merged;
+        $order->save();
+
+        return ['ok' => true, 'shipping_address' => $order->shipping_address];
     }
 
     /** Admin (P4): auto-assign every line to its recommended vendor + group into shipments. */

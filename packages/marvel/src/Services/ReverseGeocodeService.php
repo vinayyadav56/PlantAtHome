@@ -28,6 +28,7 @@ class ReverseGeocodeService
 
         return Cache::remember($cacheKey, now()->addHour(), function () use ($lat, $lng) {
             $out = ['city' => null, 'district' => null, 'state' => null, 'pincode' => null];
+            $formatted = null; // Google's full street-level formatted_address (best result).
 
             // config first so a key managed in Settings → Integrations overlays the env var.
             $key = config('location.google_maps_key') ?: env('GOOGLE_MAP_API_KEY');
@@ -37,7 +38,9 @@ class ReverseGeocodeService
                         'latlng' => $lat . ',' . $lng,
                         'key'    => $key,
                     ])->json();
-                    $out = array_merge($out, $this->extractComponents((array) ($json['results'] ?? [])));
+                    $results = (array) ($json['results'] ?? []);
+                    $out = array_merge($out, $this->extractComponents($results));
+                    $formatted = $results[0]['formatted_address'] ?? null;
                 } catch (\Throwable $e) {
                     // fail-open to the fallbacks below
                 }
@@ -68,13 +71,14 @@ class ReverseGeocodeService
                 : null;
 
             return [
-                'city'            => $out['city'],
-                'district'        => $out['district'],
-                'state'           => $out['state'],
-                'pincode'         => $out['pincode'],
-                'normalized_city' => $normalized,
-                'city_id'         => $canon?->id,
-                'is_serviceable'  => $canon ? (bool) $canon->acceptsOrders() : false,
+                'city'              => $out['city'],
+                'district'          => $out['district'],
+                'state'             => $out['state'],
+                'pincode'           => $out['pincode'],
+                'formatted_address' => $formatted, // full street-level address from the pin's coordinates
+                'normalized_city'   => $normalized,
+                'city_id'           => $canon?->id,
+                'is_serviceable'    => $canon ? (bool) $canon->acceptsOrders() : false,
             ];
         });
     }
