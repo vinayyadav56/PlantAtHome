@@ -107,7 +107,7 @@ Route::get('/email/verify/{id}/{hash}', [UserController::class, 'verifyEmail'])-
 // throttle:api) to blunt credential stuffing, OTP/SMS bombing, brute force and email flooding.
 Route::post('/register', [UserController::class, 'register'])->middleware('throttle:5,1');
 Route::post('/token', [UserController::class, 'token'])->middleware('throttle:10,1');
-Route::post('/logout', [UserController::class, 'logout']);
+Route::post('/logout', [UserController::class, 'logout'])->middleware('throttle:10,1');
 // Revokes every token for the caller — the remedy for a stolen session. `logout` above only
 // drops the token presented, which does nothing about a copy someone else is holding.
 Route::post('/logout-all-devices', [UserController::class, 'logoutAllDevices'])
@@ -161,10 +161,10 @@ Route::get('export-attributes/{shop_id}', [AttributeController::class, 'exportAt
 // Authed + permission-checked issuer for the three signed export URLs above.
 Route::get('export-urls/{shop_id}', [ProductController::class, 'exportUrls'])
     ->middleware(['auth:sanctum', 'throttle:30,1']);
-Route::get('download_url/token/{token}', [DownloadController::class, 'downloadFile'])->name('download_url.token');
-Route::get('export-order/token/{token}', [OrderController::class, 'exportOrder'])->name('export_order.token');
+Route::get('download_url/token/{token}', [DownloadController::class, 'downloadFile'])->middleware('throttle:30,1')->name('download_url.token');
+Route::get('export-order/token/{token}', [OrderController::class, 'exportOrder'])->middleware('throttle:30,1')->name('export_order.token');
 Route::post('subscribe-to-newsletter', [UserController::class, 'subscribeToNewsletter'])->name('subscribeToNewsletter');
-Route::get('download-invoice/token/{token}', [OrderController::class, 'downloadInvoice'])->name('download_invoice.token');
+Route::get('download-invoice/token/{token}', [OrderController::class, 'downloadInvoice'])->middleware('throttle:30,1')->name('download_invoice.token');
 Route::post('webhooks/razorpay', [WebHookController::class, 'razorpay'])->middleware('throttle:120,1');
 Route::post('webhooks/stripe', [WebHookController::class, 'stripe'])->middleware('throttle:120,1');
 Route::post('webhooks/paypal', [WebHookController::class, 'paypal'])->middleware('throttle:120,1');
@@ -285,7 +285,7 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('gifting/checkout', [GardenController::class, 'giftingCheckout']);
 });
 
-Route::post('license-key/verify', [UserController::class, 'verifyLicenseKey']);
+Route::post('license-key/verify', [UserController::class, 'verifyLicenseKey'])->middleware('throttle:10,1');
 
 Route::get('callback/flutterwave', [WebHookController::class, 'callback'])->name('callback.flutterwave');
 
@@ -355,7 +355,7 @@ Route::apiResource('resources', ResourceController::class, [
 Route::apiResource('coupons', CouponController::class, [
     'only' => ['index', 'show'],
 ]);
-Route::post('coupons/verify', [CouponController::class, 'verify']);
+Route::post('coupons/verify', [CouponController::class, 'verify'])->middleware('throttle:30,1');
 Route::apiResource('attributes', AttributeController::class, [
     'only' => ['index', 'show'],
 ]);
@@ -460,7 +460,7 @@ Route::resource('refund-policies', RefundPolicyController::class, [
 ]);
 
 
-Route::post('shop-maintenance-event', [ShopController::class, 'shopMaintenanceEvent']);
+Route::post('shop-maintenance-event', [ShopController::class, 'shopMaintenanceEvent'])->middleware('throttle:20,1');
 
 /**
  * ******************************************

@@ -250,8 +250,12 @@ jobs:
             set_env REDIS_CLIENT phpredis
             set_env REDIS_HOST 127.0.0.1
             set_env REDIS_PORT 6379
-            # Sessions stay file-backed — not part of the perf finding, and moving them would log
-            # everyone out for no measured gain. Token auth (Sanctum) does not use them.
+            # Sessions on Redis: the API is token-authed (Sanctum) so almost nothing
+            # lives in sessions — but file sessions are INSTANCE-LOCAL state, the one
+            # thing that blocks running a second app instance behind a load balancer. Redis
+            # is already on the box; this makes the app stateless. (Enterprise audit
+            # 2026-08-10 — horizontal-scalability finding.)
+            set_env SESSION_DRIVER redis
             #
             # Sanctum token lifetime: tokens never expired, so a captured token was valid forever.
             # 30 days (43200 min); revoke-all-devices already exists as the theft remedy. Enabling

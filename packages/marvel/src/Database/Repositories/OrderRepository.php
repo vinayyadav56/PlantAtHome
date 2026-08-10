@@ -413,23 +413,10 @@ class OrderRepository extends BaseRepository
         if (!$eligible) {
             throw new MarvelBadRequestException('COULD_NOT_PROCESS_THE_ORDER_PLEASE_CONTACT_WITH_THE_ADMIN');
         }
-        // Create Intent — a payment-provider failure must never void the placed
-        // order (the customer retries from the order's Pay Now flow instead).
-        if (!in_array($order->payment_gateway, [
-            PaymentGatewayType::CASH, PaymentGatewayType::CASH_ON_DELIVERY, PaymentGatewayType::FULL_WALLET_PAYMENT
-        ])) {
-            try {
-                $order['payment_intent'] = $this->processPaymentIntent($request, $settings);
-            } catch (\Throwable $e) {
-                Log::warning('order-create payment-intent failed; order kept payable', [
-                    'gateway'         => $order->payment_gateway,
-                    'tracking_number' => $order->tracking_number,
-                    'error'           => $e->getMessage(),
-                ]);
-                $order['payment_intent'] = null;
-            }
-        }
-
+        // NB: the payment intent (a NETWORK call to the PSP) is created by
+        // OrderController::store AFTER this transaction commits — holding the
+        // coupon/wallet row locks open for a Razorpay round-trip meant any PSP
+        // latency spike serialised every concurrent checkout behind it.
 
         if ($payment_gateway_type === PaymentGatewayType::CASH_ON_DELIVERY || $payment_gateway_type === PaymentGatewayType::CASH) {
             $this->orderStatusManagementOnCOD($order, OrderStatus::PENDING, OrderStatus::PROCESSING);
@@ -1042,12 +1029,15 @@ class OrderRepository extends BaseRepository
      */
     public function generateTrackingNumber(): string
     {
+        // Per-attempt existence probe, not the old day-wide pluck: that loaded
+        // EVERY tracking number of the day into memory on every order (O(n)
+        // per checkout) and was a stale snapshot — blind to concurrent inserts.
+        // 8 random digits = 90M/day space, so a retry is already rare; the
+        // unique index on orders.tracking_number stays the final arbiter.
         $today = date('Ymd');
-        $trackingNumbers = Order::where('tracking_number', 'like', $today . '%')->pluck('tracking_number');
-
         do {
-            $trackingNumber = $today . random_int(100000, 999999);
-        } while ($trackingNumbers->contains($trackingNumber));
+            $trackingNumber = $today . random_int(10000000, 99999999);
+        } while (Order::where('tracking_number', $trackingNumber)->exists());
 
         return $trackingNumber;
     }

@@ -233,6 +233,28 @@ class OrderController extends CoreController
                 }
                 throw $e;
             }
+            // Create Intent AFTER the commit — a PSP network call must not hold
+            // the transaction's row locks, and a provider failure must never
+            // void the placed order (the customer retries from Pay Now).
+            if (
+                $order instanceof \Marvel\Database\Models\Order
+                && !in_array($order->payment_gateway, [
+                    \Marvel\Enums\PaymentGatewayType::CASH,
+                    \Marvel\Enums\PaymentGatewayType::CASH_ON_DELIVERY,
+                    \Marvel\Enums\PaymentGatewayType::FULL_WALLET_PAYMENT,
+                ])
+            ) {
+                try {
+                    $order['payment_intent'] = $this->repository->processPaymentIntent($request, $this->settings);
+                } catch (\Throwable $e) {
+                    \Illuminate\Support\Facades\Log::warning('order-create payment-intent failed; order kept payable', [
+                        'gateway'         => $order->payment_gateway,
+                        'tracking_number' => $order->tracking_number,
+                        'error'           => $e->getMessage(),
+                    ]);
+                    $order['payment_intent'] = null;
+                }
+            }
             // Surface the per-order token to the buyer's client (and only here) so the
             // storefront can carry it to the order-confirmation page. It stays hidden
             // in every other response (list/detail) — see Order::$hidden.

@@ -9,5 +9,5 @@ use Illuminate\Support\Facades\Route;
 |--------------------------------------------------------------------------
 */
 
-Route::get('search', [SearchController::class, 'search']);
-Route::get('search/autocomplete', [SearchController::class, 'autocomplete']);
+Route::get('search', [SearchController::class, 'search'])->middleware('throttle:120,1');
+Route::get('search/autocomplete', [SearchController::class, 'autocomplete'])->middleware('throttle:240,1');

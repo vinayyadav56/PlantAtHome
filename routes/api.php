@@ -72,6 +72,8 @@ Route::get('/health/ready', function () {
 |
 */
 
-Route::middleware('auth:api')->get('/user', function (Request $request) {
+// sanctum, not the token 'api' guard — every other authed route here uses
+// sanctum; the odd guard out returned 500s instead of 401s for bad tokens.
+Route::middleware('auth:sanctum')->get('/user', function (Request $request) {
     return $request->user();
 });

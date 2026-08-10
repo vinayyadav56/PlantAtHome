@@ -71,6 +71,10 @@ return [
             'queue' => env('REDIS_QUEUE', 'default'),
             'retry_after' => 90,
             'block_for' => null,
+            // Same guarantee as the database connection: order events are
+            // dispatched INSIDE the order transaction — a worker must never
+            // pick a job up before the row it references is committed.
+            'after_commit' => true,
         ],
 
     ],
