@@ -308,10 +308,13 @@ class OrderRepository extends BaseRepository
             $request['delivery_coverage'] = $coverageSnapshot;
         }
 
-        // H8 — block oversell at order creation. The atomic decrement keeps the
-        // stock column from going negative, but without this the order would still
-        // be created + charged for unfulfillable items. Runs inside the order's
-        // DB::transaction (OrderController::store) so a failure rolls the order back.
+        // H8 — oversell gating. NB: checkStock() below is a deliberate NO-OP
+        // (CheckoutRepository::isInStock is stubbed — "city is the only gate"),
+        // so this pre-check never fires. The ACTUAL oversell gate is the atomic
+        // decrement in ProductInventoryDecrement: under the 'block' policy
+        // (config shop.inventory_oversell_policy) a 0-row decrement throws
+        // InsufficientStockException inside this same transaction and the whole
+        // order rolls back; under 'log' (legacy) oversell only logs.
         $stockUnavailable = (new CheckoutRepository())->checkStock((array) $request['products']);
         if (!empty($stockUnavailable)) {
             throw new \Symfony\Component\HttpKernel\Exception\HttpException(422, 'Some items in your cart are out of stock.');
@@ -387,6 +390,11 @@ class OrderRepository extends BaseRepository
                 $this->storeOrderWalletPoint($request['paid_total'], $order->id);
                 $this->manageWalletAmount($request['paid_total'], $user->id);
                 $this->consumeCouponIfAny($coupon ?? null, $order, $user);
+                // Inventory MUST decrement on this path too — this early return
+                // used to skip the OrderProcessed event entirely, so 100%-wallet
+                // orders never deducted stock (while cancelling them still
+                // RESTORED it, inflating counters).
+                event(new OrderProcessed($order));
                 return $order;
             }
         } else {

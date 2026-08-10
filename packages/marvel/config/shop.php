@@ -63,6 +63,18 @@ return [
 
     'active_payment_gateway' => env('ACTIVE_PAYMENT_GATEWAY', 'stripe'),
 
+    /*
+     * Oversell policy for the atomic stock decrement at order creation.
+     *   'log'   — (default, legacy behavior) a 0-row decrement logs a warning
+     *             and the order proceeds; vendors fulfil on demand.
+     *   'block' — a 0-row decrement throws InsufficientStockException (422)
+     *             inside the order transaction, rolling the whole order back —
+     *             inventory=1 with N concurrent buyers sells exactly once.
+     * Flip per-environment AFTER verifying published products carry maintained
+     * quantity counters (see docs/operations/production-readiness.md).
+     */
+    'inventory_oversell_policy' => env('INVENTORY_OVERSELL_POLICY', 'log'),
+
     'razorpay' => [
         // Accept either env naming — RAZORPAY_KEY_ID/SECRET (canonical, staging) or the
         // legacy RAZORPAY_KEY/SECRET — so a prod box set up from the old example still works.

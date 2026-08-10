@@ -10,14 +10,21 @@ use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Variation;
 use Marvel\Enums\ProductType;
+use Marvel\Exceptions\InsufficientStockException;
 
 // Intentionally NOT ShouldQueue: stock must decrement synchronously within the order request so a
 // queue-worker outage can never let orders be placed without decrementing inventory (mass
-// oversell). The decrement is a fast atomic conditional UPDATE (`where quantity >= qty`). NB the
-// order-create path is NOT wrapped in a DB transaction, so this is inline-but-not-atomic with the
-// order write; a 0-row match (oversell) is logged and the order still proceeds (pre-existing).
+// oversell). The decrement is a fast atomic conditional UPDATE (`where quantity >= qty`), and it
+// runs INSIDE the order's DB::transaction (OrderController::store wraps storeOrder, which fires
+// OrderProcessed synchronously) — so under the 'block' oversell policy a 0-row match throws and
+// rolls the whole order back; under 'log' (legacy) it is logged and the order proceeds.
 class ProductInventoryDecrement
 {
+    /** 'block' ⇒ a 0-row decrement aborts the order (422 + rollback); 'log' ⇒ legacy proceed. */
+    protected function blocking(): bool
+    {
+        return config('shop.inventory_oversell_policy', 'log') === 'block';
+    }
     /**
      * Atomically (race-safe) decrement stock so concurrent orders can't oversell.
      * One conditional UPDATE (`where quantity >= qty`) with DB-side arithmetic.
@@ -43,9 +50,14 @@ class ProductInventoryDecrement
 
         if ($affected === 0) {
             // The atomic guard matched 0 rows: another order already took this stock.
-            // The column never goes negative (good) but we WERE about to fulfil an order
-            // we can't stock — surface it so ops can cancel/refund instead of silently
-            // shipping nothing.
+            // Under 'block' this aborts the order (the surrounding transaction rolls
+            // back every earlier decrement too — all-or-nothing). Under 'log' the
+            // column still never goes negative, but we WERE about to fulfil an order
+            // we can't stock — surface it so ops can cancel/refund instead of
+            // silently shipping nothing.
+            if ($this->blocking()) {
+                throw new InsufficientStockException();
+            }
             Log::warning('Inventory oversell detected (product stock could not cover order)', [
                 'order_id'   => $orderId,
                 'product_id' => $productId,
@@ -61,6 +73,9 @@ class ProductInventoryDecrement
                     'sold_quantity' => DB::raw("COALESCE(sold_quantity, 0) + {$qty}"),
                 ]);
             if ($vAffected === 0) {
+                if ($this->blocking()) {
+                    throw new InsufficientStockException();
+                }
                 Log::warning('Inventory oversell detected (variation stock could not cover order)', [
                     'order_id'            => $orderId,
                     'variation_option_id' => $variationOptionId,
@@ -79,6 +94,10 @@ class ProductInventoryDecrement
                 (int) $eventData->pivot->order_quantity,
                 $orderId
             );
+        } catch (InsufficientStockException $e) {
+            // The oversell gate MUST escape the defensive catch — it is what
+            // rolls the order back under the 'block' policy.
+            throw $e;
         } catch (Exception $th) {
             // A genuine DB error here used to be swallowed silently — at least record it.
             Log::error('Inventory decrement failed', [
@@ -102,6 +121,10 @@ class ProductInventoryDecrement
             foreach ($bundle->expandToInventoryUnits($orderQty) as $unit) {
                 $this->decrementUnit((int) $unit['id'], $unit['variation_option_id'] ?? null, (int) $unit['quantity'], $orderId);
             }
+        } catch (InsufficientStockException $e) {
+            // Escape the defensive catch — the surrounding order transaction
+            // rolls back the already-decremented components (all-or-nothing).
+            throw $e;
         } catch (Exception $th) {
             Log::error('Bundle inventory decrement failed', [
                 'bundle_id' => $bundle->id ?? null,
