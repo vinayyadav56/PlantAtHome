@@ -159,9 +159,20 @@ class CourierPartnerProxyController extends CoreController
         $code = $this->assertPartner($code);
 
         $validated = $request->validate(['provider_order_id' => 'required|string|max:191']);
+        $pid = trim((string) $validated['provider_order_id']);
 
         return $this->passthrough(
-            fn (ShippingServiceClient $c) => $c->partnerTestTrack($code, (string) $validated['provider_order_id'])
+            fn (ShippingServiceClient $c) => $c->partnerTestTrack($code, $pid),
+            // Keep a RECORDED order's status fresh — but never CREATE one here (tracking an id we never
+            // recorded shouldn't manufacture a row).
+            function (array $data) use ($code, $pid): void {
+                \App\Models\PartnerConsoleOrder::where('partner_code', $code)
+                    ->where('provider_order_id', $pid)
+                    ->update([
+                        'last_status'     => $data['status'] ?? null,
+                        'last_tracked_at' => now(),
+                    ]);
+            }
         );
     }
 
@@ -172,7 +183,30 @@ class CourierPartnerProxyController extends CoreController
         $code = $this->assertPartner($code);
         $body = $this->withCallerConfirmation($request, $this->legPayload($request));
 
-        return $this->passthrough(fn (ShippingServiceClient $c) => $c->partnerTestBook($code, $body));
+        return $this->passthrough(
+            fn (ShippingServiceClient $c) => $c->partnerTestBook($code, $body),
+            // Record every REAL order the console creates so it can be listed + re-tracked later. Persist
+            // whenever a provider_order_id came back — even alongside a partner error (order created,
+            // AWB pending) — so a real order is never left unrecoverable.
+            function (array $data) use ($request, $code, $body): void {
+                $pid = trim((string) ($data['provider_order_id'] ?? ''));
+                if ($pid === '') {
+                    return;
+                }
+                \App\Models\PartnerConsoleOrder::updateOrCreate(
+                    ['partner_code' => $code, 'provider_order_id' => $pid],
+                    [
+                        'mode'             => $body['mode'] ?? null,
+                        'cod_amount_paise' => (int) ($body['cod_amount_paise'] ?? 0),
+                        'request'          => $body,
+                        'response'         => $data,
+                        'last_status'      => $data['status'] ?? null,
+                        'last_tracked_at'  => now(),
+                        'created_by'       => optional($request->user())->id,
+                    ]
+                );
+            }
+        );
     }
 
     /** CANCELS A LIVE JOB at the partner. Guarded by the service on the caller's `confirm`. */
@@ -252,7 +286,7 @@ class CourierPartnerProxyController extends CoreController
      * operator, so that body + status pass through too. Everything else collapses to the existing
      * 503/502 mapping.
      */
-    private function passthrough(callable $call)
+    private function passthrough(callable $call, ?callable $onData = null)
     {
         $client = new ShippingServiceClient();
         if (!$client->configured()) {
@@ -261,7 +295,14 @@ class CourierPartnerProxyController extends CoreController
 
         $res = $call($client);
         if (!empty($res['ok'])) {
-            return response()->json($res['data'] ?? []);
+            // ok here is the HTTP-level success; the service answers a partner-level failure with 200 +
+            // {ok:false, exchange, provider_order_id?}, so this branch also carries a book that created a
+            // real order but errored later (Shiprocket "order created, AWB pending"). onData sees that.
+            $data = is_array($res['data'] ?? null) ? $res['data'] : [];
+            if ($onData) {
+                $onData($data);
+            }
+            return response()->json($data);
         }
 
         $status = (int) ($res['status'] ?? 0);

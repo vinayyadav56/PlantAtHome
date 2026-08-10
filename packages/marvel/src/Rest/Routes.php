@@ -818,6 +818,11 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
         ->middleware('throttle:5,1');
     Route::post('courier/partners/{code}/test/cancel', [CourierPartnerProxyController::class, 'testCancel'])
         ->middleware('throttle:5,1');
+    // Partner Orders: every console test/book is recorded (above); list them + manually add a known
+    // provider order id (e.g. an existing Porter CRN) so it can be re-tracked. Tracking reuses test/track.
+    Route::get('courier/console-orders', [\App\Http\Controllers\PartnerConsoleOrderController::class, 'index']);
+    Route::post('courier/console-orders', [\App\Http\Controllers\PartnerConsoleOrderController::class, 'store'])
+        ->middleware('throttle:30,1');
     // Route::get('messages/get-conversations/{shop_id}', [ConversationController::class, 'getConversationByShopId']);
     // Route::get('analytics', [AnalyticsController::class, 'analytics']);
     Route::apiResource('types', TypeController::class, [
