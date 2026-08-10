@@ -75,6 +75,10 @@ return [
      */
     'inventory_oversell_policy' => env('INVENTORY_OVERSELL_POLICY', 'log'),
 
+    // Hours before an unpaid PREPAID order is auto-cancelled by
+    // orders:cancel-stale-unpaid (stock + coupon slot return). COD exempt.
+    'stale_unpaid_order_hours' => (int) env('STALE_UNPAID_ORDER_HOURS', 24),
+
     'razorpay' => [
         // Accept either env naming — RAZORPAY_KEY_ID/SECRET (canonical, staging) or the
         // legacy RAZORPAY_KEY/SECRET — so a prod box set up from the old example still works.

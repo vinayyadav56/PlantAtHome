@@ -53,6 +53,12 @@ class Kernel extends ConsoleKernel
         // reservation TTL has lapsed. No-op when nothing is expired.
         $schedule->command('inventory:release-expired')->everyMinute()->withoutOverlapping();
 
+        // Legacy (marvel) order path: cancel prepaid orders left unpaid past the
+        // threshold so their deducted stock + consumed coupon slots return
+        // (creation deducts inside the txn; abandonment/webhook-failed otherwise
+        // leaks them forever). COD/wallet exempt; restore is idempotent.
+        $schedule->command('orders:cancel-stale-unpaid')->everyFifteenMinutes()->withoutOverlapping();
+
         // v2 outbox relay (Phase 0): drain pending domain events to subscribers.
         $schedule->command('outbox:relay --once')->everyMinute()->withoutOverlapping();
 
