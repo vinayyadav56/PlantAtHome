@@ -130,7 +130,12 @@ class ProductController extends CoreController
             if ($key === '') {
                 return;
             }
-            $items = collect($products->items());
+            // Accepts the paginated listing AND the plain collections the homepage
+            // feeds (best-selling / popular / top-rated) return — every public
+            // surface must price from this one overlay or cards and PDP disagree.
+            $items = $products instanceof \Illuminate\Contracts\Pagination\LengthAwarePaginator
+                ? collect($products->items())
+                : collect($products);
             $ids = $items->pluck('id')->filter()->all();
             if (empty($ids)) {
                 return;
@@ -1389,8 +1394,16 @@ class ProductController extends CoreController
     {
         // Heaviest homepage feed (leftJoin order_product + orders + sum + groupBy + sort).
         // Cache anonymous reads under the 'products' namespace.
+        $city = $request->filled('city') ? (string) $request->city : null;
+        // City-price overlay: the homepage rails must show the SAME city price the
+        // listing and PDP show — one price source everywhere.
+        $build = function () use ($request, $city) {
+            $products = $this->repository->getBestSellingProducts($request);
+            $this->overlayCityPrices($products, $city);
+            return $products;
+        };
         if (!$this->isPublicCacheable($request)) {
-            return $this->repository->getBestSellingProducts($request);
+            return $build();
         }
         $limit = $request->limit ? $request->limit : 10;
         $language = $request->language ?? DEFAULT_LANGUAGE;
@@ -1400,7 +1413,7 @@ class ProductController extends CoreController
         // ->toArray() before caching — see the note in popularProducts(). Measured:
         // 114 queries on a cache HIT before this change, because the cached value
         // was a model collection whose appends re-fired on rehydration.
-        return response(Cache::remember($key, 300, fn () => $this->repository->getBestSellingProducts($request)->toArray()))
+        return response(Cache::remember($key, 300, fn () => $build()->toArray()))
             ->header('Cache-Control', $this->cacheControl());
     }
 
@@ -1474,7 +1487,10 @@ class ProductController extends CoreController
             // endpoint ran 105 queries on a cache HIT. Serialising once at build
             // time makes a hit 0 queries, and the emitted JSON is byte-identical
             // because Laravel would have called toArray() on the way out anyway.
-            return $this->withDerivedBundleStock($products_query->take($limit)->get())->toArray();
+            $products = $this->withDerivedBundleStock($products_query->take($limit)->get());
+            // Same city price the listing/PDP show — one price source everywhere.
+            $this->overlayCityPrices($products, $city);
+            return $products->toArray();
         };
         if (!$this->isPublicCacheable($request)) {
             return $build();
@@ -1519,7 +1535,10 @@ class ProductController extends CoreController
             $products_query = (new \Marvel\Services\AvailabilityService())->applyCityScope($products_query, $city, false, 'products.id');
             // Serialise before caching — see the note in popularProducts().
             // Measured: 132 queries on a cache HIT before this change.
-            return $this->withDerivedBundleStock($products_query->take($limit)->get())->toArray();
+            $products = $this->withDerivedBundleStock($products_query->take($limit)->get());
+            // Same city price the listing/PDP show — one price source everywhere.
+            $this->overlayCityPrices($products, $city);
+            return $products->toArray();
         };
         if (!$this->isPublicCacheable($request)) {
             return $build();
