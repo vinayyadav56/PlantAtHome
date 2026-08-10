@@ -162,8 +162,16 @@ class ServiceAvailabilityService
                 return $this->blocked('vertical_disabled_global', $g['message'], $g['status']);
             }
 
-            // Tier 2 — city status (existing City Activation Engine).
-            $cityKey = self::norm($city);
+            // Tier 2 — city status (existing City Activation Engine). Alias the lookup the
+            // SAME way AvailabilityService does (New Delhi + Delhi NCT sub-districts ->
+            // "delhi", Gurgaon -> "gurugram", ...) so a reverse-geocoded sub-district
+            // address resolves to its canonical serviceable city instead of a
+            // non-serviceable sub-district row. The map's city KEYS stay per-row
+            // (self::norm on each name, above), so aliasing ONLY the lookup can't drag the
+            // canonical city down via the most-restrictive same-key aggregation.
+            $cityKey = ($city !== null && trim((string) $city) !== '')
+                ? AvailabilityService::canonicalCityKey((string) $city)
+                : '';
             $c = $cityKey !== '' ? ($map['cities'][$cityKey] ?? null) : null;
             if ($c && !$c['accepts']) {
                 return $this->blocked('city_' . $c['status'], null, $c['status']);

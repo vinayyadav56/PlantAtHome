@@ -417,18 +417,30 @@ class AvailabilityService
     /** @return array<string,string> raw spelling => canonical key */
     public function cityAliases(): array
     {
-        return $this->aliasMap();
+        return self::aliasMap();
     }
 
     public function normalizeCityKey(string $city): string
     {
+        return self::canonicalCityKey($city);
+    }
+
+    /**
+     * Canonical city key: lowercased/trimmed + the shared alias table. STATIC so other
+     * services share the SAME aliases instead of a divergent copy — a mismatch here is
+     * exactly what let "New Delhi" (and every Delhi NCT sub-district) resolve to a
+     * non-serviceable sub-district row in the OCC availability gate while the rest of the
+     * app aliased it to "delhi".
+     */
+    public static function canonicalCityKey(string $city): string
+    {
         $key = strtolower(trim($city));
-        $aliases = $this->aliasMap();
+        $aliases = self::aliasMap();
         return $aliases[$key] ?? $key;
     }
 
-    /** The one alias table (kept private so both helpers above share it). */
-    private function aliasMap(): array
+    /** The one alias table (shared by every helper above). */
+    private static function aliasMap(): array
     {
         static $aliases = [
             'gurgaon'   => 'gurugram',
