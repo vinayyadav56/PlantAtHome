@@ -420,9 +420,13 @@ Route::apiResource('manufacturers', ManufacturerController::class, [
 // (the middleware passes GET, so `orders` show is never blocked).
 Route::post('orders/checkout/verify', [CheckoutController::class, 'verify'])
     ->middleware('service.available:orders');
-Route::apiResource('orders', OrderController::class, [
-    'only' => ['show', 'store'],
-])->middleware('service.available:orders');
+// Split from apiResource so ONLY store carries the throttle: order creation is
+// the most expensive + most abusable endpoint here (PSP intent, emails, stock),
+// while `show` backs the live tracking page's polling and must stay unthrottled.
+Route::get('orders/{order}', [OrderController::class, 'show'])
+    ->middleware('service.available:orders')->name('orders.show');
+Route::post('orders', [OrderController::class, 'store'])
+    ->middleware(['service.available:orders', 'throttle:20,1'])->name('orders.store');
 
 Route::post('/email/verification-notification', [UserController::class, 'sendVerificationEmail'])
     ->middleware(['auth:sanctum', 'throttle:6,1'])

@@ -200,12 +200,39 @@ class OrderController extends CoreController
     public function store(OrderCreateRequest $request)
     {
         try {
-            // decision need
-            // if(!($this->settings->options['useCashOnDelivery'] && $this->settings->options['useEnableGateway'])){
-            //     throw new HttpException(400, PLEASE_ENABLE_PAYMENT_OPTION_FROM_THE_SETTINGS);
-            // }
+            // Checkout idempotency: a duplicate POST with the same Idempotency-Key
+            // (double-click, network retry, refresh) returns the ORIGINAL order.
+            // Pre-check for the fast path; the unique index on orders.idempotency_key
+            // is the authoritative guard when two requests race past it.
+            $idempotencyKey = substr(trim((string) $request->header('Idempotency-Key', '')), 0, 80);
+            $customerId = $request->user()?->id;
+            if ($idempotencyKey !== '') {
+                $existing = $this->repository->findByIdempotencyKey($idempotencyKey, $customerId);
+                if ($existing) {
+                    $existing->makeVisible('tracking_token');
+                    return $existing;
+                }
+                $request->merge(['idempotency_key' => $idempotencyKey]);
+            }
 
-            $order = DB::transaction(fn () => $this->repository->storeOrder($request, $this->settings));
+            try {
+                $order = DB::transaction(fn () => $this->repository->storeOrder($request, $this->settings));
+            } catch (\Illuminate\Database\QueryException $e) {
+                // Lost the idempotency race: the concurrent request committed first.
+                // 23000 = integrity violation; match the column so an unrelated
+                // constraint failure still surfaces normally.
+                $isKeyRace = $idempotencyKey !== ''
+                    && (string) $e->getCode() === '23000'
+                    && str_contains($e->getMessage(), 'idempotency_key');
+                if ($isKeyRace) {
+                    $existing = $this->repository->findByIdempotencyKey($idempotencyKey, $customerId);
+                    if ($existing) {
+                        $existing->makeVisible('tracking_token');
+                        return $existing;
+                    }
+                }
+                throw $e;
+            }
             // Surface the per-order token to the buyer's client (and only here) so the
             // storefront can carry it to the order-confirmation page. It stays hidden
             // in every other response (list/detail) — see Order::$hidden.

@@ -67,6 +67,9 @@ class OrderRepository extends BaseRepository
     protected array $dataArray = [
         'tracking_number',
         'tracking_token',
+        // Client-supplied checkout idempotency key (parent orders only; children
+        // build their own input array in createChildOrder and never inherit it).
+        'idempotency_key',
         'customer_id',
         'shop_id',
         'language',
@@ -138,6 +141,37 @@ class OrderRepository extends BaseRepository
         return static::$supportsTrackingToken;
     }
 
+    /** Same deploy-lag guard as tracking_token — migrations run in the background. */
+    protected static ?bool $supportsIdempotencyKey = null;
+
+    public function ordersSupportIdempotencyKey(): bool
+    {
+        if (static::$supportsIdempotencyKey === null) {
+            static::$supportsIdempotencyKey = \Illuminate\Support\Facades\Schema::hasColumn('orders', 'idempotency_key');
+        }
+        return static::$supportsIdempotencyKey;
+    }
+
+    /**
+     * The order a previous request with this Idempotency-Key already created.
+     * Scoped to the same customer (or to guest orders when unauthenticated) so
+     * one user's key can never surface another user's order.
+     */
+    public function findByIdempotencyKey(string $key, ?int $customerId): ?Order
+    {
+        if ($key === '' || !$this->ordersSupportIdempotencyKey()) {
+            return null;
+        }
+        return Order::where('idempotency_key', $key)
+            ->whereNull('parent_id')
+            ->when(
+                $customerId !== null,
+                fn ($q) => $q->where('customer_id', $customerId),
+                fn ($q) => $q->whereNull('customer_id'),
+            )
+            ->first();
+    }
+
     public function storeOrder($request, $settings): mixed
     {
         $request['tracking_number'] = $this->generateTrackingNumber();
@@ -149,6 +183,11 @@ class OrderRepository extends BaseRepository
         // then orders simply have no token and fall back to the legacy guest view.
         if ($this->ordersSupportTrackingToken()) {
             $request['tracking_token'] = Str::random(48);
+        }
+        // Idempotency key: only persist when the column exists (deploy lag) —
+        // otherwise strip it so the insert can't fail on an unknown column.
+        if (!empty($request['idempotency_key']) && !$this->ordersSupportIdempotencyKey()) {
+            $request['idempotency_key'] = null;
         }
 
         // Operations Control Center — final guard: never create an order
