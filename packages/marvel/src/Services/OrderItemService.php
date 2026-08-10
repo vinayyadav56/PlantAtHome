@@ -39,14 +39,19 @@ class OrderItemService
         return (bool) ($settings?->options['marketplace']['reserve_stock'] ?? false);
     }
 
-    /** Release every still-held reservation on this order (cancel / re-plan). Idempotent. */
-    public function releaseForOrder(Order $order): void
+    /**
+     * Release every still-held reservation on this order (cancel / re-plan). Idempotent.
+     * $keepItemIds: items on live-booked (sealed) shipments — their stock stays reserved.
+     */
+    public function releaseForOrder(Order $order, array $keepItemIds = []): void
     {
         if (!self::reserveEnabled()) {
             return;
         }
         $items = OrderItem::where('order_id', $order->id)
-            ->where('reserved_qty', '>', 0)->whereNotNull('vendor_product_price_id')->get();
+            ->where('reserved_qty', '>', 0)->whereNotNull('vendor_product_price_id')
+            ->when($keepItemIds, fn ($q) => $q->whereNotIn('id', $keepItemIds))
+            ->get();
         foreach ($items as $item) {
             try {
                 VendorProductPrice::releaseStock((int) $item->vendor_product_price_id, (int) $item->reserved_qty);
@@ -131,12 +136,16 @@ class OrderItemService
         [$city, $pincode] = $this->location($order);
         $order->loadMissing('items');
 
-        // Release any stock held by a prior plan before re-planning (avoids leaking reservations).
-        $this->releaseForOrder($order);
+        // Live-booked shipments are SEALED (see isLiveBooked) — the re-plan must leave them and
+        // their items untouched. Remaining items regroup into fresh (unbooked) rows only.
+        [$lockedShipmentIds, $lockedItemIds] = $this->lockedFor($order);
 
-        // Reset prior auto grouping (keep any admin overrides? auto pass re-plans all).
-        Shipment::where('order_id', $order->id)->delete();
-        OrderItem::where('order_id', $order->id)->update([
+        // Release any stock held by a prior plan before re-planning (avoids leaking reservations).
+        $this->releaseForOrder($order, $lockedItemIds);
+
+        // Reset prior auto grouping (keep any admin overrides? auto pass re-plans all UNLOCKED).
+        Shipment::where('order_id', $order->id)->whereNotIn('id', $lockedShipmentIds)->delete();
+        OrderItem::where('order_id', $order->id)->whereNotIn('id', $lockedItemIds)->update([
             'shipment_id' => null,
             'assigned_shop_id' => null,
             'fulfillment_mode' => null,
@@ -148,8 +157,12 @@ class OrderItemService
         $shipments = [];   // "shopId:mode" => Shipment
         $assigned = 0;
         $unfilled = 0;
+        $locked = count($lockedItemIds);
 
         foreach ($order->items as $item) {
+            if (in_array($item->id, $lockedItemIds, true)) {
+                continue; // already on a booked (sealed) vendor shipment
+            }
             $best = $this->engine->bestFor(
                 (int) $item->product_id,
                 $item->variation_option_id ? (int) $item->variation_option_id : null,
@@ -168,6 +181,7 @@ class OrderItemService
         \Marvel\Database\Models\OrderEvent::record($order->id, 'items.assigned', [
             'assigned'  => $assigned,
             'unfilled'  => $unfilled,
+            'locked'    => $locked,
             'shipments' => count($shipments),
             'auto'      => true,
         ]);
@@ -176,6 +190,7 @@ class OrderItemService
             'order_id'  => $order->id,
             'assigned'  => $assigned,
             'unfilled'  => $unfilled,
+            'locked'    => $locked,
             'shipments' => count($shipments),
         ];
     }
@@ -194,37 +209,54 @@ class OrderItemService
             }
         }
 
+        // Items on a live-booked vendor shipment are sealed — reassigning one would silently
+        // change what a real courier is already carrying. Cancel the booking first.
+        [, $lockedItemIds] = $this->lockedFor($order);
+
         $applied = [];
         $rejected = []; // {order_item_id, reason} — surfaced so the admin UI never shows a false success
 
-        foreach ($byItem as $itemId => $shopId) {
-            $item = OrderItem::where('order_id', $order->id)->find($itemId);
-            if (!$item) {
-                $rejected[] = ['order_item_id' => $itemId, 'reason' => 'item not found on this order'];
-                continue;
-            }
-            $candidates = $this->engine->candidatesFor(
-                (int) $item->product_id,
-                $item->variation_option_id ? (int) $item->variation_option_id : null,
-                (int) $item->order_quantity,
-                $city,
-                $pincode
-            );
-            $pick = collect($candidates)->firstWhere('shop_id', $shopId);
-            if (!$pick) {
-                // The chosen vendor can no longer fulfil this line (stock/service-area changed) —
-                // reject explicitly; leave the prior assignment untouched.
-                $rejected[] = ['order_item_id' => $itemId, 'reason' => 'chosen vendor cannot fulfil this line'];
-                continue;
-            }
-            $item->update(['shipment_id' => null]);
+        // One transaction + ONE shared shipments map: a same-vendor multi-item override lands on
+        // one shipment row (the old per-item reset created N duplicate rows that only regroup()
+        // cleaned up — permanently, if anything failed mid-loop).
+        \Illuminate\Support\Facades\DB::transaction(function () use ($order, $byItem, $lockedItemIds, $city, $pincode, &$applied, &$rejected) {
             $shipments = [];
-            $this->applyAssignment($order, $item, $pick, $shipments, 'overridden');
-            $applied[] = $itemId;
-        }
+            foreach ($byItem as $itemId => $shopId) {
+                $item = OrderItem::where('order_id', $order->id)->find($itemId);
+                if (!$item) {
+                    $rejected[] = ['order_item_id' => $itemId, 'reason' => 'item not found on this order'];
+                    continue;
+                }
+                if (in_array($itemId, $lockedItemIds, true)) {
+                    $rejected[] = ['order_item_id' => $itemId, 'reason' => 'vendor shipment already booked — cancel it first'];
+                    continue;
+                }
+                $candidates = $this->engine->candidatesFor(
+                    (int) $item->product_id,
+                    $item->variation_option_id ? (int) $item->variation_option_id : null,
+                    (int) $item->order_quantity,
+                    $city,
+                    $pincode
+                );
+                $pick = collect($candidates)->firstWhere('shop_id', $shopId);
+                if (!$pick) {
+                    // The chosen vendor can no longer fulfil this line (stock/service-area changed) —
+                    // reject explicitly; leave the prior assignment untouched.
+                    $rejected[] = ['order_item_id' => $itemId, 'reason' => 'chosen vendor cannot fulfil this line'];
+                    continue;
+                }
+                $item->update(['shipment_id' => null]);
+                $this->applyAssignment($order, $item, $pick, $shipments, 'overridden');
+                $applied[] = $itemId;
+            }
 
-        // Rebuild shipment groupings cleanly from the items' current assignments.
-        $this->regroup($order);
+            // Rebuild shipment groupings cleanly from the items' current assignments —
+            // only when something actually changed (a fully-rejected request must not
+            // churn shipment rows).
+            if (count($applied) > 0) {
+                $this->regroup($order);
+            }
+        });
 
         if (count($applied) > 0) {
             \Marvel\Database\Models\OrderEvent::record($order->id, 'items.assigned', [
@@ -235,6 +267,29 @@ class OrderItemService
         }
 
         return ['order_id' => $order->id, 'applied' => count($applied), 'rejected' => $rejected];
+    }
+
+    /**
+     * A live-booked shipment (partner order / AWB exists and it isn't cancelled) is SEALED:
+     * its rows and item links must never be deleted, rebuilt or reassigned — doing so orphans
+     * the real partner job, loses the AWB, and deafens the status webhook (which resolves by
+     * shipment id). Cancelling the booking is the only way to unlock it.
+     */
+    private static function isLiveBooked(Shipment $s): bool
+    {
+        return ($s->provider_order_id || $s->awb_number) && $s->status !== 'cancelled';
+    }
+
+    /** @return array{0: array<int>, 1: array<int>} [locked shipment ids, item ids on them] */
+    private function lockedFor(Order $order): array
+    {
+        $lockedShipmentIds = Shipment::where('order_id', $order->id)->get()
+            ->filter(fn ($s) => self::isLiveBooked($s))
+            ->pluck('id')->all();
+        $lockedItemIds = $lockedShipmentIds
+            ? OrderItem::where('order_id', $order->id)->whereIn('shipment_id', $lockedShipmentIds)->pluck('id')->all()
+            : [];
+        return [$lockedShipmentIds, $lockedItemIds];
     }
 
     /** Set an item's assignment + attach it to the matching shipment (create if needed). */
@@ -305,24 +360,35 @@ class OrderItemService
         $item->update($update);
     }
 
-    /** Rebuild shipments from the items' current (assigned_shop_id, mode), dropping empties. */
+    /**
+     * Rebuild shipments from the items' current (assigned_shop_id, mode), dropping empties.
+     * Live-booked (sealed) shipments and their item links are never touched — deleting one
+     * orphans the real partner job and deafens the status webhook. Remaining items for a vendor
+     * whose parcel is already booked regroup into a NEW (unbooked) row: a booked parcel's
+     * contents are frozen at booking.
+     */
     private function regroup(Order $order): void
     {
         $order->load('items');
+        [$lockedShipmentIds, $lockedItemIds] = $this->lockedFor($order);
 
-        // Preserve per-(shop:mode) shipping_cost (+ delivery date) across the rebuild — it
-        // lives only on the shipment, so a naive delete+recreate would silently null it.
+        // Preserve per-(shop:mode) shipping_cost, lane override (mode) + delivery date across the
+        // rebuild — they live only on the shipment, so a naive delete+recreate would null them.
         $prior = [];
         foreach (Shipment::where('order_id', $order->id)->get() as $s) {
             $prior[$s->shop_id . ':' . ($s->fulfillment_mode ?: 'courier')] = [
                 'shipping_cost'        => $s->shipping_cost,
                 'expected_delivery_at' => $s->expected_delivery_at,
+                'mode'                 => $s->mode,
             ];
         }
 
-        Shipment::where('order_id', $order->id)->delete();
+        Shipment::where('order_id', $order->id)->whereNotIn('id', $lockedShipmentIds)->delete();
         $shipments = [];
         foreach ($order->items as $item) {
+            if (in_array($item->id, $lockedItemIds, true)) {
+                continue; // stays on its sealed shipment
+            }
             if (!$item->assigned_shop_id) {
                 $item->update(['shipment_id' => null]);
                 continue;
@@ -338,6 +404,7 @@ class OrderItemService
                     'status'               => 'pending',
                     'eta_days'             => $item->eta_days,
                     'shipping_cost'        => $carried['shipping_cost'] ?? null,
+                    'mode'                 => $carried['mode'] ?? null,
                     'expected_delivery_at' => $carried['expected_delivery_at']
                         ?? ($item->eta_days !== null ? Carbon::now()->addDays((int) $item->eta_days)->toDateString() : null),
                 ]);

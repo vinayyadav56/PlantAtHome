@@ -192,6 +192,12 @@ class CourierService
         if (!$this->shippingServiceEnabled()) {
             return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
         }
+        // One vendor shipment = one live booking. The service is idempotent on shipment_ref anyway,
+        // but refusing here gives the operator a plain answer instead of a silently-deduped 200.
+        // A CANCELLED booking is rebookable (the service reopens the ref with a fresh attempt).
+        if (($shipment->provider_order_id || $shipment->awb_number) && $shipment->status !== 'cancelled') {
+            return ['ok' => false, 'error' => 'This vendor shipment is already booked — cancel the existing booking first to rebook.'];
+        }
         $order = $shipment->order;
         // Checkout stores CASH_ON_DELIVERY, COD or CASH interchangeably. Comparing with === against
         // one of them booked a 'CASH' order as PREPAID, so the rider was never told to collect and

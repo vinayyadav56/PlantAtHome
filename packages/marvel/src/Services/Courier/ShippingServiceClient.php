@@ -274,9 +274,15 @@ class ShippingServiceClient
             'tracking_url'         => ($b['tracking_url'] ?? '') ?: null,
             'payment_method'       => $b['payment_method'] ?? ($cod ? 'cod' : 'prepaid'),
             'cod_amount'           => $cod ? $codAmount : ($shipment->cod_amount),
+            // What the booking actually cost (the service returns booked_cost since ec810b2;
+            // 'cost' is the raw partner Booking shape) — feeds the admin display + margin report.
+            'booked_cost'          => $b['booked_cost'] ?? $b['cost'] ?? null,
             'status'               => ($b['status'] ?? '') ?: 'assigned',
             'last_status'          => 'booked',
             'last_status_at'       => Carbon::now(),
+            // A rebook-after-cancel must not leave a zombie row that reads both booked AND cancelled.
+            'cancelled_at'         => null,
+            'cancelled_reason'     => null,
         ])->save();
 
         // Activity log — one seam covers manual dispatch AND the auto-book listener.
