@@ -393,6 +393,16 @@ class CourierService
         }
         $shipment->forceFill($fill)->save();
 
+        // Activity log — sits AFTER the terminal-sticky and backward/no-op early returns,
+        // so only REAL forward transitions log (webhook replays record nothing). Covers
+        // webhooks, the reconcile poll, and admin mark-RTO — all route through this seam.
+        \Marvel\Database\Models\OrderEvent::record($shipment->order_id, 'shipment.status', [
+            'shipment_id'    => $shipment->id,
+            'from'           => $cur,
+            'to'             => $target,
+            'failure_reason' => $target === 'rto' ? $shipment->failure_reason : null,
+        ]);
+
         if (!empty($map['order_status'])) {
             $order = $shipment->order;
             // A terminal/cancelled order is a FLOOR: a late or replayed shipment event must never

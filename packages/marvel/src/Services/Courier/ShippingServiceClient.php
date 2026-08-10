@@ -278,6 +278,16 @@ class ShippingServiceClient
             'last_status'          => 'booked',
             'last_status_at'       => Carbon::now(),
         ])->save();
+
+        // Activity log — one seam covers manual dispatch AND the auto-book listener.
+        \Marvel\Database\Models\OrderEvent::record($shipment->order_id, 'shipment.booked', [
+            'shipment_id'       => $shipment->id,
+            'partner'           => $shipment->provider,
+            'provider_order_id' => $shipment->provider_order_id,
+            'awb_number'        => $shipment->awb_number,
+            'mode'              => $shipment->mode,
+        ]);
+
         return ['ok' => true, 'shipment' => $shipment->fresh()];
     }
 
@@ -294,6 +304,12 @@ class ShippingServiceClient
             'cancelled_at'     => Carbon::now(),
             'cancelled_reason' => $reason,
         ])->save();
+
+        \Marvel\Database\Models\OrderEvent::record($shipment->order_id, 'shipment.cancelled', [
+            'shipment_id' => $shipment->id,
+            'reason'      => $reason,
+        ]);
+
         return ['ok' => true];
     }
 

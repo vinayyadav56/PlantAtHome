@@ -114,6 +114,13 @@ trait OrderManagementTrait
             $old = $parent->order_status;
             $parent->order_status = $new;
             $parent->saveQuietly();
+            // saveQuietly bypasses the Order model's activity-log observer — record explicitly
+            // so parent orders don't lose their completion/cancellation events.
+            \Marvel\Database\Models\OrderEvent::record($parent->id, 'order.status', [
+                'from'   => $old,
+                'to'     => $new,
+                'rollup' => true,
+            ]);
 
             // P5 stock reservation: the real fulfilment flow flips the parent status HERE
             // (rolled up from its suborders via saveQuietly, which bypasses changeOrderStatus/

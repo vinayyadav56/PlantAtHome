@@ -78,6 +78,34 @@ class Order extends Model
             }
             $builder->orderBy('created_at', 'desc');
         });
+
+        // Activity log — the ONE seam for created/status/payment events. payment_status
+        // and order_status are written from many scattered sites (payment traits, courier
+        // rollups, refunds), so the model observer is the only place that sees them all.
+        // OrderEvent::record swallows failures; wasChanged() keeps no-op saves silent.
+        // NOTE: saveQuietly() bypasses these hooks — the parent-status rollup in
+        // OrderManagementTrait records its own event explicitly.
+        static::created(function (Order $order) {
+            OrderEvent::record($order->id, 'order.created', [
+                'order_status'   => $order->order_status,
+                'payment_status' => $order->payment_status,
+                'parent_id'      => $order->parent_id,
+            ]);
+        });
+        static::updated(function (Order $order) {
+            if ($order->wasChanged('order_status')) {
+                OrderEvent::record($order->id, 'order.status', [
+                    'from' => $order->getOriginal('order_status'),
+                    'to'   => $order->order_status,
+                ]);
+            }
+            if ($order->wasChanged('payment_status')) {
+                OrderEvent::record($order->id, 'payment.status', [
+                    'from' => $order->getOriginal('payment_status'),
+                    'to'   => $order->payment_status,
+                ]);
+            }
+        });
     }
 
     protected $with = ['customer', 'products.variation_options'];

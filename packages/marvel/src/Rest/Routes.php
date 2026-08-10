@@ -1018,6 +1018,8 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('orders/{id}/assign', [OrderAssignmentController::class, 'assign']);
     // Correct the delivery address before a courier dispatch (confirm-dispatch popup).
     Route::put('orders/{id}/shipping-address', [OrderAssignmentController::class, 'updateShippingAddress']);
+    // Order activity log (admin order-detail Activity Timeline), newest-first.
+    Route::get('orders/{id}/events', [OrderAssignmentController::class, 'events']);
 
     // Delivery-partner payouts + profit (P4)
     Route::get('delivery-partner-withdraws', [DeliveryPartnerWithdrawController::class, 'index']);

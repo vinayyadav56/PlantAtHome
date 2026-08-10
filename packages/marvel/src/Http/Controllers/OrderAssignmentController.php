@@ -5,6 +5,7 @@ namespace Marvel\Http\Controllers;
 use Illuminate\Http\Request;
 use Marvel\Database\Models\DeliveryPartner;
 use Marvel\Database\Models\Order;
+use Marvel\Database\Models\OrderEvent;
 use Marvel\Database\Models\Shipment;
 use Marvel\Database\Models\Shop;
 use Marvel\Enums\Permission;
@@ -197,12 +198,28 @@ class OrderAssignmentController extends CoreController
             'assignment_status'   => 'approved',
         ])->save();
 
+        OrderEvent::record($order->id, 'order.assigned', [
+            'vendor_shop_id'      => $order->vendor_shop_id,
+            'delivery_partner_id' => $order->delivery_partner_id,
+            'delivery_mode'       => $order->delivery_mode,
+        ]);
+
         return [
             'message' => 'Assignment saved.',
             'order'   => $order->only([
                 'id', 'vendor_shop_id', 'delivery_partner_id', 'delivery_mode', 'assignment_status',
             ]),
         ];
+    }
+
+    /**
+     * Admin: the order's activity log, newest-first. 50 covers any real order's
+     * lifecycle; old orders (pre event-log) return [] and the admin timeline
+     * falls back to its derived view.
+     */
+    public function events($id)
+    {
+        return OrderEvent::where('order_id', $id)->orderByDesc('id')->limit(50)->get();
     }
 
     /**

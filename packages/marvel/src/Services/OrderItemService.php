@@ -165,6 +165,13 @@ class OrderItemService
             $assigned++;
         }
 
+        \Marvel\Database\Models\OrderEvent::record($order->id, 'items.assigned', [
+            'assigned'  => $assigned,
+            'unfilled'  => $unfilled,
+            'shipments' => count($shipments),
+            'auto'      => true,
+        ]);
+
         return [
             'order_id'  => $order->id,
             'assigned'  => $assigned,
@@ -218,6 +225,15 @@ class OrderItemService
 
         // Rebuild shipment groupings cleanly from the items' current assignments.
         $this->regroup($order);
+
+        if (count($applied) > 0) {
+            \Marvel\Database\Models\OrderEvent::record($order->id, 'items.assigned', [
+                'applied'  => count($applied),
+                'rejected' => count($rejected),
+                'auto'     => false,
+            ]);
+        }
+
         return ['order_id' => $order->id, 'applied' => count($applied), 'rejected' => $rejected];
     }
 
