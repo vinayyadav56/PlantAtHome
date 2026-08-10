@@ -79,6 +79,19 @@ return [
     // orders:cancel-stale-unpaid (stock + coupon slot return). COD exempt.
     'stale_unpaid_order_hours' => (int) env('STALE_UNPAID_ORDER_HOURS', 24),
 
+    /*
+     * Gateways whose PUBLIC webhook endpoints are live. 11 gateway classes ship
+     * with the platform but this business uses Razorpay (+COD); every other
+     * /webhooks/{gateway} URL is a dead, unauthenticated surface. Endpoints not
+     * on this list 404 before touching any payment code. Razorpay additionally
+     * requires its webhook secret to be configured. CSV env, e.g.
+     * WEBHOOK_GATEWAYS=razorpay
+     */
+    'enabled_webhook_gateways' => array_filter(array_map(
+        'trim',
+        explode(',', strtolower((string) env('WEBHOOK_GATEWAYS', 'razorpay,stripe,paypal')))
+    )),
+
     'razorpay' => [
         // Accept either env naming — RAZORPAY_KEY_ID/SECRET (canonical, staging) or the
         // legacy RAZORPAY_KEY/SECRET — so a prod box set up from the old example still works.

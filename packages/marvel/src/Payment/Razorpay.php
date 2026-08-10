@@ -95,14 +95,14 @@ class Razorpay extends Base implements PaymentInterface
             if ($webhookBody && $webhookSignature && $webhookSecret) {
                 $this->api->utility->verifyWebhookSignature($webhookBody, $webhookSignature, $webhookSecret);
             } else {
-                // Invalid request
-                http_response_code(400);
-                exit();
+                // Invalid request. abort(), not `exit()` — a bare exit skips
+                // Laravel's terminate stack (request logging, session teardown)
+                // and hard-kills any in-process test runner.
+                abort(400, 'Invalid webhook request');
             }
         } catch (SignatureVerificationError $e) {
             // Invalid signature
-            http_response_code(400);
-            exit();
+            abort(400, 'Invalid webhook signature');
         }
 
         $eventStatus = (string) Str::of($request->event)->replace('payment.', '', $request->event);
@@ -120,9 +120,10 @@ class Razorpay extends Base implements PaymentInterface
                 $this->updatePaymentOrderStatus($request, OrderStatus::PENDING, PaymentStatus::FAILED);
         }
 
-        // To prevent loop for any case
-        http_response_code(200);
-        exit();
+        // Returning normally yields the 200 the gateway needs — it must never
+        // re-loop a verified delivery (idempotent replays are handled
+        // downstream in webhookSuccessResponse). No exit()/send(): the kernel
+        // emits the response so the terminate stack still runs.
     }
 
     /**

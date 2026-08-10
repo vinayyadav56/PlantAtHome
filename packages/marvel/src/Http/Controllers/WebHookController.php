@@ -12,51 +12,80 @@ use Marvel\Services\Courier\CourierService;
 
 class WebHookController extends CoreController
 {
+    /**
+     * Kill dead gateway surfaces: Payment::handleWebHooks resolves the ACTIVE
+     * gateway no matter which /webhooks/{name} URL was hit, so every URL not on
+     * the allowlist (config shop.enabled_webhook_gateways) is an unauthenticated
+     * alias into live payment code for a gateway this business never enabled —
+     * 404 them before any payment code runs. Razorpay additionally requires its
+     * webhook secret so a half-configured deploy fails closed.
+     */
+    private function gateWebhook(string $gateway): void
+    {
+        $enabled = (array) config('shop.enabled_webhook_gateways', []);
+        if (!in_array(strtolower($gateway), $enabled, true)) {
+            abort(404);
+        }
+        if (strtolower($gateway) === 'razorpay' && empty(config('shop.razorpay.webhook_secret'))) {
+            abort(404);
+        }
+    }
 
     public function stripe(Request $request)
     {
+        $this->gateWebhook('stripe');
         return Payment::handleWebHooks($request);
     }
 
     public function paypal(Request $request)
     {
+        $this->gateWebhook('paypal');
         return Payment::handleWebHooks($request);
     }
 
     public function razorpay(Request $request)
     {
+        $this->gateWebhook('razorpay');
         return Payment::handleWebHooks($request);
     }
     public function mollie(Request $request)
     {
+        $this->gateWebhook('mollie');
         return Payment::handleWebHooks($request);
     }
     public function sslcommerz(Request $request)
     {
+        $this->gateWebhook('sslcommerz');
         return Payment::handleWebHooks($request);
     }
     public function paystack(Request $request)
     {
+        $this->gateWebhook('paystack');
         return Payment::handleWebHooks($request);
     }
     public function paymongo(Request $request)
     {
+        $this->gateWebhook('paymongo');
         return Payment::handleWebHooks($request);
     }
     public function xendit(Request $request)
     {
+        $this->gateWebhook('xendit');
         return Payment::handleWebHooks($request);
     }
     public function iyzico(Request $request)
     {
+        $this->gateWebhook('iyzico');
         return Payment::handleWebHooks($request);
     }
     public function bkash(Request $request)
     {
+        $this->gateWebhook('bkash');
         return Payment::handleWebHooks($request);
     }
     public function flutterwave(Request $request)
     {
+        $this->gateWebhook('flutterwave');
         return Payment::handleWebHooks($request);
     }
     public function callback(Request $request)

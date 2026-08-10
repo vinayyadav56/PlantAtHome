@@ -165,17 +165,17 @@ Route::get('download_url/token/{token}', [DownloadController::class, 'downloadFi
 Route::get('export-order/token/{token}', [OrderController::class, 'exportOrder'])->name('export_order.token');
 Route::post('subscribe-to-newsletter', [UserController::class, 'subscribeToNewsletter'])->name('subscribeToNewsletter');
 Route::get('download-invoice/token/{token}', [OrderController::class, 'downloadInvoice'])->name('download_invoice.token');
-Route::post('webhooks/razorpay', [WebHookController::class, 'razorpay']);
-Route::post('webhooks/stripe', [WebHookController::class, 'stripe']);
-Route::post('webhooks/paypal', [WebHookController::class, 'paypal']);
-Route::post('webhooks/mollie', [WebHookController::class, 'mollie']);
-Route::post('webhooks/sslcommerz', [WebHookController::class, 'sslcommerz'])->name('sslc.sslcommerz');
-Route::post('webhooks/paystack', [WebHookController::class, 'paystack']);
-Route::post('webhooks/paymongo', [WebHookController::class, 'paymongo']);
-Route::post('webhooks/xendit', [WebHookController::class, 'xendit']);
-Route::post('webhooks/iyzico', [WebHookController::class, 'iyzico']);
-Route::post('webhooks/bkash', [WebHookController::class, 'bkash']);
-Route::post('webhooks/flutterwave', [WebHookController::class, 'flutterwave']);
+Route::post('webhooks/razorpay', [WebHookController::class, 'razorpay'])->middleware('throttle:120,1');
+Route::post('webhooks/stripe', [WebHookController::class, 'stripe'])->middleware('throttle:120,1');
+Route::post('webhooks/paypal', [WebHookController::class, 'paypal'])->middleware('throttle:120,1');
+Route::post('webhooks/mollie', [WebHookController::class, 'mollie'])->middleware('throttle:120,1');
+Route::post('webhooks/sslcommerz', [WebHookController::class, 'sslcommerz'])->middleware('throttle:120,1')->name('sslc.sslcommerz');
+Route::post('webhooks/paystack', [WebHookController::class, 'paystack'])->middleware('throttle:120,1');
+Route::post('webhooks/paymongo', [WebHookController::class, 'paymongo'])->middleware('throttle:120,1');
+Route::post('webhooks/xendit', [WebHookController::class, 'xendit'])->middleware('throttle:120,1');
+Route::post('webhooks/iyzico', [WebHookController::class, 'iyzico'])->middleware('throttle:120,1');
+Route::post('webhooks/bkash', [WebHookController::class, 'bkash'])->middleware('throttle:120,1');
+Route::post('webhooks/flutterwave', [WebHookController::class, 'flutterwave'])->middleware('throttle:120,1');
 // SendGrid Event Webhook → email_logs status (delivered/opened/bounced…). Throttled; never 5xxes.
 Route::post('webhooks/sendgrid', [WebHookController::class, 'sendgridEvents'])->middleware('throttle:240,1');
 // Partner shipping webhooks (Borzo/Shiprocket/Porter) are received by the Go shipping-service
@@ -243,7 +243,7 @@ Route::post('corporate-leads', [GardenController::class, 'storeLead'])
     ->middleware('service.available')
     ->middleware('throttle:10,1');
 Route::get('garden-package-templates', [GardenController::class, 'templates']);
-Route::post('webhooks/razorpay-garden', [GardenController::class, 'razorpayWebhook']);
+Route::post('webhooks/razorpay-garden', [GardenController::class, 'razorpayWebhook'])->middleware('throttle:120,1');
 
 // Delivery serviceability — public pincode check (storefront blocks unserviceable
 // pincodes at checkout). Rate-limited.
