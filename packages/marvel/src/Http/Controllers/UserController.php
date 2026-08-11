@@ -599,9 +599,11 @@ class UserController extends CoreController
             $role = Role::STORE_OWNER;
         }
         $user = $this->repository->create([
-            'name'     => $request->name,
-            'email'    => $request->email,
-            'password' => Hash::make($request->password),
+            'name'       => $request->name,
+            'first_name' => $request->first_name,
+            'last_name'  => $request->last_name,
+            'email'      => $request->email,
+            'password'   => Hash::make($request->password),
         ]);
 
         $user->givePermissionTo($permissions);
@@ -882,14 +884,22 @@ class UserController extends CoreController
     /** Find-or-create the customer for a normalized social user and issue an auth token. */
     protected function issueSocialToken($provider, array $u)
     {
-        if (empty($u['email'])) {
+        if (empty($u['email']) || !filter_var($u['email'], FILTER_VALIDATE_EMAIL)) {
             throw new \Exception('Email not provided by ' . $provider);
         }
         $userExist = User::where('email', $u['email'])->exists();
 
+        // Providers can answer with an empty display name — never persist a
+        // nameless account (name = '' used to slip straight into orders and
+        // emails). Fall back to the email local-part.
+        $name = trim((string) ($u['name'] ?? ''));
+        if ($name === '') {
+            $name = ucfirst(strstr($u['email'], '@', true) ?: 'Customer');
+        }
+
         $userCreated = User::firstOrCreate(
             ['email' => $u['email']],
-            ['email_verified_at' => now(), 'name' => $u['name'] ?? '']
+            ['email_verified_at' => now(), 'name' => $name]
         );
 
         $userCreated->providers()->updateOrCreate([
@@ -1036,19 +1046,43 @@ class UserController extends CoreController
         try {
             if ($this->verifyOtp($request)) {
                 $guard->registerSuccess($phoneNumber);
-                // check if phone number exist
-                $profile = Profile::where('contact', $phoneNumber)->first();
+                // Look up by the normalized key first — legacy rows stored the
+                // phone in whatever format the client sent, so the same person
+                // typing "+91…" vs "98…" used to become two accounts. Raw match
+                // kept as a fallback for pre-backfill rows.
+                $normalized = \Marvel\Http\Rules\UniquePhone::normalize($phoneNumber);
+                $profile = ($normalized ? Profile::where('contact_clean', $normalized)->first() : null)
+                    ?? Profile::where('contact', $phoneNumber)->first();
                 $user = '';
                 if (!$profile) {
                     // profile not found so could be a new user
-                    $name = $request->name;
+                    $name = trim((string) ($request->name
+                        ?? trim(((string) $request->first_name) . ' ' . ((string) $request->last_name))));
                     $email = $request->email;
                     if ($name && $email) {
-                        $userExist = User::where('email',  $email)->exists();
-                        $user = User::firstOrCreate([
-                            'email'     => $email
-                        ], [
-                            'name'    => $name,
+                        // Manual Validator (not validate()) — a thrown
+                        // ValidationException would be swallowed by the catch
+                        // below and misreported as INVALID_GATEWAY.
+                        $v = \Illuminate\Support\Facades\Validator::make(
+                            ['name' => $name, 'email' => $email],
+                            ['name' => ['required', 'string', 'max:255'], 'email' => ['required', 'email']]
+                        );
+                        if ($v->fails()) {
+                            return response()->json($v->errors(), 422);
+                        }
+                        // An existing email + an unlinked phone used to silently
+                        // log the caller INTO that email's account (takeover via
+                        // known email + own OTP-verified phone). Refuse instead.
+                        if (User::where('email', $email)->exists()) {
+                            return response()->json([
+                                'email' => ['This email is already registered. Sign in with your email, then add this phone from your profile.'],
+                            ], 422);
+                        }
+                        $user = User::create([
+                            'email'      => $email,
+                            'name'       => $name,
+                            'first_name' => $request->first_name,
+                            'last_name'  => $request->last_name,
                         ]);
                         $user->givePermissionTo(Permission::CUSTOMER);
                         $user->assignRole(Role::CUSTOMER);
@@ -1059,9 +1093,7 @@ class UserController extends CoreController
                                 'contact' => $phoneNumber
                             ]
                         );
-                        if (empty($userExist)) {
-                            $this->giveSignupPointsToCustomer($user->id);
-                        }
+                        $this->giveSignupPointsToCustomer($user->id);
                     } else {
                         return ['message' => REQUIRED_INFO_MISSING, 'success' => false];
                     }
@@ -1093,6 +1125,21 @@ class UserController extends CoreController
         $user = $request->user();
         if (!$user) {
             return ['message' => CONTACT_UPDATE_FAILED, 'success' => false];
+        }
+
+        // Contact drives OTP login, so it must be a real Indian mobile and must
+        // not already belong to a DIFFERENT account (otpLogin logs into the
+        // first match — letting a second account claim the number would make
+        // login nondeterministic).
+        $normalized = \Marvel\Http\Rules\UniquePhone::normalize($phoneNumber);
+        if (!$normalized || !preg_match('/^(\+?91)?[6-9][0-9]{9}$/', preg_replace('/[\s()-]+/', '', (string) $phoneNumber))) {
+            return response()->json(['phone_number' => ['Enter a valid 10-digit Indian mobile number.']], 422);
+        }
+        $taken = Profile::where('contact_clean', $normalized)
+            ->where('customer_id', '!=', $user->id)
+            ->exists();
+        if ($taken) {
+            return response()->json(['phone_number' => ['This phone number is already linked to another account.']], 422);
         }
 
         try {

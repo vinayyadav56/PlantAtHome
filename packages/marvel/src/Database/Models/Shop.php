@@ -22,6 +22,7 @@ class Shop extends Model
         'cover_image' => 'json',
         'address' => 'json',
         'settings' => 'json',
+        'self_delivery' => 'json',
         'documents_due_at' => 'datetime',
         'kyc_reminded_at' => 'datetime',
         'vendor_rating' => 'float',

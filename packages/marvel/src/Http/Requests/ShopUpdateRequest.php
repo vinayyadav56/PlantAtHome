@@ -53,8 +53,30 @@ class ShopUpdateRequest extends FormRequest
             'cover_image'            => ['nullable', 'array'],
             'settings'               => ['array'],
             'address'                => ['array'],
+            // Vendor address = a courier PICKUP address (see ShopCreateRequest).
+            // Complete-on-use: enforced whenever the form sends an address, so a
+            // vendor with legacy incomplete data fixes it at the next save.
+            'address.street_address' => ['required_with:address', 'string', 'max:255'],
+            'address.house_no'       => ['nullable', 'string', 'max:120'],
+            'address.street_address2' => ['nullable', 'string', 'max:255'],
+            'address.area'           => ['nullable', 'string', 'max:120'],
+            'address.landmark'       => ['nullable', 'string', 'max:255'],
+            'address.city'           => ['required_with:address', 'string', 'max:120'],
+            'address.state'          => ['required_with:address', 'string', 'max:120'],
+            'address.zip'            => ['required_with:address', 'regex:/^[1-9][0-9]{5}$/'],
+            'address.country'        => ['nullable', 'string', 'max:64'],
             'lat'                    => ['nullable', 'numeric', 'between:-90,90'],
             'lng'                    => ['nullable', 'numeric', 'between:-180,180'],
+            'delivery_mode'               => ['sometimes', 'in:platform,self'],
+            'self_delivery'               => ['nullable', 'array'],
+            'self_delivery.contact_name'  => ['nullable', 'string', 'max:120'],
+            'self_delivery.contact_phone' => ['nullable', 'string', 'max:20'],
+            'self_delivery.radius_km'     => ['nullable', 'numeric', 'min:0', 'max:500'],
+            'self_delivery.same_day'      => ['nullable', 'boolean'],
+            'self_delivery.cod'           => ['nullable', 'boolean'],
+            'self_delivery.days'          => ['nullable', 'string', 'max:255'],
+            'self_delivery.hours'         => ['nullable', 'string', 'max:255'],
+            'self_delivery.notes'         => ['nullable', 'string', 'max:500'],
             'service_areas'                    => ['nullable', 'array'],
             'service_areas.*.city'             => ['required_with:service_areas', 'string', 'max:100'],
             'service_areas.*.pincode'          => ['nullable', 'string', 'max:12'],
@@ -79,6 +101,11 @@ class ShopUpdateRequest extends FormRequest
         return [
             'mobile.unique'                  => 'Another vendor is already registered with this mobile number.',
             'settings.compliance.gst.unique' => 'This GSTIN is already registered to another vendor.',
+            'address.street_address.required_with' => 'Street address (with house/plot number) is required',
+            'address.city.required_with'           => 'City is required',
+            'address.state.required_with'          => 'State is required',
+            'address.zip.required_with'            => 'PIN code is required',
+            'address.zip.regex'                    => 'Enter a valid 6-digit PIN code',
         ];
     }
 

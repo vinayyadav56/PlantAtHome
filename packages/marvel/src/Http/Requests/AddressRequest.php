@@ -31,6 +31,18 @@ class AddressRequest extends FormRequest
             'type'        => ['required', 'string', 'max:255'],
             'default'     => ['boolean'],
             'address'     => ['required', 'array'],
+            // Canonical address shape (Address::JSON_KEYS) — strict here; the
+            // legacy PUT /users/{id} array path stays soft for old clients.
+            'address.house_no'              => ['nullable', 'string', 'max:120'],
+            'address.street_address'        => ['required', 'string', 'max:255'],
+            'address.street_address2'       => ['nullable', 'string', 'max:255'],
+            'address.area'                  => ['nullable', 'string', 'max:120'],
+            'address.landmark'              => ['nullable', 'string', 'max:255'],
+            'address.city'                  => ['required', 'string', 'max:120'],
+            'address.state'                 => ['required', 'string', 'max:120'],
+            'address.zip'                   => ['required', 'regex:/^[1-9][0-9]{5}$/'],
+            'address.country'               => ['nullable', 'string', 'max:64'],
+            'address.delivery_instructions' => ['nullable', 'string', 'max:500'],
             // Server-set from the authenticated user in the controller — never trusted from the client.
             'customer_id' => ['nullable', 'exists:Marvel\Database\Models\User,id'],
             // Shopping-City redesign — map-pin coordinates (the draggable pin is the source
@@ -44,6 +56,17 @@ class AddressRequest extends FormRequest
             'address_type'    => ['nullable', 'string', 'in:home,office,other'],
             'recipient_name'  => ['nullable', 'string', 'max:255'],
             'recipient_phone' => ['nullable', 'string', 'max:32'],
+        ];
+    }
+
+    public function messages()
+    {
+        return [
+            'address.street_address.required' => 'Street address is required',
+            'address.city.required'           => 'City is required',
+            'address.state.required'          => 'State is required',
+            'address.zip.required'            => 'PIN code is required',
+            'address.zip.regex'               => 'Enter a valid 6-digit PIN code',
         ];
     }
 

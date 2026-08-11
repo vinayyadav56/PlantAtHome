@@ -3,8 +3,10 @@
 namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Marvel\Database\Models\Address;
 use Marvel\Database\Models\Shipment;
 use Marvel\Database\Models\Shop;
+use Marvel\Enums\Permission;
 use Marvel\Services\Courier\CourierService;
 
 /**
@@ -29,6 +31,9 @@ class CourierShipmentController extends CoreController
     public function book(Request $request, $id)
     {
         $shipment = $this->shipment($id);
+        if ($resp = $this->rejectIncompleteAddress($shipment)) {
+            return $resp;
+        }
         $this->assertCustomerLocation($shipment);
         $res = $this->courier()->bookShipment($shipment);
         return response()->json($res, !empty($res['ok']) ? 200 : 409);
@@ -52,6 +57,9 @@ class CourierShipmentController extends CoreController
     public function dispatchShipment(Request $request, $id)
     {
         $shipment = $this->shipment($id);
+        if ($resp = $this->rejectIncompleteAddress($shipment)) {
+            return $resp;
+        }
         $this->assertCustomerLocation($shipment);
         // Optional `partner` books the specific quote the operator chose instead of
         // letting the service re-route. Not validated against a list here on purpose:
@@ -89,6 +97,12 @@ class CourierShipmentController extends CoreController
         }
 
         $shipment = $this->shipment($id);
+        if ($shipment->isSelfDelivery()) {
+            return response()->json([
+                'ok'    => false,
+                'error' => 'Self-delivery shipments have no courier lane.',
+            ], 409);
+        }
         if ($shipment->provider_order_id || $shipment->awb_number) {
             return response()->json([
                 'ok'    => false,
@@ -164,6 +178,125 @@ class CourierShipmentController extends CoreController
     {
         $shop = Shop::findOrFail($id);
         return response()->json($this->courier()->syncPickupLocation($shop));
+    }
+
+    /**
+     * POST shipments/{id}/self-status — manual status walk for SELF-delivery
+     * shipments (the vendor fulfils these; no courier, no DP record). Routes
+     * through applyNormalizedStatus — the exact same seam as partner webhooks —
+     * so the order-status cascade, settlement trigger and terminal-stickiness
+     * guards apply identically to a hand-reported delivery.
+     *
+     * Reachable by staff AND the vendor (nursery app): authorization is
+     * super-admin OR the shop's owner OR staff linked to the shop.
+     */
+    public function selfStatus(Request $request, $id)
+    {
+        $status = (string) $request->input('status');
+        if (!in_array($status, ['shipped', 'out_for_delivery', 'delivered', 'cancelled'], true)) {
+            return response()->json([
+                'ok'    => false,
+                'error' => 'status must be one of: shipped, out_for_delivery, delivered, cancelled.',
+            ], 422);
+        }
+
+        $shipment = $this->shipment($id);
+        if (!$shipment->isSelfDelivery()) {
+            return response()->json([
+                'ok'    => false,
+                'error' => 'Only self-delivery shipments can be updated manually — courier shipments track via the partner.',
+            ], 422);
+        }
+
+        $user = $request->user();
+        $authorized = $user && (
+            $user->hasPermissionTo(Permission::SUPER_ADMIN)
+            || Shop::where('id', $shipment->shop_id)->where('owner_id', $user->id)->exists()
+            || (int) $user->shop_id === (int) $shipment->shop_id
+        );
+        if (!$authorized) {
+            return response()->json(['ok' => false, 'error' => 'Not authorized for this shipment.'], 403);
+        }
+
+        if (in_array((string) $shipment->status, ['delivered', 'cancelled', 'rto'], true)) {
+            return response()->json([
+                'ok'    => false,
+                'error' => "This shipment is already {$shipment->status}.",
+            ], 409);
+        }
+
+        $svc = $this->courier();
+        $svc->applyNormalizedStatus($shipment, $svc->mapServiceStatus($status));
+
+        return response()->json(['ok' => true, 'shipment' => $shipment->fresh()]);
+    }
+
+    /**
+     * POST shops/{id}/delivery-settings — vendor delivery capability
+     * (platform courier stack vs self-delivery + operational metadata).
+     * Writes ONLY the two dedicated columns: the generic PUT /shops/{id}
+     * full-replaces settings/address, which makes it unsafe for partial
+     * writes from the mobile app.
+     */
+    public function deliverySettings(Request $request, $id)
+    {
+        $shop = Shop::findOrFail($id);
+        $user = $request->user();
+        $authorized = $user && (
+            $user->hasPermissionTo(Permission::SUPER_ADMIN)
+            || (int) $shop->owner_id === (int) $user->id
+        );
+        if (!$authorized) {
+            return response()->json(['ok' => false, 'error' => 'Not authorized for this shop.'], 403);
+        }
+
+        $data = $request->validate([
+            'delivery_mode'               => ['required', 'in:platform,self'],
+            'self_delivery'               => ['nullable', 'array'],
+            'self_delivery.contact_name'  => ['nullable', 'string', 'max:120'],
+            'self_delivery.contact_phone' => ['nullable', 'string', 'max:20'],
+            'self_delivery.radius_km'     => ['nullable', 'numeric', 'min:0', 'max:500'],
+            'self_delivery.same_day'      => ['nullable', 'boolean'],
+            'self_delivery.cod'           => ['nullable', 'boolean'],
+            'self_delivery.days'          => ['nullable', 'string', 'max:255'],
+            'self_delivery.hours'         => ['nullable', 'string', 'max:255'],
+            'self_delivery.notes'         => ['nullable', 'string', 'max:500'],
+        ]);
+
+        $shop->forceFill([
+            'delivery_mode' => $data['delivery_mode'],
+            'self_delivery' => $data['self_delivery'] ?? null,
+        ])->save();
+
+        return response()->json([
+            'ok'   => true,
+            'shop' => [
+                'id'            => $shop->id,
+                'delivery_mode' => $shop->delivery_mode,
+                'self_delivery' => $shop->self_delivery,
+            ],
+        ]);
+    }
+
+    /**
+     * Complete-on-use gate at the last server hop before a courier partner:
+     * a snapshot missing street/city/state or a valid 6-digit PIN would only
+     * fail later with a raw partner 422 (Shiprocket's "Wrong address" class of
+     * errors) — refuse here with a fixable message instead.
+     */
+    private function rejectIncompleteAddress(Shipment $shipment)
+    {
+        $order = $shipment->order;
+        $missing = Address::missingFields((array) ($order->shipping_address ?? []));
+        if (!$missing) {
+            return null;
+        }
+        return response()->json([
+            'ok'      => false,
+            'code'    => 'ADDRESS_INCOMPLETE',
+            'missing' => $missing,
+            'error'   => 'The delivery address is incomplete (missing: ' . implode(', ', $missing) . '). Edit the order shipping address, then book.',
+        ], 422);
     }
 
     /** Location Capture gate (flag-gated, default off) for courier bookings. */

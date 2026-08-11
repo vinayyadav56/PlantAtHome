@@ -6,6 +6,7 @@ namespace Marvel\Http\Requests;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Validation\Rule;
 
 
 class UserUpdateRequest extends FormRequest
@@ -28,8 +29,12 @@ class UserUpdateRequest extends FormRequest
     public function rules()
     {
         return [
-            'name'    => ['string', 'max:255'],
-            'email'   => ['email', 'unique:users'],
+            'name'       => ['string', 'max:255'],
+            'first_name' => ['sometimes', 'nullable', 'string', 'max:120'],
+            'last_name'  => ['sometimes', 'nullable', 'string', 'max:120'],
+            // ignore() the user being updated — without it, resubmitting your
+            // own unchanged email was a guaranteed 422.
+            'email'   => ['email', Rule::unique('users')->ignore($this->route('id') ?? $this->route('user'))],
             'shop_id' => ['nullable', 'exists:Marvel\Database\Models\Shop,id'],
             'profile' => ['array'],
             'address' => ['array'],

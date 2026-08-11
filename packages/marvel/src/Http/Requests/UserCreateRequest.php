@@ -28,7 +28,12 @@ class UserCreateRequest extends FormRequest
     public function rules()
     {
         return [
-            'name'     => ['required', 'string', 'max:255'],
+            // Either the legacy single `name` or the structured first_name is
+            // required; old clients keep working, the User::saving observer
+            // converges the two representations.
+            'name'       => ['required_without:first_name', 'nullable', 'string', 'max:255'],
+            'first_name' => ['required_without:name', 'nullable', 'string', 'max:120'],
+            'last_name'  => ['nullable', 'string', 'max:120'],
             'email'    => ['required', 'email', 'unique:users'],
             'password' => ['required', 'string', \Illuminate\Validation\Rules\Password::min(8)],
             'shop_id' => ['nullable', 'exists:Marvel\Database\Models\Shop,id'],
@@ -46,7 +51,8 @@ class UserCreateRequest extends FormRequest
     public function messages()
     {
         return [
-            'name.required'      => 'Name is required',
+            'name.required_without'       => 'Name is required',
+            'first_name.required_without' => 'First name is required',
             'name.string'        => 'Name is not a valid string',
             'name.max:255'       => 'Name can not be more than 255 character',
             'email.required'     => 'email is required',

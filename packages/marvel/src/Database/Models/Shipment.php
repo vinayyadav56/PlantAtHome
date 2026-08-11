@@ -24,6 +24,24 @@ class Shipment extends Model
         'last_status_at'       => 'datetime',
     ];
 
+    /**
+     * Legs the courier stack may touch. shipments.delivery_mode = 'self' means
+     * the VENDOR fulfils this leg (shops.delivery_mode = 'self' at grouping
+     * time) — auto-booking, the undispatched sweep and CourierService::book
+     * must all skip it. Closure keeps the OR properly parenthesised.
+     */
+    public function scopeCourierEligible($query)
+    {
+        return $query->where(function ($q) {
+            $q->whereNull('delivery_mode')->orWhere('delivery_mode', '!=', 'self');
+        });
+    }
+
+    public function isSelfDelivery(): bool
+    {
+        return $this->delivery_mode === 'self';
+    }
+
     public function order(): BelongsTo
     {
         return $this->belongsTo(Order::class, 'order_id');

@@ -305,6 +305,7 @@ class OrderItemService
                 'order_id'             => $order->id,
                 'shop_id'              => $shopId,
                 'fulfillment_mode'     => $mode,
+                'delivery_mode'        => self::shipmentDeliveryModeFor($shopId),
                 'status'               => 'pending',
                 'eta_days'             => $eta,
                 'expected_delivery_at' => $eta !== null ? Carbon::now()->addDays((int) $eta)->toDateString() : null,
@@ -401,6 +402,9 @@ class OrderItemService
                     'order_id'             => $order->id,
                     'shop_id'              => (int) $item->assigned_shop_id,
                     'fulfillment_mode'     => $mode,
+                    // Restamped (not carried) on purpose: reassignment to a
+                    // platform vendor must clear a prior 'self' and vice versa.
+                    'delivery_mode'        => self::shipmentDeliveryModeFor((int) $item->assigned_shop_id),
                     'status'               => 'pending',
                     'eta_days'             => $item->eta_days,
                     'shipping_cost'        => $carried['shipping_cost'] ?? null,
@@ -410,6 +414,21 @@ class OrderItemService
                 ]);
             }
             $item->update(['shipment_id' => $shipments[$key]->id]);
+        }
+    }
+
+    /**
+     * shipments.delivery_mode routing key: 'self' when the vendor fulfils its
+     * own deliveries (shops.delivery_mode = 'self'), else NULL (courier stack).
+     * Deploy-lag safe: a missing column just means platform routing.
+     */
+    private static function shipmentDeliveryModeFor(int $shopId): ?string
+    {
+        try {
+            $mode = \Marvel\Database\Models\Shop::whereKey($shopId)->value('delivery_mode');
+            return $mode === 'self' ? 'self' : null;
+        } catch (\Throwable $e) {
+            return null;
         }
     }
 

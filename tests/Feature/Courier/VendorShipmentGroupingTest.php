@@ -80,6 +80,7 @@ final class VendorShipmentGroupingTest extends TestCase
             $t->unsignedBigInteger('order_id');
             $t->unsignedBigInteger('shop_id')->nullable();
             $t->string('fulfillment_mode')->nullable();
+            $t->string('delivery_mode')->nullable();
             $t->string('mode')->nullable();
             $t->string('status')->default('pending');
             $t->decimal('shipping_cost')->nullable();
@@ -126,6 +127,8 @@ final class VendorShipmentGroupingTest extends TestCase
             $t->text('settings')->nullable();
             $t->string('pickup_location_name')->nullable();
             $t->string('pickup_postcode')->nullable();
+            $t->string('delivery_mode')->default('platform');
+            $t->text('self_delivery')->nullable();
             $t->timestamps();
         });
         DB::table('shops')->insert([
@@ -226,6 +229,25 @@ final class VendorShipmentGroupingTest extends TestCase
         $this->assertSame(5, (int) $locked->fresh()->assigned_shop_id);
         // The free item landed on a NEW vendor-7 shipment.
         $this->assertSame(7, (int) Shipment::find($free->fresh()->shipment_id)->shop_id);
+    }
+
+    public function test_self_delivery_vendor_stamps_shipment_and_reassignment_clears_it(): void
+    {
+        DB::table('shops')->insert(['id' => 7, 'name' => 'Self Vendor', 'delivery_mode' => 'self']);
+        DB::table('shops')->insert(['id' => 8, 'name' => 'Platform Vendor', 'delivery_mode' => 'platform']);
+
+        $order = $this->makeOrder();
+        $item = $this->makeItem($order);
+
+        $this->service(7)->assignItems($order, [['order_item_id' => $item->id, 'shop_id' => 7]]);
+        $row = Shipment::where('order_id', $order->id)->first();
+        $this->assertSame('self', $row->delivery_mode, 'a self-delivery vendor leg must be stamped self');
+
+        // Reassigning to a platform vendor must CLEAR the stamp (restamp, not carry).
+        $this->service(8)->assignItems($order, [['order_item_id' => $item->fresh()->id, 'shop_id' => 8]]);
+        $row2 = Shipment::where('order_id', $order->id)->first();
+        $this->assertSame(8, (int) $row2->shop_id);
+        $this->assertNull($row2->delivery_mode, 'a platform vendor leg must not keep a stale self stamp');
     }
 
     public function test_auto_assign_preserves_booked_rows_and_reports_locked(): void

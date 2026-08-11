@@ -49,11 +49,15 @@ class AddressController extends CoreController
     public function store(AddressRequest $request)
     {
         try {
-            $data = $request->validated();
+            $data = Address::sanitizePayload($request->validated());
             // Never trust a client-supplied customer_id — bind to the caller.
             $data['customer_id'] = $request->user()->id;
             $data = $this->withReverseGeocode($data);
-            return $this->repository->create($data);
+            $address = $this->repository->create($data);
+            if (!empty($data['default'])) {
+                $address->makeSoleDefault();
+            }
+            return $address;
         } catch (MarvelException $e) {
             throw new MarvelException(COULD_NOT_CREATE_THE_RESOURCE);
         }
@@ -88,10 +92,13 @@ class AddressController extends CoreController
         try {
             $address = $this->repository->findOrFail($id);
             $this->authorizeOwner($address, $request);
-            $data = $request->validated();
+            $data = Address::sanitizePayload($request->validated());
             unset($data['customer_id']); // never re-parent an address to another user
             $data = $this->withReverseGeocode($data);
             $address->update($data);
+            if (!empty($data['default'])) {
+                $address->makeSoleDefault();
+            }
             return $address;
         } catch (MarvelException $e) {
             throw new MarvelException(COULD_NOT_UPDATE_THE_RESOURCE);

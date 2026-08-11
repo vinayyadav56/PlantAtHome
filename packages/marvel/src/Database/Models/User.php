@@ -31,7 +31,7 @@ class User extends Authenticatable implements MustVerifyEmail
      * @var array
      */
     protected $fillable = [
-        'name', 'email', 'password', 'is_active', 'shop_id',
+        'name', 'first_name', 'last_name', 'email', 'password', 'is_active', 'shop_id',
         // Phase B — employee / org + RBAC override fields (all nullable).
         'designation_id', 'reporting_manager_id', 'department', 'city', 'state',
         'permission_source', 'permission_overrides',
@@ -61,6 +61,39 @@ class User extends Authenticatable implements MustVerifyEmail
         // Order by updated_at desc
         static::addGlobalScope('order', function (Builder $builder) {
             $builder->orderBy('updated_at', 'desc');
+        });
+
+        // Keep `name` (the authoritative display string every consumer reads)
+        // and first_name/last_name in sync in BOTH directions. This is the
+        // single choke point — five call sites create users with an explicit
+        // `name` (register, social login, OTP login, vendor-owner creation,
+        // DP-login creation) and none of them go through a FormRequest mutator.
+        static::saving(function (User $user) {
+            // Deploy-lag guard (migrations run in the background after deploy):
+            // while the columns don't exist yet, drop the attributes so the
+            // INSERT/UPDATE never references them.
+            try {
+                $supportsSplit = \Illuminate\Support\Facades\Schema::hasColumn('users', 'first_name');
+            } catch (\Throwable $e) {
+                $supportsSplit = false;
+            }
+            if (!$supportsSplit) {
+                unset($user->first_name, $user->last_name);
+                return;
+            }
+            $joined = trim(trim((string) $user->first_name) . ' ' . trim((string) $user->last_name));
+            if (($user->isDirty('first_name') || $user->isDirty('last_name')) && $joined !== '') {
+                $user->name = $joined;
+            } elseif ($user->isDirty('name') || !$user->exists) {
+                $name = trim((string) $user->name);
+                if ($name !== '') {
+                    $parts = preg_split('/\s+/', $name, 2);
+                    $user->first_name = mb_substr($parts[0], 0, 120);
+                    $user->last_name  = isset($parts[1]) && trim($parts[1]) !== ''
+                        ? mb_substr(trim($parts[1]), 0, 120)
+                        : null;
+                }
+            }
         });
     }
 

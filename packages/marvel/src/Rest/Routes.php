@@ -483,6 +483,8 @@ Route::group(['middleware' => ['auth:sanctum', 'can:' . Permission::CUSTOMER, 'e
     Route::put('me/contacts', [ContactController::class, 'updateContacts']);
     Route::post('me/email-otp/send', [ContactController::class, 'sendEmailOtp'])->middleware('throttle:6,1');
     Route::post('me/email-otp/verify', [ContactController::class, 'verifyEmailOtp'])->middleware('throttle:10,1');
+    // Register this device's Expo push token for order/delivery push notifications.
+    Route::post('device-tokens', [\App\Http\Controllers\DeviceTokenController::class, 'store'])->middleware('throttle:30,1');
     Route::apiResource('orders', OrderController::class, [
         'only' => ['index'],
     ]);
@@ -521,8 +523,13 @@ Route::group(['middleware' => ['auth:sanctum', 'can:' . Permission::CUSTOMER, 'e
     Route::put('users/{id}', [UserController::class, 'update']);
     Route::post('/change-password', [UserController::class, 'changePassword']);
     Route::post('/update-contact', [UserController::class, 'updateContact']);
+    // Standardized address CRUD (2026-08): index/store/update were dead code
+    // while the only live write path (PUT /users/{id} address array) had zero
+    // validation. Both paths now share Address::sanitizePayload; this one adds
+    // strict AddressRequest validation. The legacy array path stays for old
+    // mobile builds.
     Route::apiResource('address', AddressController::class, [
-        'only' => ['destroy'],
+        'only' => ['index', 'store', 'update', 'destroy'],
     ]);
     Route::apiResource(
         'refunds',
@@ -774,6 +781,15 @@ Route::group(
  * reveal endpoint.
  */
 Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
+    // Vendor delivery capability (SELF vs PLATFORM). Authorization is inside the
+    // controller (super-admin OR shop owner/staff) so ONE route serves both the
+    // admin panel and the vendor's nursery app.
+    Route::post('shops/{id}/delivery-settings', [CourierShipmentController::class, 'deliverySettings']);
+    // Manual status walk for self-delivery shipments (vendor fulfils; courier
+    // stack skips these legs entirely). Same applyNormalizedStatus seam as
+    // partner webhooks — cascade + settlement + terminal guards included.
+    Route::post('shipments/{id}/self-status', [CourierShipmentController::class, 'selfStatus']);
+
     Route::get('integrations', [IntegrationController::class, 'index'])
         ->middleware('permission:settings.integrations.view');
     Route::get('integrations/{slug}', [IntegrationController::class, 'show'])

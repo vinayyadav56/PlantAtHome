@@ -189,6 +189,13 @@ class CourierService
      */
     public function book(Shipment $shipment, ?string $partnerCode = null): array
     {
+        // Root-cause guard for SELF-delivery vendors: this is the single funnel
+        // every booking path routes through (auto-book listener, admin book +
+        // dispatch buttons, legacy bookShipment) — a self leg must never reach
+        // a courier partner regardless of which caller asked.
+        if ($shipment->isSelfDelivery()) {
+            return ['ok' => false, 'code' => 'SELF_DELIVERY', 'error' => 'Self-delivery shipment — the vendor fulfils this one; no courier booking.'];
+        }
         if (!$this->shippingServiceEnabled()) {
             return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
         }

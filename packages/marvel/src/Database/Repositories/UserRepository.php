@@ -35,6 +35,8 @@ class UserRepository extends BaseRepository
      */
     protected $dataArray = [
         'name',
+        'first_name',
+        'last_name',
         'email',
         // 'shop_id' intentionally NOT self-assignable: a customer could PUT their own id with a
         // victim shop's id and then read/post that shop's private conversations (chat authz
@@ -61,13 +63,19 @@ class UserRepository extends BaseRepository
     {
         try {
             $user = $this->create([
-                'name'     => $request->name,
-                'email'    => $request->email,
-                'password' => Hash::make($request->password),
+                'name'       => $request->name,
+                'first_name' => $request->first_name,
+                'last_name'  => $request->last_name,
+                'email'      => $request->email,
+                'password'   => Hash::make($request->password),
             ]);
             $user->givePermissionTo(UserPermission::CUSTOMER);
             if (isset($request['address']) && count($request['address'])) {
-                $user->address()->createMany($request['address']);
+                // Same whitelist every address writer uses ($guarded = [] on the
+                // model — raw createMany allowed arbitrary column injection).
+                $user->address()->createMany(
+                    array_map(fn ($a) => Address::sanitizePayload((array) $a), $request['address'])
+                );
             }
             if (isset($request['profile'])) {
                 $user->profile()->create($request['profile']);
@@ -114,21 +122,24 @@ class UserRepository extends BaseRepository
             // Address via a guessed id — an IDOR + mass-assignment hole).
             if (isset($request['address']) && count($request['address'])) {
                 foreach ($request['address'] as $address) {
-                    // rg_* are SERVER-derived from the map-pin coordinates (Shopping-City gate
-                    // trusts them) — never accept client values.
-                    $fields = Arr::except((array) $address, [
-                        'id', 'customer_id', 'created_at', 'updated_at',
-                        'rg_city', 'rg_district', 'rg_state', 'rg_pincode',
-                    ]);
+                    // Address::sanitizePayload whitelists table + canonical JSON keys,
+                    // which also guarantees id/customer_id/timestamps and the
+                    // SERVER-derived rg_* fields are never accepted from the client.
+                    $fields = Address::sanitizePayload((array) $address);
                     $fields = $this->withReverseGeocode($fields);
+                    $saved = null;
                     if (isset($address['id'])) {
                         $owned = Address::where('customer_id', $user->id)->find($address['id']);
                         if ($owned) {
                             $owned->update($fields);
+                            $saved = $owned;
                         }
                     } else {
                         $fields['customer_id'] = $user->id;
-                        Address::create($fields);
+                        $saved = Address::create($fields);
+                    }
+                    if ($saved && !empty($fields['default'])) {
+                        $saved->makeSoleDefault();
                     }
                 }
             }

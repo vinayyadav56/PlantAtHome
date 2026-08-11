@@ -62,6 +62,10 @@ class ShopRepository extends BaseRepository
         'contact_person',
         'mobile',
         'upi',
+        // Delivery capability (columns, not settings keys — settings are
+        // full-replaced on update and would silently wipe these).
+        'delivery_mode',
+        'self_delivery',
     ];
 
     /**
