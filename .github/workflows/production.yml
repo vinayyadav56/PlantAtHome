@@ -440,10 +440,10 @@ jobs:
             WantedBy=multi-user.target
             UNIT
             sudo systemctl daemon-reload
-            sudo systemctl enable --now plantathome-queue@default plantathome-queue@careplans plantathome-queue@images plantathome-queue@images-instant plantathome-queue@marketing plantathome-queue@content
+            sudo systemctl enable --now plantathome-queue@default plantathome-queue@careplans plantathome-queue@images plantathome-queue@images-instant plantathome-queue@marketing plantathome-queue@content plantathome-queue@availability
             # restart so workers pick up the NEW code from this deploy
-            sudo systemctl restart 'plantathome-queue@default' 'plantathome-queue@careplans' 'plantathome-queue@images' 'plantathome-queue@images-instant' 'plantathome-queue@marketing' 'plantathome-queue@content'
-            sudo systemctl is-active plantathome-queue@default plantathome-queue@careplans plantathome-queue@images plantathome-queue@images-instant plantathome-queue@marketing plantathome-queue@content
+            sudo systemctl restart 'plantathome-queue@default' 'plantathome-queue@careplans' 'plantathome-queue@images' 'plantathome-queue@images-instant' 'plantathome-queue@marketing' 'plantathome-queue@content' 'plantathome-queue@availability'
+            sudo systemctl is-active plantathome-queue@default plantathome-queue@careplans plantathome-queue@images plantathome-queue@images-instant plantathome-queue@marketing plantathome-queue@content plantathome-queue@availability
 
             # RESTART, not reload — this step writes a new conf.d/zz-opcache.ini
             # above, and opcache.memory_consumption / interned_strings_buffer /

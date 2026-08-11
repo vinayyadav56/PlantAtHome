@@ -41,6 +41,17 @@ class SendOrderCreationNotification implements ShouldQueue
                     'fallback' => fn () => $customer->notify(new OrderPlacedSuccessfully($event->invoiceData)),
                 ]);
             }
+            // Guest orders: no account, but an optionally-provided email gets
+            // the same confirmation — it carries the tokenized tracking link,
+            // the guest's ONLY durable way back to their order (localStorage
+            // was the sole copy before).
+            $guestEmail = !$customer ? ($order->customer_email ?? null) : null;
+            if ($guestEmail && $emailReceiver['customer'] && $order->parent_id == null) {
+                $engine->send('order.placed.customer', $guestEmail, $vars, [
+                    'fallback' => fn () => \Illuminate\Support\Facades\Notification::route('mail', $guestEmail)
+                        ->notify(new OrderPlacedSuccessfully($event->invoiceData)),
+                ]);
+            }
             if ($emailReceiver['admin']) {
                 $admins = $this->adminList();
                 $engine->send('order.placed.admin', $admins->pluck('email')->all(), $vars, [

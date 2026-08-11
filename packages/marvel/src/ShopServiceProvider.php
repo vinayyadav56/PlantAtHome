@@ -297,7 +297,13 @@ class ShopServiceProvider extends ServiceProvider
             return new \Marvel\Translation\TranslationContext();
         });
 
-        $this->app->singleton('payment', function ($app) {
+        // scoped(), not singleton(): queue workers reset scoped instances
+        // BETWEEN jobs, so a defaultPaymentGateway/defaultAi settings change
+        // reaches long-lived workers without queue:restart. Within one FPM web
+        // request the semantics are identical to singleton. Caveat: queued code
+        // must resolve via app('payment')/app('ai') — the static Facade cache
+        // is NOT reset between jobs.
+        $this->app->scoped('payment', function ($app) {
             $active_payment_gateway = '';
             $settings = Settings::first();
 
@@ -316,7 +322,7 @@ class ShopServiceProvider extends ServiceProvider
             }
         });
 
-        $this->app->singleton('ai', function ($app) {
+        $this->app->scoped('ai', function ($app) {
             $active_ai = '';
             $settings = Settings::first();
 

@@ -328,7 +328,7 @@ class ProductRepository extends BaseRepository
             $data = $this->normalizeNumericFields($request->only($this->dataArray));
             $data['slug'] = $this->makeSlug($request);
 
-            if ($setting->options["isProductReview"]) {
+            if ($setting->options["isProductReview"] ?? false) {
                 // Master-catalog model: both admins and vendors may create a
                 // product that goes live immediately, so PUBLISH is a valid
                 // create status alongside draft/under_review.
@@ -695,7 +695,7 @@ class ProductRepository extends BaseRepository
             $data = $this->normalizeNumericFields($request->only($this->dataArray));
             $data['sale_price'] = isset($request['sale_price']) && $request['sale_price'] !== '' ? $request['sale_price'] : null;
 
-            if ($setting->options["isProductReview"]) {
+            if ($setting->options["isProductReview"] ?? false) {
                 $data['status'] = $this->checkProductForPublish($request, $product);
             }
 

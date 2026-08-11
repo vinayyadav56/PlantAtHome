@@ -428,6 +428,10 @@ class LocationController extends CoreController
         // The storefront caches availability by a version key — without this the
         // override sits in the DB and the customer keeps seeing the old number.
         $this->bustServiceAvailability();
+        // The products:* response caches (list/popular/etc.) are a SEPARATE
+        // version namespace — bust them too or the old stock shows for up to
+        // 300s + edge TTL.
+        (new \Marvel\Services\AvailabilityService())->bustCatalogCache();
 
         return $row;
     }

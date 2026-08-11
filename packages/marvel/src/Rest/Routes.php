@@ -1098,6 +1098,9 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('users/unblock-user', [UserController::class, 'activeUser']);
     Route::apiResource('taxes', TaxController::class);
     Route::apiResource('shippings', ShippingController::class);
+    // Operator recovery: rebuild one vendor's city-availability projection now
+    // (also reports the inventory-without-service-areas trap).
+    Route::post('shops/{id}/recompute-availability', [ShopController::class, 'recomputeAvailability']);
     Route::post('approve-shop', [ShopController::class, 'approveShop']);
     Route::post('disapprove-shop', [ShopController::class, 'disApproveShop']);
     // Reset a vendor owner's password (admin-typed) + re-send credentials email.

@@ -221,6 +221,45 @@ class ProductController extends CoreController
     }
 
     /** The publicly-visible product scope the facets are counted over. */
+    /**
+     * hide_unpriced gate, shared by the product list (fetchProducts) and the
+     * filter facets (facetBaseQuery) — the two MUST stay in parity or facet
+     * counts disagree with the list (locked by ProductFilterFacetsTest).
+     *
+     * Master-price OR — when the request carries a city — a city-priced
+     * projection rollup row. The old master-price-only clause ran BEFORE the
+     * city price overlay, so a ₹0-master product that vendors HAD priced via
+     * vendor_product_prices was filtered out before the overlay could ever
+     * price it. The EXISTS is deliberately CITY-SCOPED: a city-agnostic probe
+     * would resurrect ₹0.00 cards for city-less SSR and for serviceable-but-
+     * unmapped cities (full-catalog fallback), which is exactly what this
+     * flag exists to prevent.
+     */
+    private function applyUnpricedGate($query, Request $request)
+    {
+        if (!$request->boolean('hide_unpriced')) {
+            return $query;
+        }
+        $cityKey = $request->filled('city')
+            ? (new \Marvel\Services\AvailabilityService())->normalizeCityKey((string) $request->city)
+            : '';
+        return $query->where(function ($q) use ($cityKey) {
+            $q->where('products.price', '>', 0)
+                ->orWhere('products.sale_price', '>', 0)
+                ->orWhere('products.max_price', '>', 0);
+            if ($cityKey !== '') {
+                $q->orWhereExists(function ($s) use ($cityKey) {
+                    $s->selectRaw('1')
+                        ->from('product_city_availability')
+                        ->whereColumn('product_city_availability.product_id', 'products.id')
+                        ->where('product_city_availability.city', $cityKey)
+                        ->where('product_city_availability.variation_option_id', 0)
+                        ->where('product_city_availability.display_price', '>', 0);
+                });
+            }
+        });
+    }
+
     private function facetBaseQuery(Request $request)
     {
         $query = Product::query()
@@ -229,13 +268,7 @@ class ProductController extends CoreController
             ->where('products.visibility', \Marvel\Enums\ProductVisibilityStatus::VISIBILITY_PUBLIC);
 
         // Customer surfaces send hide_unpriced=1 (same gate as fetchProducts).
-        if ($request->boolean('hide_unpriced')) {
-            $query->where(function ($q) {
-                $q->where('products.price', '>', 0)
-                    ->orWhere('products.sale_price', '>', 0)
-                    ->orWhere('products.max_price', '>', 0);
-            });
-        }
+        $query = $this->applyUnpricedGate($query, $request);
 
         // Optional narrowing to the current listing context (vertical / category pages).
         if ($request->filled('type')) {
@@ -432,13 +465,7 @@ class ProductController extends CoreController
         // unpriced catalogue entries (imported names approved at ₹0, awaiting
         // vendor rates) never render as buyable "₹0.00" cards. Opt-in param —
         // admin/vendor tooling is unaffected.
-        if ($request->boolean('hide_unpriced')) {
-            $products_query = $products_query->where(function ($q) {
-                $q->where('products.price', '>', 0)
-                    ->orWhere('products.sale_price', '>', 0)
-                    ->orWhere('products.max_price', '>', 0);
-            });
-        }
+        $products_query = $this->applyUnpricedGate($products_query, $request);
 
         // City-first availability (single source of truth: AvailabilityService::cityScopeProductIds):
         //   - city has vendor inventory -> STRICT, only that inventory

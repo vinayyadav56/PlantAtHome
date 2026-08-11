@@ -38,6 +38,9 @@ class OrderCreateRequest extends FormRequest
             'delivery_time'           => 'nullable|string',
             'customer_contact'        => 'nullable|string',
             'customer_name'           => 'nullable|string',
+            // Optional guest email — the order confirmation (with the tokenized
+            // tracking link) is sent here when the buyer has no account.
+            'customer_email'          => 'nullable|email:filter|max:255',
             'payment_gateway'         => ['required', Rule::in(PaymentGatewayType::getValues())],
             'altered_payment_gateway' => 'nullable|string',
             'products'                => 'required|array|max:100', // cap lines: each is O(1+) DB queries in storeOrder

@@ -60,6 +60,7 @@ class OrderItemService
             }
             $item->update(['reserved_qty' => 0]);
         }
+        $this->queueProjectionRefresh($items);
     }
 
     /** Commit every reservation on this order (delivered): decrement real stock. Idempotent. */
@@ -80,6 +81,24 @@ class OrderItemService
             // Only drop our handle when the commit actually applied; otherwise keep
             // reserved_qty so a reconcile/release can still recover the held vendor stock.
             $item->update($committed ? ['reserved_qty' => 0, 'item_status' => 'delivered'] : ['item_status' => 'delivered']);
+        }
+        $this->queueProjectionRefresh($items);
+    }
+
+    /**
+     * Stock moved (reserve/release/commit) — refresh the city-availability
+     * projection for the touched products so the storefront's in-stock gate
+     * tracks orders instead of waiting for the 03:30 rebuild. Queued + deduped
+     * (ShouldBeUnique per product); must never fail the order flow.
+     */
+    private function queueProjectionRefresh($items): void
+    {
+        try {
+            foreach (collect($items)->pluck('product_id')->filter()->unique() as $productId) {
+                \Marvel\Jobs\RecomputeProductAvailabilityJob::dispatch((int) $productId);
+            }
+        } catch (\Throwable $e) {
+            // projection is a cache — the daily rebuild repairs any miss
         }
     }
 
@@ -328,6 +347,7 @@ class OrderItemService
                 if (VendorProductPrice::reserveStock((int) $vppId, $qty)) {
                     $reservedQty = $qty;
                 }
+                $this->queueProjectionRefresh([$item]);
             } catch (\Throwable $e) {
                 $reservedQty = 0;
             }

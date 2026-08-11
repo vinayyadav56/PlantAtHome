@@ -91,7 +91,16 @@ class SettingsController extends CoreController
      */
     public function store(SettingsRequest $request)
     {
-        $language = $request->language ? $request->language : DEFAULT_LANGUAGE;
+        // Settings are SINGLE-ROW by design (the translation engine is
+        // flag-gated off, and virtually every server read is a no-arg
+        // Settings::getData() = the DEFAULT_LANGUAGE row). The admin sends
+        // `language: <ui locale>`, and this method used to CREATE a fork row
+        // for that locale — a row no server logic ever read again, so every
+        // toggle saved from a non-default locale silently did nothing.
+        // Always write the default-language row; forget the requested
+        // locale's cache too (that's the row the admin re-reads).
+        $requested = $request->language ? $request->language : DEFAULT_LANGUAGE;
+        $language = DEFAULT_LANGUAGE;
         $request->merge([
             'options' => [
                 ...$request->options,
@@ -100,15 +109,15 @@ class SettingsController extends CoreController
             ]
         ]);
 
-        $data = $this->repository->where('language', $request->language)->first();
+        $data = $this->repository->where('language', $language)->first();
 
+        Cache::forget('cached_settings_' . $language);
+        if ($requested !== $language) {
+            Cache::forget('cached_settings_' . $requested);
+        }
         if ($data) {
-            if (Cache::has('cached_settings_' . $language)) {
-                Cache::forget('cached_settings_' . $language);
-            }
             $settings =  tap($data)->update($request->only(['options']));
         } else {
-            // Cache::flush();
             $settings =  $this->repository->create(['options' => $request['options'], 'language' => $language]);
         }
         event(new Maintenance($language));

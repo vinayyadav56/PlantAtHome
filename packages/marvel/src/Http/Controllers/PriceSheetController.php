@@ -118,6 +118,12 @@ class PriceSheetController extends CoreController
     {
         $row = VendorProductPrice::findOrFail($id);
         $row->delete();
+        // Removing supply changes the city projection — without this the
+        // product stayed listed (with a price no vendor offers) until the
+        // 03:30 rebuild.
+        $availability = new \Marvel\Services\AvailabilityService();
+        $availability->recomputeForProduct((int) $row->product_id);
+        $availability->bustCatalogCache();
         return $row;
     }
 

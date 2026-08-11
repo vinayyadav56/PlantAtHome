@@ -22,6 +22,7 @@ use Marvel\Database\Models\Wallet;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Settings;
 use Marvel\Database\Models\User;
+use Illuminate\Http\Exceptions\HttpResponseException;
 use Marvel\Database\Models\Variation;
 use Marvel\Services\PricingService;
 use Marvel\Enums\CouponType;
@@ -90,6 +91,7 @@ class OrderRepository extends BaseRepository
         'delivery_fee',
         'customer_contact',
         'customer_name',
+        'customer_email',
         'note',
         'vendor_cost_total',
         // Operations / courier-area order flags (set by the storefront when the
@@ -289,6 +291,13 @@ class OrderRepository extends BaseRepository
                 throw new AuthorizationException(NOT_AUTHORIZED);
             }
         }
+
+        // Admin toggles must actually gate behavior (they were UI-only):
+        // maintenance blocks ordering for non-staff; COD-off refuses COD orders
+        // a client submits directly (the storefront hides the option, but
+        // hiding is not enforcement).
+        $this->assertNotUnderMaintenance($request);
+        $this->assertCodAllowed($request);
         // Server-authoritative pricing: for vendor-supplied products, charge the CITY
         // selling price (max vendor rate + PlantAtHome margin — computed here, not
         // trusted from the client). Products without vendor inventory are untouched.
@@ -539,6 +548,16 @@ class OrderRepository extends BaseRepository
     {
         try {
             $orderInput = $request->only($this->dataArray);
+            // Deploy-lag guard: migrations run in the background after deploy —
+            // an INSERT naming a not-yet-migrated column would fail the order.
+            try {
+                if (isset($orderInput['customer_email'])
+                    && !\Illuminate\Support\Facades\Schema::hasColumn('orders', 'customer_email')) {
+                    unset($orderInput['customer_email']);
+                }
+            } catch (\Throwable $e) {
+                unset($orderInput['customer_email']);
+            }
             $order = $this->create($orderInput);
             $products = $this->processProducts($request['products'], $request['customer_id'], $order);
             $order->products()->attach($products);
@@ -935,6 +954,59 @@ class OrderRepository extends BaseRepository
                 ? 'Some items are currently unavailable in ' . $city . '. Please remove them and try again.'
                 : 'Some items in your cart are currently unavailable. Please remove them and try again.';
             throw new \Symfony\Component\HttpKernel\Exception\HttpException(503, $message);
+        }
+    }
+
+    /**
+     * Maintenance mode used to be a storefront overlay only — the APIs kept
+     * accepting orders. When isUnderMaintenance is ON (and now is within the
+     * optional start/until window), refuse order placement for everyone
+     * except staff with a clear 503 the storefront can render.
+     */
+    protected function assertNotUnderMaintenance($request): void
+    {
+        try {
+            $options = (array) (Settings::getData()->options ?? []);
+            if (!($options['isUnderMaintenance'] ?? false)) {
+                return;
+            }
+            $window = (array) ($options['maintenance'] ?? []);
+            $now = now();
+            if (!empty($window['start']) && $now->lt(\Carbon\Carbon::parse($window['start']))) {
+                return; // scheduled but not started
+            }
+            if (!empty($window['until']) && $now->gt(\Carbon\Carbon::parse($window['until']))) {
+                return; // window already over (toggle left on)
+            }
+        } catch (\Throwable $e) {
+            return; // fail-open: a broken maintenance config must never block orders
+        }
+
+        $u = $request->user();
+        if ($u && ($u->hasPermissionTo(Permission::SUPER_ADMIN) || $u->hasPermissionTo(Permission::STAFF))) {
+            return;
+        }
+        throw new \Symfony\Component\HttpKernel\Exception\HttpException(
+            503,
+            'We are briefly down for maintenance — please try again shortly.'
+        );
+    }
+
+    /**
+     * COD-off must be ENFORCED, not just hidden in the payment grid — a client
+     * posting payment_gateway=CASH_ON_DELIVERY directly was accepted.
+     */
+    protected function assertCodAllowed($request): void
+    {
+        if (!PaymentGatewayType::isCashOnDelivery($request['payment_gateway'] ?? null)) {
+            return;
+        }
+        $options = (array) (Settings::getData()->options ?? []);
+        if (array_key_exists('useCashOnDelivery', $options) && !$options['useCashOnDelivery']) {
+            throw new HttpResponseException(response()->json([
+                'code'    => 'COD_DISABLED',
+                'message' => 'Cash on delivery is currently unavailable — please choose an online payment method.',
+            ], 422));
         }
     }
 

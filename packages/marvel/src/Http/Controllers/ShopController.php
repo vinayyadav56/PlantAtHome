@@ -234,6 +234,44 @@ class ShopController extends CoreController
         return $shop->fresh();
     }
 
+    /**
+     * POST shops/{id}/recompute-availability — operator recovery: rebuild the
+     * city-availability projection for one vendor's catalogue NOW (previously
+     * only reachable via the 03:30 cron or a gh workflow). Small catalogues
+     * rebuild inline for instant feedback; big ones go to the availability
+     * queue so the request can't time out.
+     */
+    public function recomputeAvailability(Request $request, $id)
+    {
+        if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
+            throw new MarvelException(NOT_AUTHORIZED);
+        }
+        $shop = Shop::findOrFail($id);
+        $productCount = \Marvel\Database\Models\VendorProductPrice::where('shop_id', $shop->id)
+            ->distinct('product_id')->count('product_id');
+        $areaCount = \Marvel\Database\Models\VendorServiceArea::where('shop_id', $shop->id)
+            ->where('is_active', true)->count();
+
+        $inline = $productCount <= 100;
+        if ($inline) {
+            (new \Marvel\Services\AvailabilityService())->recomputeForShop((int) $shop->id);
+        } else {
+            \Marvel\Jobs\RecomputeShopAvailabilityJob::dispatch((int) $shop->id);
+        }
+
+        return [
+            'ok'            => true,
+            'mode'          => $inline ? 'inline' : 'queued',
+            'products'      => $productCount,
+            'service_areas' => $areaCount,
+            // The #1 reason a vendor's catalogue is invisible: inventory exists
+            // but no active service areas ⇒ the projection has no cities to write.
+            'warning'       => ($productCount > 0 && $areaCount === 0)
+                ? 'This vendor has inventory but ZERO active service areas — nothing can be projected into any city. Add service areas or delivery coverage first.'
+                : null,
+        ];
+    }
+
     public function approveShop(ApproveShopRequest $request)
     {
         if (!$request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
