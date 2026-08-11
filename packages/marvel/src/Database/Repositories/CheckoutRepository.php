@@ -35,6 +35,32 @@ class CheckoutRepository
         $minimumOrderAmount = isset($settings['options']['minimumOrderAmount']) ? $settings['options']['minimumOrderAmount'] : 0;
         $unavailable_products = $this->checkStock($request['products']);
 
+        // A VARIABLE product line with no variation_option_id can never be
+        // ordered (order-create needs the variation) — old carts contain such
+        // ghost lines (added before option-selection was enforced) and they
+        // used to sail through verify only to 404 the order. Reported as a
+        // SEPARATE line-level key (NOT unavailable_products, which is
+        // product-level — flagging the product there would also kill the
+        // customer's valid variation lines of the same product).
+        $invalid_option_lines = [];
+        try {
+            $ids = collect($request['products'])->pluck('product_id')->filter()->unique()->values()->all();
+            if (!empty($ids)) {
+                $variableIds = Product::whereIn('id', $ids)
+                    ->where('product_type', 'variable')->pluck('id')
+                    ->map(fn ($i) => (int) $i)->flip();
+                foreach ((array) $request['products'] as $line) {
+                    $pid = (int) ($line['product_id'] ?? 0);
+                    if ($pid && isset($variableIds[$pid]) && empty($line['variation_option_id'])) {
+                        $invalid_option_lines[] = $pid;
+                    }
+                }
+                $invalid_option_lines = array_values(array_unique($invalid_option_lines));
+            }
+        } catch (\Throwable $e) {
+            // fail open — the order-create guard still refuses cleanly
+        }
+
         // Operations Control Center — block any cart line whose vertical is
         // currently unavailable in the shipping city. FAIL OPEN: no city ⇒ no gate.
         $blocked_verticals = [];
@@ -157,6 +183,11 @@ class CheckoutRepository
             // an explicit cutover, so the charged total stays byte-identical. Never throws.
             'optimized'            => $this->optimizedCheckout($request, (float) $amount, (bool) ($request['isFullWalletPayment'] ?? false)),
             'unavailable_products' => $unavailable_products,
+            // Line-level: VARIABLE products whose cart line has no
+            // variation_option_id (ghost lines from old carts). Clients drop
+            // exactly the option-less line — the product's valid variation
+            // lines stay orderable.
+            'invalid_option_lines' => $invalid_option_lines,
             'city_stock'           => $city_stock,
             // Shopping-City gate: null when OK / not applicable; else
             // { code, shopping_city, address_city } for the storefront mismatch dialog.

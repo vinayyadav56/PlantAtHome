@@ -699,6 +699,15 @@ class OrderRepository extends BaseRepository
                     if ($productData->product_type === ProductType::SIMPLE) {
                         $this->storeOrderedFile($productData, $product['order_quantity'], $customer_id, $order->tracking_number);
                     } else if ($productData->product_type === ProductType::VARIABLE) {
+                        // A variable line without its variation used to hit
+                        // findOrFail(null) → an opaque 404 ("No query results
+                        // for model [Variation]") that killed the whole order.
+                        // Refuse with something the customer can act on.
+                        if (empty($product['variation_option_id'])) {
+                            throw new HttpResponseException(response()->json([
+                                'message' => "'{$productData->name}' is missing its size/option selection — please remove it from your cart and add it again.",
+                            ], 422));
+                        }
                         $variation_option = Variation::with('digital_file')->findOrFail($product['variation_option_id']);
                         $this->storeOrderedFile($variation_option, $product['order_quantity'], $customer_id, $order->tracking_number);
                     }
