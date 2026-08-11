@@ -79,6 +79,12 @@ return [
     // orders:cancel-stale-unpaid (stock + coupon slot return). COD exempt.
     'stale_unpaid_order_hours' => (int) env('STALE_UNPAID_ORDER_HOURS', 24),
 
+    // Minutes a courier shipment may sit unbooked (no provider_order_id/awb) on a
+    // payable, non-cancelled order before courier:sweep-undispatched alarms. This
+    // is a fulfilment safety net over the BookCourierShipments auto-book listener;
+    // it only alarms, it never rebooks. No-op when courier is disabled.
+    'undispatched_shipment_alert_minutes' => (int) env('UNDISPATCHED_SHIPMENT_ALERT_MINUTES', 120),
+
     /*
      * Gateways whose PUBLIC webhook endpoints are live. 11 gateway classes ship
      * with the platform but this business uses Razorpay (+COD); every other

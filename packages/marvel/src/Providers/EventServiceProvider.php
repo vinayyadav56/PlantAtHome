@@ -42,6 +42,7 @@ use Marvel\Listeners\DigitalProductNotifyLogsListener;
 use Marvel\Listeners\FlashSaleProductProcess;
 use Marvel\Listeners\MaintenanceNotification;
 use Marvel\Listeners\OwnershipTransferStatusControlListener;
+use Marvel\Listeners\BookCourierShipments;
 use Marvel\Listeners\ProductInventoryDecrement;
 use Marvel\Listeners\ProductInventoryRestore;
 use Marvel\Listeners\ProductReviewApprovedListener;
@@ -94,6 +95,9 @@ class EventServiceProvider extends ServiceProvider
         ],
         OrderProcessed::class => [
             ProductInventoryDecrement::class,
+            // COD + full-wallet orders are confirmed at creation ⇒ auto-book here. Prepaid
+            // orders are still payment-PENDING at this point; they book on PaymentSuccess.
+            BookCourierShipments::class,
         ],
         OrderCancelled::class => [
             ProductInventoryRestore::class,
@@ -110,7 +114,9 @@ class EventServiceProvider extends ServiceProvider
             OwnershipTransferStatusControlListener::class
         ],
         PaymentSuccess::class => [
-            SendPaymentSuccessNotification::class
+            SendPaymentSuccessNotification::class,
+            // Prepaid orders become fulfilable only once payment settles ⇒ auto-book here.
+            BookCourierShipments::class,
         ],
         PaymentFailed::class => [
             SendPaymentFailedNotification::class

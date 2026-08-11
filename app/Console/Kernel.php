@@ -46,8 +46,17 @@ class Kernel extends ConsoleKernel
 
         $schedule->command('marvel:run-settlements')->dailyAt('04:00')->withoutOverlapping();
 
-        // Re-track open courier shipments + re-apply status (recovers missed/failed webhooks).
-        // No-op unless courier is enabled, so it's safe to always schedule.
+        // Courier fulfilment safety net: alarm on shipments that auto-booking never dispatched
+        // (payable, non-cancelled orders left unbooked past the SLA). Alarm only — it never
+        // rebooks. No-op when courier is off. Status recovery for BOOKED shipments lives in the
+        // Go shipping-service's reconcile loop, not here. 5-min mutex so a dead container can't
+        // hold the lock for 24h.
+        $schedule->command('courier:sweep-undispatched')->everyFifteenMinutes()->withoutOverlapping(5);
+
+        // Courier margin watch: orders whose delivery fee was less than the partner cost
+        // (charged delivery_fee vs Σ shipment booked_cost). Report-only (logs); dormant
+        // until courier bookings exist.
+        $schedule->command('courier:margin-report')->dailyAt('05:00')->withoutOverlapping();
 
         // v2 Inventory (Phase 5): return stock held by abandoned checkouts whose
         // reservation TTL has lapsed. No-op when nothing is expired.
