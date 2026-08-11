@@ -31,7 +31,7 @@ use Symfony\Component\HttpKernel\Exception\HttpException;
 class CourierPartnerProxyController extends CoreController
 {
     /** Partners whose runtime config may be proxied (defence-in-depth on the {code} path param). */
-    private array $allowedPartners = ['porter', 'borzo', 'shiprocket'];
+    private array $allowedPartners = ['porter', 'borzo', 'shiprocket', 'shiprocket_quick'];
 
     public function show(Request $request, string $code)
     {

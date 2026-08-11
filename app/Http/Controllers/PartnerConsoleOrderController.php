@@ -14,7 +14,7 @@ use Illuminate\Routing\Controller;
  */
 class PartnerConsoleOrderController extends Controller
 {
-    private const PARTNERS = ['porter', 'borzo', 'shiprocket'];
+    private const PARTNERS = ['porter', 'borzo', 'shiprocket', 'shiprocket_quick'];
 
     /** GET courier/console-orders?partner=&limit= — newest first, optional partner filter. */
     public function index(Request $request)
@@ -33,7 +33,7 @@ class PartnerConsoleOrderController extends Controller
     public function store(Request $request)
     {
         $data = $request->validate([
-            'partner_code'      => 'required|string|in:porter,borzo,shiprocket',
+            'partner_code'      => 'required|string|in:porter,borzo,shiprocket,shiprocket_quick',
             'provider_order_id' => 'required|string|max:191',
         ]);
 

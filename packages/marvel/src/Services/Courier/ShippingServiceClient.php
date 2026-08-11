@@ -458,6 +458,37 @@ class ShippingServiceClient
         ];
     }
 
+    /**
+     * Register the shop's pickup location at Shiprocket (idempotent service-side). Coordinates
+     * ride along — they're required for the hyperlocal lane (Shiprocket Quick) and harmless for
+     * standard courier. Returns {ok, outcome?, error?}.
+     */
+    public function registerPickup($shop): array
+    {
+        $a = $this->addressFromShop($shop);
+        $res = $this->request('post', '/v1/partners/shiprocket/register-pickup', [
+            'name'    => 'shop-' . $shop->id,
+            'contact' => (string) ($a['name'] ?? 'PlantAtHome'),
+            'phone'   => (string) ($a['phone'] ?? ''),
+            'address' => (string) ($a['address'] ?? ''),
+            'line2'   => (string) ($a['line2'] ?? ''),
+            'city'    => (string) ($a['city'] ?? ''),
+            'state'   => (string) ($a['state'] ?? ''),
+            'pincode' => (string) ($a['pincode'] ?? ''),
+            'lat'     => (float) ($a['lat'] ?? 0),
+            'lng'     => (float) ($a['lng'] ?? 0),
+        ]);
+        if (empty($res['ok'])) {
+            return ['ok' => false, 'error' => $res['error'] ?? 'Shipping service unreachable.'];
+        }
+        $d = (array) ($res['data'] ?? []);
+        return [
+            'ok'      => (bool) ($d['ok'] ?? false),
+            'outcome' => $d['outcome'] ?? null,
+            'error'   => $d['error'] ?? null,
+        ];
+    }
+
     private function addressFromShop($shop): array
     {
         $a = (array) ($shop->address ?? []);

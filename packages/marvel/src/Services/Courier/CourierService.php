@@ -283,8 +283,10 @@ class CourierService
     }
 
     /**
-     * Vendor pickup registration is a shipping-service concern now. We still stamp the local
-     * pickup nickname/postcode (domain data other flows read), but no partner API is called.
+     * Register the vendor's pickup location: stamp the local nickname/postcode (domain data other
+     * flows read) AND register it AT Shiprocket via the shipping service. The create call
+     * references pickup_location by nickname — an unregistered one 422s every booking, and for a
+     * long time nothing here actually registered it (the button was a local-only stamp).
      */
     public function syncPickupLocation(Shop $shop): array
     {
@@ -293,7 +295,22 @@ class CourierService
             'pickup_location_name' => 'shop-' . $shop->id,
             'pickup_postcode'      => $shop->pickup_postcode ?: ($addr['zip'] ?? null),
         ])->save();
-        return ['ok' => true, 'pickup_location_name' => $shop->pickup_location_name, 'error' => null];
+
+        if (!$this->shippingServiceEnabled()) {
+            return [
+                'ok'                   => false,
+                'pickup_location_name' => $shop->pickup_location_name,
+                'error'                => 'Courier is off or the shipping service is not configured — pickup was stamped locally but NOT registered at the partner.',
+            ];
+        }
+
+        $res = $this->shippingClient()->registerPickup($shop);
+        return [
+            'ok'                   => (bool) ($res['ok'] ?? false),
+            'pickup_location_name' => $shop->pickup_location_name,
+            'outcome'              => $res['outcome'] ?? null,
+            'error'                => $res['error'] ?? null,
+        ];
     }
 
     /**
