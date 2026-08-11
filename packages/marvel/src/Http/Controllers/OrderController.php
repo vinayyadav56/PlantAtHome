@@ -321,11 +321,25 @@ class OrderController extends CoreController
 
         $providedToken = (string) ($request->query('token') ?? $request->input('token') ?? '');
 
+        $isSuperAdmin = $user && $user->hasPermissionTo(Permission::SUPER_ADMIN);
+        $isVendor     = ($user && isset($order->shop_id) && $this->repository->hasPermission($user, $order->shop_id))
+            // Single-shop model: the fulfilling vendor's claim comes from the assignment
+            // layer (order_items.assigned_shop_id), not the order's (master) shop_id.
+            || $this->vendorHasAssignment($user, $order);
+
         if (!$order->customer_id) {
-            // GUEST order (no owner to authorise against). New orders carry a per-order
-            // secret token; require it so an attacker can't harvest a buyer's order by
-            // enumerating tracking numbers. On any mismatch we behave EXACTLY like a
-            // missing order (404) so we don't even confirm the order exists.
+            // GUEST order (no owner to authorise against). Staff who could see it
+            // in the admin panel anyway view it WITHOUT the per-order token — the
+            // token gate below exists to stop anonymous tracking-number
+            // enumeration, and requiring it from a super-admin made every guest
+            // order unopenable in the admin (the panel never has the token).
+            if ($isSuperAdmin || $isVendor) {
+                return $order;
+            }
+            // Anonymous/customer viewers: new orders carry a per-order secret
+            // token; require it so an attacker can't harvest a buyer's order by
+            // enumerating tracking numbers. On any mismatch we behave EXACTLY
+            // like a missing order (404) so we don't even confirm it exists.
             if (!empty($order->tracking_token)) {
                 if ($providedToken === '' || !hash_equals((string) $order->tracking_token, $providedToken)) {
                     throw new ModelNotFoundException(NOT_FOUND);
@@ -341,12 +355,7 @@ class OrderController extends CoreController
         }
 
         // REGISTERED-customer order: owner, the fulfilling vendor, or a super-admin only.
-        $isSuperAdmin = $user && $user->hasPermissionTo(Permission::SUPER_ADMIN);
-        $isOwner      = $user && ((int) $user->id === (int) $order->customer_id);
-        $isVendor     = ($user && isset($order->shop_id) && $this->repository->hasPermission($user, $order->shop_id))
-            // Single-shop model: the fulfilling vendor's claim comes from the assignment
-            // layer (order_items.assigned_shop_id), not the order's (master) shop_id.
-            || $this->vendorHasAssignment($user, $order);
+        $isOwner = $user && ((int) $user->id === (int) $order->customer_id);
         if ($isSuperAdmin || $isOwner || $isVendor) {
             return $order;
         }
@@ -395,8 +404,13 @@ class OrderController extends CoreController
         }
 
         if ($order->customer_id === null) {
-            // GUEST order — require the per-order token (new orders); fall back to the
-            // PII-stripped public view only for legacy token-less orders.
+            // GUEST order — staff view it without the per-order token (the token
+            // gate stops anonymous tracking-number enumeration, not the admin).
+            if ($user && $user->can('super_admin')) {
+                return $order;
+            }
+            // Everyone else: require the per-order token (new orders); fall back to
+            // the PII-stripped public view only for legacy token-less orders.
             if (!empty($order->tracking_token)) {
                 if ($providedToken === '' || !hash_equals((string) $order->tracking_token, $providedToken)) {
                     throw new MarvelException(NOT_FOUND);
