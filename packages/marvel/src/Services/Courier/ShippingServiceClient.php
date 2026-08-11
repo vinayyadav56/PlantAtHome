@@ -261,6 +261,18 @@ class ShippingServiceClient
         $res = $this->request('post', '/v1/shipments', $this->buildRequest($shipment, $mode, $cod, $codAmount, $partnerCode));
         if (empty($res['ok'])) {
             $shipment->forceFill(['last_status' => 'book_failed', 'failure_reason' => $res['error'] ?? 'shipping service'])->save();
+            // Structured, correlatable failure record: shipment id doubles as
+            // shipment_ref on the Go-service/partner side. Never logs payloads
+            // or credentials — the provider's error string only.
+            Log::warning('courier.book.failed', [
+                'order_id'    => $shipment->order_id,
+                'shipment_id' => $shipment->id,
+                'shop_id'     => $shipment->shop_id,
+                'mode'        => $mode,
+                'partner'     => $partnerCode,
+                'http_status' => $res['status'] ?? null,
+                'error'       => $res['error'] ?? null,
+            ]);
             return ['ok' => false, 'error' => $res['error'] ?? 'Shipping service book failed.'];
         }
         $b = (array) ($res['data'] ?? []);
