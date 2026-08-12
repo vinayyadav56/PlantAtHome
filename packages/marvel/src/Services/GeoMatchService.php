@@ -28,6 +28,28 @@ class GeoMatchService
         return !empty($this->key);
     }
 
+    /**
+     * Where a shop ships FROM, or null if it has never been pinned.
+     *
+     * The nursery onboarding LocationPicker writes settings.location{lat,lng};
+     * the shops.lat/lng columns are the matching engine's copy of the same point
+     * (LocationCaptureService writes both). Read settings first, then columns —
+     * this ordering used to be duplicated privately in MatchingService and
+     * ShippingServiceClient, which is how the two could disagree about where a
+     * vendor is.
+     */
+    public function shopLatLng($shop): ?array
+    {
+        $loc = is_array($shop->settings ?? null) ? ($shop->settings['location'] ?? null) : null;
+        if (is_array($loc) && isset($loc['lat'], $loc['lng']) && is_numeric($loc['lat']) && is_numeric($loc['lng'])) {
+            return ['lat' => (float) $loc['lat'], 'lng' => (float) $loc['lng']];
+        }
+        if (is_numeric($shop->lat ?? null) && is_numeric($shop->lng ?? null)) {
+            return ['lat' => (float) $shop->lat, 'lng' => (float) $shop->lng];
+        }
+        return null;
+    }
+
     /** Great-circle distance in km. */
     public function haversineKm(float $lat1, float $lng1, float $lat2, float $lng2): float
     {

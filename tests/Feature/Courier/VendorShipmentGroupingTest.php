@@ -51,6 +51,11 @@ final class VendorShipmentGroupingTest extends TestCase
             $t->unsignedBigInteger('parent_id')->nullable();
             $t->string('order_status')->nullable();
             $t->unsignedBigInteger('vendor_shop_id')->nullable();
+            // The three columns assign() writes — without them the controller's
+            // save is a silent no-op and an assignment test proves nothing.
+            $t->unsignedBigInteger('delivery_partner_id')->nullable();
+            $t->string('delivery_mode')->nullable();
+            $t->string('assignment_status')->nullable();
             $t->string('payment_status')->nullable();
             $t->string('payment_gateway')->nullable();
             $t->text('shipping_address')->nullable();
@@ -391,6 +396,54 @@ final class VendorShipmentGroupingTest extends TestCase
         $this->assertCount(2, Shipment::where('order_id', $order->id)->get());
     }
 
+    public function test_assign_without_an_explicit_vendor_does_not_collapse_a_multi_vendor_order(): void
+    {
+        // The Ship button (and any DP-only save) posts no vendor_shop_id. The
+        // controller used to default that to orders.vendor_shop_id and then sync
+        // EVERY line onto it — silently collapsing a deliberate 2-vendor split
+        // back onto one supplier, destroying the operator's choice. Only an
+        // explicit "put this order on vendor X" may move lines.
+        // Both shops must exist: assign() 422s on an unknown vendor_shop_id before
+        // it ever reaches the sync.
+        DB::table('shops')->insert([
+            ['id' => 7, 'name' => 'First Vendor'],
+            ['id' => 9, 'name' => 'Second Vendor'],
+        ]);
+        $order = $this->makeOrder();
+        $order->forceFill(['vendor_shop_id' => 7])->save();
+        $a = $this->makeItem($order);
+        $b = $this->makeItem($order);
+        $this->service(7)->assignItems($order, [
+            ['order_item_id' => $a->id, 'shop_id' => 7],
+            ['order_item_id' => $b->id, 'shop_id' => 7],
+        ]);
+        $this->service(9)->assignItems($order, [['order_item_id' => $b->id, 'shop_id' => 9]]);
+        $this->assertCount(2, Shipment::where('order_id', $order->id)->get(), 'precondition: split across 2 vendors');
+
+        // Spy on the seam. Asserting on the lines alone would be vacuous here:
+        // syncOrderVendor throws in the stub schema and assign() swallows it, so
+        // the split would survive either way and the test would pass unfixed.
+        $spy = new SpyOrderItemService();
+        $this->app->instance(OrderItemService::class, $spy);
+
+        // Ship: approve the assignment, naming no vendor.
+        $res = (new \Marvel\Http\Controllers\OrderAssignmentController())
+            ->assign($order->id, \Illuminate\Http\Request::create('/', 'POST', []));
+
+        $this->assertSame([], $spy->syncedTo, 'no line sync may run when no vendor was named');
+        $this->assertSame('approved', $order->fresh()->assignment_status, 'Ship still approves');
+        $this->assertNull($res['items']);
+        $this->assertSame(7, (int) $a->fresh()->assigned_shop_id);
+        $this->assertSame(9, (int) $b->fresh()->assigned_shop_id, 'vendor B keeps its line');
+        $this->assertCount(2, Shipment::where('order_id', $order->id)->get(), 'both vendor groups survive');
+
+        // Control: naming a vendor explicitly still propagates, as it must.
+        (new \Marvel\Http\Controllers\OrderAssignmentController())
+            ->assign($order->id, \Illuminate\Http\Request::create('/', 'POST', ['vendor_shop_id' => 9]));
+
+        $this->assertSame([9], $spy->syncedTo, 'an explicit vendor choice still moves the lines');
+    }
+
     public function test_auto_assign_preserves_booked_rows_and_reports_locked(): void
     {
         $order = $this->makeOrder();
@@ -456,6 +509,19 @@ final class VendorShipmentGroupingTest extends TestCase
     }
 }
 
+/** Records which vendor the controller asked to propagate to the lines, if any. */
+class SpyOrderItemService extends OrderItemService
+{
+    /** @var int[] shop ids passed to syncOrderVendor, in order. */
+    public array $syncedTo = [];
+
+    public function syncOrderVendor(Order $order, int $shopId): array
+    {
+        $this->syncedTo[] = $shopId;
+        return ['applied' => 0, 'rejected' => []];
+    }
+}
+
 /** Engine stub: every line's best/only candidate is one fixed vendor. */
 class FakeAssignmentEngine extends ItemAssignmentService
 {
@@ -464,7 +530,14 @@ class FakeAssignmentEngine extends ItemAssignmentService
         parent::__construct();
     }
 
-    public function candidatesFor(int $productId, ?int $variationOptionId, int $qty, ?string $city, ?string $pincode = null): array
+    public function candidatesFor(
+        int $productId,
+        ?int $variationOptionId,
+        int $qty,
+        ?string $city,
+        ?string $pincode = null,
+        ?array $customer = null
+    ): array
     {
         return [[
             'shop_id'          => $this->shopId,

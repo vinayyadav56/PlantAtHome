@@ -60,13 +60,19 @@ class OrderAssignmentController extends CoreController
         $addr = is_array($order->shipping_address) ? $order->shipping_address : (array) $order->shipping_address;
         $city = $addr['city'] ?? null;
         $pincode = $addr['zip'] ?? ($addr['pincode'] ?? null);
+        // The delivery pin, so each candidate can report how far it ships FROM.
+        // Top-level `location` — see MatchingService::resolveCustomerLatLng.
+        $loc = $addr['location'] ?? null;
+        $customer = (is_array($loc) && is_numeric($loc['lat'] ?? null) && is_numeric($loc['lng'] ?? null))
+            ? ['lat' => (float) $loc['lat'], 'lng' => (float) $loc['lng']]
+            : null;
 
         $engine = new ItemAssignmentService();
         $lines = [];
         foreach ($order->products as $product) {
             $qty = (int) ($product->pivot->order_quantity ?? 1);
             $voId = $product->pivot->variation_option_id ? (int) $product->pivot->variation_option_id : null;
-            $candidates = $engine->candidatesFor((int) $product->id, $voId, $qty, $city, $pincode);
+            $candidates = $engine->candidatesFor((int) $product->id, $voId, $qty, $city, $pincode, $customer);
             $lines[] = [
                 'product_id'          => (int) $product->id,
                 'name'                => $product->name,
@@ -237,10 +243,19 @@ class OrderAssignmentController extends CoreController
         // candidacy and rejects what it cannot fulfil (leaving those lines on
         // their current vendor), and it refuses lines on an already-booked
         // shipment. Both are reported back so the UI never claims a silent win.
+        //
+        // Gated on the key being PRESENT, not on $vendorShopId being truthy.
+        // $vendorShopId defaults to $order->vendor_shop_id above, so a caller
+        // that never mentions a vendor (the Ship button, a DP-only save) would
+        // otherwise sync every line onto the stale order-level vendor — quietly
+        // collapsing a deliberate multi-vendor split onto one supplier. Only an
+        // explicit "put this order on vendor X" may move the lines.
         $itemSync = null;
-        if ($vendorShopId) {
+        if ($request->filled('vendor_shop_id')) {
             try {
-                $itemSync = (new OrderItemService())->syncOrderVendor($order, (int) $vendorShopId);
+                // Resolved, not `new`, so the swallow-all catch below can't hide a
+                // regression from a test: a fake can assert this ran (or didn't).
+                $itemSync = app(OrderItemService::class)->syncOrderVendor($order, (int) $vendorShopId);
             } catch (\Throwable $e) {
                 \Illuminate\Support\Facades\Log::warning('order.assign.item_sync_failed', [
                     'order_id' => $order->id,

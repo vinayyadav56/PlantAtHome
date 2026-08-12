@@ -337,16 +337,10 @@ class MatchingService
         ];
     }
 
+    /** @see GeoMatchService::shopLatLng — one reader, so vendor matching and
+     *  courier pickup can never disagree about where a shop is. */
     private function shopLatLng(Shop $shop): ?array
     {
-        $loc = is_array($shop->settings) ? ($shop->settings['location'] ?? null) : null;
-        if (is_array($loc) && isset($loc['lat'], $loc['lng']) && is_numeric($loc['lat']) && is_numeric($loc['lng'])) {
-            return ['lat' => (float) $loc['lat'], 'lng' => (float) $loc['lng']];
-        }
-        // Fall back to the lat/lng columns if populated.
-        if (is_numeric($shop->lat) && is_numeric($shop->lng)) {
-            return ['lat' => (float) $shop->lat, 'lng' => (float) $shop->lng];
-        }
-        return null;
+        return $this->geo->shopLatLng($shop);
     }
 }

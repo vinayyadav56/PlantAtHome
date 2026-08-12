@@ -37,6 +37,7 @@ class ItemAssignmentService
     private ?array $platformFlagsMemo = null;   // ['stop_deliveries' => bool, ...]
     private ?array $slugByProductMemo = null;    // productId => type slug
     private array $availabilityMemo = [];        // "slug|cityN" => bool available
+    private ?GeoMatchService $geo = null;        // resolved lazily; only needed when a customer point is passed
 
     public function __construct(private ?AvailabilityService $availability = null)
     {
@@ -102,10 +103,21 @@ class ItemAssignmentService
     /**
      * Ranked vendor candidates for one line. Returns [] when nobody can fulfil it.
      * Each candidate: shop_id, vendor_name, selling_price, available_qty, fulfillment_mode,
-     * pincode_covered, sla_days, eta_days, rating, priority, shipping_cost, score, recommended.
+     * pincode_covered, sla_days, eta_days, rating, priority, shipping_cost, score, recommended,
+     * plus (for the admin's per-line picker) distance_km, margin_per_unit, margin_total and
+     * best_margin.
+     *
+     * @param array|null $customer {lat,lng} of the delivery address. Optional: without it
+     *                             distance_km is simply null and ranking is unchanged.
      */
-    public function candidatesFor(int $productId, ?int $variationOptionId, int $qty, ?string $city, ?string $pincode = null): array
-    {
+    public function candidatesFor(
+        int $productId,
+        ?int $variationOptionId,
+        int $qty,
+        ?string $city,
+        ?string $pincode = null,
+        ?array $customer = null
+    ): array {
         $qty = max(1, $qty);
         $cityN = $this->norm($city);
 
@@ -193,6 +205,11 @@ class ItemAssignmentService
                 // are already loaded here — no extra query.
                 'city'                    => is_array($shop?->address ?? null) ? ($shop->address['city'] ?? null) : null,
                 'cities'                  => $v['cities'] ?? [],
+                // Straight-line km from this vendor to the delivery address, so the
+                // picker can show what a cheaper vendor costs in travel. $shop is
+                // already a full model from loadShops() — no extra query. Null when
+                // the caller passed no customer point or the shop was never pinned.
+                'distance_km'             => $this->distanceKm($customer, $shop),
                 // The vendor's supply rate (their payout when assigned). selling_price is
                 // overwritten below with the UNIFORM city price (max rate + margin).
                 'vendor_rate'             => isset($v['vendor_rate']) ? (float) $v['vendor_rate'] : null,
@@ -261,6 +278,16 @@ class ItemAssignmentService
         foreach ($candidates as &$c) {
             $c['selling_price']  = $sellingPrice ?? ($c['selling_price'] ?? null);
             $c['margin_percent'] = $marginPercent;
+            // What the platform keeps on this line with THIS vendor. The customer
+            // price is uniform across candidates by design (see above), so the
+            // vendor choice moves only this number — which is exactly the trade-off
+            // the operator is making against distance and ETA.
+            $c['margin_per_unit'] = ($c['selling_price'] !== null && $c['vendor_rate'] !== null)
+                ? round((float) $c['selling_price'] - (float) $c['vendor_rate'], 2)
+                : null;
+            $c['margin_total'] = $c['margin_per_unit'] !== null
+                ? round($c['margin_per_unit'] * $qty, 2)
+                : null;
             $shipNorm = $maxShipping > 0 ? $this->clamp($c['shipping_cost'] / $maxShipping, 0, 1) : 0.0;
             // Normalize the rate within THIS candidate set (0 = cheapest, 1 = priciest)
             // and subtract like shipping — a cheaper vendor rate scores higher.
@@ -299,7 +326,46 @@ class ItemAssignmentService
         for ($i = 1; $i < count($candidates); $i++) {
             $candidates[$i]['recommended'] = false;
         }
+
+        // Flag the highest-margin candidate SEPARATELY from the recommendation.
+        // The score already prefers a cheaper vendor rate, so these usually land on
+        // the same row — but when they don't (the cheapest vendor is slower, further
+        // or low on stock) the operator should see both and decide, rather than have
+        // the trade-off silently resolved. Deliberately does not reorder anything.
+        $bestMargin = null;
+        foreach ($candidates as $i => $c) {
+            if ($c['margin_per_unit'] === null) {
+                continue;
+            }
+            if ($bestMargin === null || $c['margin_per_unit'] > $candidates[$bestMargin]['margin_per_unit']) {
+                $bestMargin = $i;
+            }
+        }
+        foreach ($candidates as $i => &$c) {
+            $c['best_margin'] = $i === $bestMargin;
+        }
+        unset($c);
+
         return $candidates;
+    }
+
+    /** Straight-line km between the delivery address and a vendor, null if either is unpinned. */
+    private function distanceKm(?array $customer, $shop): ?float
+    {
+        if (!$shop || !is_array($customer) || !isset($customer['lat'], $customer['lng'])) {
+            return null;
+        }
+        $geo = $this->geo ??= app(GeoMatchService::class);
+        $from = $geo->shopLatLng($shop);
+        if (!$from) {
+            return null;
+        }
+        return $geo->haversineKm(
+            (float) $from['lat'],
+            (float) $from['lng'],
+            (float) $customer['lat'],
+            (float) $customer['lng'],
+        );
     }
 
     /**
