@@ -70,6 +70,7 @@ final class VendorShipmentGroupingTest extends TestCase
             $t->string('fulfillment_mode')->nullable();
             $t->integer('eta_days')->nullable();
             $t->unsignedBigInteger('shipment_id')->nullable();
+            $t->string('split_group', 16)->nullable();
             $t->string('vendor_price_snapshot')->nullable();
             $t->string('assignment_status')->default('unassigned');
             $t->string('item_status')->default('pending');
@@ -248,6 +249,109 @@ final class VendorShipmentGroupingTest extends TestCase
         $row2 = Shipment::where('order_id', $order->id)->first();
         $this->assertSame(8, (int) $row2->shop_id);
         $this->assertNull($row2->delivery_mode, 'a platform vendor leg must not keep a stale self stamp');
+    }
+
+    public function test_order_level_vendor_choice_moves_the_lines_and_the_shipment(): void
+    {
+        // The operator picking a vendor in the assignment panel used to write
+        // ONLY orders.vendor_shop_id, while the shipment cards are built from
+        // order_items.assigned_shop_id — so the card kept showing the
+        // auto-assigned vendor and the choice looked ignored.
+        DB::table('shops')->insert(['id' => 9, 'name' => 'Chosen Vendor']);
+        $order = $this->makeOrder();
+        $a = $this->makeItem($order);
+        $b = $this->makeItem($order);
+        $this->service(7)->assignItems($order, [
+            ['order_item_id' => $a->id, 'shop_id' => 7],
+            ['order_item_id' => $b->id, 'shop_id' => 7],
+        ]);
+        $this->assertSame(7, (int) Shipment::where('order_id', $order->id)->first()->shop_id);
+
+        $res = $this->service(9)->syncOrderVendor($order, 9);
+
+        $this->assertSame(2, $res['applied']);
+        $rows = Shipment::where('order_id', $order->id)->get();
+        $this->assertCount(1, $rows, 'both lines still share ONE vendor shipment');
+        $this->assertSame(9, (int) $rows->first()->shop_id, 'the shipment must follow the chosen vendor');
+    }
+
+    public function test_order_level_sync_is_a_noop_when_already_on_that_vendor(): void
+    {
+        $order = $this->makeOrder();
+        $item = $this->makeItem($order);
+        $this->service(7)->assignItems($order, [['order_item_id' => $item->id, 'shop_id' => 7]]);
+        $before = Shipment::where('order_id', $order->id)->first()->id;
+
+        $res = $this->service(7)->syncOrderVendor($order, 7);
+
+        $this->assertSame(0, $res['applied']);
+        $this->assertTrue($res['already'] ?? false);
+        $this->assertSame($before, Shipment::where('order_id', $order->id)->first()->id, 'no shipment churn');
+    }
+
+    public function test_order_level_sync_refuses_lines_on_a_booked_shipment(): void
+    {
+        DB::table('shops')->insert(['id' => 9, 'name' => 'Chosen Vendor']);
+        $order = $this->makeOrder();
+        $booked = Shipment::create([
+            'order_id' => $order->id, 'shop_id' => 5, 'fulfillment_mode' => 'local',
+            'status' => 'assigned', 'provider_order_id' => 'CRN-LIVE-9',
+        ]);
+        $locked = $this->makeItem($order, [
+            'assigned_shop_id' => 5, 'fulfillment_mode' => 'local', 'shipment_id' => $booked->id,
+        ]);
+
+        $res = $this->service(9)->syncOrderVendor($order, 9);
+
+        $this->assertSame(0, $res['applied']);
+        $this->assertStringContainsString('already booked', $res['rejected'][0]['reason']);
+        $this->assertSame($booked->id, (int) $locked->fresh()->shipment_id);
+        $this->assertSame('CRN-LIVE-9', Shipment::find($booked->id)->provider_order_id);
+    }
+
+    public function test_one_vendor_can_be_split_into_two_shipments_and_merged_back(): void
+    {
+        // Default: a vendor's lines share ONE parcel. A large order sometimes
+        // needs two vehicles from that same vendor.
+        $order = $this->makeOrder();
+        $a = $this->makeItem($order);
+        $b = $this->makeItem($order);
+        $svc = $this->service(7);
+        $svc->assignItems($order, [
+            ['order_item_id' => $a->id, 'shop_id' => 7],
+            ['order_item_id' => $b->id, 'shop_id' => 7],
+        ]);
+        $this->assertCount(1, Shipment::where('order_id', $order->id)->get());
+
+        $res = $svc->splitShipment($order, [$b->id]);
+        $this->assertSame(1, $res['applied']);
+        $rows = Shipment::where('order_id', $order->id)->get();
+        $this->assertCount(2, $rows, 'the split line gets its own parcel');
+        $this->assertSame([7, 7], $rows->pluck('shop_id')->map(fn ($i) => (int) $i)->all());
+        $this->assertNotSame($a->fresh()->shipment_id, $b->fresh()->shipment_id);
+
+        // Merge back.
+        $svc->splitShipment($order, [$b->id], false);
+        $this->assertCount(1, Shipment::where('order_id', $order->id)->get());
+        $this->assertSame($a->fresh()->shipment_id, $b->fresh()->shipment_id);
+    }
+
+    public function test_split_refuses_a_line_on_a_booked_shipment(): void
+    {
+        $order = $this->makeOrder();
+        $booked = Shipment::create([
+            'order_id' => $order->id, 'shop_id' => 5, 'fulfillment_mode' => 'local',
+            'status' => 'assigned', 'awb_number' => 'AWB-SPLIT',
+        ]);
+        $locked = $this->makeItem($order, [
+            'assigned_shop_id' => 5, 'fulfillment_mode' => 'local', 'shipment_id' => $booked->id,
+        ]);
+
+        $res = $this->service(7)->splitShipment($order, [$locked->id]);
+
+        $this->assertSame(0, $res['applied']);
+        $this->assertStringContainsString('already booked', $res['rejected'][0]['reason']);
+        $this->assertSame($booked->id, (int) $locked->fresh()->shipment_id);
     }
 
     public function test_auto_assign_preserves_booked_rows_and_reports_locked(): void

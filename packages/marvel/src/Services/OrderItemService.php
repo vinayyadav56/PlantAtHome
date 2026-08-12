@@ -218,6 +218,82 @@ class OrderItemService
      * Admin override: assign specific lines to specific vendors, then regroup. Each entry
      * is { order_item_id, shop_id }. Items left out keep their current assignment.
      */
+    /**
+     * Move every line this vendor CAN fulfil onto them — the order-level
+     * "approve assignment" action expressed in terms of the lines, which are
+     * what shipments (and therefore the vendor shown on each shipment card)
+     * are actually built from.
+     *
+     * Lines already on that vendor are skipped (no churn), lines the vendor
+     * cannot fulfil and lines on a live-booked shipment come back in
+     * `rejected` with their reason.
+     */
+    public function syncOrderVendor(Order $order, int $shopId): array
+    {
+        $assignments = OrderItem::where('order_id', $order->id)
+            ->get(['id', 'assigned_shop_id'])
+            ->filter(fn ($i) => (int) $i->assigned_shop_id !== $shopId)
+            ->map(fn ($i) => ['order_item_id' => (int) $i->id, 'shop_id' => $shopId])
+            ->values()
+            ->all();
+
+        if (empty($assignments)) {
+            return ['order_id' => $order->id, 'applied' => 0, 'rejected' => [], 'already' => true];
+        }
+
+        return $this->assignItems($order, $assignments);
+    }
+
+    /**
+     * Move the given lines of ONE vendor onto their own shipment (or back to
+     * the vendor's default parcel when $separate is false).
+     *
+     * Default grouping — one shipment per vendor — is right for almost every
+     * order; this is the escape hatch for the ones that physically can't go in
+     * one vehicle. Lines on an already-booked shipment are refused: their
+     * parcel is with a courier.
+     */
+    public function splitShipment(Order $order, array $orderItemIds, bool $separate = true): array
+    {
+        if (!self::supportsSplitGroup()) {
+            return ['order_id' => $order->id, 'applied' => 0, 'rejected' => [
+                ['order_item_id' => null, 'reason' => 'split is not available yet on this deployment'],
+            ]];
+        }
+        [, $lockedItemIds] = $this->lockedFor($order);
+
+        // One shared marker so a multi-line split lands in ONE new parcel.
+        $group = $separate ? substr((string) time(), -6) . random_int(10, 99) : null;
+
+        $applied = [];
+        $rejected = [];
+        DB::transaction(function () use ($order, $orderItemIds, $lockedItemIds, $group, &$applied, &$rejected) {
+            foreach ($orderItemIds as $rawId) {
+                $itemId = (int) $rawId;
+                $item = OrderItem::where('order_id', $order->id)->find($itemId);
+                if (!$item) {
+                    $rejected[] = ['order_item_id' => $itemId, 'reason' => 'item not found on this order'];
+                    continue;
+                }
+                if (in_array($itemId, $lockedItemIds, true)) {
+                    $rejected[] = ['order_item_id' => $itemId, 'reason' => 'vendor shipment already booked — cancel it first'];
+                    continue;
+                }
+                if (!$item->assigned_shop_id) {
+                    $rejected[] = ['order_item_id' => $itemId, 'reason' => 'assign a vendor before splitting this line'];
+                    continue;
+                }
+                $item->update(['split_group' => $group]);
+                $applied[] = $itemId;
+            }
+            if (count($applied) > 0) {
+                $this->regroup($order);
+            }
+        });
+
+        return ['order_id' => $order->id, 'applied' => count($applied), 'rejected' => $rejected];
+    }
+
     public function assignItems(Order $order, array $assignments): array
     {
         [$city, $pincode] = $this->location($order);
@@ -316,7 +392,8 @@ class OrderItemService
     {
         $shopId = (int) $pick['shop_id'];
         $mode = $pick['fulfillment_mode'] ?? 'courier';
-        $key = $shopId . ':' . $mode;
+        $split = self::supportsSplitGroup() ? $item->split_group : null;
+        $key = self::groupKey($shopId, $mode, $split);
 
         if (!isset($shipments[$key])) {
             $eta = $pick['eta_days'] ?? null;
@@ -397,7 +474,7 @@ class OrderItemService
         // rebuild — they live only on the shipment, so a naive delete+recreate would null them.
         $prior = [];
         foreach (Shipment::where('order_id', $order->id)->get() as $s) {
-            $prior[$s->shop_id . ':' . ($s->fulfillment_mode ?: 'courier')] = [
+            $prior[self::groupKey((int) $s->shop_id, $s->fulfillment_mode ?: 'courier', $s->split_group ?? null)] = [
                 'shipping_cost'        => $s->shipping_cost,
                 'expected_delivery_at' => $s->expected_delivery_at,
                 'mode'                 => $s->mode,
@@ -415,7 +492,8 @@ class OrderItemService
                 continue;
             }
             $mode = $item->fulfillment_mode ?: 'courier';
-            $key = $item->assigned_shop_id . ':' . $mode;
+            $split = self::supportsSplitGroup() ? $item->split_group : null;
+            $key = self::groupKey((int) $item->assigned_shop_id, $mode, $split);
             if (!isset($shipments[$key])) {
                 $carried = $prior[$key] ?? [];
                 $shipments[$key] = Shipment::create([
@@ -435,6 +513,32 @@ class OrderItemService
             }
             $item->update(['shipment_id' => $shipments[$key]->id]);
         }
+    }
+
+    /** Whether order_items carries the split-group column yet (deploy-lag guard). */
+    private static function supportsSplitGroup(): bool
+    {
+        static $supports = null;
+        if ($supports === null) {
+            try {
+                $supports = \Illuminate\Support\Facades\Schema::hasColumn('order_items', 'split_group');
+            } catch (\Throwable $e) {
+                $supports = false;
+            }
+        }
+        return $supports;
+    }
+
+    /**
+     * Grouping key for a shipment row. A vendor's lines share ONE shipment by
+     * default; `split_group` is the operator's explicit "send this part
+     * separately" marker (large orders that need two vehicles), so it has to
+     * survive regroup() — otherwise the rows merge straight back together.
+     */
+    private static function groupKey(int $shopId, string $mode, $splitGroup = null): string
+    {
+        $split = $splitGroup === null || $splitGroup === '' ? '' : ':' . $splitGroup;
+        return $shopId . ':' . $mode . $split;
     }
 
     /**

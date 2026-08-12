@@ -793,6 +793,8 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     // stack skips these legs entirely). Same applyNormalizedStatus seam as
     // partner webhooks — cascade + settlement + terminal guards included.
     Route::post('shipments/{id}/self-status', [CourierShipmentController::class, 'selfStatus']);
+    // Split ONE vendor's lines into a second parcel (large orders), or merge back.
+    Route::post('orders/{id}/split-shipment', [OrderAssignmentController::class, 'splitShipment']);
 
     Route::get('integrations', [IntegrationController::class, 'index'])
         ->middleware('permission:settings.integrations.view');

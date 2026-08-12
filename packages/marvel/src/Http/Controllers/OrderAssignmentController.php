@@ -166,6 +166,32 @@ class OrderAssignmentController extends CoreController
     }
 
     /**
+     * Admin: POST orders/{id}/split-shipment — move the given lines of one
+     * vendor into their own parcel (`separate: false` merges them back).
+     * A vendor's lines share one shipment by default; large orders sometimes
+     * need two vehicles from the same vendor.
+     */
+    public function splitShipment($id, Request $request)
+    {
+        $request->validate([
+            'order_item_ids'   => 'required|array|min:1',
+            'order_item_ids.*' => 'required|integer',
+            'separate'         => 'nullable|boolean',
+        ]);
+        $order = Order::findOrFail($id);
+        $result = (new OrderItemService())->splitShipment(
+            $order,
+            $request->input('order_item_ids'),
+            $request->boolean('separate', true)
+        );
+        OrderEvent::record($order->id, 'shipment.split', [
+            'lines' => $result['applied'],
+            'separate' => $request->boolean('separate', true),
+        ]);
+        return response()->json($result);
+    }
+
+    /**
      * Admin: approve / reassign. Body: vendor_shop_id?, delivery_partner_id?,
      * delivery_mode? (vendor_dp|separate_dp|courier_admin|courier_dp).
      */
@@ -198,14 +224,44 @@ class OrderAssignmentController extends CoreController
             'assignment_status'   => 'approved',
         ])->save();
 
+        // Propagate the operator's choice to the LINES.
+        //
+        // orders.vendor_shop_id and order_items.assigned_shop_id were two
+        // independent sources of truth: this endpoint only ever wrote the
+        // order-level column, while the shipment cards are built from the item
+        // assignments. So approving "Delhi Nursery 2" here left every shipment
+        // still showing whatever auto-assignment had picked — the operator saw
+        // their choice ignored.
+        //
+        // assignItems() validates each line against that vendor's live
+        // candidacy and rejects what it cannot fulfil (leaving those lines on
+        // their current vendor), and it refuses lines on an already-booked
+        // shipment. Both are reported back so the UI never claims a silent win.
+        $itemSync = null;
+        if ($vendorShopId) {
+            try {
+                $itemSync = (new OrderItemService())->syncOrderVendor($order, (int) $vendorShopId);
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('order.assign.item_sync_failed', [
+                    'order_id' => $order->id,
+                    'vendor_shop_id' => $vendorShopId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
         OrderEvent::record($order->id, 'order.assigned', [
             'vendor_shop_id'      => $order->vendor_shop_id,
             'delivery_partner_id' => $order->delivery_partner_id,
             'delivery_mode'       => $order->delivery_mode,
+            'lines_moved'         => $itemSync['applied'] ?? 0,
         ]);
 
         return [
             'message' => 'Assignment saved.',
+            // {applied, rejected[]} — how many lines actually moved to this
+            // vendor and why any didn't.
+            'items'   => $itemSync,
             'order'   => $order->only([
                 'id', 'vendor_shop_id', 'delivery_partner_id', 'delivery_mode', 'assignment_status',
             ]),

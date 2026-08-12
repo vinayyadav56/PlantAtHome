@@ -42,9 +42,11 @@ class MatchingService
             : $order->products()->pluck('products.id')->all();
 
         $stockShopIds = $this->shopsWithStock($productIds);
+        $quotes = $this->vendorQuotes($productIds);
+        $lineCount = count(array_unique($productIds));
 
         [$vendors, $vendorsOther] = $this->partition(
-            $this->rankVendors($customer, $orderCity, $canFilter, $stockShopIds)
+            $this->rankVendors($customer, $orderCity, $canFilter, $stockShopIds, $quotes, $lineCount)
         );
         $chosenVendor = $vendors[0] ?? $vendorsOther[0] ?? null;
 
@@ -160,8 +162,63 @@ class MatchingService
             ->all();
     }
 
-    private function rankVendors(?array $customer, ?string $orderCity, bool $canFilter, array $stockShopIds): array
+    /**
+     * Per-vendor quote for THIS order's lines: what each vendor charges for the
+     * products they can supply, and how many of the order's lines that covers.
+     *
+     * The picker previously showed only distance + an "in stock / no cost
+     * sheet" chip, so an operator choosing between two vendors 8 km and 93 km
+     * away had no idea what either would cost.
+     *
+     * @return array<int, array{total: float, lines: int}> keyed by shop_id
+     */
+    private function vendorQuotes(array $productIds): array
     {
+        if (empty($productIds)) {
+            return [];
+        }
+        $rows = VendorProductPrice::whereIn('product_id', $productIds)
+            ->where('is_available', true)
+            ->get(['shop_id', 'product_id', 'vendor_selling_price', 'cost_price']);
+
+        $out = [];
+        foreach ($rows as $r) {
+            $price = (float) ($r->vendor_selling_price ?: $r->cost_price);
+            if ($price <= 0) {
+                continue;
+            }
+            $shop = (int) $r->shop_id;
+            $pid = (int) $r->product_id;
+            // A vendor can have several rows per product (variants/periods) —
+            // count each PRODUCT once, at its cheapest row.
+            if (!isset($out[$shop])) {
+                $out[$shop] = ['total' => 0.0, 'lines' => 0, 'seen' => []];
+            }
+            if (isset($out[$shop]['seen'][$pid])) {
+                if ($price < $out[$shop]['seen'][$pid]) {
+                    $out[$shop]['total'] += $price - $out[$shop]['seen'][$pid];
+                    $out[$shop]['seen'][$pid] = $price;
+                }
+                continue;
+            }
+            $out[$shop]['seen'][$pid] = $price;
+            $out[$shop]['total'] += $price;
+            $out[$shop]['lines']++;
+        }
+        foreach ($out as $shop => $d) {
+            $out[$shop] = ['total' => round($d['total'], 2), 'lines' => $d['lines']];
+        }
+        return $out;
+    }
+
+    private function rankVendors(
+        ?array $customer,
+        ?string $orderCity,
+        bool $canFilter,
+        array $stockShopIds,
+        array $quotes = [],
+        int $lineCount = 0
+    ): array {
         $shops = Shop::where('is_active', 1)->get()->filter(fn ($s) => $this->shopLatLng($s) !== null);
 
         $rows = [];
@@ -175,6 +232,13 @@ class MatchingService
                 'lat'       => $ll['lat'],
                 'lng'       => $ll['lng'],
                 'has_stock' => in_array($s->id, $stockShopIds, true),
+                // What this vendor charges for the lines they can supply, and
+                // how many of the order's lines that covers — so "8.7 km" can
+                // be weighed against an actual price.
+                'quote_total'    => $quotes[$s->id]['total'] ?? null,
+                'quote_lines'    => $quotes[$s->id]['lines'] ?? 0,
+                'order_lines'    => $lineCount,
+                'covers_all'     => $lineCount > 0 && ($quotes[$s->id]['lines'] ?? 0) >= $lineCount,
             ];
             $dests[] = $ll;
         }
