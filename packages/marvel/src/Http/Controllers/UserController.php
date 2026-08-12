@@ -14,6 +14,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Redirect;
 use Illuminate\Support\Facades\Validator;
@@ -983,9 +984,31 @@ class UserController extends CoreController
         }
     }
 
+    /**
+     * Reject junk before it reaches a paid gateway. Returns null when the number
+     * is acceptable, or the 422 response when it is not. Deliberately format-only:
+     * it must NEVER reveal whether the number belongs to an account.
+     */
+    protected function validateOtpPhone($phoneNumber)
+    {
+        $compact = preg_replace('/[\s()-]+/', '', (string) $phoneNumber);
+        if ($compact === '' || !preg_match('/^\+?[1-9][0-9]{7,14}$/', $compact)) {
+            return response()->json([
+                'code' => 'INVALID_PHONE',
+                'message' => 'Enter a valid mobile number including the country code.',
+            ], 422);
+        }
+        return null;
+    }
+
     public function sendOtpCode(Request $request)
     {
         $phoneNumber = $request->phone_number;
+        // Format gate FIRST: an unvalidated number used to reach the provider (and
+        // burn quota / count against the caller's limits) on any garbage input.
+        if ($invalid = $this->validateOtpPhone($phoneNumber)) {
+            return $invalid;
+        }
         // Layered abuse protection (cooldown + daily cap) on top of throttle:otp. Throws 429
         // before any SMS is sent. Runs OUTSIDE the try/catch below so its 429 isn't masked
         // as INVALID_GATEWAY.
@@ -998,7 +1021,17 @@ class UserController extends CoreController
             $otpGateway = $this->getOtpGateway($channel);
             $sendOtpCode = $otpGateway->startVerification($phoneNumber);
             if (!$sendOtpCode->isValid()) {
-                return ['message' => OTP_SEND_FAIL, 'success' => false];
+                Log::warning('otp.send_failed', [
+                    'provider' => $gatewayName,
+                    'phone_suffix' => substr(preg_replace('/\D+/', '', (string) $phoneNumber), -4),
+                ]);
+                return response()->json([
+                    'message' => OTP_SEND_FAIL,
+                    'success' => false,
+                    // Structured code so clients can show the right recovery copy
+                    // (offer SMS when WhatsApp is down) without parsing prose.
+                    'code' => $gatewayName === 'whatsapp' ? 'WHATSAPP_SEND_FAILED' : 'OTP_SEND_FAILED',
+                ], 502);
             }
             return [
                 'message' => OTP_SEND_SUCCESSFUL,
@@ -1007,11 +1040,24 @@ class UserController extends CoreController
                 'channel' => $channel,
                 'id' => $sendOtpCode->getId(),
                 'phone_number' => $phoneNumber,
+                // Client-side countdowns come from the SERVER's policy, never
+                // hardcoded in the UI.
+                'expires_in' => $this->otpExpiresIn($gatewayName),
+                'resend_after' => \Marvel\Otp\OtpAbuseGuard::cooldownSeconds(),
                 // Do NOT disclose whether the phone is registered (account enumeration).
             ];
         } catch (MarvelException $e) {
             throw new MarvelException(INVALID_GATEWAY);
         }
+    }
+
+    /** OTP validity window for the resolved gateway (seconds). */
+    protected function otpExpiresIn(string $gatewayName): int
+    {
+        if ($gatewayName === 'whatsapp') {
+            return (new \Marvel\Otp\Gateways\WhatsappGateway())->ttlSeconds();
+        }
+        return 300; // provider-side gateways (Twilio/MSG91) expire their own codes
     }
 
     public function verifyOtpCode(Request $request)
@@ -1028,12 +1074,14 @@ class UserController extends CoreController
                     "success" => true,
                 ];
             }
-            $guard->registerFailure($request->phone_number);
-            throw new MarvelException(OTP_VERIFICATION_FAILED);
         } catch (\Throwable $e) {
-            $guard->registerFailure($request->phone_number);
-            throw new MarvelException(OTP_VERIFICATION_FAILED);
+            // fall through to the single failure path below
         }
+        // ONE registerFailure per wrong code. The old shape called it on the miss
+        // branch and again in the catch that swallowed its own throw, so every
+        // wrong code counted twice and the 5-attempt lockout tripped at 3.
+        $guard->registerFailure($request->phone_number);
+        throw new MarvelException(OTP_VERIFICATION_FAILED);
     }
 
     public function otpLogin(Request $request)
@@ -1100,7 +1148,21 @@ class UserController extends CoreController
                 } else {
                     $user = User::where('id', $profile->customer_id)->first();
                 }
+                if (!$user) {
+                    // Orphaned profile (customer row deleted) — never mint a token
+                    // for a user that doesn't exist.
+                    return response()->json(['message' => NOT_FOUND, 'success' => false], 404);
+                }
+                // Record HOW this session was authenticated. Same `providers` table
+                // social login uses, so WhatsApp/SMS become identities of the SAME
+                // customer instead of a parallel account space. Never fatal.
+                $this->linkOtpIdentity($user, $request->channel, $normalized ?: $phoneNumber);
                 event(new ProcessUserData());
+                Log::info('auth.otp.login_success', [
+                    'user_id' => $user->id,
+                    'channel' => $request->channel === 'whatsapp' ? 'whatsapp' : 'sms',
+                    'new_user' => !$profile,
+                ]);
                 return [
                     "token" => $user->createToken('auth_token')->plainTextToken,
                     "permissions" => $user->getPermissionNames(),
@@ -1112,6 +1174,31 @@ class UserController extends CoreController
         } catch (\Throwable $e) {
             $guard->registerFailure($phoneNumber);
             return response()->json(['error' => INVALID_GATEWAY], 422);
+        }
+    }
+
+    /**
+     * Record a verified phone/WhatsApp identity on the SAME `providers` table
+     * social login writes to (provider + provider_user_id), so an account can
+     * carry email, google, phone and whatsapp identities side by side.
+     *
+     * Keyed by the normalized number, so re-logging in from a differently
+     * formatted number updates the one row instead of creating duplicates.
+     * Best-effort: an identity-bookkeeping failure must never block a login.
+     */
+    protected function linkOtpIdentity($user, $channel, $identifier): void
+    {
+        try {
+            $provider = $channel === 'whatsapp' ? 'whatsapp' : 'phone';
+            $user->providers()->updateOrCreate(
+                ['provider' => $provider, 'provider_user_id' => (string) $identifier],
+                []
+            );
+        } catch (\Throwable $e) {
+            Log::warning('auth.otp.identity_link_failed', [
+                'user_id' => $user->id ?? null,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 

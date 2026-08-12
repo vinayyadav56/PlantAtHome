@@ -178,6 +178,10 @@ Route::post('webhooks/bkash', [WebHookController::class, 'bkash'])->middleware('
 Route::post('webhooks/flutterwave', [WebHookController::class, 'flutterwave'])->middleware('throttle:120,1');
 // SendGrid Event Webhook → email_logs status (delivered/opened/bounced…). Throttled; never 5xxes.
 Route::post('webhooks/sendgrid', [WebHookController::class, 'sendgridEvents'])->middleware('throttle:240,1');
+// Meta WhatsApp Cloud API: GET = subscription handshake (echo hub.challenge),
+// POST = message/status events (X-Hub-Signature-256 HMAC over the raw body).
+Route::get('webhooks/whatsapp', [WebHookController::class, 'whatsappVerify'])->middleware('throttle:60,1');
+Route::post('webhooks/whatsapp', [WebHookController::class, 'whatsappEvents'])->middleware('throttle:240,1');
 // Partner shipping webhooks (Borzo/Shiprocket/Porter) are received by the Go shipping-service
 // (/webhooks/{partner} there); the monolith gets status ONLY via shipping/callback below.
 // Dedicated shipping microservice → monolith callback (status/COD). Token-verified (x-api-key)

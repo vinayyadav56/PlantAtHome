@@ -35,6 +35,12 @@ class OtpAbuseGuard
     /** Minimum gap between OTP sends to one number. */
     private const COOLDOWN_SECONDS = 45;
 
+    /** The resend cooldown, so clients can render an accurate countdown. */
+    public static function cooldownSeconds(): int
+    {
+        return self::COOLDOWN_SECONDS;
+    }
+
     /** Max OTP sends to one number per rolling 24h. */
     private const DAILY_SEND_CAP = 8;
     private const DAY_SECONDS = 86400;
@@ -43,9 +49,18 @@ class OtpAbuseGuard
     private const MAX_FAILED_VERIFY = 5;
     private const LOCKOUT_SECONDS = 900; // 15 min
 
+    /**
+     * Counter key. MUST normalise the same way the route limiter does
+     * (RouteServiceProvider::otpPhoneKey → last 10 digits): keying on ALL digits
+     * gave "+919876543210" and "9876543210" separate counters, so simply
+     * reformatting the number reset the cooldown and the daily cap.
+     */
     private function key(string $kind, string $phone): string
     {
-        return 'otp:' . $kind . ':' . preg_replace('/\D+/', '', $phone);
+        $digits = (string) preg_replace('/\D+/', '', $phone);
+        $canonical = strlen($digits) > 10 ? substr($digits, -10) : $digits;
+
+        return 'otp:' . $kind . ':' . $canonical;
     }
 
     /**

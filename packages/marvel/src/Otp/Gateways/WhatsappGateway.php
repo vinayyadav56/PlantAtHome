@@ -3,7 +3,9 @@
 namespace Marvel\Otp\Gateways;
 
 use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Marvel\Otp\OtpInterface;
 use Marvel\Otp\Result;
 
@@ -29,6 +31,8 @@ class WhatsappGateway implements OtpInterface
     private bool $otpHasButton;
     private ?string $notifyTemplate;
     private string $notifyLang;
+    private int $otpTtlMinutes;
+    private int $otpMaxAttempts;
 
     public function __construct()
     {
@@ -41,6 +45,14 @@ class WhatsappGateway implements OtpInterface
         $this->otpHasButton = (bool) ($cfg['otp_has_button'] ?? false);
         $this->notifyTemplate = $cfg['notify_template'] ?? null;
         $this->notifyLang = $cfg['notify_lang'] ?? 'en';
+        $this->otpTtlMinutes = max(1, (int) ($cfg['otp_ttl_minutes'] ?? 5));
+        $this->otpMaxAttempts = max(1, (int) ($cfg['otp_max_attempts'] ?? 5));
+    }
+
+    /** Seconds a freshly issued code stays valid (the client shows this countdown). */
+    public function ttlSeconds(): int
+    {
+        return $this->otpTtlMinutes * 60;
     }
 
     /** E.164 digits (country code, no +). Bare 10-digit numbers → assume India. */
@@ -87,14 +99,26 @@ class WhatsappGateway implements OtpInterface
         throw new \RuntimeException($data['error']['message'] ?? 'WhatsApp send failed');
     }
 
-    /** Login OTP: generate + cache + deliver via the authentication template. */
+    /** Cache key for the pending code of a normalized number. */
+    private function otpKey(string $mobile): string
+    {
+        return "wa_otp:{$mobile}";
+    }
+
+    /**
+     * Login OTP: generate + store (HASHED) + deliver via the authentication template.
+     *
+     * The code is never persisted, logged or returned in plaintext — only a bcrypt
+     * hash lives in the cache, mirroring how email_otps stores its codes. Issuing a
+     * new code OVERWRITES the pending one, so a resend invalidates its predecessor.
+     */
     public function startVerification($phone_number)
     {
         if (!$this->configured() || empty($this->otpTemplate)) {
             return new Result(['WhatsApp is not configured (token / phone_number_id / otp_template).']);
         }
         $mobile = $this->normalize($phone_number);
-        $code = (string) random_int(100000, 999999);
+        $code = (string) random_int(100000, 999999); // CSPRNG
         try {
             $components = [
                 ['type' => 'body', 'parameters' => [['type' => 'text', 'text' => $code]]],
@@ -108,22 +132,72 @@ class WhatsappGateway implements OtpInterface
                     'parameters' => [['type' => 'text', 'text' => $code]],
                 ];
             }
-            $this->sendTemplate($mobile, $this->otpTemplate, $this->otpLang, $components);
-            Cache::put("wa_otp:{$mobile}", $code, now()->addMinutes(5));
+            $messageId = $this->sendTemplate($mobile, $this->otpTemplate, $this->otpLang, $components);
+            Cache::put($this->otpKey($mobile), [
+                'hash' => Hash::make($code),
+                'attempts' => 0,
+                'message_id' => $messageId,
+                // Absolute deadline so a wrong guess can be re-stored WITHOUT
+                // extending the window (a re-put with a fresh TTL would).
+                'expires_at' => now()->addMinutes($this->otpTtlMinutes)->getTimestamp(),
+            ], now()->addMinutes($this->otpTtlMinutes));
+            // Observability: the message id correlates our send with Meta's delivery
+            // webhook. The CODE is never logged — only the last 4 digits of the number.
+            Log::info('otp.whatsapp.dispatched', [
+                'phone_suffix' => substr($mobile, -4),
+                'message_id' => $messageId,
+                'template' => $this->otpTemplate,
+                'ttl_seconds' => $this->ttlSeconds(),
+            ]);
             return new Result($mobile);
         } catch (\Throwable $e) {
+            Log::warning('otp.whatsapp.dispatch_failed', [
+                'phone_suffix' => substr($mobile, -4),
+                'template' => $this->otpTemplate,
+                'error' => $e->getMessage(), // Meta's message; never the token or the code
+            ]);
             return new Result(["WhatsApp OTP send failed: {$e->getMessage()}"]);
         }
     }
 
-    /** Verify the code the user entered against the cached one. */
+    /**
+     * Verify the entered code against the stored hash. Single-use (the entry is
+     * dropped on success) and attempt-capped: the entry counts wrong tries and
+     * self-destructs at the cap, so a burnt code cannot be brute-forced even
+     * within its TTL. (OtpAbuseGuard independently locks the NUMBER out.)
+     */
     public function checkVerification($id, $code, $phone_number)
     {
         $mobile = $this->normalize($phone_number);
-        $cached = Cache::get("wa_otp:{$mobile}");
-        if ($cached !== null && hash_equals((string) $cached, (string) $code)) {
-            Cache::forget("wa_otp:{$mobile}");
+        $key = $this->otpKey($mobile);
+        $entry = Cache::get($key);
+
+        // Legacy plaintext entries (issued before hashing shipped) stay verifiable
+        // for their remaining TTL so codes already in flight are not invalidated.
+        if (is_string($entry)) {
+            if (hash_equals($entry, (string) $code)) {
+                Cache::forget($key);
+                return new Result($id ?: $mobile);
+            }
+            return new Result(['Invalid or expired code.']);
+        }
+
+        if (!is_array($entry) || empty($entry['hash'])) {
+            return new Result(['Invalid or expired code.']);
+        }
+        if (Hash::check((string) $code, (string) $entry['hash'])) {
+            Cache::forget($key); // single-use
             return new Result($id ?: $mobile);
+        }
+
+        $entry['attempts'] = (int) ($entry['attempts'] ?? 0) + 1;
+        // Re-store against the ORIGINAL deadline — a wrong guess must never
+        // extend the code's life.
+        $remaining = (int) ($entry['expires_at'] ?? 0) - now()->getTimestamp();
+        if ($entry['attempts'] >= $this->otpMaxAttempts || $remaining <= 0) {
+            Cache::forget($key); // burn the code; the user must request a new one
+        } else {
+            Cache::put($key, $entry, now()->addSeconds($remaining));
         }
         return new Result(['Invalid or expired code.']);
     }

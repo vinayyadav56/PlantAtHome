@@ -51,8 +51,11 @@ final class OtpAbuseGuardTest extends TestCase
             if ($code === 200) {
                 $sent++;
             }
-            // drop the cooldown key so the next send isn't blocked by it
-            Cache::forget('otp:cooldown:' . preg_replace('/\D+/', '', $this->phone));
+            // Drop the cooldown key so the next send isn't blocked by it. The key
+            // is the LAST 10 DIGITS — the guard deliberately normalises the same
+            // way the route limiter does, so reformatting a number cannot reset
+            // its counters (see OtpAbuseGuard::key).
+            Cache::forget('otp:cooldown:' . substr(preg_replace('/\D+/', '', $this->phone), -10));
         }
         $this->assertSame(8, $sent, 'the daily cap is 8 sends per number');
     }

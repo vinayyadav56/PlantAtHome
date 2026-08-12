@@ -68,6 +68,12 @@ return [
         'otp_has_button' => env('WHATSAPP_OTP_HAS_BUTTON', false),
         'notify_template' => env('WHATSAPP_NOTIFY_TEMPLATE'),
         'notify_lang' => env('WHATSAPP_NOTIFY_LANG', 'en'),
+        // Login-OTP policy (configurable, not hardcoded in the gateway).
+        'otp_ttl_minutes' => env('WHATSAPP_OTP_TTL_MINUTES', 5),
+        'otp_max_attempts' => env('WHATSAPP_OTP_MAX_ATTEMPTS', 5),
+        // Inbound webhook (Meta): GET challenge token + POST payload signature.
+        'webhook_verify_token' => env('WHATSAPP_WEBHOOK_VERIFY_TOKEN'),
+        'app_secret' => env('WHATSAPP_APP_SECRET'),
     ],
 
     // PlantAtHome — Twilio (alternative OTP gateway). TwilioGateway already reads these keys, but

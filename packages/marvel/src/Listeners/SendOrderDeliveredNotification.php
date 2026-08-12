@@ -52,5 +52,15 @@ class SendOrderDeliveredNotification implements ShouldQueue
             }
         }
         $this->sendOrderDeliveredSms($order);
+
+        // Mobile push to the customer (parent order only).
+        if ($order->customer && $order->parent_id == null) {
+            app(\App\Services\ExpoPushService::class)->sendToUser(
+                $order->customer,
+                'Delivered 🌿',
+                "Your order #{$order->tracking_number} has been delivered.",
+                ['type' => 'order', 'tracking_number' => $order->tracking_number],
+            );
+        }
     }
 }

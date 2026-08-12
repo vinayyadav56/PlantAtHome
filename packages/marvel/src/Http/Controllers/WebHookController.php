@@ -240,4 +240,95 @@ class WebHookController extends CoreController
         return response()->json(['ok' => true]);
     }
 
+    /**
+     * GET webhooks/whatsapp — Meta's subscription handshake.
+     *
+     * Meta calls this once when the webhook URL is saved and expects the raw
+     * hub.challenge echoed back as text/plain when hub.verify_token matches the
+     * token configured in the Meta app. Fails closed: no configured token ⇒ 404,
+     * so an unconfigured deployment cannot be subscribed by a third party.
+     */
+    public function whatsappVerify(Request $request)
+    {
+        $expected = (string) config('services.whatsapp.webhook_verify_token');
+        $presented = (string) $request->query('hub_verify_token', '');
+        $challenge = (string) $request->query('hub_challenge', '');
+
+        if ($expected === '') {
+            Log::warning('whatsapp webhook verify attempted with no WHATSAPP_WEBHOOK_VERIFY_TOKEN set');
+            return response()->json(['message' => 'Not Found'], 404);
+        }
+        if (!hash_equals($expected, $presented)) {
+            return response()->json(['message' => 'Unauthorized.'], 401);
+        }
+        return response($challenge, 200)->header('Content-Type', 'text/plain');
+    }
+
+    /**
+     * POST webhooks/whatsapp — Meta message/status events.
+     *
+     * Verified with the X-Hub-Signature-256 HMAC over the RAW body (Meta signs
+     * bytes, so a re-encoded array would not match). Records delivery state for
+     * OTP/notification messages by their WhatsApp message id. Idempotent (status
+     * only ever advances) and NEVER 5xxes — a non-2xx makes Meta retry the whole
+     * batch, which is how a transient bug becomes a webhook storm.
+     *
+     * Inbound message CONTENT is deliberately not stored: OTP replies would put
+     * codes in our database.
+     */
+    public function whatsappEvents(Request $request)
+    {
+        $secret = (string) config('services.whatsapp.app_secret');
+        if ($secret !== '') {
+            $presented = (string) $request->header('X-Hub-Signature-256', '');
+            $expected = 'sha256=' . hash_hmac('sha256', $request->getContent(), $secret);
+            if (!hash_equals($expected, $presented)) {
+                return response()->json(['message' => 'Unauthorized.'], 401);
+            }
+        } else {
+            Log::warning('whatsapp webhook accepted UNVERIFIED — set WHATSAPP_APP_SECRET to enforce');
+        }
+
+        try {
+            foreach ((array) $request->input('entry', []) as $entry) {
+                foreach ((array) ($entry['changes'] ?? []) as $change) {
+                    $value = (array) ($change['value'] ?? []);
+                    foreach ((array) ($value['statuses'] ?? []) as $status) {
+                        $this->recordWhatsappStatus($status);
+                    }
+                }
+            }
+        } catch (\Throwable $e) {
+            Log::warning('whatsapp webhook event skipped: ' . $e->getMessage());
+        }
+
+        return response()->json(['ok' => true]);
+    }
+
+    /**
+     * One delivery status. Logged (not persisted): OTP sends have no durable row —
+     * the code lives only in the cache — so the log line + message id is the
+     * correlation point between our dispatch and Meta's delivery.
+     */
+    private function recordWhatsappStatus(array $status): void
+    {
+        $messageId = (string) ($status['id'] ?? '');
+        $state = (string) ($status['status'] ?? '');
+        if ($messageId === '' || $state === '') {
+            return;
+        }
+        $context = [
+            'message_id' => $messageId,
+            'status' => $state, // sent | delivered | read | failed
+            'recipient_suffix' => substr((string) ($status['recipient_id'] ?? ''), -4),
+        ];
+        if ($state === 'failed') {
+            $err = (array) ($status['errors'][0] ?? []);
+            $context['error_code'] = $err['code'] ?? null;
+            $context['error_title'] = $err['title'] ?? null;
+            Log::warning('whatsapp.delivery.failed', $context);
+            return;
+        }
+        Log::info('whatsapp.delivery.' . $state, $context);
+    }
 }

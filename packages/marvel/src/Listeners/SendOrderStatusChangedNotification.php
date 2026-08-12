@@ -28,6 +28,18 @@ class SendOrderStatusChangedNotification implements ShouldQueue
 
 
         $this->sendOrderStatusChangeSms($order);
+
+        // Mobile push to the customer (parent order only — children are per-vendor internals).
+        if ($customer && $order->parent_id == null) {
+            $label = ucfirst(str_replace('-', ' ', preg_replace('/^order-/', '', (string) $order->order_status)));
+            app(\App\Services\ExpoPushService::class)->sendToUser(
+                $customer,
+                'Order update',
+                "Order #{$order->tracking_number} is now {$label}.",
+                ['type' => 'order', 'tracking_number' => $order->tracking_number],
+            );
+        }
+
         $emailReceiver = $this->getWhichUserWillGetEmail(EventType::ORDER_STATUS_CHANGED, $order->language ?? DEFAULT_LANGUAGE);
         if ($emailReceiver['vendor'] && $order->parent_id != null) {
             $vendor_id = $order->shop->owner_id;
