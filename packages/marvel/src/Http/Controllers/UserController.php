@@ -1037,7 +1037,13 @@ class UserController extends CoreController
                 'message' => OTP_SEND_SUCCESSFUL,
                 'success' => true,
                 'provider' => $gatewayName,
-                'channel' => $channel,
+                // Echo the RESOLVED gateway, not the raw request value. The client
+                // must send this back on verify/login: only the gateway that
+                // issued a code can verify it, and a client that sent no channel
+                // (server default) would otherwise echo nothing and be verified
+                // against the wrong provider. resolveOtpGatewayName() accepts a
+                // gateway name verbatim, so this round-trips exactly.
+                'channel' => $gatewayName,
                 'id' => $sendOtpCode->getId(),
                 'phone_number' => $phoneNumber,
                 // Client-side countdowns come from the SERVER's policy, never
