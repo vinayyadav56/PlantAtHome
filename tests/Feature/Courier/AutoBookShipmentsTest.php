@@ -200,6 +200,35 @@ final class AutoBookShipmentsTest extends TestCase
         $this->assertSame('pending', $shipment->fresh()->status);
     }
 
+    public function test_one_vendor_group_stays_booked_when_a_sibling_fails(): void
+    {
+        // Vendor groups book independently: A must not be rolled back because B's
+        // partner was down, and the retry must re-attempt ONLY B. Both the admin's
+        // "Book selected (N)" retry and the queue replay lean on this — re-sending
+        // an already-booked leg comes back "already booked, cancel first", which
+        // would turn a partial success into a permanent failure.
+        $order = $this->makeOrder(['payment_gateway' => 'CASH_ON_DELIVERY', 'order_status' => 'order-processing']);
+        $ok     = $this->makeShipment($order);
+        $broken = $this->makeShipment($order);
+        $this->courier->failFor = [$broken->id];
+
+        try {
+            $this->book(new OrderProcessed($order));
+        } catch (RuntimeException $e) {
+            // expected — the queue retries the job
+        }
+
+        $this->assertNotNull($ok->fresh()->provider_order_id, 'the good leg keeps its booking');
+        $this->assertNull($broken->fresh()->provider_order_id);
+
+        $this->courier->booked = [];
+        $this->courier->failFor = [];
+        $this->book(new OrderProcessed($order));
+
+        $this->assertSame([$broken->id], $this->courier->booked, 'the retry re-attempts only the leg that failed');
+        $this->assertNotNull($broken->fresh()->awb_number);
+    }
+
     public function test_courier_off_is_a_noop(): void
     {
         $this->courier->on = false;
@@ -298,6 +327,8 @@ class FakeCourier extends CourierService
     public array $booked = [];
     public bool $on = true;
     public bool $fail = false;
+    /** @var int[] shipment ids that fail while the rest succeed. */
+    public array $failFor = [];
 
     public function __construct()
     {
@@ -312,7 +343,7 @@ class FakeCourier extends CourierService
     public function book(Shipment $shipment, ?string $partnerCode = null): array
     {
         $this->booked[] = (int) $shipment->id;
-        if ($this->fail) {
+        if ($this->fail || in_array((int) $shipment->id, $this->failFor, true)) {
             return ['ok' => false, 'error' => 'shipping service down'];
         }
         $shipment->forceFill([
