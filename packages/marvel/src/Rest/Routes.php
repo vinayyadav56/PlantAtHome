@@ -954,6 +954,9 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // legitimately makes a different set of partners quotable for an order that
     // was classified into the wrong lane.
     Route::post('shipments/{id}/shipping-mode', [CourierShipmentController::class, 'updateMode']);
+    // Parcel weight/dimensions for the booking modal. Saved BEFORE rates are
+    // fetched — couriers price on (volumetric) weight.
+    Route::post('shipments/{id}/package', [CourierShipmentController::class, 'updatePackage']);
     // Manual RTO: webhooks record partner-reported bounces automatically; this is for
     // the ones the operator learns about by phone. Track-and-act-manually by design —
     // no automatic restock or refund.

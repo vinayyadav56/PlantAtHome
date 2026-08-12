@@ -452,6 +452,7 @@ class ShippingServiceClient
     {
         $order = $shipment->order;
         $shop = $shipment->shop;
+        $dims = $this->packageDims($shipment);
         return [
             // Empty string, not null: the service treats "" as "no override" and
             // routes normally, whereas a null would have to be special-cased there.
@@ -466,6 +467,11 @@ class ShippingServiceClient
             'drop'            => $this->addressFromOrder($order),
             'items'           => $this->items($shipment),
             'weight_g'        => $this->weightG($shipment),
+            // Parcel dimensions (cm). Couriers price on volumetric weight, so
+            // these are real inputs, not decoration — see packageDims().
+            'length_cm'       => $dims['length'],
+            'breadth_cm'      => $dims['breadth'],
+            'height_cm'       => $dims['height'],
             'pickup_location' => (string) ($shop->pickup_location_name ?? ''),
         ];
     }
@@ -589,8 +595,17 @@ class ShippingServiceClient
         return $out;
     }
 
+    /**
+     * Parcel weight in grams. An operator override on the shipment wins — they
+     * can see the actual parcel; the per-product sum (with a 500 g/unit
+     * fallback) is only an estimate.
+     */
     private function weightG(Shipment $shipment): int
     {
+        $override = (int) ($shipment->weight_g ?? 0);
+        if ($override > 0) {
+            return $override;
+        }
         $g = 0;
         foreach ($shipment->items as $it) {
             $p = $it->product ?? null;
@@ -598,6 +613,52 @@ class ShippingServiceClient
             $g += $w * max(1, (int) ($it->order_quantity ?? 1));
         }
         return max(1, $g);
+    }
+
+    /**
+     * Parcel dimensions in cm, most-specific source first:
+     *   shipment override → largest product dims on the leg → the admin's
+     *   courier default_package → 20x15x15.
+     *
+     * Every layer already existed but none was wired: products.length/breadth/
+     * height had no reader, CourierService::defaultPackage() had no caller, and
+     * the partner adapter carried hardcoded literals. Volumetric weight can cost
+     * more than actual weight, so this is a money path, not cosmetics.
+     */
+    private function packageDims(Shipment $shipment): array
+    {
+        $override = [
+            'length'  => (float) ($shipment->length_cm ?? 0),
+            'breadth' => (float) ($shipment->breadth_cm ?? 0),
+            'height'  => (float) ($shipment->height_cm ?? 0),
+        ];
+        if ($override['length'] > 0 && $override['breadth'] > 0 && $override['height'] > 0) {
+            return $override;
+        }
+
+        // Largest per-dimension across the leg's products — a box that fits the
+        // biggest item in each axis. (Summing would model a stack we don't know
+        // how the packer builds.)
+        $fromProducts = ['length' => 0.0, 'breadth' => 0.0, 'height' => 0.0];
+        foreach ($shipment->items as $it) {
+            $p = $it->product ?? null;
+            if (!$p) {
+                continue;
+            }
+            $fromProducts['length']  = max($fromProducts['length'], (float) ($p->length ?? 0));
+            $fromProducts['breadth'] = max($fromProducts['breadth'], (float) ($p->breadth ?? 0));
+            $fromProducts['height']  = max($fromProducts['height'], (float) ($p->height ?? 0));
+        }
+        if ($fromProducts['length'] > 0 && $fromProducts['breadth'] > 0 && $fromProducts['height'] > 0) {
+            return $fromProducts;
+        }
+
+        $default = (new CourierService())->defaultPackage();
+        return [
+            'length'  => (float) ($default['length'] ?? 20),
+            'breadth' => (float) ($default['breadth'] ?? 15),
+            'height'  => (float) ($default['height'] ?? 15),
+        ];
     }
 
     private function digits($s): string

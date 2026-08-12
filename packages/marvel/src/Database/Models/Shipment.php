@@ -42,6 +42,18 @@ class Shipment extends Model
         return $this->delivery_mode === 'self';
     }
 
+    /**
+     * A LIVE booking: a partner order/AWB exists and it isn't cancelled. Such a
+     * shipment is SEALED — its items, lane and parcel must not change under a
+     * courier that is already carrying it. Cancelling is the only way to unlock
+     * (a cancelled booking keeps its provider ids for the audit trail, which is
+     * why the status check is part of the predicate).
+     */
+    public function isLiveBooked(): bool
+    {
+        return ($this->provider_order_id || $this->awb_number) && $this->status !== 'cancelled';
+    }
+
     public function order(): BelongsTo
     {
         return $this->belongsTo(Order::class, 'order_id');

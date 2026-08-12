@@ -181,6 +181,41 @@ class CourierShipmentController extends CoreController
     }
 
     /**
+     * POST shipments/{id}/package — operator's parcel correction.
+     *
+     * Separate from dispatch on purpose: couriers price on weight/volumetric
+     * weight, so the package has to be saved BEFORE rates are fetched or the
+     * quote the operator picks isn't the quote they get billed for. Any field
+     * omitted (or sent null) reverts to the derived value.
+     */
+    public function updatePackage(Request $request, $id)
+    {
+        $data = $request->validate([
+            'weight_g'   => 'nullable|integer|min:1|max:100000',
+            'length_cm'  => 'nullable|numeric|min:1|max:300',
+            'breadth_cm' => 'nullable|numeric|min:1|max:300',
+            'height_cm'  => 'nullable|numeric|min:1|max:300',
+        ]);
+
+        $shipment = $this->shipment($id);
+        if ($shipment->isLiveBooked()) {
+            return response()->json([
+                'ok'    => false,
+                'error' => 'This shipment is already booked — cancel the booking before changing the parcel.',
+            ], 409);
+        }
+
+        $shipment->forceFill([
+            'weight_g'   => $data['weight_g'] ?? null,
+            'length_cm'  => $data['length_cm'] ?? null,
+            'breadth_cm' => $data['breadth_cm'] ?? null,
+            'height_cm'  => $data['height_cm'] ?? null,
+        ])->save();
+
+        return response()->json(['ok' => true, 'shipment' => $shipment->fresh()]);
+    }
+
+    /**
      * POST shipments/{id}/self-status — manual status walk for SELF-delivery
      * shipments (the vendor fulfils these; no courier, no DP record). Routes
      * through applyNormalizedStatus — the exact same seam as partner webhooks —

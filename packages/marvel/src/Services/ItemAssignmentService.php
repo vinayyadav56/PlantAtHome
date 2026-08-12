@@ -188,6 +188,11 @@ class ItemAssignmentService
                 'shop_id'                 => $shopId,
                 'vendor_product_price_id' => $v['vendor_product_price_id'] ?? null,
                 'vendor_name'             => $v['vendor_name'] ?? null,
+                // Where this vendor ships FROM, so the admin's per-line vendor
+                // picker can show a location next to price + stock. Both values
+                // are already loaded here — no extra query.
+                'city'                    => is_array($shop?->address ?? null) ? ($shop->address['city'] ?? null) : null,
+                'cities'                  => $v['cities'] ?? [],
                 // The vendor's supply rate (their payout when assigned). selling_price is
                 // overwritten below with the UNIFORM city price (max rate + margin).
                 'vendor_rate'             => isset($v['vendor_rate']) ? (float) $v['vendor_rate'] : null,
