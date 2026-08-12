@@ -50,6 +50,7 @@ final class VendorShipmentGroupingTest extends TestCase
             $t->unsignedBigInteger('customer_id')->nullable();
             $t->unsignedBigInteger('parent_id')->nullable();
             $t->string('order_status')->nullable();
+            $t->unsignedBigInteger('vendor_shop_id')->nullable();
             $t->string('payment_status')->nullable();
             $t->string('payment_gateway')->nullable();
             $t->text('shipping_address')->nullable();
@@ -352,6 +353,42 @@ final class VendorShipmentGroupingTest extends TestCase
         $this->assertSame(0, $res['applied']);
         $this->assertStringContainsString('already booked', $res['rejected'][0]['reason']);
         $this->assertSame($booked->id, (int) $locked->fresh()->shipment_id);
+    }
+
+    public function test_per_item_override_back_fills_the_order_level_vendor(): void
+    {
+        // The panel and the per-item table are two views of ONE decision, so
+        // they must agree in both directions — otherwise overriding a line
+        // leaves the panel showing a vendor that no longer has any lines.
+        DB::table('shops')->insert(['id' => 9, 'name' => 'Chosen Vendor']);
+        $order = $this->makeOrder();
+        $order->forceFill(['vendor_shop_id' => 7])->save();
+        $item = $this->makeItem($order);
+        $this->service(7)->assignItems($order, [['order_item_id' => $item->id, 'shop_id' => 7]]);
+
+        $this->service(9)->assignItems($order, [['order_item_id' => $item->id, 'shop_id' => 9]]);
+
+        $this->assertSame(9, (int) $order->fresh()->vendor_shop_id);
+    }
+
+    public function test_multi_vendor_order_leaves_the_order_level_vendor_alone(): void
+    {
+        // No single vendor owns a split order — inventing a "winner" would be
+        // a lie, so the approved value stands.
+        DB::table('shops')->insert(['id' => 9, 'name' => 'Second Vendor']);
+        $order = $this->makeOrder();
+        $order->forceFill(['vendor_shop_id' => 7])->save();
+        $a = $this->makeItem($order);
+        $b = $this->makeItem($order);
+        $this->service(7)->assignItems($order, [
+            ['order_item_id' => $a->id, 'shop_id' => 7],
+            ['order_item_id' => $b->id, 'shop_id' => 7],
+        ]);
+
+        $this->service(9)->assignItems($order, [['order_item_id' => $b->id, 'shop_id' => 9]]);
+
+        $this->assertSame(7, (int) $order->fresh()->vendor_shop_id);
+        $this->assertCount(2, Shipment::where('order_id', $order->id)->get());
     }
 
     public function test_auto_assign_preserves_booked_rows_and_reports_locked(): void

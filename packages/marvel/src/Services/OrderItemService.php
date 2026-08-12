@@ -219,6 +219,37 @@ class OrderItemService
      * is { order_item_id, shop_id }. Items left out keep their current assignment.
      */
     /**
+     * Keep the ORDER-level vendor honest after a per-line change.
+     *
+     * The assignment panel and the per-item table are two views of one
+     * decision, so they have to agree in BOTH directions: approving a vendor
+     * moves the lines (syncOrderVendor), and moving the lines back-fills the
+     * order-level column here. Only when every line agrees — a genuinely
+     * multi-vendor order has no single order-level vendor, so the column is
+     * left as the operator last approved it rather than being given a
+     * misleading winner.
+     */
+    private function syncOrderLevelVendor(Order $order): void
+    {
+        try {
+            $shops = OrderItem::where('order_id', $order->id)
+                ->whereNotNull('assigned_shop_id')
+                ->distinct()
+                ->pluck('assigned_shop_id');
+            if ($shops->count() !== 1) {
+                return;
+            }
+            $shopId = (int) $shops->first();
+            if ((int) $order->vendor_shop_id === $shopId) {
+                return;
+            }
+            $order->forceFill(['vendor_shop_id' => $shopId])->save();
+        } catch (\Throwable $e) {
+            // bookkeeping only — never break an assignment over it
+        }
+    }
+
+    /**
      * Move every line this vendor CAN fulfil onto them — the order-level
      * "approve assignment" action expressed in terms of the lines, which are
      * what shipments (and therefore the vendor shown on each shipment card)
@@ -354,6 +385,7 @@ class OrderItemService
         });
 
         if (count($applied) > 0) {
+            $this->syncOrderLevelVendor($order);
             \Marvel\Database\Models\OrderEvent::record($order->id, 'items.assigned', [
                 'applied'  => count($applied),
                 'rejected' => count($rejected),
