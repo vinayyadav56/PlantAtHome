@@ -119,6 +119,24 @@ final class RevenueRecognitionTest extends TestCase
         $this->assertSame(14274.02, round($this->revenue30d(), 2));
     }
 
+    public function test_the_executive_block_actually_populates(): void
+    {
+        // executive() wraps every section in catch (\Throwable) {}, so a coding error inside
+        // one does not 500 — it silently returns null for that section and the card renders a
+        // dash. That is exactly how a stale closure capture shipped: the time-series was right
+        // while compares and AOV came back empty. Assert the sections are populated, not just
+        // that the call did not throw.
+        $this->order(OrderStatus::PROCESSING, PaymentStatus::SUCCESS, 1000.00);
+        $this->order(OrderStatus::COMPLETED, PaymentStatus::CASH, 500.00);
+
+        \Illuminate\Support\Facades\Cache::flush();
+        $out = (new MetricsService())->executive();
+
+        $this->assertNotNull($out['compares'], 'compares was swallowed by a catch');
+        $this->assertSame(1500.0, round((float) $out['compares']['this_month']['revenue'], 2));
+        $this->assertSame(750.0, round((float) $out['aov_30d'], 2), 'AOV = 1500 over 2 orders');
+    }
+
     public function test_suborders_are_never_double_counted(): void
     {
         // The parent row carries the full total; children would double it.

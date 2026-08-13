@@ -275,7 +275,11 @@ class MetricsService
      * one-query strips for finance / satisfaction / marketing / referrers.
      * Whole payload cached 60s; every block try/caught so schema drift on one
      * table never blanks the dashboard. Revenue convention matches the class
-     * header: COMPLETED parent orders, SUM(paid_total).
+     * header — see applyRevenueFilter.
+     *
+     * ⚠️ Those catches are swallow-all: a plain coding error in a block does not surface as a
+     * 500, it silently nulls that section. RevenueRecognitionTest asserts compares/aov are
+     * populated for exactly that reason.
      */
     public function executive(): array
     {
@@ -329,7 +333,7 @@ class MetricsService
             }
 
             try {
-                $window = function (Carbon $from, Carbon $to) use ($completed) {
+                $window = function (Carbon $from, Carbon $to) use ($earning) {
                     $r = $earning()->where('created_at', '>=', $from)->where('created_at', '<', $to)
                         ->selectRaw('COALESCE(SUM(paid_total),0) revenue, COUNT(*) orders')->first();
                     return ['revenue' => round((float) $r->revenue, 2), 'orders' => (int) $r->orders];
