@@ -8,14 +8,17 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\User;
 use Marvel\Enums\OrderStatus;
+use Marvel\Enums\PaymentStatus;
 use Marvel\Enums\Permission;
 
 /**
  * The SINGLE source of truth for the Operations Command Center numbers. Every
  * command-center endpoint delegates here, so metric definitions live in ONE
  * place. Definitions (documented, internally consistent):
- *   revenue = SUM(paid_total) over COMPLETED customer orders (parent_id IS NULL)
- *             — the parent row carries the full order total, so no double-count.
+ *   revenue = SUM(paid_total) over customer orders (parent_id IS NULL) whose money is real:
+ *             prepaid once payment succeeded, COD once delivered. Never cancelled/failed/
+ *             refunded. See applyRevenueFilter — the parent row carries the full order
+ *             total, so no double-count.
  *   orders  = customer orders (parent_id IS NULL), counted by status.
  * Cities are still free-text (no master cities table yet — Phase 2), extracted
  * from the order's shipping_address JSON.
@@ -106,7 +109,7 @@ class MetricsService
             ->select(
                 DB::raw("$cityExpr as city"),
                 DB::raw('COUNT(id) as orders'),
-                DB::raw('SUM(CASE WHEN order_status = "' . OrderStatus::COMPLETED . '" THEN paid_total ELSE 0 END) as revenue'),
+                DB::raw('SUM(CASE WHEN ' . $this->revenueSql() . ' THEN paid_total ELSE 0 END) as revenue'),
                 DB::raw('COUNT(DISTINCT customer_id) as customers')
             )
             ->groupBy('city')
@@ -234,9 +237,8 @@ class MetricsService
             ->select('id', 'tracking_number', 'order_status', 'paid_total', 'created_at')
             ->orderByDesc('id')->limit(12)->get();
 
-        // 14-day revenue trend (completed).
-        $trend = $base()
-            ->where('order_status', OrderStatus::COMPLETED)
+        // 14-day revenue trend.
+        $trend = $this->applyRevenueFilter($base())
             ->where('created_at', '>=', Carbon::now()->subDays(14))
             ->select(DB::raw('DATE(created_at) as d'), DB::raw('SUM(paid_total) as revenue'))
             ->groupBy('d')->orderBy('d')->get();
@@ -247,7 +249,7 @@ class MetricsService
         return [
             'city'          => $city,
             'orders_30d'    => (int) $base()->where('created_at', '>=', $d30)->count(),
-            'revenue_30d'   => (float) $base()->where('order_status', OrderStatus::COMPLETED)->where('created_at', '>=', $d30)->sum('paid_total'),
+            'revenue_30d'   => (float) $this->applyRevenueFilter($base())->where('created_at', '>=', $d30)->sum('paid_total'),
             'customers'     => (int) $base()->distinct()->count('customer_id'),
             'vendors'       => $vendors,
             'by_status'     => [
@@ -292,13 +294,13 @@ class MetricsService
                 'generated_at' => now()->toIso8601String(),
             ];
 
-            $completed = fn () => $this->customerOrders()->where('order_status', OrderStatus::COMPLETED);
+            $earning = fn () => $this->applyRevenueFilter($this->customerOrders());
 
             try {
-                $rows = $completed()->where('created_at', '>=', Carbon::today()->subDays(29))
+                $rows = $earning()->where('created_at', '>=', Carbon::today()->subDays(29))
                     ->selectRaw('DATE(created_at) d, SUM(paid_total) revenue, COUNT(*) orders')
                     ->groupBy('d')->pluck('revenue', 'd');
-                $counts = $completed()->where('created_at', '>=', Carbon::today()->subDays(29))
+                $counts = $earning()->where('created_at', '>=', Carbon::today()->subDays(29))
                     ->selectRaw('DATE(created_at) d, COUNT(*) c')->groupBy('d')->pluck('c', 'd');
                 for ($i = 29; $i >= 0; $i--) {
                     $d = Carbon::today()->subDays($i)->toDateString();
@@ -312,7 +314,7 @@ class MetricsService
             }
 
             try {
-                $rows = $completed()->where('created_at', '>=', Carbon::now()->startOfMonth()->subMonths(11))
+                $rows = $earning()->where('created_at', '>=', Carbon::now()->startOfMonth()->subMonths(11))
                     ->selectRaw("DATE_FORMAT(created_at, '%Y-%m') m, SUM(paid_total) revenue, COUNT(*) orders")
                     ->groupBy('m')->get()->keyBy('m');
                 for ($i = 11; $i >= 0; $i--) {
@@ -328,7 +330,7 @@ class MetricsService
 
             try {
                 $window = function (Carbon $from, Carbon $to) use ($completed) {
-                    $r = $completed()->where('created_at', '>=', $from)->where('created_at', '<', $to)
+                    $r = $earning()->where('created_at', '>=', $from)->where('created_at', '<', $to)
                         ->selectRaw('COALESCE(SUM(paid_total),0) revenue, COUNT(*) orders')->first();
                     return ['revenue' => round((float) $r->revenue, 2), 'orders' => (int) $r->orders];
                 };
@@ -457,6 +459,50 @@ class MetricsService
         });
     }
 
+    /**
+     * Revenue = money that is actually ours.
+     *
+     * A prepaid order counts once its payment succeeded; a COD order counts only once it is
+     * delivered, because that is when the cash is actually handed over. Cancelled, failed and
+     * refunded orders never count, whatever their payment status says.
+     *
+     * This replaces "delivered orders only", which recognised revenue purely on delivery. On a
+     * store with a normal delivery lag that hid every paid-but-undelivered order — four of them,
+     * ~Rs 11k, money already collected — so the whole dashboard read Rs 0 while it was trading.
+     * Delivery-based metrics (fulfilment time, DP performance) still key off COMPLETED; this is
+     * only for sums of money.
+     */
+    private function applyRevenueFilter($query)
+    {
+        return $query
+            ->whereNotIn('order_status', [
+                OrderStatus::CANCELLED,
+                OrderStatus::FAILED,
+                OrderStatus::REFUNDED,
+            ])
+            ->where(function ($w) {
+                $w->whereIn('payment_status', [
+                    PaymentStatus::SUCCESS,
+                    PaymentStatus::CASH,
+                    PaymentStatus::WALLET,
+                ])->orWhere(function ($cod) {
+                    $cod->where('payment_status', PaymentStatus::CASH_ON_DELIVERY)
+                        ->where('order_status', OrderStatus::COMPLETED);
+                });
+            });
+    }
+
+    /** The same rule as a SQL predicate, for aggregates that sum inside a CASE. */
+    private function revenueSql(): string
+    {
+        $dead = "'" . implode("','", [OrderStatus::CANCELLED, OrderStatus::FAILED, OrderStatus::REFUNDED]) . "'";
+        $paid = "'" . implode("','", [PaymentStatus::SUCCESS, PaymentStatus::CASH, PaymentStatus::WALLET]) . "'";
+
+        return "order_status NOT IN ($dead) AND (payment_status IN ($paid)"
+            . " OR (payment_status = '" . PaymentStatus::CASH_ON_DELIVERY . "'"
+            . " AND order_status = '" . OrderStatus::COMPLETED . "'))";
+    }
+
     private function orders()
     {
         return DB::table('orders')->whereNull('deleted_at');
@@ -470,8 +516,7 @@ class MetricsService
 
     private function revenueSince(Carbon $since): float
     {
-        return (float) $this->customerOrders()
-            ->where('order_status', OrderStatus::COMPLETED)
+        return (float) $this->applyRevenueFilter($this->customerOrders())
             ->where('created_at', '>=', $since)
             ->sum('paid_total');
     }
