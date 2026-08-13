@@ -39,11 +39,26 @@ class CourierShipmentController extends CoreController
         return response()->json($res, !empty($res['ok']) ? 200 : 409);
     }
 
-    /** GET shipments/{id}/shipping-quotes — ranked quotes across every eligible partner. */
+    /**
+     * GET shipments/{id}/shipping-quotes — ranked quotes across every eligible partner.
+     *
+     * Optional `mode` quotes a lane other than the shipment's own. Partners are mode-exclusive,
+     * so the admin asks for each lane in turn to list every delivery option; this is a read and
+     * must not persist the lane (POST shipping-mode is the write).
+     */
     public function quotes(Request $request, $id)
     {
         $cod = $request->has('cod') ? $request->boolean('cod') : null;
-        return response()->json($this->courier()->quoteShipment($this->shipment($id), $cod));
+
+        $mode = $request->input('mode');
+        if ($mode !== null && !in_array($mode, ['instant', 'same_city', 'courier'], true)) {
+            return response()->json([
+                'ok'    => false,
+                'error' => 'mode must be one of: instant, same_city, courier.',
+            ], 422);
+        }
+
+        return response()->json($this->courier()->quoteShipment($this->shipment($id), $cod, $mode));
     }
 
     /**
@@ -68,6 +83,23 @@ class CourierShipmentController extends CoreController
         // so a second allowlist in PHP would be a copy of those rules that can drift.
         $partner = $request->input('partner');
         $partner = is_string($partner) && $partner !== '' ? $partner : null;
+
+        // Optional `mode` books the lane the operator's chosen quote was priced on. book() reads
+        // the lane off the shipment row, so without this, picking a hyperlocal quote on a
+        // courier-lane shipment fails with "partner not available: porter". Validated here
+        // (unlike `partner`) because it is written to the row, not just forwarded.
+        $mode = $request->input('mode');
+        if ($mode !== null && $mode !== '') {
+            if (!in_array($mode, ['instant', 'same_city', 'courier'], true)) {
+                return response()->json([
+                    'ok'    => false,
+                    'error' => 'mode must be one of: instant, same_city, courier.',
+                ], 422);
+            }
+            if ($shipment->mode !== $mode) {
+                $shipment->forceFill(['mode' => $mode])->save();
+            }
+        }
 
         $res = $this->courier()->book($shipment, $partner);
         return response()->json($res, !empty($res['ok']) ? 200 : 409);

@@ -227,11 +227,17 @@ class CourierService
      * Ranked delivery quotes for this shipment's mode (+ COD), from the Go service's
      * partner fan-out (each partner isolated there; failures surface as partner_errors).
      */
-    public function quoteShipment(Shipment $shipment, ?bool $cod = null): array
+    /**
+     * $mode quotes a lane OTHER than the shipment's persisted one, so the admin can show every
+     * delivery option at once (partners are mode-exclusive: Shiprocket serves `courier`, Porter
+     * and Borzo serve `instant`/`same_city`, so one lane can only ever return half the picture).
+     * Read-only by design — quoting a lane must never persist it; that is updateMode's job.
+     */
+    public function quoteShipment(Shipment $shipment, ?bool $cod = null, ?string $mode = null): array
     {
         $order = $shipment->order;
         $cod = $cod ?? ($order && PaymentGatewayType::isCashOnDelivery($order->payment_gateway));
-        $mode = $this->modeOf($shipment);
+        $mode = $mode ?: $this->modeOf($shipment);
 
         if (!$this->shippingServiceEnabled()) {
             return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
