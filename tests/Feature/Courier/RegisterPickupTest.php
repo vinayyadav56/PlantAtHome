@@ -9,6 +9,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\Shop;
+use Marvel\Services\Courier\CourierService;
 use Marvel\Services\Courier\ShippingServiceClient;
 use Tests\TestCase;
 
@@ -89,5 +90,76 @@ final class RegisterPickupTest extends TestCase
 
         $this->assertFalse($res['ok']);
         $this->assertStringContainsString('valid phone', $res['error']);
+    }
+
+    /** The courier master switch, so syncPickupLocation gets past shippingServiceEnabled(). */
+    private function enableCourier(): void
+    {
+        Schema::create('settings', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->text('options')->nullable();
+            $t->string('language')->default('en');
+            $t->timestamps();
+        });
+        DB::table('settings')->insert([
+            'id' => 1, 'language' => 'en',
+            'options' => json_encode(['courier' => ['enabled' => true]]),
+        ]);
+    }
+
+    private function completeShop(): Shop
+    {
+        return Shop::create([
+            'name'     => 'Delhi Nursery',
+            'address'  => ['street_address' => '1 Garden Lane', 'city' => 'Delhi', 'state' => 'Delhi', 'zip' => '110001', 'phone' => '+91 98765 43210'],
+            'settings' => ['location' => ['lat' => 28.6139, 'lng' => 77.209]],
+        ]);
+    }
+
+    public function test_a_failed_registration_is_not_persisted_locally(): void
+    {
+        // THE production bug: the nickname used to be stamped before the partner call and kept
+        // regardless of the outcome, so a failed registration looked identical to a good one and
+        // every later booking sent Shiprocket a pickup_location it had never heard of.
+        $this->enableCourier();
+        Http::fake(['ship.test/*' => Http::response([
+            'code' => 'shiprocket', 'ok' => false,
+            'error' => 'shiprocket: Please provide a valid phone number (422)',
+        ], 200)]);
+
+        $shop = $this->completeShop();
+        $res = (new CourierService())->syncPickupLocation($shop);
+
+        $this->assertFalse($res['ok']);
+        $this->assertNull($shop->fresh()->pickup_location_name, 'a failed registration must leave no local stamp');
+    }
+
+    public function test_a_successful_registration_is_persisted(): void
+    {
+        $this->enableCourier();
+        Http::fake(['ship.test/*' => Http::response([
+            'code' => 'shiprocket', 'ok' => true, 'outcome' => 'registered',
+        ], 200)]);
+
+        $shop = $this->completeShop();
+        $res = (new CourierService())->syncPickupLocation($shop);
+
+        $this->assertTrue($res['ok']);
+        $this->assertSame('shop-' . $shop->id, $shop->fresh()->pickup_location_name);
+        $this->assertSame('110001', $shop->fresh()->pickup_postcode);
+    }
+
+    public function test_an_incomplete_vendor_is_refused_by_name_without_calling_the_partner(): void
+    {
+        $this->enableCourier();
+        Http::fake(['ship.test/*' => Http::response(['ok' => true], 200)]);
+
+        $shop = Shop::create(['name' => 'V', 'address' => ['city' => 'Delhi', 'zip' => '110001']]);
+        $res = (new CourierService())->syncPickupLocation($shop);
+
+        $this->assertFalse($res['ok']);
+        $this->assertStringContainsString('street address', $res['error']);
+        $this->assertStringContainsString('phone', $res['error']);
+        Http::assertNothingSent();
     }
 }

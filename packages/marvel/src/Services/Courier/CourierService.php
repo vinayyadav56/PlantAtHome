@@ -206,12 +206,50 @@ class CourierService
         if (($shipment->provider_order_id || $shipment->awb_number) && $shipment->status !== 'cancelled') {
             return ['ok' => false, 'error' => 'This vendor shipment is already booked — cancel the existing booking first to rebook.'];
         }
+        // Courier lanes reference the vendor's pickup location BY NICKNAME, and Shiprocket rejects
+        // the order if that nickname was never registered on the account. Refuse here with an
+        // actionable message: the alternative is a partner 422 per booking that reads like a
+        // Shiprocket outage. Hyperlocal lanes carry coordinates instead, so they are exempt.
+        if ($this->modeOf($shipment) === 'courier' && ($err = $this->pickupBlocker($shipment))) {
+            return ['ok' => false, 'code' => 'PICKUP_NOT_REGISTERED', 'error' => $err];
+        }
+
         $order = $shipment->order;
         // Checkout stores CASH_ON_DELIVERY, COD or CASH interchangeably. Comparing with === against
         // one of them booked a 'CASH' order as PREPAID, so the rider was never told to collect and
         // the order value was simply lost. Always ask the enum.
         $cod = $order && PaymentGatewayType::isCashOnDelivery($order->payment_gateway);
         return $this->shippingClient()->book($shipment, $this->modeOf($shipment), (bool) $cod, $this->shipmentCodAmount($shipment, $order), $partnerCode);
+    }
+
+    /**
+     * Why this shipment cannot be booked on a courier lane yet, or null when it can.
+     *
+     * Reads the pickup off THIS shipment's own vendor ($shipment->shop), which is also what
+     * buildRequest does — so one vendor's shipment can never be booked against another vendor's
+     * pickup location, and a shipment whose vendor was never registered is refused rather than
+     * silently sent with a nickname Shiprocket does not know.
+     */
+    public function pickupBlocker(Shipment $shipment): ?string
+    {
+        $shop = $shipment->shop;
+        if (!$shop) {
+            return 'This shipment has no vendor, so it has no pickup location.';
+        }
+        if (trim((string) ($shop->pickup_location_name ?? '')) === '') {
+            return sprintf(
+                '%s has no registered Shiprocket pickup location. Use "Register Pickup" on this vendor group first.',
+                $shop->name ?: "Vendor #{$shop->id}",
+            );
+        }
+        if ($missing = $this->missingPickupFields($shop)) {
+            return sprintf(
+                '%s is missing %s on its pickup address — Shiprocket will refuse the booking.',
+                $shop->name ?: "Vendor #{$shop->id}",
+                implode(', ', $missing),
+            );
+        }
+        return null;
     }
 
     /** Cancel a booked shipment (the service cancels at whichever partner placed it). */
@@ -305,26 +343,71 @@ class CourierService
     public function syncPickupLocation(Shop $shop): array
     {
         $addr = (array) ($shop->address ?? []);
-        $shop->forceFill([
-            'pickup_location_name' => 'shop-' . $shop->id,
-            'pickup_postcode'      => $shop->pickup_postcode ?: ($addr['zip'] ?? null),
-        ])->save();
+        $nickname = 'shop-' . $shop->id;
+        $postcode = $shop->pickup_postcode ?: ($addr['zip'] ?? null);
 
+        // The local stamp is what every booking sends as `pickup_location`. It used to be written
+        // HERE — before the partner call and regardless of its outcome — so a FAILED registration
+        // was indistinguishable from a good one, and every later booking quoted a nickname that
+        // did not exist at Shiprocket. Nothing is persisted now until the partner confirms.
         if (!$this->shippingServiceEnabled()) {
             return [
                 'ok'                   => false,
                 'pickup_location_name' => $shop->pickup_location_name,
-                'error'                => 'Courier is off or the shipping service is not configured — pickup was stamped locally but NOT registered at the partner.',
+                'error'                => 'Courier is off or the shipping service is not configured — nothing was registered.',
+            ];
+        }
+
+        // Answer with the field names rather than relaying Shiprocket's opaque 422.
+        if ($missing = $this->missingPickupFields($shop)) {
+            return [
+                'ok'                   => false,
+                'pickup_location_name' => $shop->pickup_location_name,
+                'error'                => 'This vendor is missing ' . implode(', ', $missing)
+                    . '. Shiprocket refuses a pickup location without them — fix the vendor address, then register again.',
             ];
         }
 
         $res = $this->shippingClient()->registerPickup($shop);
+        $ok  = (bool) ($res['ok'] ?? false);
+
+        if ($ok) {
+            $shop->forceFill([
+                'pickup_location_name' => $nickname,
+                'pickup_postcode'      => $postcode,
+            ])->save();
+        }
+
         return [
-            'ok'                   => (bool) ($res['ok'] ?? false),
-            'pickup_location_name' => $shop->pickup_location_name,
+            'ok'                   => $ok,
+            'pickup_location_name' => $ok ? $nickname : $shop->pickup_location_name,
             'outcome'              => $res['outcome'] ?? null,
             'error'                => $res['error'] ?? null,
         ];
+    }
+
+    /**
+     * The pickup fields Shiprocket rejects a location without — checked before we call, so the
+     * operator is told which vendor fields to fill instead of receiving a partner validation error.
+     */
+    public function missingPickupFields(Shop $shop): array
+    {
+        $a = $this->shippingClient()->pickupAddressOf($shop);
+        $need = [
+            'address' => 'street address',
+            'city'    => 'city',
+            'state'   => 'state',
+            'pincode' => 'pincode',
+            'phone'   => 'phone',
+        ];
+
+        $missing = [];
+        foreach ($need as $key => $label) {
+            if (trim((string) ($a[$key] ?? '')) === '') {
+                $missing[] = $label;
+            }
+        }
+        return $missing;
     }
 
     /**

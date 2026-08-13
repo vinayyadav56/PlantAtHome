@@ -522,6 +522,15 @@ class ShippingServiceClient
         ];
     }
 
+    /**
+     * The exact pickup address a booking would send for this shop — exposed so callers can check
+     * it is complete BEFORE registering or booking, rather than discovering it from a partner 422.
+     */
+    public function pickupAddressOf($shop): array
+    {
+        return $this->addressFromShop($shop);
+    }
+
     private function addressFromShop($shop): array
     {
         $a = (array) ($shop->address ?? []);
