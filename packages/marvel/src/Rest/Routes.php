@@ -840,6 +840,10 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
         ->middleware('throttle:5,1');
     Route::post('courier/partners/{code}/test/cancel', [CourierPartnerProxyController::class, 'testCancel'])
         ->middleware('throttle:5,1');
+    // UAT-only order-flow simulator. The SERVICE refuses this outside a sandbox environment; there is
+    // deliberately no environment check here (one owner for the rule).
+    Route::post('courier/partners/{code}/test/simulate-flow', [CourierPartnerProxyController::class, 'simulateFlow'])
+        ->middleware('throttle:5,1');
     // Partner Orders: every console test/book is recorded (above); list them + manually add a known
     // provider order id (e.g. an existing Porter CRN) so it can be re-tracked. Tracking reuses test/track.
     Route::get('courier/console-orders', [\App\Http\Controllers\PartnerConsoleOrderController::class, 'index']);

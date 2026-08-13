@@ -419,6 +419,21 @@ class ShippingServiceClient
     }
 
     /** Live status lookup for one provider order id (paid API on some partners). Read-only. */
+    /**
+     * Start Porter's UAT order-flow simulator for an existing CRN.
+     *
+     * The service refuses this outside a sandbox environment — deliberately NOT re-checked here, so
+     * the rule has exactly one owner (same reason the destructive confirm phrase lives only there).
+     */
+    public function partnerSimulateFlow(string $code, string $providerOrderId, int $flowType): array
+    {
+        return $this->request(
+            'post',
+            '/v1/partners/' . rawurlencode($code) . '/test/simulate-flow',
+            ['provider_order_id' => $providerOrderId, 'flow_type' => $flowType]
+        );
+    }
+
     public function partnerTestTrack(string $code, string $providerOrderId): array
     {
         return $this->request(

@@ -176,6 +176,44 @@ class CourierPartnerProxyController extends CoreController
         );
     }
 
+    /**
+     * Start Porter's UAT order-flow simulator against an existing CRN.
+     *
+     * NO environment check here on purpose. The service refuses this outside a sandbox and is the
+     * single owner of that rule — exactly like the destructive confirm phrase, which deliberately
+     * appears nowhere in this codebase. A second check here would be a second thing to keep in step,
+     * and the one that drifts is the one that lets something through.
+     */
+    public function simulateFlow(Request $request, string $code)
+    {
+        $this->assertAdmin($request);
+        $code = $this->assertPartner($code);
+
+        $validated = $request->validate([
+            'provider_order_id' => 'required|string|max:191',
+            // Porter documents flows 0..7. `integer` rejects "0" and 1.5; the service re-validates.
+            'flow_type'         => 'required|integer|between:0,7',
+        ]);
+        $pid = trim((string) $validated['provider_order_id']);
+        $flow = (int) $validated['flow_type'];
+
+        return $this->passthrough(
+            fn (ShippingServiceClient $c) => $c->partnerSimulateFlow($code, $pid, $flow),
+            // Stamp the simulation on the console record when one exists. Never CREATE a row: the
+            // CRN being simulated usually belongs to a real shipment, not a console probe, and
+            // manufacturing a console order for it would put a shipment in the wrong ledger.
+            function (array $data) use ($request, $code, $pid, $flow): void {
+                \App\Models\PartnerConsoleOrder::where('partner_code', $code)
+                    ->where('provider_order_id', $pid)
+                    ->update([
+                        'simulation_flow_type'   => $flow,
+                        'simulation_started_at'  => now(),
+                        'simulation_started_by'  => optional($request->user())->id,
+                    ]);
+            }
+        );
+    }
+
     /** CREATES A REAL DELIVERY at the partner. Guarded by the service on the caller's `confirm`. */
     public function testBook(Request $request, string $code)
     {

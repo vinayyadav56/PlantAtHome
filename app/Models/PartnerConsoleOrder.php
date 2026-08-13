@@ -21,6 +21,9 @@ class PartnerConsoleOrder extends Model
         'last_status',
         'last_tracked_at',
         'created_by',
+        'simulation_flow_type',
+        'simulation_started_at',
+        'simulation_started_by',
     ];
 
     protected $casts = [
@@ -28,5 +31,7 @@ class PartnerConsoleOrder extends Model
         'response'         => 'array',
         'last_tracked_at'  => 'datetime',
         'cod_amount_paise' => 'integer',
+        'simulation_started_at' => 'datetime',
+        'simulation_flow_type'  => 'integer',
     ];
 }
