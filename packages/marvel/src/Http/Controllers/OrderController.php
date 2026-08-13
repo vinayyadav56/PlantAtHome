@@ -82,7 +82,7 @@ class OrderController extends CoreController
         // by the order-detail page via fetchSingleOrder). So slim each order hard:
         //   products  → [{id}]            (only .length is used)
         //   customer  → {id, name, email} (only name/email are shown)
-        //   children  → [{id}]            (only .length is used)
+        //   children  → [{id, order_status}] (count + per-vendor progress "2/3 delivered")
         //   heavy JSON (addresses, payment intent, note) → hidden
         // This drops each order to a few hundred bytes so it can never truncate.
         $idsOnly = function ($model, string $relation) {
@@ -92,7 +92,11 @@ class OrderController extends CoreController
         };
         $orders->getCollection()->transform(function ($order) use ($idsOnly) {
             $idsOnly($order, 'products');
-            $idsOnly($order, 'children');
+            if ($order->relationLoaded('children')) {
+                $order->setRelation('children', $order->children->map(
+                    fn ($c) => ['id' => $c->id, 'order_status' => $c->order_status]
+                )->values());
+            }
             if ($order->relationLoaded('customer') && $order->customer) {
                 $c = $order->customer;
                 $order->setRelation('customer', ['id' => $c->id, 'name' => $c->name, 'email' => $c->email]);

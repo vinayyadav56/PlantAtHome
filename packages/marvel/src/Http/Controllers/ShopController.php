@@ -58,6 +58,13 @@ class ShopController extends CoreController
         // them through the Vendors screens (super-admin token bypasses this filter).
         if (!$this->isShopAdmin($request)) {
             $query->whereDoesntHave('serviceAreas');
+        } else {
+            // `balance` carries admin_commission_rate — without it every row in the admin
+            // shops table renders 0% and the commission modal opens empty. Admins only:
+            // this route is `auth:sanctum` (not admin-gated) and index() returns the RAW
+            // model, so eager-loading it unconditionally would hand current_balance,
+            // total_earnings and payment_info to any signed-in customer.
+            $query->with('balance');
         }
         return $query;
     }

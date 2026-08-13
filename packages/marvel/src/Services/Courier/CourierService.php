@@ -8,6 +8,7 @@ use Marvel\Database\Models\Settings;
 use Marvel\Database\Models\Shipment;
 use Marvel\Database\Models\Shop;
 use Marvel\Database\Repositories\OrderRepository;
+use Marvel\Enums\OrderStatus;
 use Marvel\Enums\PaymentGatewayType;
 
 /**
@@ -454,10 +455,16 @@ class CourierService
                 }
                 // Don't regress the customer order timeline across multi-leg orders (a slower leg's
                 // "shipped" must not pull an order already out-for-delivery back to at-local-facility).
-                $orank = ['order-pending' => 0, 'order-processing' => 1, 'order-at-local-facility' => 2, 'order-out-for-delivery' => 3, 'order-completed' => 4];
-                $advance = !isset($orank[$dest], $orank[$order->order_status]) || $orank[$dest] > $orank[$order->order_status];
+                $orank = OrderStatus::ranks();
+                $from = $orank[$order->order_status] ?? null;
+                $to   = $orank[$dest] ?? null;
+                $advance = $from === null || $to === null || $to > $from;
                 if ($order->order_status !== $dest && $advance) {
-                    app(OrderRepository::class)->changeOrderStatus($order, $dest);
+                    // The partner is authoritative, so record the destination it actually
+                    // reported in ONE transition. Walking the skipped rungs instead would
+                    // write status history for states that never happened and fire a separate
+                    // customer notification for each fabricated one.
+                    app(OrderRepository::class)->changeOrderStatus($order, $dest, true);
                 }
             }
         }

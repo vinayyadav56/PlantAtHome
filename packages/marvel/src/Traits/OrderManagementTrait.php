@@ -18,7 +18,15 @@ trait OrderManagementTrait
      * @param  mixed $status
      * @return void
      */
-    public function changeOrderStatus($order, $status)
+    /**
+     * $authoritative — the caller KNOWS the order reached $status (a courier partner's
+     * webhook/reconcile callback). Such a caller may skip rungs, because partners report
+     * the truth rather than every intermediate state: Borzo jumps straight to
+     * out_for_delivery and a first webhook can land on "delivered". Operator-driven
+     * callers leave this false and stay one rung at a time. Forward-only and every
+     * terminal rule still applies in both modes.
+     */
+    public function changeOrderStatus($order, $status, bool $authoritative = false)
     {
         $prev_order_status = $order->order_status;
 
@@ -28,9 +36,23 @@ trait OrderManagementTrait
         // re-crediting vendor earnings via completed→processing→completed and
         // restoring stock for already-shipped/delivered orders.
         if ($prev_order_status !== $status) {
-            $final = [OrderStatusEnum::CANCELLED, OrderStatusEnum::REFUNDED];
-            $illegal = in_array($prev_order_status, $final, true)
-                || ($prev_order_status === OrderStatusEnum::COMPLETED && $status !== OrderStatusEnum::REFUNDED);
+            $rank = OrderStatusEnum::ranks();
+            if (in_array($prev_order_status, [OrderStatusEnum::CANCELLED, OrderStatusEnum::REFUNDED], true)) {
+                $illegal = true;
+            } elseif ($prev_order_status === OrderStatusEnum::COMPLETED) {
+                $illegal = $status !== OrderStatusEnum::REFUNDED;
+            } elseif ($status === OrderStatusEnum::CANCELLED) {
+                $illegal = false; // cancelling interrupts the ladder — legal from any live rung
+            } else {
+                // One rung at a time: no skipping (processing→completed would settle a vendor
+                // for an order nobody shipped) and no regression. An UNRANKED status on either
+                // side (failed/refunded) fails closed — those are written by the payment and
+                // refund flows directly and are never earned by advancing the ladder.
+                $from = $rank[$prev_order_status] ?? null;
+                $to   = $rank[$status] ?? null;
+                $illegal = $from === null || $to === null
+                    || ($authoritative ? $to <= $from : $to !== $from + 1);
+            }
             if ($illegal) {
                 throw new \Symfony\Component\HttpKernel\Exception\HttpException(
                     422,
@@ -74,9 +96,9 @@ trait OrderManagementTrait
             }
         }
 
-        // A suborder's status changed → roll the parent order status up from its
-        // siblings (all completed → completed; all cancelled → cancelled; else
-        // processing). Keeps the parent a faithful summary of the per-vertical legs.
+        // A suborder's status changed → roll the parent order status up from its siblings
+        // (the least-advanced live leg, or the dominant terminal state once every leg has
+        // ended). Keeps the parent a faithful summary of the per-vertical legs.
         if (!empty($order->parent_id)) {
             $this->recomputeParentOrderStatus($order->parent_id);
         }
@@ -102,12 +124,44 @@ trait OrderManagementTrait
             return;
         }
 
-        if ($statuses->every(fn ($s) => $s === OrderStatusEnum::COMPLETED)) {
-            $new = OrderStatusEnum::COMPLETED;
-        } elseif ($statuses->every(fn ($s) => $s === OrderStatusEnum::CANCELLED)) {
-            $new = OrderStatusEnum::CANCELLED;
+        $ranks = OrderStatusEnum::ranks();
+        // A parent that already ended is final — a late sibling rollup must not reopen it.
+        $abandoned = [OrderStatusEnum::CANCELLED, OrderStatusEnum::REFUNDED, OrderStatusEnum::FAILED];
+        if (in_array($parent->order_status, $abandoned, true)) {
+            return;
+        }
+
+        $terminal = array_merge([OrderStatusEnum::COMPLETED], $abandoned);
+        if ($statuses->every(fn ($s) => in_array($s, $terminal, true))) {
+            // Every leg has ended: report the state most of them landed in (ties resolve to the
+            // most successful) instead of collapsing a finished order back to processing.
+            $counts = $statuses->countBy();
+            $new = collect($terminal)->sortByDesc(fn ($s) => $counts[$s] ?? 0)->first();
         } else {
-            $new = OrderStatusEnum::PROCESSING;
+            // An order is only as far along as its least-advanced LIVE leg — which is how a
+            // parent whose legs are all out-for-delivery finally reports out-for-delivery
+            // instead of processing. Abandoned legs are out of the race and must not pin it.
+            $new = $statuses->reject(fn ($s) => in_array($s, $abandoned, true))
+                ->sortBy(fn ($s) => $ranks[$s] ?? 0)->first();
+        }
+
+        // Rank floor. CourierService advances the PARENT directly, while this rollup re-runs on
+        // every sibling transition — without the floor a slower leg drags a delivered order back
+        // to processing, which is why multi-item orders could never show as delivered.
+        if (isset($ranks[$new], $ranks[$parent->order_status]) && $ranks[$new] < $ranks[$parent->order_status]) {
+            return;
+        }
+
+        // The numeric floor cannot see an abandoned destination — cancelled/refunded/failed carry
+        // no rank, so `isset()` above is false and every one of them sails past it. A COMPLETED
+        // parent with a majority of cancelled siblings would then be laundered into "cancelled",
+        // settling money and issuing an invoice for an order that reports as never happening.
+        // changeOrderStatus admits completed → refunded and nothing else; honour that here too,
+        // because saveQuietly() bypasses the seam that enforces it.
+        if (!isset($ranks[$new])
+            && $parent->order_status === OrderStatusEnum::COMPLETED
+            && $new !== OrderStatusEnum::REFUNDED) {
+            return;
         }
 
         if ($parent->order_status !== $new) {

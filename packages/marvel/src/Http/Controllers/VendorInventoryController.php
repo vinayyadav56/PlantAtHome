@@ -178,16 +178,30 @@ class VendorInventoryController extends CoreController
     {
         $shopId = $this->resolveShopId($request);
         $limit = min(100, max(1, (int) ($request->limit ?? 30)));
+        // Ordered by product then variant so a plant's sizes are adjacent — id DESC
+        // scattered them and the client could only build partial groups.
         $query = VendorProductPrice::with(['product:id,name,slug,sku,image'])
-            ->where('shop_id', $shopId)->orderByDesc('id');
+            ->where('shop_id', $shopId)->orderBy('product_id')->orderBy('variation_option_id');
         if ($request->filled('search')) {
             $term = trim((string) $request->search);
             $query->whereHas('product', fn ($p) => $p->where('name', 'like', "%{$term}%")->orWhere('sku', 'like', "%{$term}%"));
         }
         $page = $query->paginate($limit);
+        // Variant titles — the row only carries variation_option_id, so without them a
+        // 3-size plant renders three identical-looking rows.
+        $variantIds = $page->getCollection()->pluck('variation_option_id')->filter()->unique()->values();
+        $titles = $variantIds->isEmpty()
+            ? collect()
+            : \Illuminate\Support\Facades\DB::table('variation_options')
+                ->whereIn('id', $variantIds)->pluck('title', 'id');
         // Drop the eager-loaded product's default $appends (ratings/reviews/
         // availability accessors) — a query per row during serialization; not needed here.
-        $page->getCollection()->each(fn ($vpp) => optional($vpp->product)->setAppends([]));
+        $page->getCollection()->each(function ($vpp) use ($titles) {
+            optional($vpp->product)->setAppends([]);
+            $vpp->variant_title = $vpp->variation_option_id
+                ? ($titles[$vpp->variation_option_id] ?? null)
+                : null;
+        });
 
         return $page;
     }
