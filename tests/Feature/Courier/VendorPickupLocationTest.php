@@ -254,16 +254,20 @@ final class VendorPickupLocationTest extends TestCase
         $this->assertNull($shipment->fresh()->courier_company_id, 'an unquoted courier must not be persisted');
     }
 
-    public function test_the_chosen_courier_travels_on_the_booking(): void
+    public function test_the_chosen_courier_travels_on_the_booking_that_validated_it(): void
     {
         $this->shop(5);
         $this->location(5, ['status' => 'verified', 'provider_location_name' => 'shop-5']);
         $shipment = $this->shipment(5);
         $this->fakeQuotes();
-        (new CourierService())->chooseCourier($shipment, 51);
+        $chosen = (new CourierService())->chooseCourier($shipment, 51);
 
         Http::fake(['*/v1/shipments' => Http::response(['partner' => 'shiprocket', 'status' => 'assigned'], 200)]);
-        (new CourierService())->book($shipment->fresh());
+        // The validated id rides the booking as an ARGUMENT. It is deliberately no longer read
+        // back off shipments.courier_company_id, which is never cleared and so replayed a
+        // day-old courier against a fresh rate card on every later rebook or auto-book.
+        // See CourierOperationsTest for the replay case itself.
+        (new CourierService())->book($shipment->fresh(), null, $chosen['courier_id']);
 
         Http::assertSent(fn ($request) => (int) ($request->data()['courier_id'] ?? 0) === 51);
     }

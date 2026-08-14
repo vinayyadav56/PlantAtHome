@@ -974,6 +974,28 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // no automatic restock or refund.
     Route::post('shipments/{id}/mark-rto', [CourierShipmentController::class, 'markRto']);
 
+    // Post-booking paperwork. Every one of these needs a live booking at the partner (the
+    // controller answers 409 with the missing step, rather than relaying a partner 422 that names
+    // an id it has never heard of). The bulk manifest is ONE sheet for a whole pickup — how a
+    // handover actually happens — so it is a collection route, not a per-shipment one.
+    Route::post('shipments/{id}/generate-invoice', [CourierShipmentController::class, 'invoice']);
+    Route::post('shipments/{id}/generate-manifest', [CourierShipmentController::class, 'manifest']);
+    Route::post('shipments/manifests', [CourierShipmentController::class, 'manifestBulk']);
+    // Two different cancels: cancel-shipment kills the partner ORDER, cancel-awb voids only the
+    // waybill (the order survives, which is what a re-pack or a courier swap needs).
+    Route::post('shipments/{id}/cancel-awb', [CourierShipmentController::class, 'cancelAwb']);
+    // Shiprocket has no reassign endpoint — assign/awb with status:"reassign" IS the mechanism.
+    // Refused once the parcel has been picked up.
+    Route::post('shipments/{id}/reassign-courier', [CourierShipmentController::class, 'reassignCourier']);
+    // NDR = a failed delivery attempt. The courier auto-RTOs after 3, so this is a countdown ops
+    // has to be able to see and act on, not a log.
+    Route::get('courier/ndr', [CourierShipmentController::class, 'ndrList']);
+    Route::get('courier/ndr/{awb}', [CourierShipmentController::class, 'ndrDetail']);
+    Route::post('shipments/{id}/ndr-action', [CourierShipmentController::class, 'ndrAction']);
+    // A customer RETURN is a REVERSE shipment with its own AWB — a different business process
+    // from an RTO (the forward parcel bouncing on its own).
+    Route::post('shipments/{id}/create-return', [CourierShipmentController::class, 'createReturn']);
+
     // Marketplace analytics widgets (admin dashboard, D1).
     Route::get('analytics/city-sales', [AnalyticsController::class, 'cityWiseSales']);
     Route::get('analytics/top-vendors', [AnalyticsController::class, 'topVendors']);

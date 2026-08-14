@@ -256,9 +256,9 @@ class ShippingServiceClient
      * override cannot bypass the runtime master switch or mode/COD eligibility — an
      * ineligible code comes back as "partner not available: X" rather than booking.
      */
-    public function book(Shipment $shipment, string $mode, bool $cod, float $codAmount, ?string $partnerCode = null): array
+    public function book(Shipment $shipment, string $mode, bool $cod, float $codAmount, ?string $partnerCode = null, ?int $courierId = null): array
     {
-        $res = $this->request('post', '/v1/shipments', $this->buildRequest($shipment, $mode, $cod, $codAmount, $partnerCode));
+        $res = $this->request('post', '/v1/shipments', $this->buildRequest($shipment, $mode, $cod, $codAmount, $partnerCode, $courierId));
         if (empty($res['ok'])) {
             $shipment->forceFill(['last_status' => 'book_failed', 'failure_reason' => $res['error'] ?? 'shipping service'])->save();
             // Structured, correlatable failure record: shipment id doubles as
@@ -309,12 +309,330 @@ class ShippingServiceClient
         return ['ok' => true, 'shipment' => $shipment->fresh()];
     }
 
+    /** Cancel the partner ORDER (Shiprocket orders/cancel). See cancelAwb() for the AWB-only cancel. */
     public function cancel(Shipment $shipment, ?string $reason): array
     {
-        $res = $this->request('post', '/v1/shipments/' . rawurlencode((string) $shipment->id) . '/cancel', ['reason' => $reason]);
+        $res = $this->request('post', $this->shipmentPath($shipment, '/cancel'), ['reason' => $reason]);
         if (empty($res['ok'])) {
             return ['ok' => false, 'error' => $res['error'] ?? 'Shipping service cancel failed.'];
         }
+        $this->stampCancelled($shipment, $reason, 'order');
+
+        return ['ok' => true];
+    }
+
+    /**
+     * Cancel the SHIPMENT/AWB only (Shiprocket orders/cancel/shipment/awbs) — the parcel stops
+     * moving while the partner order survives, which is what a reassignment or a re-pack needs.
+     * Cancelling the order instead would strand the manifest and force a fresh create.
+     */
+    public function cancelAwb(Shipment $shipment, ?string $reason = null): array
+    {
+        $res = $this->request('post', $this->shipmentPath($shipment, '/cancel'), ['reason' => $reason]);
+        $d = $this->unwrap($res, 'AWB cancellation failed.');
+        if (empty($d['ok'])) {
+            return $d;
+        }
+        $this->stampCancelled($shipment, $reason, 'awb');
+
+        return ['ok' => true, 'shipment' => $shipment->fresh()];
+    }
+
+    /**
+     * Mint (or fetch the stored) shipping label for a booked shipment, persisting label_url.
+     * The service is idempotent — a second call returns the stored URL without a partner call —
+     * so retry-after-timeout is safe.
+     */
+    public function generateLabel(Shipment $shipment): array
+    {
+        $d = $this->unwrap($this->request('post', $this->shipmentPath($shipment, '/label')), 'Label generation failed.');
+        if (empty($d['ok'])) {
+            return $d;
+        }
+        // The column has existed since 2026_06_23 and was written by nothing until now.
+        $url = $this->persistDoc($shipment, 'label_url', $d['label_url'] ?? null);
+        return ['ok' => true, 'label_url' => $url, 'shipment' => $shipment->fresh()];
+    }
+
+    /**
+     * Mint the partner INVOICE (Shiprocket orders/print/invoice — which takes ORDER ids, not
+     * shipment ids; the service owns that translation). invoice_url had a column and no writer.
+     */
+    public function generateInvoice(Shipment $shipment): array
+    {
+        $d = $this->unwrap($this->request('post', $this->shipmentPath($shipment, '/invoice')), 'Invoice generation failed.');
+        if (empty($d['ok'])) {
+            return $d;
+        }
+        $url = $this->persistDoc($shipment, 'invoice_url', $d['invoice_url'] ?? null);
+        return ['ok' => true, 'invoice_url' => $url, 'shipment' => $shipment->fresh()];
+    }
+
+    /**
+     * Generate + print the manifest for ONE shipment (manifests/generate then manifests/print).
+     * manifest_url has had a column since June and no writer at all.
+     */
+    public function generateManifest(Shipment $shipment): array
+    {
+        $d = $this->unwrap($this->request('post', '/v1/shipments/manifest', ['refs' => [(string) $shipment->id]]), 'Manifest generation failed.');
+        if (empty($d['ok'])) {
+            return $d;
+        }
+        $url = $this->persistDoc($shipment, 'manifest_url', $d['manifest_url'] ?? null);
+        return ['ok' => true, 'manifest_url' => $url, 'shipment' => $shipment->fresh()];
+    }
+
+    /**
+     * ONE manifest across many shipments — how a handover actually happens: the driver signs a
+     * single sheet for the whole pickup, not one per parcel. The partner returns one URL, so every
+     * row in the batch stores the same one.
+     *
+     * Contract (PROVIDED BY shipping-service):
+     *   POST /v1/manifests { shipment_refs: ["12","13"] } -> { ok, manifest_url, error? }
+     *
+     * @param  \Illuminate\Support\Collection|Shipment[]  $shipments
+     */
+    public function generateManifestBulk($shipments): array
+    {
+        $refs = [];
+        foreach ($shipments as $s) {
+            $refs[] = (string) $s->id;
+        }
+        if (!$refs) {
+            return ['ok' => false, 'error' => 'No shipments given.'];
+        }
+
+        $d = $this->unwrap($this->request('post', '/v1/shipments/manifest', ['refs' => $refs]), 'Manifest generation failed.');
+        if (empty($d['ok'])) {
+            return $d;
+        }
+        $url = (string) ($d['manifest_url'] ?? '');
+        foreach ($shipments as $s) {
+            $this->persistDoc($s, 'manifest_url', $url);
+        }
+        return ['ok' => true, 'manifest_url' => $url, 'shipment_refs' => $refs];
+    }
+
+    /**
+     * Schedule the courier pickup for a booked shipment AND record it. The result used to be
+     * returned and dropped on the floor, so nothing could tell an operator when the courier is
+     * actually coming, and a re-schedule was indistinguishable from a first one.
+     */
+    public function schedulePickup(Shipment $shipment): array
+    {
+        $d = $this->unwrap($this->request('post', $this->shipmentPath($shipment, '/pickup')), 'Pickup scheduling failed.');
+        if (empty($d['ok'])) {
+            return $d;
+        }
+        $p = (array) ($d['pickup'] ?? []);
+        // Shiprocket answers pickup_status + response.pickup_scheduled_date + pickup_token_number;
+        // the service may already have normalized those, so read both spellings.
+        $fill = array_filter([
+            'pickup_scheduled_at' => $this->time($p['scheduled_at'] ?? $p['pickup_scheduled_date'] ?? null),
+            'pickup_token'        => trim((string) ($p['token'] ?? $p['pickup_token_number'] ?? '')) ?: null,
+        ], static fn ($v) => $v !== null);
+        if ($fill) {
+            $shipment->forceFill($fill + ['last_status_at' => Carbon::now()])->save();
+        }
+        return ['ok' => true, 'pickup' => $d['pickup'] ?? null, 'shipment' => $shipment->fresh()];
+    }
+
+    /**
+     * Move a booked shipment onto a DIFFERENT courier. Shiprocket has no separate reassign
+     * endpoint: assign/awb with status:"reassign" IS the mechanism, and it mints a NEW AWB — so
+     * the label and manifest that name the old one are cleared here rather than left pointing at
+     * a waybill the parcel no longer carries.
+     *
+     * Contract (PROVIDED BY shipping-service):
+     *   POST /v1/shipments/{ref}/reassign { courier_id } -> { ok, awb_number, courier_name, courier_id, error? }
+     */
+    public function reassignCourier(Shipment $shipment, int $courierId): array
+    {
+        $previousAwb = (string) $shipment->awb_number;
+        $d = $this->unwrap(
+            $this->request('post', $this->shipmentPath($shipment, '/reassign'), ['courier_id' => $courierId]),
+            'Courier reassignment failed.',
+        );
+        if (empty($d['ok'])) {
+            return $d;
+        }
+
+        // The service nests the new booking under `shipment`. Reading these flat resolved every
+        // one to '' -> null -> filtered out, so the row KEPT the dead waybill — exactly what
+        // reassignment exists to replace.
+        $b = (array) ($d['shipment'] ?? $d);
+        $shipment->forceFill(array_filter([
+            'awb_number'           => ($b['awb_number'] ?? '') ?: null,
+            'courier_name'         => ($b['courier_name'] ?? '') ?: null,
+            'provider_shipment_id' => ($b['provider_shipment_id'] ?? '') ?: null,
+        ], static fn ($v) => $v !== null) + [
+            'courier_company_id' => ((int) ($b['courier_id'] ?? $courierId)) ?: null,
+            // The old waybill's paperwork is void.
+            'label_url'          => null,
+            'manifest_url'       => null,
+            'last_status'        => 'reassigned',
+            'last_status_at'     => Carbon::now(),
+        ])->save();
+
+        \Marvel\Database\Models\OrderEvent::record($shipment->order_id, 'shipment.reassigned', [
+            'shipment_id'  => $shipment->id,
+            'courier_id'   => (int) ($d['courier_id'] ?? $courierId),
+            'courier_name' => $shipment->courier_name,
+            'from_awb'     => $previousAwb ?: null,
+            'to_awb'       => $shipment->awb_number,
+        ]);
+
+        return ['ok' => true, 'shipment' => $shipment->fresh()];
+    }
+
+    // ── NDR (non-delivery report) ─────────────────────────────────
+    // A failed delivery attempt. Shiprocket auto-RTOs after 3, so this is a countdown, not a log:
+    // until now a bare "Undelivered" mapped to nothing and the parcel bounced with nobody told.
+
+    /** Open NDRs at the partner, newest first. $query is forwarded as-is (paging is the service's job). */
+    public function ndrList(array $query = []): array
+    {
+        return $this->request('get', '/v1/partners/shiprocket/ndr', [], null, $query);
+    }
+
+    /** One NDR by waybill. $shipment (when we hold the row for that AWB) gets the counters synced. */
+    public function ndrDetail(string $awb, ?Shipment $shipment = null): array
+    {
+        $res = $this->request('get', '/v1/partners/shiprocket/ndr/' . rawurlencode($awb));
+        if (empty($res['ok'])) {
+            return ['ok' => false, 'error' => $res['error'] ?? 'NDR lookup failed.'];
+        }
+        $d = (array) ($res['data'] ?? []);
+        if ($shipment) {
+            $this->syncNdr($shipment, $d);
+        }
+        return ['ok' => true, 'ndr' => $d['ndr'] ?? $d, 'shipment' => $shipment?->fresh()];
+    }
+
+    /**
+     * Submit an NDR action (reattempt / return / fake-attempt …). The action vocabulary belongs to
+     * the partner, so it is forwarded verbatim rather than mirrored in a PHP allowlist that drifts.
+     */
+    public function ndrAction(Shipment $shipment, string $action, ?string $comments = null): array
+    {
+        $awb = (string) $shipment->awb_number;
+        $d = $this->unwrap(
+            $this->request('post', '/v1/partners/shiprocket/ndr/' . rawurlencode($awb) . '/action', ['action' => $action, 'comments' => $comments]),
+            'NDR action failed.',
+        );
+        if (empty($d['ok'])) {
+            return $d;
+        }
+        $this->syncNdr($shipment, $d, Carbon::now());
+
+        \Marvel\Database\Models\OrderEvent::record($shipment->order_id, 'shipment.ndr_action', [
+            'shipment_id' => $shipment->id,
+            'awb'         => $awb,
+            'action'      => $action,
+            'comments'    => $comments,
+        ]);
+
+        return ['ok' => true, 'shipment' => $shipment->fresh()];
+    }
+
+    /**
+     * Create a customer RETURN — a REVERSE shipment (pickup = the customer, drop = the warehouse).
+     * Not an RTO: an RTO is the forward parcel bouncing on its own. It mints its own AWB and order
+     * id, which land in return_* so the forward identifiers stay the audit trail of what shipped.
+     *
+     * Contract (PROVIDED BY shipping-service):
+     *   POST /v1/partners/{code}/returns  <full ShipRequest> -> { ok, return: {...}, error? }
+     */
+    public function createReturn(Shipment $shipment, ?string $reason = null): array
+    {
+        $d = $this->unwrap(
+            $this->request('post', '/v1/partners/shiprocket/returns', $this->buildRequest($shipment, 'courier', false, 0) + ['reason' => $reason]),
+            'Return creation failed.',
+        );
+        if (empty($d['ok'])) {
+            return $d;
+        }
+        // The service nests the new reverse booking under `return`, and it is a plain partner
+        // Booking — so the reverse leg's identifiers are `awb_number` / `provider_order_id`, NOT
+        // `return_*`. Reading them flat left the return AWB unpersisted while reporting success,
+        // and reading `return_provider_order_id` off a key nobody sends left the id blank forever.
+        $r = (array) ($d['return'] ?? $d);
+        $shipment->forceFill([
+            'return_awb'               => ($r['awb_number'] ?? $r['return_awb'] ?? '') ?: $shipment->return_awb,
+            'return_provider_order_id' => ($r['provider_order_id'] ?? $r['return_provider_order_id'] ?? '') ?: $shipment->return_provider_order_id,
+            'last_status_at'           => Carbon::now(),
+        ])->save();
+
+        \Marvel\Database\Models\OrderEvent::record($shipment->order_id, 'shipment.return_created', [
+            'shipment_id'              => $shipment->id,
+            'return_awb'               => $shipment->return_awb,
+            'return_provider_order_id' => $shipment->return_provider_order_id,
+            'reason'                   => $reason,
+        ]);
+
+        return ['ok' => true, 'shipment' => $shipment->fresh()];
+    }
+
+    public function track(Shipment $shipment): array
+    {
+        return $this->request('get', $this->shipmentPath($shipment, '/track'));
+    }
+
+    // ── persistence helpers ───────────────────────────────────────
+
+    /** The service addresses a shipment by OUR id — that is its shipment_ref. */
+    private function shipmentPath(Shipment $shipment, string $suffix = ''): string
+    {
+        return '/v1/shipments/' . rawurlencode((string) $shipment->id) . $suffix;
+    }
+
+    /**
+     * Unwrap the service's {ok, …} envelope. A transport failure and an ok:false body are the same
+     * thing to a caller — one failure carrying the partner's own reason — and collapsing them here
+     * is what stops a partner refusal from being read as a success with empty fields.
+     */
+    private function unwrap(array $res, string $fallback): array
+    {
+        if (empty($res['ok']) || empty($res['data']['ok'])) {
+            return ['ok' => false, 'error' => $res['data']['error'] ?? $res['error'] ?? $fallback];
+        }
+        return ['ok' => true] + (array) $res['data'];
+    }
+
+    /** Store a provider document URL; a repeat of the same URL writes nothing. Returns the URL. */
+    private function persistDoc(Shipment $shipment, string $column, $url): string
+    {
+        $url = trim((string) $url);
+        if ($url !== '' && $url !== (string) $shipment->{$column}) {
+            $shipment->forceFill([$column => $url, 'last_status_at' => Carbon::now()])->save();
+        }
+        return $url;
+    }
+
+    /** NDR counters off a partner payload; only fields the partner actually reported are written. */
+    private function syncNdr(Shipment $shipment, array $d, ?Carbon $actionedAt = null): void
+    {
+        $n = (array) ($d['ndr'] ?? $d);
+        $fill = [];
+        $reason = trim((string) ($n['reason'] ?? $n['ndr_reason'] ?? ''));
+        if ($reason !== '') {
+            $fill['ndr_reason'] = mb_substr($reason, 0, 255);
+        }
+        $attempts = $n['attempts'] ?? $n['ndr_attempts'] ?? null;
+        if (is_numeric($attempts)) {
+            $fill['ndr_attempts'] = max(0, min(255, (int) $attempts));
+        }
+        if ($actionedAt) {
+            $fill['ndr_action_at'] = $actionedAt;
+        }
+        if ($fill) {
+            $shipment->forceFill($fill)->save();
+        }
+    }
+
+    /** Shared cancel bookkeeping. $scope records WHICH cancel it was: the order, or just the AWB. */
+    private function stampCancelled(Shipment $shipment, ?string $reason, string $scope): void
+    {
         $shipment->forceFill([
             'status'           => 'cancelled',
             'last_status'      => 'cancelled',
@@ -326,43 +644,22 @@ class ShippingServiceClient
         \Marvel\Database\Models\OrderEvent::record($shipment->order_id, 'shipment.cancelled', [
             'shipment_id' => $shipment->id,
             'reason'      => $reason,
+            'scope'       => $scope,
         ]);
-
-        return ['ok' => true];
     }
 
-    /**
-     * Mint (or fetch the stored) shipping label for a booked shipment, persisting label_url.
-     * The service is idempotent — a second call returns the stored URL without a partner call —
-     * so retry-after-timeout is safe.
-     */
-    public function generateLabel(Shipment $shipment): array
+    /** Partner timestamps arrive in whatever format the partner likes; an unparseable one is null. */
+    private function time($value): ?Carbon
     {
-        $res = $this->request('post', '/v1/shipments/' . rawurlencode((string) $shipment->id) . '/label');
-        if (empty($res['ok']) || empty($res['data']['ok'])) {
-            return ['ok' => false, 'error' => $res['data']['error'] ?? $res['error'] ?? 'Label generation failed.'];
+        $value = trim((string) $value);
+        if ($value === '') {
+            return null;
         }
-        $labelUrl = (string) ($res['data']['label_url'] ?? '');
-        if ($labelUrl !== '' && $labelUrl !== $shipment->label_url) {
-            // The column has existed since 2026_06_23 and was written by nothing until now.
-            $shipment->forceFill(['label_url' => $labelUrl, 'last_status_at' => Carbon::now()])->save();
+        try {
+            return Carbon::parse($value);
+        } catch (\Throwable $e) {
+            return null;
         }
-        return ['ok' => true, 'label_url' => $labelUrl, 'shipment' => $shipment->fresh()];
-    }
-
-    /** Schedule the courier pickup for a booked shipment. */
-    public function schedulePickup(Shipment $shipment): array
-    {
-        $res = $this->request('post', '/v1/shipments/' . rawurlencode((string) $shipment->id) . '/pickup');
-        if (empty($res['ok']) || empty($res['data']['ok'])) {
-            return ['ok' => false, 'error' => $res['data']['error'] ?? $res['error'] ?? 'Pickup scheduling failed.'];
-        }
-        return ['ok' => true, 'pickup' => $res['data']['pickup'] ?? null];
-    }
-
-    public function track(Shipment $shipment): array
-    {
-        return $this->request('get', '/v1/shipments/' . rawurlencode((string) $shipment->id) . '/track');
     }
 
     /**
@@ -463,7 +760,7 @@ class ShippingServiceClient
 
     // ── request building ──────────────────────────────────────────
 
-    private function buildRequest(Shipment $shipment, string $mode, bool $cod, float $codAmount, ?string $partnerCode = null): array
+    private function buildRequest(Shipment $shipment, string $mode, bool $cod, float $codAmount, ?string $partnerCode = null, ?int $courierId = null): array
     {
         $order = $shipment->order;
         $shop = $shipment->shop;
@@ -496,9 +793,16 @@ class ShippingServiceClient
             // (and refuses others above their value cap), so a quote sent without it is not the
             // quote the booking gets billed at.
             'declared_value'  => $this->declaredValue($shipment),
-            // The courier the operator picked off a quote — server-validated against a fresh quote
-            // before it was persisted (CourierService::chooseCourier). 0 = let the partner route.
-            'courier_id'      => (int) ($shipment->courier_company_id ?? 0),
+            // The courier the operator picked off a quote, passed in BY THE DISPATCH THAT JUST
+            // VALIDATED IT against a fresh quote (CourierService::chooseCourier). 0 = let the
+            // partner route on today's rate card.
+            //
+            // It is deliberately NOT read from shipments.courier_company_id any more: that column
+            // is persisted for display and never cleared, so every later call replayed it — an
+            // auto-book or a rebook hours after the quote expired named a courier off a dead rate
+            // card, and the partner either refused the AWB or allocated a differently-priced one.
+            // The column is now an OUTPUT (what was chosen/allocated), never an input.
+            'courier_id'      => max(0, (int) $courierId),
             'pickup_location' => $courier->pickupNameFor($shipment, $pickup),
         ];
     }

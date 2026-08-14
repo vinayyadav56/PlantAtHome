@@ -21,6 +21,22 @@ use Marvel\Enums\PaymentGatewayType;
  */
 class CourierService
 {
+    /**
+     * The RETURN leg (customer → warehouse), ordered. Mirrors the shipping-service's own
+     * domain.rtoStage so both sides agree on what "further along" means.
+     *
+     * Legacy `rto` is stage 1: every row written before the leg was modelled holds it, and the
+     * partner mapper still emits it for anything it can only tell is "a return". Being stage 1
+     * means such a row can still be advanced by a later in-transit/delivered event instead of
+     * being stuck at the first thing we heard.
+     */
+    private const RTO_STAGES = [
+        'rto'            => 1,
+        'rto_initiated'  => 1,
+        'rto_in_transit' => 2,
+        'rto_delivered'  => 3,
+    ];
+
     private ?ShippingServiceClient $shippingClient = null; // the ONLY shipping path
     private array $opts;
 
@@ -159,10 +175,19 @@ class CourierService
             case 'shipped':
                 return ['shipment_status' => 'shipped', 'order_status' => 'order-at-local-facility'];
             case 'rto':
-                // Terminal bounce. order_status stays null: what happens to the
-                // ORDER after an RTO (refund / re-ship / restock) is an operator
-                // decision, not a webhook's.
-                return ['shipment_status' => 'rto', 'order_status' => null];
+            case 'rto_initiated':
+            case 'rto_in_transit':
+            case 'rto_delivered':
+                // The return leg, stage by stage. order_status stays null at every stage: what
+                // happens to the ORDER after a bounce (refund / re-ship / restock) is an operator
+                // decision, not a webhook's. applyNormalizedStatus persists the leg as `rto` and
+                // tracks the stage — see RTO_STAGES there for why.
+                return ['shipment_status' => $shipmentStatus, 'order_status' => null];
+            case 'ndr':
+                // A FAILED delivery attempt, not an end state — the courier reattempts (and
+                // auto-RTOs after 3). It used to map to nothing at all, so an undelivered parcel
+                // was invisible right up until it bounced.
+                return ['shipment_status' => 'ndr', 'order_status' => null];
             case 'cancelled':
                 return ['shipment_status' => 'cancelled', 'order_status' => null];
             case 'assigned':
@@ -189,7 +214,7 @@ class CourierService
      * (courier → Shiprocket; instant/same-city → cheapest of Borzo/Porter), idempotent on
      * shipment_ref so a retry never double-books.
      */
-    public function book(Shipment $shipment, ?string $partnerCode = null): array
+    public function book(Shipment $shipment, ?string $partnerCode = null, ?int $courierId = null): array
     {
         // Root-cause guard for SELF-delivery vendors: this is the single funnel
         // every booking path routes through (auto-book listener, admin book +
@@ -220,7 +245,9 @@ class CourierService
         // one of them booked a 'CASH' order as PREPAID, so the rider was never told to collect and
         // the order value was simply lost. Always ask the enum.
         $cod = $order && PaymentGatewayType::isCashOnDelivery($order->payment_gateway);
-        return $this->shippingClient()->book($shipment, $this->modeOf($shipment), (bool) $cod, $this->shipmentCodAmount($shipment, $order), $partnerCode);
+        // $courierId travels as an ARGUMENT, never off the row: see buildRequest's note — a
+        // persisted choice replayed on a later booking is a stale rate card.
+        return $this->shippingClient()->book($shipment, $this->modeOf($shipment), (bool) $cod, $this->shipmentCodAmount($shipment, $order), $partnerCode, $courierId);
     }
 
     /**
@@ -318,6 +345,10 @@ class CourierService
      * request or a lane change since the quote was rendered all name a courier the partner is not
      * offering right now, and Shiprocket would either refuse the AWB or allocate a different (and
      * differently priced) courier. Only an id the partner just quoted for THIS shipment is stored.
+     *
+     * The persisted courier_company_id is DISPLAY ONLY. The validated id is returned so the caller
+     * can hand it to the booking it just validated it for — nothing reads the column back into a
+     * partner request (see ShippingServiceClient::buildRequest).
      */
     public function chooseCourier(Shipment $shipment, int $courierId): array
     {
@@ -332,7 +363,7 @@ class CourierService
                     // Provisional: book() overwrites it with whatever the partner actually allocated.
                     'courier_name'       => ((string) ($q['courier_name'] ?? '')) ?: $shipment->courier_name,
                 ])->save();
-                return ['ok' => true, 'quote' => $q];
+                return ['ok' => true, 'courier_id' => $courierId, 'quote' => $q];
             }
         }
 
@@ -349,13 +380,90 @@ class CourierService
         ];
     }
 
+    /**
+     * The one gate every service-backed operation sits behind: the refusal array, or null when the
+     * call may proceed. `return $this->offline() ?? $this->shippingClient()->x()` reads as the
+     * guard it is, and keeps the operator-facing wording in a single place.
+     */
+    private function offline(): ?array
+    {
+        return $this->shippingServiceEnabled()
+            ? null
+            : ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
+    }
+
     /** Cancel a booked shipment (the service cancels at whichever partner placed it). */
     public function cancel(Shipment $shipment, ?string $reason = null): array
     {
-        if (!$this->shippingServiceEnabled()) {
-            return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
+        return $this->offline() ?? $this->shippingClient()->cancel($shipment, $reason);
+    }
+
+    /**
+     * Cancel only the AWB, leaving the partner order alive — what a reassignment or a re-pack
+     * needs. cancel() above kills the whole order.
+     */
+    public function cancelAwb(Shipment $shipment, ?string $reason = null): array
+    {
+        return $this->offline() ?? $this->shippingClient()->cancelAwb($shipment, $reason);
+    }
+
+    /**
+     * Move a booked shipment onto a different courier. The id is validated against a FRESH quote
+     * first — same rule as booking: an id off the client is untrusted input on a money path, and a
+     * reassignment re-prices the leg exactly like a new booking does.
+     */
+    public function reassignCourier(Shipment $shipment, int $courierId): array
+    {
+        if ($res = $this->offline()) {
+            return $res;
         }
-        return $this->shippingClient()->cancel($shipment, $reason);
+        $chosen = $this->chooseCourier($shipment, $courierId);
+        if (empty($chosen['ok'])) {
+            return $chosen;
+        }
+        return $this->shippingClient()->reassignCourier($shipment, $courierId);
+    }
+
+    /** Partner invoice PDF (persists invoice_url). */
+    public function generateInvoice(Shipment $shipment): array
+    {
+        return $this->offline() ?? $this->shippingClient()->generateInvoice($shipment);
+    }
+
+    /** Manifest for one shipment (persists manifest_url). */
+    public function generateManifest(Shipment $shipment): array
+    {
+        return $this->offline() ?? $this->shippingClient()->generateManifest($shipment);
+    }
+
+    /** ONE manifest across a batch — the sheet the driver signs for the whole pickup. */
+    public function generateManifestBulk($shipments): array
+    {
+        return $this->offline() ?? $this->shippingClient()->generateManifestBulk($shipments);
+    }
+
+    /** Open NDRs at the partner (the 3-attempt countdown before an automatic RTO). */
+    public function ndrList(array $query = []): array
+    {
+        return $this->offline() ?? $this->shippingClient()->ndrList($query);
+    }
+
+    /** One NDR by waybill; syncs the counters onto $shipment when we hold that row. */
+    public function ndrDetail(string $awb, ?Shipment $shipment = null): array
+    {
+        return $this->offline() ?? $this->shippingClient()->ndrDetail($awb, $shipment);
+    }
+
+    /** Submit an NDR action (reattempt / return / …) — the last chance before the auto-RTO. */
+    public function ndrAction(Shipment $shipment, string $action, ?string $comments = null): array
+    {
+        return $this->offline() ?? $this->shippingClient()->ndrAction($shipment, $action, $comments);
+    }
+
+    /** Customer return = a REVERSE shipment with its own AWB. Not an RTO. */
+    public function createReturn(Shipment $shipment, ?string $reason = null): array
+    {
+        return $this->offline() ?? $this->shippingClient()->createReturn($shipment, $reason);
     }
 
     /**
@@ -374,10 +482,7 @@ class CourierService
         $cod = $cod ?? ($order && PaymentGatewayType::isCashOnDelivery($order->payment_gateway));
         $mode = $mode ?: $this->modeOf($shipment);
 
-        if (!$this->shippingServiceEnabled()) {
-            return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
-        }
-        return $this->shippingClient()->quoteShipment($shipment, $mode, (bool) $cod, $this->shipmentCodAmount($shipment, $order));
+        return $this->offline() ?? $this->shippingClient()->quoteShipment($shipment, $mode, (bool) $cod, $this->shipmentCodAmount($shipment, $order));
     }
 
     /** Default physical package when a product carries no weight/dims yet. */
@@ -408,27 +513,18 @@ class CourierService
      */
     public function generateLabel(Shipment $shipment): array
     {
-        if (!$this->shippingServiceEnabled()) {
-            return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
-        }
-        return $this->shippingClient()->generateLabel($shipment);
+        return $this->offline() ?? $this->shippingClient()->generateLabel($shipment);
     }
 
-    /** Schedule the courier pickup via the service. */
+    /** Schedule the courier pickup via the service (persists the slot + token it returns). */
     public function schedulePickup(Shipment $shipment): array
     {
-        if (!$this->shippingServiceEnabled()) {
-            return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
-        }
-        return $this->shippingClient()->schedulePickup($shipment);
+        return $this->offline() ?? $this->shippingClient()->schedulePickup($shipment);
     }
 
     public function track(Shipment $shipment): array
     {
-        if (!$this->shippingServiceEnabled()) {
-            return ['ok' => false, 'error' => 'Courier is off or the shipping service is not configured.'];
-        }
-        return $this->shippingClient()->track($shipment);
+        return $this->offline() ?? $this->shippingClient()->track($shipment);
     }
 
     /**
@@ -579,7 +675,21 @@ class CourierService
         // order_status stays null — what happens to the ORDER after a bounce
         // (refund / re-ship / restock) is deliberately an operator decision.
         if ($has('rto') || $has('return to origin')) {
+            // The return leg has stages of its own, and they embed forward keywords the same way:
+            // "RTO DELIVERED" means back AT THE ORIGIN, not delivered to the customer.
+            if ($has('delivered') || $has('acknowledged') || $has('received')) {
+                return ['shipment_status' => 'rto_delivered', 'order_status' => null];
+            }
+            if ($has('transit') || $has('dispatched') || $has('out for pickup')) {
+                return ['shipment_status' => 'rto_in_transit', 'order_status' => null];
+            }
             return ['shipment_status' => 'rto', 'order_status' => null];
+        }
+        // BEFORE the delivered check, and not optional: "Undelivered" CONTAINS "delivered", so a
+        // failed delivery attempt was being recorded as delivered — completing the order and
+        // firing vendor settlement on a parcel still sitting in the courier's van.
+        if ($has('undelivered') || $has('ndr') || $has('not delivered') || $has('delivery attempt')) {
+            return ['shipment_status' => 'ndr', 'order_status' => null];
         }
         if ($has('delivered')) {
             return ['shipment_status' => 'delivered', 'order_status' => 'order-completed'];
@@ -615,6 +725,18 @@ class CourierService
     }
 
     /**
+     * How far along the return leg a shipment already is (0 = not returning).
+     *
+     * The stage lives in last_status because the status column flattens the whole leg to `rto`
+     * (see applyNormalizedStatus). A row whose status is `rto` but whose last_status predates
+     * staging still counts as stage 1, so it can be advanced rather than treated as finished.
+     */
+    private function rtoStage(string $status, string $lastStatus): int
+    {
+        return self::RTO_STAGES[$lastStatus] ?? (self::RTO_STAGES[$status] ?? 0);
+    }
+
+    /**
      * Apply an ALREADY-normalized {shipment_status, order_status} to a shipment + advance the
      * customer order. Shared by every partner (Shiprocket via mapStatus, Borzo via mapBorzoStatus)
      * so the order-advance seam + in-flight completion guard live in exactly one place. Idempotent.
@@ -629,38 +751,88 @@ class CourierService
             return $map;
         }
 
-        // Monotonic + terminal-sticky. Once delivered/cancelled, ignore later events; otherwise only
-        // move FORWARD (cancelled may interrupt any pre-terminal state). This makes out-of-order or
-        // duplicate webhooks (common across multi-leg orders, esp. Borzo jumping straight to
-        // out_for_delivery) a true no-op instead of regressing the shipment — and never reverses
-        // delivered_at or fires settlement-reversing order downgrades.
-        $rank = ['pending' => 0, 'assigned' => 1, 'packed' => 1, 'shipped' => 2, 'out_for_delivery' => 3, 'delivered' => 4];
+        // Monotonic + terminal-sticky. Once delivered/cancelled/back-at-origin, ignore later events;
+        // otherwise only move FORWARD (cancelled may interrupt any pre-terminal state). This makes
+        // out-of-order or duplicate webhooks (common across multi-leg orders, esp. Borzo jumping
+        // straight to out_for_delivery) a true no-op instead of regressing the shipment — and never
+        // reverses delivered_at or fires settlement-reversing order downgrades.
+        //
+        // ndr shares out_for_delivery's rank: a failed attempt is the same point of the journey,
+        // not a step past it — and the reattempt (out_for_delivery again) has to be able to follow
+        // it, which a strict `>` would refuse, freezing the shipment at ndr forever.
+        $rank = ['pending' => 0, 'assigned' => 1, 'packed' => 1, 'shipped' => 2, 'out_for_delivery' => 3, 'ndr' => 3, 'delivered' => 4];
         $cur = (string) $shipment->status;
-        // rto is terminal like delivered/cancelled: a bounced parcel never becomes
-        // delivered, and what happens next is an operator decision, not a webhook's.
-        if (in_array($cur, ['delivered', 'cancelled', 'rto'], true)) {
+        $curStage = $this->rtoStage($cur, (string) $shipment->last_status);
+        $inStage  = self::RTO_STAGES[$target] ?? 0;
+
+        // Terminal = delivered, cancelled, or a COMPLETED return leg. The first RTO stage used to
+        // be terminal, which made every later stage invisible: a parcel marked "RTO initiated"
+        // could never be seen to arrive back, so ops had no way to know a refund was safe.
+        if (in_array($cur, ['delivered', 'cancelled'], true) || $curStage >= 3) {
             $shipment->forceFill(['last_status_at' => $now])->save();
             return $map; // terminal → sticky
         }
-        // rto interrupts like cancelled — a shipment bounces AFTER it has shipped,
-        // so the forward-only rank comparison would never admit it.
-        if (!in_array($target, ['cancelled', 'rto'], true) && ($rank[$target] ?? 0) <= ($rank[$cur] ?? 0)) {
+        // Repeat of the state we are already in. Explicit because `ndr` and `cancelled` interrupt
+        // by design and so skip the rank comparison below — without this, every duplicate NDR
+        // webhook would re-log a transition that never happened.
+        if ($target === $cur && $inStage === 0) {
             $shipment->forceFill(['last_status_at' => $now])->save();
-            return $map; // same or backward → no-op
+            return $map;
+        }
+        if ($inStage > 0) {
+            // The return leg interrupts any forward status (a parcel bounces AFTER it has shipped,
+            // so a rank comparison would never admit it) and from then on only advances.
+            if ($inStage <= $curStage) {
+                $shipment->forceFill(['last_status_at' => $now])->save();
+                return $map; // same or earlier stage → no-op
+            }
+        } elseif ($curStage > 0) {
+            // Already heading back: nothing on the forward leg applies any more (a late
+            // "out for delivery" must not un-bounce it). An operator cancel still can.
+            if ($target !== 'cancelled') {
+                $shipment->forceFill(['last_status_at' => $now])->save();
+                return $map;
+            }
+        } elseif (!in_array($target, ['cancelled', 'ndr'], true) && ($rank[$target] ?? 0) <= ($rank[$cur] ?? 0)) {
+            // cancelled and ndr interrupt at any pre-terminal point (both happen mid-journey, so a
+            // forward-only rank comparison would never admit them). Everything else must move up
+            // the rank — except the reattempt OUT of ndr, which sits at the same rank and would
+            // otherwise be rejected, freezing the shipment at ndr forever.
+            if (!($cur === 'ndr' && ($rank[$target] ?? 0) >= $rank['ndr'])) {
+                $shipment->forceFill(['last_status_at' => $now])->save();
+                return $map; // same or backward → no-op
+            }
         }
 
-        $fill = ['status' => $target, 'last_status' => $target, 'last_status_at' => $now];
+        // What the shipment is moving FROM, for the activity log: inside the return leg that is the
+        // previous stage, not the flattened `rto` the status column carries.
+        $from = $curStage > 0 && $shipment->last_status ? (string) $shipment->last_status : $cur;
+
+        // Every stage of the return leg persists as `status = 'rto'`: that one value is what the
+        // rest of the system (order-completion guard, the has_rto order filter, the reconcile and
+        // sweep commands) already understands as "bounced", and splitting it into three would make
+        // a parcel silently vanish from all of them mid-return. The STAGE lives in last_status.
+        $fill = [
+            'status'         => $inStage > 0 ? 'rto' : $target,
+            'last_status'    => $target,
+            'last_status_at' => $now,
+        ];
         if ($target === 'shipped' && !$shipment->shipped_at) {
             $fill['shipped_at'] = $now;
         }
         if ($target === 'delivered') {
             $fill['delivered_at'] = $now;
         }
-        if ($target === 'rto' && !$shipment->failure_reason) {
-            // Reuses the existing failure_reason column rather than adding an
-            // rto_reason migration — one nullable free-text field is enough for
-            // "track it and let the operator act".
-            $fill['failure_reason'] = 'Returned to origin (RTO)';
+        if ($inStage > 0) {
+            if (!$shipment->rto_at) {
+                $fill['rto_at'] = $now; // when it turned back, stamped once at the first stage
+            }
+            if (!$shipment->failure_reason) {
+                // Reuses the existing failure_reason column rather than adding an
+                // rto_reason migration — one nullable free-text field is enough for
+                // "track it and let the operator act".
+                $fill['failure_reason'] = 'Returned to origin (RTO)';
+            }
         }
         $shipment->forceFill($fill)->save();
 
@@ -669,9 +841,9 @@ class CourierService
         // webhooks, the reconcile poll, and admin mark-RTO — all route through this seam.
         \Marvel\Database\Models\OrderEvent::record($shipment->order_id, 'shipment.status', [
             'shipment_id'    => $shipment->id,
-            'from'           => $cur,
+            'from'           => $from,
             'to'             => $target,
-            'failure_reason' => $target === 'rto' ? $shipment->failure_reason : null,
+            'failure_reason' => $inStage > 0 ? $shipment->failure_reason : null,
         ]);
 
         if (!empty($map['order_status'])) {

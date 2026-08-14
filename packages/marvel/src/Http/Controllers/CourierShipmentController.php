@@ -109,6 +109,11 @@ class CourierShipmentController extends CoreController
         // the AWB or allocate a differently-priced one. Re-validated against a FRESH quote for this
         // shipment (after the mode write above, so it is quoted on the lane it will book on) and
         // only persisted when the partner is actually offering it.
+        //
+        // The validated id is then handed to THIS booking as an argument. It is deliberately not
+        // taken back off the row at build time: the column is never cleared, so a rebook hours
+        // later (or the auto-book listener, which chooses nothing) used to replay a courier off an
+        // expired rate card.
         $courierId = (int) $request->input('courier_id', 0);
         if ($courierId > 0) {
             $chosen = $this->courier()->chooseCourier($shipment, $courierId);
@@ -117,7 +122,7 @@ class CourierShipmentController extends CoreController
             }
         }
 
-        $res = $this->courier()->book($shipment, $partner);
+        $res = $this->courier()->book($shipment, $partner, $courierId > 0 ? $courierId : null);
         return response()->json($res, !empty($res['ok']) ? 200 : 409);
     }
 
@@ -203,16 +208,220 @@ class CourierShipmentController extends CoreController
         return response()->json($res, !empty($res['ok']) ? 200 : 409);
     }
 
+    /**
+     * POST shipments/{id}/cancel-awb — stop the parcel, keep the partner order.
+     *
+     * Separate from cancel-shipment because Shiprocket has two different cancels and they are not
+     * interchangeable: orders/cancel kills the order (and with it the manifest, forcing a fresh
+     * create), while cancel/shipment/awbs voids just this waybill — which is what a re-pack or a
+     * courier swap needs.
+     */
+    public function cancelAwb(Request $request, $id)
+    {
+        $shipment = $this->shipment($id);
+        if ($resp = $this->requireAwb($shipment, 'cancel a waybill')) {
+            return $resp;
+        }
+        if ((string) $shipment->status === 'cancelled') {
+            return $this->conflict('This shipment is already cancelled.');
+        }
+        $res = $this->courier()->cancelAwb($shipment, $request->input('reason'));
+        return response()->json($res, !empty($res['ok']) ? 200 : 409);
+    }
+
+    /**
+     * POST shipments/{id}/reassign-courier — move a booked parcel onto a different courier.
+     *
+     * Refused once the courier has it: after pickup the parcel is physically in one network and a
+     * reassignment would mint an AWB nobody is carrying. The courier_id is re-validated against a
+     * fresh quote (in CourierService::reassignCourier) exactly like a booking — a reassignment
+     * re-prices the leg, so it is the same money path.
+     */
+    public function reassignCourier(Request $request, $id)
+    {
+        $courierId = (int) $request->input('courier_id', 0);
+        if ($courierId <= 0) {
+            return response()->json(['ok' => false, 'error' => 'courier_id is required.'], 422);
+        }
+
+        $shipment = $this->shipment($id);
+        if ($resp = $this->requireBooking($shipment, 'reassign the courier')) {
+            return $resp;
+        }
+        if ($this->pickedUp($shipment)) {
+            return $this->conflict("The courier has already picked this shipment up ({$shipment->status}) — cancel the waybill instead of reassigning it.");
+        }
+
+        $res = $this->courier()->reassignCourier($shipment, $courierId);
+        return response()->json($res, !empty($res['ok']) ? 200 : 409);
+    }
+
     /** POST shipments/{id}/generate-label */
     public function label(Request $request, $id)
     {
-        return response()->json($this->courier()->generateLabel($this->shipment($id)));
+        $shipment = $this->shipment($id);
+        if ($resp = $this->requireBooking($shipment, 'print a label')) {
+            return $resp;
+        }
+        $res = $this->courier()->generateLabel($shipment);
+        return response()->json($res, !empty($res['ok']) ? 200 : 409);
+    }
+
+    /** POST shipments/{id}/generate-invoice */
+    public function invoice(Request $request, $id)
+    {
+        $shipment = $this->shipment($id);
+        if ($resp = $this->requireBooking($shipment, 'print an invoice')) {
+            return $resp;
+        }
+        $res = $this->courier()->generateInvoice($shipment);
+        return response()->json($res, !empty($res['ok']) ? 200 : 409);
+    }
+
+    /** POST shipments/{id}/generate-manifest */
+    public function manifest(Request $request, $id)
+    {
+        $shipment = $this->shipment($id);
+        if ($resp = $this->requireBooking($shipment, 'generate a manifest')) {
+            return $resp;
+        }
+        $res = $this->courier()->generateManifest($shipment);
+        return response()->json($res, !empty($res['ok']) ? 200 : 409);
+    }
+
+    /**
+     * POST shipments/manifests — ONE manifest for a batch of shipments, which is how a handover
+     * actually happens: the driver signs a single sheet for the whole pickup.
+     *
+     * All-or-nothing on the guard: a partial batch would hand the driver a sheet that silently
+     * omits parcels, so an unbooked id refuses the call and names the offenders.
+     */
+    public function manifestBulk(Request $request)
+    {
+        $data = $request->validate([
+            'shipment_ids'   => ['required', 'array', 'min:1', 'max:100'],
+            'shipment_ids.*' => ['integer'],
+        ]);
+
+        $shipments = Shipment::whereIn('id', $data['shipment_ids'])->get();
+        if ($missing = array_values(array_diff(array_map('intval', $data['shipment_ids']), $shipments->pluck('id')->all()))) {
+            return $this->conflict('No such shipment: ' . implode(', ', $missing) . '.');
+        }
+        if ($unbooked = $shipments->reject->isLiveBooked()->pluck('id')->all()) {
+            return $this->conflict('These shipments have no live courier booking: ' . implode(', ', $unbooked) . '. Book them first.');
+        }
+
+        $res = $this->courier()->generateManifestBulk($shipments);
+        return response()->json($res, !empty($res['ok']) ? 200 : 409);
     }
 
     /** POST shipments/{id}/schedule-pickup */
     public function pickup(Request $request, $id)
     {
-        return response()->json($this->courier()->schedulePickup($this->shipment($id)));
+        $shipment = $this->shipment($id);
+        if ($resp = $this->requireBooking($shipment, 'schedule a pickup')) {
+            return $resp;
+        }
+        $res = $this->courier()->schedulePickup($shipment);
+        return response()->json($res, !empty($res['ok']) ? 200 : 409);
+    }
+
+    // ── NDR: the 3-attempt countdown before the courier gives up and auto-RTOs ────────────────
+
+    /** GET courier/ndr — open NDRs at the partner. Paging keys are forwarded as-is. */
+    public function ndrList(Request $request)
+    {
+        return response()->json($this->courier()->ndrList($request->only(['limit', 'page', 'from', 'to'])));
+    }
+
+    /** GET courier/ndr/{awb} — one NDR; syncs reason/attempts onto our row when we hold it. */
+    public function ndrDetail(Request $request, $awb)
+    {
+        $awb = (string) $awb;
+        $res = $this->courier()->ndrDetail($awb, Shipment::where('awb_number', $awb)->first());
+        return response()->json($res, !empty($res['ok']) ? 200 : 409);
+    }
+
+    /**
+     * POST shipments/{id}/ndr-action — tell the courier what to do with a failed attempt.
+     *
+     * The action vocabulary is the partner's and is forwarded verbatim: a PHP allowlist would be a
+     * second copy of their list, and it is their API that rejects an unknown one.
+     */
+    public function ndrAction(Request $request, $id)
+    {
+        $data = $request->validate([
+            'action'   => ['required', 'string', 'max:64'],
+            'comments' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        $shipment = $this->shipment($id);
+        if ($resp = $this->requireAwb($shipment, 'action an NDR')) {
+            return $resp;
+        }
+
+        $res = $this->courier()->ndrAction($shipment, $data['action'], $data['comments'] ?? null);
+        return response()->json($res, !empty($res['ok']) ? 200 : 409);
+    }
+
+    /**
+     * POST shipments/{id}/create-return — a REVERSE shipment (pickup = the customer).
+     *
+     * Not an RTO and not a cancel: an RTO is the forward parcel bouncing on its own, a cancel stops
+     * it before it moves. This is a new, separately-tracked shipment in the opposite direction, so
+     * it mints its own AWB and lands in return_* — the forward identifiers stay as the record of
+     * what was shipped out.
+     */
+    public function createReturn(Request $request, $id)
+    {
+        $shipment = $this->shipment($id);
+        if ($resp = $this->requireBooking($shipment, 'create a return')) {
+            return $resp;
+        }
+        if ($shipment->return_awb) {
+            return $this->conflict("A return already exists for this shipment (AWB {$shipment->return_awb}).");
+        }
+
+        $res = $this->courier()->createReturn($shipment, $request->input('reason'));
+        return response()->json($res, !empty($res['ok']) ? 200 : 409);
+    }
+
+    // ── state guards ─────────────────────────────────────────────────────────────────────────
+    // Every post-booking operation needs the booking to exist at the partner. Without these the
+    // partner answers a raw 422 naming an id it has never seen, which reads to an operator like an
+    // outage rather than "you skipped a step".
+
+    private function conflict(string $error)
+    {
+        return response()->json(['ok' => false, 'error' => $error], 409);
+    }
+
+    /** $what completes "…before you can X". Null when the shipment carries a live booking. */
+    private function requireBooking(Shipment $shipment, string $what)
+    {
+        if ($shipment->isLiveBooked()) {
+            return null;
+        }
+        return $this->conflict(
+            $shipment->status === 'cancelled'
+                ? "This shipment's booking was cancelled — rebook it before you can {$what}."
+                : "This shipment is not booked with a courier yet — dispatch it before you can {$what}.",
+        );
+    }
+
+    private function requireAwb(Shipment $shipment, string $what)
+    {
+        if (trim((string) $shipment->awb_number) !== '') {
+            return null;
+        }
+        return $this->conflict("This shipment has no AWB yet — a courier has to allocate one before you can {$what}.");
+    }
+
+    /** In the courier's hands already: reassigning past this point mints a waybill nobody carries. */
+    private function pickedUp(Shipment $shipment): bool
+    {
+        return $shipment->shipped_at
+            || in_array((string) $shipment->status, ['shipped', 'out_for_delivery', 'ndr', 'delivered', 'rto'], true);
     }
 
     /** GET shipments/{id}/courier-track — live status (admin view). */

@@ -340,7 +340,9 @@ class FakeCourier extends CourierService
         return $this->on;
     }
 
-    public function book(Shipment $shipment, ?string $partnerCode = null): array
+    // $courierId: the auto-book listener never passes one — a courier chosen off a quote is only
+    // ever sent by the dispatch that just validated it against a fresh rate card.
+    public function book(Shipment $shipment, ?string $partnerCode = null, ?int $courierId = null): array
     {
         $this->booked[] = (int) $shipment->id;
         if ($this->fail || in_array((int) $shipment->id, $this->failFor, true)) {

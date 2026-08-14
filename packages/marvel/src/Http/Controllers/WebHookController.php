@@ -99,10 +99,27 @@ class WebHookController extends CoreController
 
     /**
      * Callback from the dedicated Go shipping microservice (status/COD events from its outbox).
-     * Token-verified (x-api-key == services.shipping_service.callback_key), idempotent, never-5xx.
+     * Token-verified (x-api-key == services.shipping_service.callback_key), idempotent.
      * Maps the service-normalized shipment status through CourierService::applyNormalizedStatus —
      * the SAME monotonic order-advance + vendor-settlement seam the in-process webhooks use — so
      * settlement fires identically whether the monolith or the service drove the delivery.
+     *
+     * DATA LOSS FIX 2026-08-14: this used to catch every Throwable and answer 200. The Go relay
+     * (internal/outbox/relay.go) marks any 2xx as PUBLISHED, so a Laravel-side failure — DB down,
+     * a deadlock on the order advance, a bug in the seam — permanently destroyed that status
+     * event: the parcel moves and the customer's order never does. A genuine processing failure
+     * now answers 503 so the relay reschedules it (MarkOutboxRetry, 2^attempts s capped at 1h).
+     *
+     * The split is deliberate — these are NOT failures and keep answering 200, because the relay
+     * has no attempt cap and would retry them until the heat death of the universe:
+     *   - shipping service disabled (SHIPPING_SERVICE_ENABLED / master switch off)
+     *   - missing / non-integer shipment_ref, or an empty normalized_status
+     *   - no shipment row for that ref (deleted, or an event for another environment)
+     *   - a status the mapper doesn't recognise, a replay, a backward step, terminal-sticky —
+     *     all of which applyNormalizedStatus absorbs as a successful no-op
+     * ponytail: retry is unbounded on the relay side, so a DETERMINISTIC bug here retries every
+     * hour forever; the 'Shipping callback error' log line is the alarm. Add a dead-letter cap in
+     * the relay if that ever becomes noise.
      */
     public function shippingCallback(Request $request)
     {
@@ -113,7 +130,9 @@ class WebHookController extends CoreController
         }
 
         try {
-            $svc = new CourierService();
+            // Resolved, not `new`: same object graph (nothing binds it), but the courier seam
+            // becomes fakeable — which is how the 503-vs-200 split above is actually tested.
+            $svc = app(CourierService::class);
             // Inbound is inert unless the service actually owns shipping — keeps behavior identical
             // to before whenever SHIPPING_SERVICE_ENABLED is off (even if the key happens to be set).
             if (!$svc->shippingServiceEnabled()) {
@@ -155,8 +174,15 @@ class WebHookController extends CoreController
 
             return response()->json(['ok' => true]);
         } catch (\Throwable $e) {
-            Log::error('Shipping callback error', ['error' => $e->getMessage()]);
-            return response()->json(['ok' => false], 200); // never 5xx to the service relay
+            // GENUINE failure — everything that is merely a no-op returned 200 above.
+            Log::error('Shipping callback error', [
+                'error'        => $e->getMessage(),
+                'shipment_ref' => (string) (((array) $request->input('data', []))['shipment_ref'] ?? ''),
+                'event_id'     => $request->input('id'),
+            ]);
+            // 503 (not 500): the relay only checks status/100 != 2, but a retryable class is the
+            // honest answer and keeps proxies/alerting from filing this as an app crash.
+            return response()->json(['ok' => false, 'error' => 'processing failed'], 503);
         }
     }
 

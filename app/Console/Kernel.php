@@ -53,6 +53,15 @@ class Kernel extends ConsoleKernel
         // hold the lock for 24h.
         $schedule->command('courier:sweep-undispatched')->everyFifteenMinutes()->withoutOverlapping(5);
 
+        // Courier STATUS safety net (the other half of the sweep above, which only alarms on legs
+        // that were never booked). Push delivery is partner webhook → Go outbox → our
+        // /api/shipping/callback; every hop can drop an event, and a partner that was never given
+        // our webhook URL pushes nothing at all. This polls booked, non-terminal legs and replays
+        // live status through the same applyNormalizedStatus seam, so it is idempotent.
+        // Every row costs a live partner Track call (Porter rate-limits ~1/min per order), so this
+        // is deliberately slow + bounded, NOT everyMinute. 10-min mutex expiry, never the 24h default.
+        $schedule->command('courier:reconcile-shipments')->everyThirtyMinutes()->withoutOverlapping(10);
+
         // Courier margin watch: orders whose delivery fee was less than the partner cost
         // (charged delivery_fee vs Σ shipment booked_cost). Report-only (logs); dormant
         // until courier bookings exist.
