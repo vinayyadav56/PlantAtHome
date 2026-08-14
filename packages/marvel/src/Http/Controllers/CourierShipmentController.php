@@ -3,9 +3,11 @@
 namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\Address;
 use Marvel\Database\Models\Shipment;
 use Marvel\Database\Models\Shop;
+use Marvel\Database\Models\VendorPickupLocation;
 use Marvel\Enums\Permission;
 use Marvel\Services\Courier\CourierService;
 
@@ -98,6 +100,20 @@ class CourierShipmentController extends CoreController
             }
             if ($shipment->mode !== $mode) {
                 $shipment->forceFill(['mode' => $mode])->save();
+            }
+        }
+
+        // Optional `courier_id` books the exact courier the operator picked off the rate list.
+        // NEVER trusted: a stale tab, a lane change since the rates were rendered, or a crafted
+        // request all name a courier the partner is not offering, and Shiprocket would then refuse
+        // the AWB or allocate a differently-priced one. Re-validated against a FRESH quote for this
+        // shipment (after the mode write above, so it is quoted on the lane it will book on) and
+        // only persisted when the partner is actually offering it.
+        $courierId = (int) $request->input('courier_id', 0);
+        if ($courierId > 0) {
+            $chosen = $this->courier()->chooseCourier($shipment, $courierId);
+            if (empty($chosen['ok'])) {
+                return response()->json($chosen, 422);
             }
         }
 
@@ -205,11 +221,146 @@ class CourierShipmentController extends CoreController
         return response()->json($this->courier()->track($this->shipment($id)));
     }
 
-    /** POST shops/{id}/sync-pickup — register the vendor address as a provider pickup location. */
+    /** POST shops/{id}/sync-pickup — register the vendor's DEFAULT door as a provider pickup location. */
     public function syncPickup(Request $request, $id)
     {
         $shop = Shop::findOrFail($id);
         return response()->json($this->courier()->syncPickupLocation($shop));
+    }
+
+    // ── vendor pickup locations (the doors a vendor loads from) ───────────────
+    // shops.pickup_location_name could only ever name ONE door and carried no state, so a nursery
+    // that loads from two yards had no way to say so and nothing recorded whether the partner had
+    // actually accepted the location. These rows do both; the legacy column still answers for
+    // vendors with no rows.
+
+    /** GET shops/{id}/pickup-locations */
+    public function pickupLocations(Request $request, $id)
+    {
+        Shop::findOrFail($id);
+        return response()->json([
+            'ok'        => true,
+            'locations' => VendorPickupLocation::where('shop_id', $id)
+                ->orderByDesc('is_default')->orderBy('id')->get(),
+        ]);
+    }
+
+    /** POST shops/{id}/pickup-locations — add a door. Registering it is a separate, explicit step. */
+    public function storePickupLocation(Request $request, $id)
+    {
+        $shop = Shop::findOrFail($id);
+        $data = $this->validatePickupLocation($request, true);
+        // A vendor's first door is its default — otherwise nothing would resolve until someone
+        // remembered to press "set default".
+        //
+        // ...EXCEPT while the vendor is still booking through its legacy shops.pickup_location_name.
+        // A brand-new door is `pending` until Shiprocket accepts it, and a resolved-but-unusable
+        // door deliberately does NOT fall back to the legacy nickname (that would ship the parcel
+        // out of a different yard). So auto-defaulting here would take a vendor that books fine
+        // today and block every one of its shipments the moment an operator merely ADDS an address.
+        // Let the explicit flag, or a successful registration, promote it instead.
+        $booksOnLegacy = trim((string) ($shop->pickup_location_name ?? '')) !== '';
+        $data['is_default'] = (bool) ($data['is_default'] ?? false)
+            || (!$booksOnLegacy && !VendorPickupLocation::where('shop_id', $shop->id)->exists());
+
+        $location = VendorPickupLocation::create($data + ['shop_id' => $shop->id]);
+        if ($location->is_default) {
+            $this->demoteOtherDefaults($location);
+        }
+
+        return response()->json(['ok' => true, 'location' => $location], 201);
+    }
+
+    /**
+     * PUT pickup-locations/{id}
+     *
+     * ponytail: a local edit does NOT reach a door already registered — Shiprocket's API has
+     * addpickup and a list, no update, and re-registering an existing nickname answers "already
+     * registered" without changing the address. To move a registered door, add a new label.
+     */
+    public function updatePickupLocation(Request $request, $id)
+    {
+        $location = VendorPickupLocation::findOrFail($id);
+        $location->fill($this->validatePickupLocation($request, false))->save();
+        if ($location->is_default) {
+            $this->demoteOtherDefaults($location);
+        }
+        return response()->json(['ok' => true, 'location' => $location->fresh()]);
+    }
+
+    /** POST pickup-locations/{id}/register — register THIS door at the partner. */
+    public function registerPickupLocation(Request $request, $id)
+    {
+        $location = VendorPickupLocation::findOrFail($id);
+        $shop = Shop::findOrFail($location->shop_id);
+
+        $res = $this->courier()->syncPickupLocation($shop, $location);
+
+        // A door the partner has now accepted becomes the vendor's default when it has no other
+        // usable one. This is the migration off the legacy shops.pickup_location_name: creating a
+        // door deliberately does NOT promote it (a pending door would block every shipment), so
+        // acceptance is the moment it is safe to route through.
+        if (!empty($res['ok']) && !$location->fresh()->is_default) {
+            $hasUsableDefault = VendorPickupLocation::where('shop_id', $shop->id)
+                ->where('id', '!=', $location->id)
+                ->where('is_default', true)
+                ->get()
+                ->contains(fn ($l) => $l->isUsable());
+
+            if (!$hasUsableDefault) {
+                DB::transaction(function () use ($location) {
+                    $location->forceFill(['is_default' => true])->save();
+                    $this->demoteOtherDefaults($location);
+                });
+            }
+        }
+
+        return response()->json(
+            $res + ['location' => $location->fresh()],
+            !empty($res['ok']) ? 200 : 409,
+        );
+    }
+
+    /** POST pickup-locations/{id}/set-default — the door every leg of this vendor leaves from. */
+    public function setDefaultPickupLocation(Request $request, $id)
+    {
+        $location = VendorPickupLocation::findOrFail($id);
+        DB::transaction(function () use ($location) {
+            $location->forceFill(['is_default' => true])->save();
+            $this->demoteOtherDefaults($location);
+        });
+        return response()->json(['ok' => true, 'location' => $location->fresh()]);
+    }
+
+    /** Exactly one default per vendor+partner — resolution reads the first one it finds. */
+    private function demoteOtherDefaults(VendorPickupLocation $location): void
+    {
+        VendorPickupLocation::where('shop_id', $location->shop_id)
+            ->where('partner', $location->partner)
+            ->where('id', '!=', $location->id)
+            ->update(['is_default' => false]);
+    }
+
+    private function validatePickupLocation(Request $request, bool $creating): array
+    {
+        $required = $creating ? 'required' : 'sometimes';
+        return $request->validate([
+            'label'        => [$required, 'string', 'max:64'],
+            'contact_name' => ['nullable', 'string', 'max:96'],
+            'phone'        => ['nullable', 'string', 'max:24'],
+            'address'      => ['nullable', 'string', 'max:255'],
+            'address_2'    => ['nullable', 'string', 'max:255'],
+            'city'         => ['nullable', 'string', 'max:96'],
+            'state'        => ['nullable', 'string', 'max:96'],
+            'country'      => ['nullable', 'string', 'max:64'],
+            'pincode'      => ['nullable', 'string', 'max:12'],
+            'lat'          => ['nullable', 'numeric', 'between:-90,90'],
+            'lng'          => ['nullable', 'numeric', 'between:-180,180'],
+            'partner'      => ['nullable', 'string', 'max:24'],
+            'is_default'   => ['nullable', 'boolean'],
+        ]);
+        // status / provider_location_name / provider_pickup_code are deliberately absent: they are
+        // the partner's answer, not the operator's input (the model's $fillable says the same).
     }
 
     /**

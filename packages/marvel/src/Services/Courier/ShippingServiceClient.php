@@ -468,6 +468,11 @@ class ShippingServiceClient
         $order = $shipment->order;
         $shop = $shipment->shop;
         $dims = $this->packageDims($shipment);
+        $courier = new CourierService();
+        // Which of the vendor's doors THIS leg leaves from: its own pickup_location_id, else the
+        // vendor's default, else the legacy shops.pickup_location_name. Every leg used to be sent
+        // from the shop-level nickname regardless of where the stock actually sits.
+        $pickup = $courier->pickupLocationFor($shipment);
         return [
             // Empty string, not null: the service treats "" as "no override" and
             // routes normally, whereas a null would have to be special-cased there.
@@ -478,7 +483,7 @@ class ShippingServiceClient
             'mode'            => $mode,
             'cod'             => $cod,
             'cod_amount'      => $cod ? round($codAmount, 2) : 0,
-            'pickup'          => $this->addressFromShop($shop),
+            'pickup'          => $this->pickupAddressOf($shop, $pickup),
             'drop'            => $this->addressFromOrder($order),
             'items'           => $this->items($shipment),
             'weight_g'        => $this->weightG($shipment),
@@ -487,20 +492,28 @@ class ShippingServiceClient
             'length_cm'       => $dims['length'],
             'breadth_cm'      => $dims['breadth'],
             'height_cm'       => $dims['height'],
-            'pickup_location' => (string) ($shop->pickup_location_name ?? ''),
+            // Goods value on the leg. Shiprocket's serviceability call prices some couriers off it
+            // (and refuses others above their value cap), so a quote sent without it is not the
+            // quote the booking gets billed at.
+            'declared_value'  => $this->declaredValue($shipment),
+            // The courier the operator picked off a quote — server-validated against a fresh quote
+            // before it was persisted (CourierService::chooseCourier). 0 = let the partner route.
+            'courier_id'      => (int) ($shipment->courier_company_id ?? 0),
+            'pickup_location' => $courier->pickupNameFor($shipment, $pickup),
         ];
     }
 
     /**
-     * Register the shop's pickup location at Shiprocket (idempotent service-side). Coordinates
-     * ride along — they're required for the hyperlocal lane (Shiprocket Quick) and harmless for
-     * standard courier. Returns {ok, outcome?, error?}.
+     * Register a pickup location at Shiprocket (idempotent service-side). Coordinates ride along —
+     * they're required for the hyperlocal lane (Shiprocket Quick) and harmless for standard
+     * courier. $name defaults to the legacy shop-{id} nickname; $location is the vendor door whose
+     * address should be registered. Returns {ok, outcome?, pickup_code?, error?}.
      */
-    public function registerPickup($shop): array
+    public function registerPickup($shop, ?string $name = null, $location = null): array
     {
-        $a = $this->addressFromShop($shop);
+        $a = $this->pickupAddressOf($shop, $location);
         $res = $this->request('post', '/v1/partners/shiprocket/register-pickup', [
-            'name'    => 'shop-' . $shop->id,
+            'name'    => $name ?: ('shop-' . $shop->id),
             'contact' => (string) ($a['name'] ?? 'PlantAtHome'),
             'phone'   => (string) ($a['phone'] ?? ''),
             'address' => (string) ($a['address'] ?? ''),
@@ -516,19 +529,65 @@ class ShippingServiceClient
         }
         $d = (array) ($res['data'] ?? []);
         return [
-            'ok'      => (bool) ($d['ok'] ?? false),
-            'outcome' => $d['outcome'] ?? null,
-            'error'   => $d['error'] ?? null,
+            'ok'          => (bool) ($d['ok'] ?? false),
+            'outcome'     => $d['outcome'] ?? null,
+            // Shiprocket's own id for the location (addpickup → address.pickup_code); the service
+            // only returns it on a fresh registration.
+            'pickup_code' => ($d['pickup_code'] ?? null) ?: null,
+            'error'       => $d['error'] ?? null,
         ];
     }
 
     /**
-     * The exact pickup address a booking would send for this shop — exposed so callers can check
-     * it is complete BEFORE registering or booking, rather than discovering it from a partner 422.
+     * The exact pickup address a booking would send — exposed so callers can check it is complete
+     * BEFORE registering or booking, rather than discovering it from a partner 422.
+     *
+     * A VendorPickupLocation overrides the shop record field by field; a blank field on the row
+     * keeps the shop's value, so a partially-filled door never registers an emptier address than
+     * the vendor already has.
      */
-    public function pickupAddressOf($shop): array
+    /**
+     * Pickup address line 1, with the house/flat/road number on the FRONT.
+     *
+     * Shiprocket refuses `addpickup` with
+     *   {"address":["Address line 1 should have House no / Flat no / Road no."]}
+     * and the vendor form collects `address.house_no` precisely for this — but the courier path
+     * never used it, so a Google-autocomplete line ("Greater Kailash, New Delhi, Delhi, India")
+     * went verbatim and every registration 422'd. Verified live against the real account.
+     */
+    private function pickupLine1(array $a): string
     {
-        return $this->addressFromShop($shop);
+        $street = trim((string) ($a['street_address'] ?? $a['address'] ?? ''));
+        $house  = trim((string) ($a['house_no'] ?? $a['flat_no'] ?? $a['building'] ?? ''));
+
+        if ($house === '' || $street === '') {
+            return $street !== '' ? $street : $house;
+        }
+        // The form often already writes "E-512, Greater Kailash" — don't double the number.
+        return stripos($street, $house) === 0 ? $street : $house . ', ' . $street;
+    }
+
+    public function pickupAddressOf($shop, $location = null): array
+    {
+        $a = $this->addressFromShop($shop);
+        if (!$location) {
+            return $a;
+        }
+        $over = array_filter([
+            'name'    => (string) ($location->contact_name ?? ''),
+            'phone'   => $this->digits($location->phone ?? ''),
+            'address' => (string) ($location->address ?? ''),
+            'line2'   => (string) ($location->address_2 ?? ''),
+            'city'    => (string) ($location->city ?? ''),
+            'state'   => (string) ($location->state ?? ''),
+            'pincode' => (string) ($location->pincode ?? ''),
+        ], static fn ($v) => trim((string) $v) !== '');
+        // Coordinates only as a pair: half a fix is worse than the shop's own pin.
+        if ((float) ($location->lat ?? 0) && (float) ($location->lng ?? 0)) {
+            $over['lat'] = (float) $location->lat;
+            $over['lng'] = (float) $location->lng;
+        }
+        return $over + $a;
     }
 
     private function addressFromShop($shop): array
@@ -541,7 +600,7 @@ class ShippingServiceClient
         return [
             'name'    => (string) ($shop->name ?: 'Vendor'),
             'phone'   => $this->digits($a['phone'] ?? ($shop->settings['contact'] ?? '')),
-            'address' => (string) ($a['street_address'] ?? $a['address'] ?? ''),
+            'address' => $this->pickupLine1($a),
             'city'    => (string) ($a['city'] ?? ''),
             'state'   => (string) ($a['state'] ?? ''),
             'pincode' => (string) ($shop->pickup_postcode ?? $a['zip'] ?? $a['pincode'] ?? ''),
@@ -637,6 +696,19 @@ class ShippingServiceClient
             $g += $w * max(1, (int) ($it->order_quantity ?? 1));
         }
         return max(1, $g);
+    }
+
+    /** Goods value on this leg (line subtotal when stored, else unit price × qty). */
+    private function declaredValue(Shipment $shipment): float
+    {
+        $v = 0.0;
+        foreach ($shipment->items as $it) {
+            $sub = $it->subtotal ?? null;
+            $v += $sub !== null
+                ? (float) $sub
+                : (float) ($it->unit_price ?? 0) * max(1, (int) ($it->order_quantity ?? 1));
+        }
+        return round($v, 2);
     }
 
     /**

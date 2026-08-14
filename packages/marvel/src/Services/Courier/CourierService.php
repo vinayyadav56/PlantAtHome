@@ -7,6 +7,7 @@ use Marvel\Database\Models\CourierPartnerConfig;
 use Marvel\Database\Models\Settings;
 use Marvel\Database\Models\Shipment;
 use Marvel\Database\Models\Shop;
+use Marvel\Database\Models\VendorPickupLocation;
 use Marvel\Database\Repositories\OrderRepository;
 use Marvel\Enums\OrderStatus;
 use Marvel\Enums\PaymentGatewayType;
@@ -223,12 +224,60 @@ class CourierService
     }
 
     /**
+     * The vendor door THIS leg leaves from: the shipment's own pickup_location_id, else the
+     * vendor's default row. ALWAYS scoped to $shipment->shop_id, so a stale or hand-edited
+     * pickup_location_id can never book one vendor's parcel out of another vendor's yard.
+     *
+     * Null when the vendor has no rows (or the table predates this deploy) — callers then fall
+     * back to the legacy shops.pickup_location_name, which is what keeps every already-live
+     * vendor booking working with no backfill.
+     */
+    public function pickupLocationFor(Shipment $shipment): ?VendorPickupLocation
+    {
+        if (!$shipment->shop_id) {
+            return null;
+        }
+        try {
+            $rows = VendorPickupLocation::where('shop_id', $shipment->shop_id)
+                ->orderByDesc('is_default')->orderBy('id')->get();
+        } catch (\Throwable $e) {
+            return null; // table not migrated yet — the legacy shop column still answers
+        }
+        if ($rows->isEmpty()) {
+            return null;
+        }
+        if ($shipment->pickup_location_id) {
+            $own = $rows->firstWhere('id', (int) $shipment->pickup_location_id);
+            if ($own) {
+                return $own;
+            }
+        }
+        return $rows->first(); // is_default first, then oldest
+    }
+
+    /**
+     * The `pickup_location` nickname this leg books under; '' when the vendor has no usable door.
+     * $location skips the lookup for callers that already resolved it.
+     */
+    public function pickupNameFor(Shipment $shipment, ?VendorPickupLocation $location = null): string
+    {
+        $location = $location ?: $this->pickupLocationFor($shipment);
+        if ($location) {
+            // A resolved door the partner never accepted books NOTHING: falling back to the
+            // vendor's legacy nickname here would ship the parcel out of a different yard.
+            return $location->isUsable() ? (string) $location->provider_location_name : '';
+        }
+        return trim((string) ($shipment->shop->pickup_location_name ?? ''));
+    }
+
+    /**
      * Why this shipment cannot be booked on a courier lane yet, or null when it can.
      *
-     * Reads the pickup off THIS shipment's own vendor ($shipment->shop), which is also what
-     * buildRequest does — so one vendor's shipment can never be booked against another vendor's
-     * pickup location, and a shipment whose vendor was never registered is refused rather than
-     * silently sent with a nickname Shiprocket does not know.
+     * Reads the pickup off THIS shipment (its own door, else its vendor's default, else the
+     * legacy shop nickname) — the same resolution buildRequest sends — so one vendor's shipment
+     * can never be booked against another vendor's pickup location, and a shipment whose door
+     * Shiprocket never accepted is refused rather than silently sent with a nickname it does
+     * not know.
      */
     public function pickupBlocker(Shipment $shipment): ?string
     {
@@ -236,20 +285,68 @@ class CourierService
         if (!$shop) {
             return 'This shipment has no vendor, so it has no pickup location.';
         }
-        if (trim((string) ($shop->pickup_location_name ?? '')) === '') {
-            return sprintf(
-                '%s has no registered Shiprocket pickup location. Use "Register Pickup" on this vendor group first.',
-                $shop->name ?: "Vendor #{$shop->id}",
-            );
+        $vendor = $shop->name ?: "Vendor #{$shop->id}";
+        $location = $this->pickupLocationFor($shipment);
+
+        if ($this->pickupNameFor($shipment, $location) === '') {
+            return $location
+                ? sprintf(
+                    '%s: pickup location "%s" is %s, not registered with Shiprocket. Register it first.',
+                    $vendor,
+                    $location->label,
+                    $location->status,
+                )
+                : sprintf(
+                    '%s has no registered Shiprocket pickup location. Use "Register Pickup" on this vendor group first.',
+                    $vendor,
+                );
         }
-        if ($missing = $this->missingPickupFields($shop)) {
+        if ($missing = $this->missingPickupFields($shop, $location)) {
             return sprintf(
                 '%s is missing %s on its pickup address — Shiprocket will refuse the booking.',
-                $shop->name ?: "Vendor #{$shop->id}",
+                $vendor,
                 implode(', ', $missing),
             );
         }
         return null;
+    }
+
+    /**
+     * Validate an operator-chosen courier against a FRESH quote for this shipment and persist it.
+     *
+     * A courier id off the client is untrusted input on a money path: a stale tab, a hand-crafted
+     * request or a lane change since the quote was rendered all name a courier the partner is not
+     * offering right now, and Shiprocket would either refuse the AWB or allocate a different (and
+     * differently priced) courier. Only an id the partner just quoted for THIS shipment is stored.
+     */
+    public function chooseCourier(Shipment $shipment, int $courierId): array
+    {
+        $res = $this->quoteShipment($shipment);
+        $quotes = (array) ($res['quotes'] ?? []);
+
+        foreach ($quotes as $q) {
+            $q = (array) $q;
+            if ($courierId > 0 && (int) ($q['courier_id'] ?? 0) === $courierId) {
+                $shipment->forceFill([
+                    'courier_company_id' => $courierId,
+                    // Provisional: book() overwrites it with whatever the partner actually allocated.
+                    'courier_name'       => ((string) ($q['courier_name'] ?? '')) ?: $shipment->courier_name,
+                ])->save();
+                return ['ok' => true, 'quote' => $q];
+            }
+        }
+
+        return [
+            'ok'      => false,
+            'code'    => 'COURIER_NOT_QUOTED',
+            'error'   => $quotes
+                ? 'That courier is not being offered for this shipment right now — re-fetch the rates and pick again.'
+                : ($res['error'] ?? 'No courier rates are available for this shipment right now.'),
+            'offered' => array_values(array_filter(array_map(
+                static fn ($q) => (int) (((array) $q)['courier_id'] ?? 0),
+                $quotes,
+            ))),
+        ];
     }
 
     /** Cancel a booked shipment (the service cancels at whichever partner placed it). */
@@ -335,16 +432,26 @@ class CourierService
     }
 
     /**
-     * Register the vendor's pickup location: stamp the local nickname/postcode (domain data other
-     * flows read) AND register it AT Shiprocket via the shipping service. The create call
-     * references pickup_location by nickname — an unregistered one 422s every booking, and for a
-     * long time nothing here actually registered it (the button was a local-only stamp).
+     * Register a vendor pickup location: register it AT Shiprocket via the shipping service, then
+     * record what the partner said on the VendorPickupLocation row (and, for the vendor's default
+     * door, on the legacy shop columns other flows still read). The create call references
+     * pickup_location by nickname — an unregistered one 422s every booking, and for a long time
+     * nothing here actually registered it (the button was a local-only stamp).
+     *
+     * $location is the specific door; omitted, it means the vendor's default (or, for a vendor
+     * with no rows at all, the pure legacy path).
      */
-    public function syncPickupLocation(Shop $shop): array
+    public function syncPickupLocation(Shop $shop, ?VendorPickupLocation $location = null): array
     {
         $addr = (array) ($shop->address ?? []);
-        $nickname = 'shop-' . $shop->id;
-        $postcode = $shop->pickup_postcode ?: ($addr['zip'] ?? null);
+        $location = $location ?: $this->defaultPickupLocation($shop);
+        $legacyName = 'shop-' . $shop->id;
+        // The nickname is the partner's own key for a door, so an already-registered one is reused
+        // verbatim; the default door keeps the legacy shop-{id} nickname every live booking already
+        // sends, and each extra yard gets a suffix of its own.
+        $nickname = trim((string) ($location->provider_location_name ?? ''))
+            ?: (($location && !$location->is_default) ? $legacyName . '-' . $location->id : $legacyName);
+        $postcode = trim((string) ($location->pincode ?? '')) ?: ($shop->pickup_postcode ?: ($addr['zip'] ?? null));
 
         // The local stamp is what every booking sends as `pickup_location`. It used to be written
         // HERE — before the partner call and regardless of its outcome — so a FAILED registration
@@ -359,40 +466,84 @@ class CourierService
         }
 
         // Answer with the field names rather than relaying Shiprocket's opaque 422.
-        if ($missing = $this->missingPickupFields($shop)) {
+        if ($missing = $this->missingPickupFields($shop, $location)) {
+            $error = 'This vendor is missing ' . implode(', ', $missing)
+                . '. Shiprocket refuses a pickup location without them — fix the vendor address, then register again.';
+            $this->stampPickupFailure($location, $error);
             return [
                 'ok'                   => false,
                 'pickup_location_name' => $shop->pickup_location_name,
-                'error'                => 'This vendor is missing ' . implode(', ', $missing)
-                    . '. Shiprocket refuses a pickup location without them — fix the vendor address, then register again.',
+                'error'                => $error,
             ];
         }
 
-        $res = $this->shippingClient()->registerPickup($shop);
+        $res = $this->shippingClient()->registerPickup($shop, $nickname, $location);
         $ok  = (bool) ($res['ok'] ?? false);
 
         if ($ok) {
-            $shop->forceFill([
-                'pickup_location_name' => $nickname,
-                'pickup_postcode'      => $postcode,
+            $location?->forceFill([
+                'status'                 => 'verified',
+                'provider_location_name' => $nickname,
+                // Shiprocket's own id for the door (addpickup → address.pickup_code); absent on the
+                // "already registered" path, so never overwrite a code we already hold with null.
+                'provider_pickup_code'   => ($res['pickup_code'] ?? null) ?: $location->provider_pickup_code,
+                'last_synced_at'         => Carbon::now(),
+                'last_error'             => null,
             ])->save();
+            // Only the door that owns the legacy nickname stamps the shop columns — a second yard
+            // would otherwise silently repoint every booking that still reads them.
+            if ($nickname === $legacyName) {
+                $shop->forceFill([
+                    'pickup_location_name' => $nickname,
+                    'pickup_postcode'      => $postcode,
+                ])->save();
+            }
+        } else {
+            $this->stampPickupFailure($location, (string) ($res['error'] ?? 'Registration failed.'));
         }
 
         return [
             'ok'                   => $ok,
             'pickup_location_name' => $ok ? $nickname : $shop->pickup_location_name,
+            'pickup_code'          => $res['pickup_code'] ?? null,
+            'location_id'          => $location?->id,
             'outcome'              => $res['outcome'] ?? null,
             'error'                => $res['error'] ?? null,
         ];
     }
 
+    /** The vendor's default door (is_default first, then oldest), or null when it has none. */
+    public function defaultPickupLocation(Shop $shop): ?VendorPickupLocation
+    {
+        try {
+            return VendorPickupLocation::where('shop_id', $shop->id)
+                ->orderByDesc('is_default')->orderBy('id')->first();
+        } catch (\Throwable $e) {
+            return null; // table not migrated yet — pure legacy path
+        }
+    }
+
+    /**
+     * Record a failed registration on the row. This is the whole point of the status column:
+     * "never registered" and "registration failed last Tuesday" used to look identical, and the
+     * operator only found out at the 422 on a real booking.
+     */
+    private function stampPickupFailure(?VendorPickupLocation $location, string $error): void
+    {
+        $location?->forceFill([
+            'status'         => 'failed',
+            'last_synced_at' => Carbon::now(),
+            'last_error'     => mb_substr($error, 0, 255),
+        ])->save();
+    }
+
     /**
      * The pickup fields Shiprocket rejects a location without — checked before we call, so the
-     * operator is told which vendor fields to fill instead of receiving a partner validation error.
+     * operator is told which fields to fill instead of receiving a partner validation error.
      */
-    public function missingPickupFields(Shop $shop): array
+    public function missingPickupFields(Shop $shop, ?VendorPickupLocation $location = null): array
     {
-        $a = $this->shippingClient()->pickupAddressOf($shop);
+        $a = $this->shippingClient()->pickupAddressOf($shop, $location);
         $need = [
             'address' => 'street address',
             'city'    => 'city',

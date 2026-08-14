@@ -949,6 +949,14 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('shipments/{id}/schedule-pickup', [CourierShipmentController::class, 'pickup']);
     Route::get('shipments/{id}/courier-track', [CourierShipmentController::class, 'track']);
     Route::post('shops/{id}/sync-pickup', [CourierShipmentController::class, 'syncPickup']);
+    // Vendor pickup locations: the doors a vendor loads from. shops.pickup_location_name names
+    // exactly one and records nothing about whether the partner accepted it; these rows carry the
+    // address, the partner's own code for it, and its registration state.
+    Route::get('shops/{id}/pickup-locations', [CourierShipmentController::class, 'pickupLocations']);
+    Route::post('shops/{id}/pickup-locations', [CourierShipmentController::class, 'storePickupLocation']);
+    Route::put('pickup-locations/{id}', [CourierShipmentController::class, 'updatePickupLocation'])->whereNumber('id');
+    Route::post('pickup-locations/{id}/register', [CourierShipmentController::class, 'registerPickupLocation'])->whereNumber('id');
+    Route::post('pickup-locations/{id}/set-default', [CourierShipmentController::class, 'setDefaultPickupLocation'])->whereNumber('id');
     // Multi-partner shipping (Shiprocket + Borzo): ranked quotes, mode-routed dispatch, cancel.
     Route::get('shipments/{id}/shipping-quotes', [CourierShipmentController::class, 'quotes']);
     Route::post('shipments/{id}/dispatch', [CourierShipmentController::class, 'dispatchShipment']);
