@@ -151,11 +151,7 @@ class LocationNormalizer
             $out['state']       = $row['state'] ?? $out['state'];
             $out['state_id']    = $row['state_id'] ?? null;
             if (!empty($row['city'])) {
-                // A promotion (district -> its city) is the answer we want. A same-place rename is
-                // not: see preferInput.
-                $out['city']    = !empty($row['promoted'])
-                    ? $row['city']
-                    : self::preferInput($inputCity, $row['city']);
+                $out['city']    = $this->preferInput($inputCity, $row['city']);
                 $out['city_id'] = $row['city_id'];
                 return $out;
             }
@@ -182,7 +178,7 @@ class LocationNormalizer
                     $city = $parent;
                     $promoted = true;
                 }
-                $out['city']     = $promoted ? $city['name'] : self::preferInput($inputCity, $city['name']);
+                $out['city']     = $promoted ? $city['name'] : $this->preferInput($inputCity, $city['name']);
                 $out['city_id']  = (int) $city['id'];
                 $out['state_id'] = $out['state_id'] ?: ($city['state_id'] ?? null);
                 $out['state']    = $out['state'] ?: ($city['state_name'] ?? null);
@@ -229,18 +225,26 @@ class LocationNormalizer
      * so resolving a "Gurugram" address by its pincode rewrote it backwards to "Gurgaon". Both
      * spellings share a canonical key, which is precisely the signal that there was nothing to fix.
      *
-     * ⚠️ Only for a same-level match. It must NOT be consulted after a subdivision walk: "South
-     * Delhi" and "Delhi" also share a canonical key (the alias table maps every NCT district onto
-     * delhi), so applying it there would keep the district and undo the promotion entirely.
+     * ⚠️ Sharing a canonical key is NOT sufficient on its own. Every Delhi district shares one with
+     * Delhi, and once postal_codes was repaired to point straight at the parent there was no
+     * subdivision walk left to detect — so a key test alone happily kept "South Delhi" as the city
+     * of an address whose city_id was already 290. What the input NAMES is the reliable signal.
      */
-    private static function preferInput(?string $input, string $resolved): string
+    private function preferInput(?string $input, string $resolved): string
     {
         if ($input === null || $input === '') {
             return $resolved;
         }
-        return AvailabilityService::canonicalCityKey($input) === AvailabilityService::canonicalCityKey($resolved)
-            ? $input
-            : $resolved;
+        if (AvailabilityService::canonicalCityKey($input) !== AvailabilityService::canonicalCityKey($resolved)) {
+            return $resolved;
+        }
+        // Matching keys are not enough. "South Delhi" and "Delhi" match too, because the alias
+        // table maps every NCT district onto delhi — so ask what the INPUT actually is. If it names
+        // a subdivision row, it is a district and the resolved city wins; if it names nothing, or a
+        // real city, it is a spelling of the same place and the caller's is the current one.
+        $row = $this->cityByName($input);
+
+        return ($row && !empty($row['parent_city_id'])) ? $resolved : $input;
     }
 
     private static function clean(?string $s): ?string

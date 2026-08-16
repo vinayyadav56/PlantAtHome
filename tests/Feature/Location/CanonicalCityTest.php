@@ -293,4 +293,23 @@ final class CanonicalCityTest extends TestCase
         $this->assertSame($b, $a, 'whitespace must not create a second city');
         $this->assertSame('north east delhi', $a);
     }
+
+    public function test_a_district_input_still_resolves_once_the_pincode_points_straight_at_the_city(): void
+    {
+        // The state AFTER the repair migration, which is the state production is actually in:
+        // postal_codes.city_id already points at Delhi, so there is no subdivision walk left to
+        // observe. A rule that keyed off "did we walk?" silently kept "South Delhi" as the city on
+        // an address whose city_id was 290 — only visible by reading live data, never from a test
+        // that seeded the pre-repair state.
+        DB::table('postal_codes')->insert([
+            'state_id' => 32, 'district_id' => 297, 'city_id' => 290, 'pincode' => '110017',
+        ]);
+        LocationNormalizer::flush();
+
+        $res = (new LocationNormalizer())->normalize(['city' => 'South Delhi', 'zip' => '110017']);
+
+        $this->assertSame('Delhi', $res['city'], 'a district name must never survive as the city');
+        $this->assertSame(290, $res['city_id']);
+        $this->assertSame('South Delhi', $res['district']);
+    }
 }
