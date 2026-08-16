@@ -130,6 +130,10 @@ class LocationNormalizer
      */
     public function normalize(array $in): array
     {
+        // What the caller already told us. Used below to decide whether a resolution is actually an
+        // improvement — see preferInput().
+        $inputCity = self::clean($in['city'] ?? null);
+
         $out = [
             'city'        => self::clean($in['city'] ?? null),
             'city_id'     => null,
@@ -147,7 +151,11 @@ class LocationNormalizer
             $out['state']       = $row['state'] ?? $out['state'];
             $out['state_id']    = $row['state_id'] ?? null;
             if (!empty($row['city'])) {
-                $out['city']    = $row['city'];
+                // A promotion (district -> its city) is the answer we want. A same-place rename is
+                // not: see preferInput.
+                $out['city']    = !empty($row['promoted'])
+                    ? $row['city']
+                    : self::preferInput($inputCity, $row['city']);
                 $out['city_id'] = $row['city_id'];
                 return $out;
             }
@@ -165,14 +173,16 @@ class LocationNormalizer
             if ($city) {
                 // A subdivision is not a city. Walk to the parent and keep the slice as district —
                 // demoting it must never LOSE it, that is the whole point of the split.
+                $promoted = false;
                 if (!empty($city['parent_city_id']) && ($parent = $this->cityById((int) $city['parent_city_id']))) {
                     if ($out['district'] === null || $out['district'] === '') {
                         $out['district'] = $city['name'];
                     }
                     $out['district_id'] = $out['district_id'] ?: ($city['district_id'] ?? null);
                     $city = $parent;
+                    $promoted = true;
                 }
-                $out['city']     = $city['name'];
+                $out['city']     = $promoted ? $city['name'] : self::preferInput($inputCity, $city['name']);
                 $out['city_id']  = (int) $city['id'];
                 $out['state_id'] = $out['state_id'] ?: ($city['state_id'] ?? null);
                 $out['state']    = $out['state'] ?: ($city['state_name'] ?? null);
@@ -210,6 +220,28 @@ class LocationNormalizer
     }
 
     // ---------------------------------------------------------------- lookups
+
+    /**
+     * Keep the caller's spelling when the master's row means the same place.
+     *
+     * The master is authoritative about WHICH place a pincode is in, not about what that place is
+     * called today. Haryana has one row, named "Gurgaon" — the city was renamed Gurugram in 2016 —
+     * so resolving a "Gurugram" address by its pincode rewrote it backwards to "Gurgaon". Both
+     * spellings share a canonical key, which is precisely the signal that there was nothing to fix.
+     *
+     * ⚠️ Only for a same-level match. It must NOT be consulted after a subdivision walk: "South
+     * Delhi" and "Delhi" also share a canonical key (the alias table maps every NCT district onto
+     * delhi), so applying it there would keep the district and undo the promotion entirely.
+     */
+    private static function preferInput(?string $input, string $resolved): string
+    {
+        if ($input === null || $input === '') {
+            return $resolved;
+        }
+        return AvailabilityService::canonicalCityKey($input) === AvailabilityService::canonicalCityKey($resolved)
+            ? $input
+            : $resolved;
+    }
 
     private static function clean(?string $s): ?string
     {
@@ -337,13 +369,16 @@ class LocationNormalizer
         $city = $row->city_id ? $this->cityById((int) $row->city_id) : null;
         // Belt and braces: postal_codes.city_id pointed at subdivision rows for half of Delhi
         // until the repair migration. Walking the parent here means a stale row still resolves.
+        $promoted = false;
         if ($city && !empty($city['parent_city_id'])) {
             $city = $this->cityById((int) $city['parent_city_id']) ?: $city;
+            $promoted = true;
         }
 
         return [
             'city'        => $city['name'] ?? null,
             'city_id'     => isset($city['id']) ? (int) $city['id'] : null,
+            'promoted'    => $promoted,
             'district'    => $row->district_name ?: null,
             'district_id' => $row->district_id ? (int) $row->district_id : null,
             'state'       => $row->state_name ?: null,

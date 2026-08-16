@@ -257,4 +257,40 @@ final class CanonicalCityTest extends TestCase
             $this->assertContains($spelling, $variants, "a vendor area spelled '$spelling' must match Delhi");
         }
     }
+
+    public function test_resolution_never_downgrades_a_city_to_an_older_spelling(): void
+    {
+        // Haryana's master holds ONE row for this place and it is named "Gurgaon" — the city was
+        // renamed Gurugram in 2016 and the geo data never caught up. Resolving a "Gurugram" address
+        // by its pincode therefore rewrote it backwards to "Gurgaon", which is the opposite of
+        // canonicalising. Both spellings share a canonical key, and that is exactly the signal that
+        // there was nothing to fix.
+        DB::table('states')->insert(['id' => 12, 'name' => 'Haryana']);
+        DB::table('districts')->insert(['id' => 159, 'state_id' => 12, 'name' => 'Gurgaon']);
+        DB::table('cities')->insert([
+            'id' => 405, 'name' => 'Gurgaon', 'state_id' => 12, 'state_name' => 'Haryana', 'is_serviceable' => true,
+        ]);
+        DB::table('postal_codes')->insert([
+            'state_id' => 12, 'district_id' => 159, 'city_id' => 405, 'pincode' => '122003',
+        ]);
+        LocationNormalizer::flush();
+
+        $res = (new LocationNormalizer())->normalize(['city' => 'Gurugram', 'zip' => '122003']);
+
+        $this->assertSame('Gurugram', $res['city'], 'the modern spelling the customer used must survive');
+        $this->assertSame(405, $res['city_id'], 'and it must still resolve to the right row');
+    }
+
+    public function test_a_city_name_with_a_double_space_is_the_same_row_as_without(): void
+    {
+        // The bug this guards is not display, it is IDENTITY. IndiaCitySeeder keyed its
+        // already-exists check on trim() alone, so once these names were cleaned to one space the
+        // seeder stopped recognising them and inserted the double-spaced originals again as new
+        // cities — three duplicate Delhi districts from a single deploy.
+        $a = LocationNormalizer::key('North East  Delhi');
+        $b = LocationNormalizer::key('North East Delhi');
+
+        $this->assertSame($b, $a, 'whitespace must not create a second city');
+        $this->assertSame('north east delhi', $a);
+    }
 }

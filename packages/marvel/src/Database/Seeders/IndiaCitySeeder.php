@@ -27,6 +27,18 @@ class IndiaCitySeeder extends Seeder
         return base_path('packages/marvel/data/india-cities.json');
     }
 
+    /** Trimmed, internal whitespace collapsed. */
+    private static function collapse(string $s): string
+    {
+        return trim(preg_replace('/\s+/', ' ', $s));
+    }
+
+    /** The identity of a city row for de-duplication: collapsed + lowercased. */
+    private static function key(string $s): string
+    {
+        return strtolower(self::collapse($s));
+    }
+
     public function run(): void
     {
         $path = $this->dataPath();
@@ -50,7 +62,7 @@ class IndiaCitySeeder extends Seeder
         // update, so a serviceable row keeps is_serviceable = 1.
         $existing = [];
         foreach (City::get(['name', 'state_id']) as $c) {
-            $existing[strtolower(trim($c->name)) . '|' . ((int) $c->state_id)] = true;
+            $existing[self::key($c->name) . '|' . ((int) $c->state_id)] = true;
         }
 
         $now = now();
@@ -60,7 +72,11 @@ class IndiaCitySeeder extends Seeder
         $seenThisRun = [];
 
         foreach ($rows as $row) {
-            $cityName = trim((string) ($row['city'] ?? ''));
+            // Collapse internal whitespace on the way in. The source file really contains
+            // "North East  Delhi" with two spaces, and a bare trim() let that through — so once
+            // those rows were cleaned up in the database, this seeder no longer recognised them
+            // and inserted a SECOND, double-spaced Delhi district on the next deploy.
+            $cityName = self::collapse((string) ($row['city'] ?? ''));
             $stateName = trim((string) ($row['state'] ?? ''));
             if ($cityName === '' || $stateName === '') {
                 continue;
@@ -70,7 +86,7 @@ class IndiaCitySeeder extends Seeder
                 $skippedState++;
                 continue; // no matching state row — skip rather than orphan
             }
-            $key = strtolower($cityName) . '|' . $stateId;
+            $key = self::key($cityName) . '|' . $stateId;
             if (isset($existing[$key]) || isset($seenThisRun[$key])) {
                 continue;
             }
