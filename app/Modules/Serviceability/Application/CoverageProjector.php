@@ -171,20 +171,29 @@ class CoverageProjector
 
         $cityNames = [];
         if ($cityIds !== [] && $schema->hasTable('cities')) {
-            $cityNames = $this->db->table('cities')->whereIn('id', array_keys($cityIds))
-                ->pluck('name')->unique()->values()->all();
+            // Project the CANONICAL city. A pincode's city row may be a subdivision, and writing
+            // "South Delhi" into vendor_service_areas would make this vendor's coverage invisible
+            // to every Delhi shopper — the bridge would have manufactured the exact split the
+            // canonical model exists to prevent.
+            $rows = $this->db->table('cities')->whereIn('id', array_keys($cityIds))->get(['id', 'name']);
+            $normalizer = new \Marvel\Services\LocationNormalizer();
+            $cityNames = $rows
+                ->map(fn ($r) => $normalizer->normalize(['city' => $r->name])['city'] ?: $r->name)
+                ->unique()->values()->all();
         }
 
         $manual = [];
         $manualRows = $this->db->table('vendor_service_areas')
             ->where('shop_id', $shopId)->whereNull('source')->get(['city', 'fulfillment_mode', 'eta_days']);
         foreach ($manualRows as $row) {
-            $manual[mb_strtolower(trim((string) $row->city))] = $row;
+            $manual[\Marvel\Services\AvailabilityService::canonicalCityKey((string) $row->city)] = $row;
         }
 
         $now = now();
         foreach ($cityNames as $name) {
-            $inherit = $manual[mb_strtolower(trim((string) $name))] ?? null;
+            // Canonical key on both sides, so a vendor's hand-entered "Gurgaon" row still hands its
+            // mode/ETA down to the bridge row the master calls "Gurugram".
+            $inherit = $manual[\Marvel\Services\AvailabilityService::canonicalCityKey((string) $name)] ?? null;
             $values = [
                 'fulfillment_mode' => $inherit->fulfillment_mode ?? 'both',
                 'eta_days'         => $inherit->eta_days ?? null,
@@ -242,9 +251,23 @@ class CoverageProjector
         try {
             $schema = $this->db->getSchemaBuilder();
             if ($schema->hasTable('cities') && $schema->hasColumn('cities', 'is_serviceable')) {
-                $lower = array_values(array_unique(array_map(fn ($n) => mb_strtolower(trim((string) $n)), $cityNames)));
+                // Canonical keys + their raw spellings: the pincode master can name a coverage
+                // city after a district ("South Delhi"), and activating THAT row leaves the real
+                // city switched off. Districts are never activated — they are not destinations.
+                $lower = [];
+                foreach ($cityNames as $n) {
+                    $key = \Marvel\Services\AvailabilityService::canonicalCityKey((string) $n);
+                    if ($key !== '') {
+                        $lower = array_merge($lower, \Marvel\Services\AvailabilityService::canonicalCityVariants($key));
+                    }
+                }
+                $lower = array_values(array_unique($lower));
                 $this->db->table('cities')
                     ->whereIn($this->db->raw('LOWER(name)'), $lower)
+                    ->when(
+                        $schema->hasColumn('cities', 'is_subdivision'),
+                        fn ($q) => $q->where('is_subdivision', false),
+                    )
                     ->where('status', '!=', 'disabled') // ops kill-switch is never overridden
                     ->where('is_serviceable', false)
                     ->update(['is_serviceable' => true]);

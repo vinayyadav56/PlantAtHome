@@ -87,18 +87,46 @@ class GeoMasterSeeder extends Seeder
      * @return array{0:int, 1:int} [matched, unmatched]
      */
     /**
-     * The storefront's canonical city aliases (mirrors
-     * Marvel\Services\AvailabilityService::normalizeCityKey) so e.g. a
-     * "Bangalore" city row still matches the "Bengaluru" district.
+     * The storefront's canonical city aliases. This used to be a hand-copied constant that had
+     * already drifted — it carried six entries while the real table carried sixteen, missing every
+     * Delhi NCT district, which is exactly the set that matters here. Read the one map instead.
+     *
+     * @return array<string,string> raw spelling => canonical key
      */
-    private const CITY_ALIASES = [
-        'gurgaon' => 'gurugram',
-        'bangalore' => 'bengaluru',
-        'bombay' => 'mumbai',
-        'calcutta' => 'kolkata',
-        'madras' => 'chennai',
-        'new delhi' => 'delhi',
-    ];
+    private function cityAliases(): array
+    {
+        return (new \Marvel\Services\AvailabilityService())->cityAliases();
+    }
+
+    /**
+     * Flag city rows that are really administrative slices of a bigger city, using the same pure
+     * predicate the runtime normalizer uses. Migrations cannot do this on a fresh install — they
+     * run before the city rows exist — so the seeder has to stamp them itself.
+     */
+    private function stampSubdivisions(): void
+    {
+        if (! DB::getSchemaBuilder()->hasColumn('cities', 'parent_city_id')) {
+            return;
+        }
+
+        foreach (DB::table('cities')->select('state_id')->distinct()->pluck('state_id') as $stateId) {
+            $rows = DB::table('cities')
+                ->where('state_id', $stateId)
+                ->get(['id', 'name', 'is_serviceable'])
+                ->map(fn ($r) => ['id' => (int) $r->id, 'name' => (string) $r->name, 'is_serviceable' => (bool) $r->is_serviceable])
+                ->all();
+
+            foreach (\Marvel\Services\LocationNormalizer::resolveSubdivisions($rows) as $childId => $parentId) {
+                DB::table('cities')->where('id', $childId)->update([
+                    'parent_city_id' => $parentId,
+                    'is_subdivision' => true,
+                    'is_serviceable' => false,
+                ]);
+            }
+        }
+
+        \Marvel\Services\LocationNormalizer::flush();
+    }
 
     private function rollupCities(): array
     {
@@ -106,11 +134,13 @@ class GeoMasterSeeder extends Seeder
             return [0, 0];
         }
 
+        $this->stampSubdivisions();
+
         foreach (DB::table('districts')->get(['id', 'state_id', 'name']) as $district) {
             $districtKey = mb_strtolower(trim($district->name));
             $names = [$districtKey];
             // Alias keys whose canonical form is this district also match.
-            foreach (self::CITY_ALIASES as $alias => $canonical) {
+            foreach ($this->cityAliases() as $alias => $canonical) {
                 if ($canonical === $districtKey) {
                     $names[] = $alias;
                 }
@@ -121,9 +151,16 @@ class GeoMasterSeeder extends Seeder
                 ->update(['district_id' => $district->id]);
         }
 
-        $matchedCities = DB::table('cities')->whereNotNull('district_id')->get(['id', 'district_id']);
+        $hasParent = DB::getSchemaBuilder()->hasColumn('cities', 'parent_city_id');
+        $cols = $hasParent ? ['id', 'district_id', 'parent_city_id'] : ['id', 'district_id'];
+        $matchedCities = DB::table('cities')->whereNotNull('district_id')->get($cols);
         foreach ($matchedCities as $city) {
-            DB::table('postal_codes')->where('district_id', $city->district_id)->update(['city_id' => $city->id]);
+            // A subdivision keeps its district_id — it IS that district — but it must never own
+            // the pins: those belong to the parent city. Binding them here by name is what made
+            // half of Delhi's pincodes resolve to "South Delhi" while the other half correctly
+            // resolved to "Delhi", since the metro fallback below only fills pins still unclaimed.
+            $target = ($hasParent ? ($city->parent_city_id ?: $city->id) : $city->id);
+            DB::table('postal_codes')->where('district_id', $city->district_id)->update(['city_id' => $target]);
         }
 
         // Metro city-states (Delhi, Chandigarh…): a city named exactly like its
@@ -137,7 +174,7 @@ class GeoMasterSeeder extends Seeder
                 ->whereNull('district_id')
                 ->whereIn(DB::raw('LOWER(TRIM(name))'), array_merge(
                     [$stateKey],
-                    array_keys(array_filter(self::CITY_ALIASES, fn ($c) => $c === $stateKey)),
+                    array_keys(array_filter($this->cityAliases(), fn ($c) => $c === $stateKey)),
                 ))
                 ->get(['id']);
             foreach ($cityStates as $cityState) {

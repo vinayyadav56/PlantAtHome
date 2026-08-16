@@ -132,14 +132,36 @@ class MetricsService
             ->select(DB::raw('LOWER(name) as city'), 'status')
             ->pluck('status', 'city');
 
-        return $rows->map(fn ($r) => [
-            'city'      => $r->city ?: 'Unknown',
-            'orders'    => (int) $r->orders,
-            'revenue'   => (float) $r->revenue,
-            'customers' => (int) $r->customers,
-            'vendors'   => (int) ($vendorsByCity[$r->city] ?? 0),
-            'status'    => (string) ($statusByCity[strtolower((string) $r->city)] ?? 'active'),
-        ])->all();
+        // Fold districts into their city. SQL grouped on the raw JSON string, so Delhi arrived as
+        // up to three separate rows — "Delhi", "New Delhi", "South Delhi" — each with a slice of
+        // the revenue, while the City Command Center (which IS alias-aware) showed one. Stored
+        // values are normalized on write now; this keeps older rows and any unresolvable spelling
+        // from splitting the board.
+        $vendorsCanon = [];
+        foreach ($vendorsByCity as $name => $count) {
+            $vendorsCanon[AvailabilityService::canonicalCityKey((string) $name)] = ($vendorsCanon[AvailabilityService::canonicalCityKey((string) $name)] ?? 0) + (int) $count;
+        }
+
+        $folded = [];
+        foreach ($rows as $r) {
+            $name = $r->city ?: 'Unknown';
+            $key  = AvailabilityService::canonicalCityKey((string) $name);
+            if (!isset($folded[$key])) {
+                $folded[$key] = ['city' => $name, 'orders' => 0, 'revenue' => 0.0, 'customers' => 0];
+            }
+            // Keep the canonical spelling when we meet it, not whichever district sorted first.
+            if (AvailabilityService::canonicalCityKey((string) $name) === strtolower(trim((string) $name))) {
+                $folded[$key]['city'] = $name;
+            }
+            $folded[$key]['orders']    += (int) $r->orders;
+            $folded[$key]['revenue']   += (float) $r->revenue;
+            $folded[$key]['customers'] += (int) $r->customers;
+        }
+
+        return collect($folded)->map(fn ($row, $key) => $row + [
+            'vendors' => (int) ($vendorsCanon[$key] ?? 0),
+            'status'  => (string) ($statusByCity[$key] ?? 'active'),
+        ])->sortByDesc('orders')->values()->all();
     }
 
     // ── Delivery operations ─────────────────────────────────────────────────
@@ -223,10 +245,17 @@ class MetricsService
         $d30 = Carbon::now()->subDays(30);
         $cityExpr = $this->cityExpr('orders');
 
+        // Every spelling of this city, not just the one the operator clicked. Drilling into
+        // "Delhi" used a case-sensitive equality on the raw JSON, so it silently excluded the
+        // orders stored as "New Delhi" or "South Delhi" — the detail page contradicted the list
+        // it was opened from.
+        $variants = AvailabilityService::canonicalCityVariants($city);
+        $placeholders = implode(',', array_fill(0, count($variants), '?'));
+
         // Closure builds a FRESH query each call (no shared/cloned state).
         $base = fn () => DB::table('orders')
             ->whereNull('parent_id')->whereNull('deleted_at')
-            ->whereRaw("$cityExpr = ?", [$city]);
+            ->whereRaw("LOWER($cityExpr) IN ($placeholders)", $variants);
 
         $statusRows = $base()
             ->where('created_at', '>=', $d30)
@@ -244,7 +273,7 @@ class MetricsService
             ->groupBy('d')->orderBy('d')->get();
 
         $vendors = (int) DB::table('shops')
-            ->whereRaw($this->shopCityExpr('shops') . ' = ?', [$city])->count();
+            ->whereRaw('LOWER(' . $this->shopCityExpr('shops') . ") IN ($placeholders)", $variants)->count();
 
         return [
             'city'          => $city,

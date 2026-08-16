@@ -102,7 +102,13 @@ class MarginResolver
         self::$map = [];
         try {
             foreach (PricingMargin::where('is_active', true)->get() as $m) {
-                $city = ($m->city !== null && $m->city !== '') ? strtolower(trim($m->city)) : '*';
+                // Canonical key, matching how PricingMarginController writes the row. A bare
+                // strtolower here meant any margin stored under a district name ("south delhi")
+                // built a map key nothing ever looks up — the rule fell through to the global
+                // "*|*" default and quietly priced at the wrong margin.
+                $city = ($m->city !== null && $m->city !== '')
+                    ? AvailabilityService::canonicalCityKey($m->city)
+                    : '*';
                 $type = $m->type_id ? (string) $m->type_id : '*';
                 // margin_type may predate the flat-margin migration → percent.
                 $flat = ($m->margin_type ?? 'percent') === 'flat';

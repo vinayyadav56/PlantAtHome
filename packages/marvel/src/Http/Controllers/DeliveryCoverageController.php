@@ -4,6 +4,7 @@ namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Marvel\Enums\Permission;
 
 /**
@@ -432,9 +433,16 @@ class DeliveryCoverageController extends CoreController
                 if (($row['city'] ?? '') === '') {
                     throw new \InvalidArgumentException('A city name is required for a city rule.');
                 }
+                // Canonical key + raw spellings: an import naming a district ("South Delhi") or an
+                // old spelling ("Gurgaon") must resolve to the city we actually serve, otherwise
+                // the row is rejected as "City not found" for a city that plainly exists.
                 $id = DB::table('cities')
-                    ->whereRaw('LOWER(name) = ?', [strtolower($row['city'])])
+                    ->whereIn(DB::raw('LOWER(name)'), \Marvel\Services\AvailabilityService::canonicalCityVariants((string) $row['city']))
                     ->when($stateId !== null, fn ($q) => $q->where('state_id', $stateId))
+                    ->when(
+                        Schema::hasColumn('cities', 'is_subdivision'),
+                        fn ($q) => $q->orderBy('is_subdivision'), // a real city outranks a district
+                    )
                     ->value('id');
                 if ($id === null) {
                     throw new \InvalidArgumentException("City '{$row['city']}' not found.");

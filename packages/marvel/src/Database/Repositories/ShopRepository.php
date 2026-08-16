@@ -9,6 +9,7 @@ use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Mail;
+use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\Balance;
 use Marvel\Database\Models\City;
 use Marvel\Database\Models\OwnershipTransfer;
@@ -138,14 +139,27 @@ class ShopRepository extends BaseRepository
      */
     private function activateServedCities(array $cityNames): void
     {
-        $names = array_values(array_unique(array_filter(array_map(
-            fn ($n) => mb_strtolower(trim((string) $n)),
-            $cityNames
-        ))));
+        // Canonical keys, and then every raw spelling of each. A bare lowercase meant a vendor whose
+        // service area said "South Delhi" activated the SOUTH DELHI row — a district that is not a
+        // shopping city — while Delhi itself stayed switched off and the vendor's stock stayed
+        // invisible in the city they had just told us they serve.
+        $names = [];
+        foreach ($cityNames as $n) {
+            $key = \Marvel\Services\AvailabilityService::canonicalCityKey((string) $n);
+            if ($key !== '') {
+                $names = array_merge($names, \Marvel\Services\AvailabilityService::canonicalCityVariants($key));
+            }
+        }
+        $names = array_values(array_unique($names));
         if (!$names) {
             return;
         }
         City::whereIn(DB::raw('LOWER(name)'), $names)
+            ->when(
+                Schema::hasColumn('cities', 'is_subdivision'),
+                // Never flip a district on: it is not somewhere we ship to.
+                fn ($q) => $q->where('is_subdivision', false),
+            )
             ->where('status', '!=', City::STATUS_DISABLED)
             ->where('is_serviceable', false)
             ->update(['is_serviceable' => true]);

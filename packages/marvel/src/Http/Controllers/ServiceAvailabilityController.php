@@ -11,6 +11,7 @@ use Marvel\Database\Models\CityVerticalServiceSetting as CVS;
 use Marvel\Database\Models\GlobalVerticalSetting as GVS;
 use Marvel\Database\Models\ServiceAvailabilityLog;
 use Marvel\Events\ServiceAvailabilityChanged;
+use Marvel\Services\AvailabilityService;
 use Marvel\Services\ServiceAvailabilityService;
 
 /**
@@ -52,7 +53,14 @@ class ServiceAvailabilityController extends CoreController
             && $city
         ) {
             try {
-                $cityRow = City::whereRaw('LOWER(name) = ?', [ServiceAvailabilityService::norm((string) $city)])
+                // Canonical key, matching how the availability check itself resolved this city
+                // one line above. The raw norm() looked up "south delhi" and found nothing, so a
+                // shopper in a Delhi district got the bare block screen with none of the
+                // maintenance copy written for their city.
+                $cityRow = City::whereIn(
+                    DB::raw('LOWER(name)'),
+                    AvailabilityService::canonicalCityVariants((string) $city),
+                )
                     ->orderByDesc('is_serviceable')
                     ->first();
                 if ($cityRow && $result['reason'] === 'city_maintenance') {

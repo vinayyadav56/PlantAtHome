@@ -202,8 +202,16 @@ class FulfillmentService
         return null;
     }
 
+    /**
+     * Canonical city key — the shared alias table, NOT a bare strtolower.
+     *
+     * This compares a customer's city against `vendor_service_areas.city`, which stores whatever
+     * the vendor typed. A raw compare meant a vendor serving "South Delhi" never matched a
+     * customer in "Delhi": the local tier silently found nothing and the plan fell through to
+     * courier, so the PDP showed a multi-day national delivery for a nursery down the road.
+     */
     private function norm(?string $s): string
     {
-        return strtolower(trim((string) $s));
+        return AvailabilityService::canonicalCityKey((string) $s);
     }
 }

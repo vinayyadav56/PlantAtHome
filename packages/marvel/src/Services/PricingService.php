@@ -3,6 +3,7 @@
 namespace Marvel\Services;
 
 use Carbon\Carbon;
+use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Settings;
 use Marvel\Database\Models\VendorProductPrice;
@@ -96,9 +97,15 @@ class PricingService
         if ($rows->isEmpty() || !$cityKey) {
             return $rows;
         }
+        // Match every raw spelling of this city, not just the canonical key. `vendor_service_areas`
+        // stores the vendor's own words ("Gurgaon", "South Delhi"), so an equality test against the
+        // canonical key silently found no covering vendor — and because the fallback below returns
+        // ALL rows when nothing matches, the line was then priced off the national pool instead.
+        // Wrong price, no error. Same shape as AvailabilityService::availableVendorRows.
+        $variants = AvailabilityService::canonicalCityVariants($cityKey);
         $coveredShopIds = VendorServiceArea::whereIn('shop_id', $rows->pluck('shop_id')->unique()->values())
             ->where('is_active', true)
-            ->whereRaw('LOWER(TRIM(city)) = ?', [$cityKey])
+            ->whereIn(DB::raw('LOWER(TRIM(city))'), $variants)
             ->pluck('shop_id')
             ->flip();
         $covered = $rows->filter(fn ($r) => isset($coveredShopIds[$r->shop_id]));

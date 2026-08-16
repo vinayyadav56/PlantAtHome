@@ -39,6 +39,9 @@ class AddressRequest extends FormRequest
             'address.area'                  => ['nullable', 'string', 'max:120'],
             'address.landmark'              => ['nullable', 'string', 'max:255'],
             'address.city'                  => ['required', 'string', 'max:120'],
+            // Optional: clients that parse Google's address_components can send the district
+            // straight through. When absent the server derives it from the pincode anyway.
+            'address.district'              => ['nullable', 'string', 'max:120'],
             'address.state'                 => ['required', 'string', 'max:120'],
             'address.zip'                   => ['required', 'regex:/^[1-9][0-9]{5}$/'],
             'address.country'               => ['nullable', 'string', 'max:64'],

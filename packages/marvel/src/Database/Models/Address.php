@@ -24,7 +24,10 @@ class Address extends Model
      */
     public const JSON_KEYS = [
         'house_no', 'street_address', 'street_address2', 'area', 'landmark',
-        'city', 'state', 'zip', 'country', 'delivery_instructions',
+        // `district` is the administrative slice of a city (South Delhi within Delhi). It exists
+        // so `city` can stay canonical: geocoders answer "what city?" with a district, and without
+        // somewhere to put it, normalising the city would simply throw the detail away.
+        'city', 'district', 'state', 'zip', 'country', 'delivery_instructions',
     ];
 
     /** Table-level keys a client may set (rg_* are always server-derived). */
@@ -55,6 +58,19 @@ class Address extends Model
             $inner = Arr::only($inner, self::JSON_KEYS);
             if (isset($inner['zip'])) {
                 $inner['zip'] = preg_replace('/\s+/', '', (string) $inner['zip']);
+            }
+            // Canonical city/district. Every address write funnels through here, so this is the
+            // one place that has to know Google answers "which city?" with "South Delhi". It only
+            // ever rewrites what it can resolve from the location master — unrecognised input is
+            // left exactly as the customer typed it.
+            //
+            // Fail-soft on purpose. This method is called from contexts with no booted container
+            // (it is a static on a model, and the unit tests call it directly), and tidying up a
+            // city name must never be the reason someone cannot save their address.
+            try {
+                $inner = app(\Marvel\Services\LocationNormalizer::class)->normalizeAddressJson($inner);
+            } catch (\Throwable $e) {
+                // keep the customer's own words
             }
             $fields['address'] = array_filter($inner, fn ($v) => $v !== null);
         }

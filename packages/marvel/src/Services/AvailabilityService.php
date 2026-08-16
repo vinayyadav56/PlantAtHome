@@ -404,9 +404,21 @@ class AvailabilityService
      */
     public function cityKeyVariants(string $key): array
     {
-        $key = $this->normalizeCityKey($key);
+        return self::canonicalCityVariants($key);
+    }
+
+    /**
+     * STATIC twin of cityKeyVariants. Constructing this service builds a PricingService, which
+     * reads `settings` — a real query, and one that simply does not exist in the stub schemas some
+     * modules test against. Callers that only need the alias arithmetic must not pay for that.
+     *
+     * @return string[] lowercase spellings, canonical key first
+     */
+    public static function canonicalCityVariants(string $key): array
+    {
+        $key = self::canonicalCityKey($key);
         $variants = [$key];
-        foreach ($this->cityAliases() as $from => $to) {
+        foreach (self::aliasMap() as $from => $to) {
             if ($to === $key) {
                 $variants[] = $from;
             }
@@ -434,7 +446,11 @@ class AvailabilityService
      */
     public static function canonicalCityKey(string $city): string
     {
-        $key = strtolower(trim($city));
+        // Collapse INTERNAL whitespace too, not just the ends. The geo master really contains
+        // "North East  Delhi", "North West  Delhi" and "South West  Delhi" with a double space,
+        // so a bare trim() produced "north east  delhi" — a key that matches nothing in the map
+        // below. Those three districts were the only ones that could never alias to Delhi.
+        $key = strtolower(trim(preg_replace('/\s+/', ' ', $city)));
         $aliases = self::aliasMap();
         return $aliases[$key] ?? $key;
     }
@@ -569,7 +585,12 @@ class AvailabilityService
         }
         if (!array_key_exists($key, $cache)) {
             try {
-                $cache[$key] = City::whereRaw('LOWER(name) = ?', [$key])
+                // Canonical name first, then every raw spelling — the same fallback ladder
+                // DeliveryOptionsController uses. An equality test on the canonical key alone
+                // depends on a `cities` row literally named "Delhi" existing; if it is ever
+                // renamed or demoted, this returns false and the whole city reads unserviceable,
+                // which empties the catalogue rather than failing visibly.
+                $cache[$key] = City::whereIn(DB::raw('LOWER(name)'), $this->cityKeyVariants($key))
                     ->where('is_serviceable', true)
                     ->whereIn('status', [City::STATUS_ACTIVE, City::STATUS_MAINTENANCE])
                     ->exists();

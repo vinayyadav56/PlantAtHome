@@ -84,9 +84,16 @@ class MatchingService
         return [array_slice($same, 0, $limit), array_slice($other, 0, $limit)];
     }
 
+    /**
+     * Canonical city key. This compares the ORDER's address city (whatever the geocoder called it)
+     * against a shop's or delivery partner's own address city, so a raw compare dropped a vendor
+     * out of the same-city partition whenever the two spelled the same place differently — a Delhi
+     * order against a "South Delhi" nursery. The radius fallback below hid it whenever coordinates
+     * happened to exist, which is exactly what made it hard to see.
+     */
     private function normCity(?string $s): string
     {
-        return strtolower(trim((string) $s));
+        return AvailabilityService::canonicalCityKey((string) $s);
     }
 
     /** Same city by name (case-insensitive) OR within RADIUS_KM. Show-all when nothing to filter by. */

@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Marvel\Database\Models\City;
+use Marvel\Services\LocationNormalizer;
 
 /**
  * Server-authoritative reverse geocoding (Shopping-City redesign). The draggable map
@@ -63,12 +64,26 @@ class ReverseGeocodeService
                 }
             }
 
+            // Split city from district BEFORE anything persists this. Google labels a Saket pin
+            // "South Delhi", and the fallback at extractComponents() promotes a district into the
+            // city slot whenever there is no `locality` at all — so without this every caller
+            // (rg_city, verified_city, the admin geo/reverse endpoint) stored a district as a city.
+            $canonical = app(LocationNormalizer::class)->normalize([
+                'city'     => $out['city'],
+                'district' => $out['district'],
+                'state'    => $out['state'],
+                'zip'      => $out['pincode'],
+            ]);
+            $out['city']     = $canonical['city'] ?: $out['city'];
+            $out['district'] = $canonical['district'] ?: $out['district'];
+            $out['state']    = $canonical['state'] ?: $out['state'];
+
             $normalized = $out['city']
                 ? app(AvailabilityService::class)->normalizeCityKey($out['city'])
                 : null;
-            $canon = $normalized
-                ? City::query()->whereRaw('LOWER(name) = ?', [$normalized])->first()
-                : null;
+            $canon = $canonical['city_id']
+                ? City::query()->find($canonical['city_id'])
+                : ($normalized ? City::query()->whereRaw('LOWER(name) = ?', [$normalized])->first() : null);
 
             return [
                 'city'              => $out['city'],
