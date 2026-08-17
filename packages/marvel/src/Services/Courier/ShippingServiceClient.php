@@ -295,6 +295,11 @@ class ShippingServiceClient
             // A rebook-after-cancel must not leave a zombie row that reads both booked AND cancelled.
             'cancelled_at'         => null,
             'cancelled_reason'     => null,
+            // Same reasoning, and it was missed: a shipment that just booked has no failure. The
+            // stale text outlived the problem and actively lied — a vendor's pin was corrected and
+            // Porter booked fine, while the row still read "restricted_location" from the attempt
+            // before, so a working booking looked broken to whoever opened the order.
+            'failure_reason'       => null,
         ])->save();
 
         // Activity log — one seam covers manual dispatch AND the auto-book listener.
