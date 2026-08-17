@@ -335,9 +335,12 @@ Route::apiResource('products', ProductController::class, [
 Route::apiResource('types', TypeController::class, [
     'only' => ['index', 'show'],
 ])->middleware('cache.headers:etag');
+// auth: the file URLs themselves stay public (S3/CDN), but the LISTING was the only
+// unauthenticated apiResource in this block — an enumerable index of every upload
+// (invoices, KYC documents, vendor paperwork) for anyone who found the path.
 Route::apiResource('attachments', AttachmentController::class, [
     'only' => ['index', 'show'],
-]);
+])->middleware('auth:sanctum');
 Route::apiResource('categories', CategoryController::class, [
     'only' => ['index', 'show'],
 ])->middleware('cache.headers:etag');
@@ -794,7 +797,11 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     // partner webhooks — cascade + settlement + terminal guards included.
     Route::post('shipments/{id}/self-status', [CourierShipmentController::class, 'selfStatus']);
     // Split ONE vendor's lines into a second parcel (large orders), or merge back.
-    Route::post('orders/{id}/split-shipment', [OrderAssignmentController::class, 'splitShipment']);
+    // super_admin, unlike its siblings above: those check ownership inside the controller,
+    // this one never did — it findOrFail'd the order and re-parcelled it. In an auth-only
+    // group that meant ANY logged-in customer could re-parcel ANY order by id.
+    Route::post('orders/{id}/split-shipment', [OrderAssignmentController::class, 'splitShipment'])
+        ->middleware('permission:' . Permission::SUPER_ADMIN);
 
     Route::get('integrations', [IntegrationController::class, 'index'])
         ->middleware('permission:settings.integrations.view');

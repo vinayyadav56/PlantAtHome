@@ -14,6 +14,12 @@ class VendorResource extends Resource
 {
     public function toArray($request): array
     {
+        // Banking, tax ids and commission are ADMIN-eyes-only. The read gate on /vendors accepts
+        // any store_owner (deliberately — vendors browse the supplier directory), and this resource
+        // used to flatten account_number/ifsc/pan/gst/upi for every row, so any vendor could read
+        // every other vendor's banking details. Directory fields stay; money identity does not.
+        $admin = (bool) optional($request->user())->hasPermissionTo(\Marvel\Enums\Permission::SUPER_ADMIN);
+
         $settings   = (array) ($this->settings ?? []);
         $compliance = (array) ($settings['compliance'] ?? []);
         $banking    = (array) ($settings['banking'] ?? []);
@@ -34,7 +40,7 @@ class VendorResource extends Resource
             // credentials_email_sent is a transient flag set right after create/reset so
             // the admin UI knows whether to show the credentials for manual sharing.
             'owner_id'         => $this->owner_id ?? null,
-            'owner_email'      => $this->when($this->relationLoaded('owner'), fn () => optional($this->owner)->email),
+            'owner_email'      => $this->when($admin && $this->relationLoaded('owner'), fn () => optional($this->owner)->email),
             'credentials_email_sent' => $this->when(isset($this->credentials_email_sent), fn () => (bool) $this->credentials_email_sent),
 
             // Contact
@@ -44,8 +50,8 @@ class VendorResource extends Resource
             'website'          => $settings['website'] ?? null,
 
             // Compliance
-            'gst_number'       => $this->gst_number ?? ($compliance['gst'] ?? null),
-            'pan'              => $compliance['pan'] ?? null,
+            'gst_number'       => $this->when($admin, fn () => $this->gst_number ?? ($compliance['gst'] ?? null)),
+            'pan'              => $this->when($admin, fn () => $compliance['pan'] ?? null),
             'constitution'     => $compliance['constitution'] ?? null,
 
             // Address / location (a vendor belongs to exactly one city)
@@ -58,12 +64,12 @@ class VendorResource extends Resource
             'lng'              => $this->lng ?? ($location['lng'] ?? null),
 
             // Banking / payout
-            'bank'             => $payment['bank'] ?? null,
-            'account_holder'   => $payment['name'] ?? null,
-            'account_number'   => $payment['account'] ?? null,
-            'ifsc'             => $banking['ifsc'] ?? null,
-            'branch'           => $banking['branch'] ?? null,
-            'upi'              => $this->upi ?? ($banking['upi'] ?? null),
+            'bank'             => $this->when($admin, fn () => $payment['bank'] ?? null),
+            'account_holder'   => $this->when($admin, fn () => $payment['name'] ?? null),
+            'account_number'   => $this->when($admin, fn () => $payment['account'] ?? null),
+            'ifsc'             => $this->when($admin, fn () => $banking['ifsc'] ?? null),
+            'branch'           => $this->when($admin, fn () => $banking['branch'] ?? null),
+            'upi'              => $this->when($admin, fn () => $this->upi ?? ($banking['upi'] ?? null)),
 
             // Status
             'status'           => $this->is_active ? 'active' : 'inactive',
@@ -72,7 +78,7 @@ class VendorResource extends Resource
             'approved_at'      => $this->approved_at ?? null,
 
             // Commission / performance (admin only)
-            'admin_commission_rate' => optional($this->balance)->admin_commission_rate,
+            'admin_commission_rate' => $this->when($admin, fn () => optional($this->balance)->admin_commission_rate),
             'vendor_rating'    => $this->vendor_rating,
             'vendor_priority_score' => $this->vendor_priority_score,
 

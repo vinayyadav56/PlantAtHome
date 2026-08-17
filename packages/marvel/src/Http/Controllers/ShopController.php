@@ -47,7 +47,17 @@ class ShopController extends CoreController
     public function index(Request $request)
     {
         $limit = $request->limit ? $request->limit : 15;
-        return $this->fetchShops($request)->paginate($limit)->withQueryString();
+        $page = $this->fetchShops($request)->paginate($limit)->withQueryString();
+
+        // Non-admins get the same sanitized shape `show` has used since the raw-model leak was
+        // closed there. The list kept returning RAW Eloquent models — Shop has no $hidden and
+        // `settings` is a plain json cast, so every remaining shop's banking/compliance blob and
+        // its owner's email, phone and geolocation shipped to any signed-in customer token.
+        if (!$this->isShopAdmin($request)) {
+            return PublicShopResource::collection($page);
+        }
+
+        return $page;
     }
 
     public function fetchShops(Request $request)
