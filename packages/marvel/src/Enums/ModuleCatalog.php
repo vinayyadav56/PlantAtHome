@@ -89,7 +89,7 @@ final class ModuleCatalog
         ];
     }
 
-    /** Top-level module keys (mirrors ModulePermission::MODULES order). */
+    /** Top-level module keys — the single source ModulePermission::modules() reads. */
     public static function modules(): array
     {
         return array_keys(self::catalog());

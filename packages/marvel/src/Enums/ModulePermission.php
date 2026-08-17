@@ -14,19 +14,17 @@ namespace Marvel\Enums;
  */
 final class ModulePermission
 {
-    /** Admin modules the UI + API gate on. */
-    public const MODULES = [
-        'dashboard',
-        'orders',
-        'customers',
-        'vendors',
-        'products',
-        'bundles',
-        'reports',
-        'settings',
-        'employees',
-        'kanban',
-    ];
+    /**
+     * Admin modules the UI + API gate on — read from the catalogue, never listed twice.
+     *
+     * This used to be a hand-copied const that drifted the moment `operations` joined the
+     * catalogue: allView() iterated the stale list, so the seeded `viewer` role silently never
+     * received `operations.view` and nothing errored anywhere.
+     */
+    public static function modules(): array
+    {
+        return ModuleCatalog::modules();
+    }
 
     /** Actions per module. */
     public const ACTIONS = ['view', 'create', 'edit', 'delete'];
@@ -54,7 +52,7 @@ final class ModulePermission
     /** "<module>.view" for every module — the read-only (Viewer) set. */
     public static function allView(): array
     {
-        return array_map(fn ($module) => "{$module}.view", self::MODULES);
+        return array_map(fn ($module) => "{$module}.view", self::modules());
     }
 
     /** Is $name a valid permission string (2- or 3-segment, via the catalogue). */

@@ -49,7 +49,7 @@ class RolePermissionController extends CoreController
 
         return [
             'roles'   => $roles,
-            'modules' => ModulePermission::MODULES,
+            'modules' => ModulePermission::modules(),
             'actions' => ModulePermission::ACTIONS,
             // Phase C — submodule catalogue for the professional matrix UI.
             'catalog' => ModuleCatalog::forUi(),
@@ -66,12 +66,12 @@ class RolePermissionController extends CoreController
     public function permissions(Request $request)
     {
         $grouped = [];
-        foreach (ModulePermission::MODULES as $module) {
+        foreach (ModulePermission::modules() as $module) {
             $grouped[$module] = ModulePermission::forModule($module);
         }
 
         return [
-            'modules'     => ModulePermission::MODULES,
+            'modules'     => ModulePermission::modules(),
             'actions'     => ModulePermission::ACTIONS,
             'permissions' => $grouped,
         ];
