@@ -2,6 +2,7 @@
 /vendor/
 /public/storage
 /storage/*.key
+/storage/debugbar/
 /bootstrap/cache/
 .phpunit.result.cache
 

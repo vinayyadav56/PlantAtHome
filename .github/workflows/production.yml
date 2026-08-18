@@ -165,12 +165,20 @@ jobs:
 
             echo "==> Pulling latest code..."
             cd /var/www/plantathome/api
+
+            # Perms BEFORE the reset: git must be able to (re)create tracked paths under
+            # storage/ — a www-data-owned storage/ made `reset --hard` die with
+            # "cannot create directory at 'storage/debugbar': Permission denied".
+            echo "==> Fixing permissions for deploy user (ubuntu runs all artisan cmds)..."
+            sudo chown -R ubuntu:ubuntu storage bootstrap/cache 2>/dev/null || true
+            chmod -R 775 storage bootstrap/cache 2>/dev/null || true
+
             git fetch origin
             git checkout -- . 2>/dev/null || true
             git checkout main
             git reset --hard origin/main
 
-            echo "==> Fixing permissions for deploy user (ubuntu runs all artisan cmds)..."
+            # Re-assert after the reset too — the reset may create fresh paths.
             sudo chown -R ubuntu:ubuntu storage bootstrap/cache 2>/dev/null || true
             chmod -R 775 storage bootstrap/cache 2>/dev/null || true
 
