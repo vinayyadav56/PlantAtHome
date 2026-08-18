@@ -300,6 +300,124 @@ final class CourierOperationsTest extends TestCase
         $this->assertStringStartsWith('2026-08-20 10:00', (string) $fresh->pickup_scheduled_at);
     }
 
+    /**
+     * The wire contract, using the key the Go service ACTUALLY sends.
+     *
+     * PickupResult (internal/partner/types.go) serialises `scheduled_date`. This side read
+     * `scheduled_at ?? pickup_scheduled_date` — neither of which exists — so pickup_scheduled_at
+     * was written NULL on every successful pickup, the button never flipped to "Re-schedule" and
+     * no date ever rendered. The test above missed it by stubbing one of the aliases rather than
+     * the real key, so both sides agreed with each other and neither agreed with the service.
+     */
+    public function test_pickup_reads_the_key_the_service_actually_sends(): void
+    {
+        $shipment = $this->shipment(['provider_order_id' => 'P1', 'awb_number' => 'A1', 'status' => 'assigned']);
+        Http::fake(['*/pickup' => Http::response(['ok' => true, 'pickup' => [
+            'scheduled_date'      => '2026-08-21 09:30:00',
+            'pickup_token_number' => 'TOK-REAL',
+        ]], 200)]);
+
+        $this->assertSame(200, (new CourierShipmentController())->pickup(new Request(), $shipment->id)->getStatusCode());
+
+        $fresh = $shipment->fresh();
+        $this->assertStringStartsWith(
+            '2026-08-21 09:30',
+            (string) $fresh->pickup_scheduled_at,
+            'the service sends scheduled_date; reading only the aliases wrote NULL every time',
+        );
+        $this->assertSame('TOK-REAL', $fresh->pickup_token);
+    }
+
+    /**
+     * A Shiprocket order can be CREATED while the waybill is refused. The service says so —
+     * last_status 'awb_pending' plus the partner's reason — and this side used to hard-code
+     * 'booked' and null the reason, erasing both. That is why every paperwork button failed with
+     * nothing on screen to explain why.
+     */
+    public function test_an_awb_refusal_survives_the_book_write(): void
+    {
+        $shipment = $this->shipment(['status' => 'pending']);
+        $kyc = 'KYC verification is mandated for your account to ship an order.';
+        Http::fake(['*/v1/shipments' => Http::response([
+            'partner'              => 'shiprocket',
+            'mode'                 => 'courier',
+            'provider_order_id'    => '1524274089',
+            'provider_shipment_id' => '1520000000',
+            'awb_number'           => '',
+            'status'               => 'assigned',
+            'last_status'          => 'awb_pending',
+            'failure_reason'       => $kyc,
+        ], 200)]);
+
+        (new ShippingServiceClient())->book($shipment, 'courier', false, 0.0);
+
+        $fresh = $shipment->fresh();
+        $this->assertSame('awb_pending', $fresh->last_status, "'booked' was hard-coded over the service's own verdict");
+        $this->assertSame($kyc, $fresh->failure_reason, 'the only text telling the operator why the parcel is stuck');
+    }
+
+    /** A genuinely clean book must still clear a stale reason from an earlier attempt. */
+    public function test_a_clean_book_still_clears_a_stale_reason(): void
+    {
+        $shipment = $this->shipment([
+            'status'         => 'pending',
+            'failure_reason' => 'booking outcome unknown: porter: restricted_location',
+        ]);
+        Http::fake(['*/v1/shipments' => Http::response([
+            'partner'           => 'shiprocket',
+            'provider_order_id' => 'P9',
+            'awb_number'        => 'AWB9',
+            'status'            => 'assigned',
+        ], 200)]);
+
+        (new ShippingServiceClient())->book($shipment, 'courier', false, 0.0);
+
+        $this->assertNull($shipment->fresh()->failure_reason, 'stale text outlives the problem and lies');
+    }
+
+    /**
+     * The hyperlocal lane is refused outright when either end is 0,0, and roughly 40% of real
+     * orders arrive with no coordinates — the customer neither shared GPS nor map-picked. That took
+     * Porter, Borzo AND Shiprocket Quick off the options list and reported the route as uncovered,
+     * when the address was on the order the whole time.
+     */
+    public function test_a_drop_without_coordinates_is_geocoded_from_its_address(): void
+    {
+        config(['location.google_maps_key' => 'test-key']);
+        \Illuminate\Support\Facades\Cache::flush();
+
+        $order = Order::create([
+            'tracking_number' => 'GEO-1',
+            'shipping_address' => json_encode([
+                'street_address' => '27, Lajpat Nagar II',
+                'city' => 'Delhi', 'state' => 'Delhi', 'zip' => '110024',
+            ]),
+        ]);
+        $shipment = $this->shipment(['order_id' => $order->id, 'mode' => 'same_city']);
+
+        Http::fake([
+            'maps.googleapis.com/*' => Http::response([
+                'results' => [['geometry' => ['location' => ['lat' => 28.5677, 'lng' => 77.2433]]]],
+            ], 200),
+            '*/v1/quotes' => Http::response(['quotes' => [], 'mode' => 'same_city'], 200),
+        ]);
+
+        (new ShippingServiceClient())->quoteShipment($shipment->fresh(), 'same_city', false, 0.0);
+
+        $sent = null;
+        Http::assertSent(function ($req) use (&$sent) {
+            if (!str_contains($req->url(), '/v1/quotes')) {
+                return false;
+            }
+            $sent = $req->data();
+            return true;
+        });
+
+        $this->assertNotNull($sent, 'no quote request was sent');
+        $this->assertSame(28.5677, $sent['drop']['lat'], 'drop lat was left at 0 — the hyperlocal lane is refused at 0,0');
+        $this->assertSame(77.2433, $sent['drop']['lng']);
+    }
+
     public function test_a_partner_refusal_is_a_failure_not_an_empty_success(): void
     {
         $shipment = $this->shipment(['provider_order_id' => 'P1', 'awb_number' => 'A1', 'status' => 'assigned']);

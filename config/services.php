@@ -123,7 +123,10 @@ return [
         'url'          => env('SHIPPING_SERVICE_URL'),                                   // e.g. https://shipping-staging.up.railway.app
         'api_key'      => env('SHIPPING_SERVICE_API_KEY'),                               // sent as X-Api-Key when calling the service
         'callback_key' => env('SHIPPING_SERVICE_CALLBACK_KEY', env('SHIPPING_SERVICE_API_KEY')), // expected X-Api-Key on inbound callbacks
-        'timeout'      => (int) env('SHIPPING_SERVICE_TIMEOUT', 25),
+        // Must exceed the Go service's own 25s upstream budget. At an identical 25s both legs
+        // abandoned at the same instant on slow Shiprocket PDF generation, so the operator got
+        // "Network error contacting shipping service." instead of the partner's actual reason.
+        'timeout'      => (int) env('SHIPPING_SERVICE_TIMEOUT', 35),
     ],
 
     // External competitor-catalogue intelligence service (NurseryLive + Ugaoo scrape).

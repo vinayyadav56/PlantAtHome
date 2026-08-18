@@ -4,6 +4,7 @@ namespace Marvel\Services\Courier;
 
 use Carbon\Carbon;
 use Illuminate\Http\Client\Pool;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\Shipment;
@@ -290,16 +291,21 @@ class ShippingServiceClient
             // 'cost' is the raw partner Booking shape) — feeds the admin display + margin report.
             'booked_cost'          => $b['booked_cost'] ?? $b['cost'] ?? null,
             'status'               => ($b['status'] ?? '') ?: 'assigned',
-            'last_status'          => 'booked',
+            // Take the service's verdict, not an assumption of success. A Shiprocket order can be
+            // CREATED while the waybill is refused — the service reports last_status='awb_pending'
+            // with the partner's own reason ("KYC verification is mandated for your account…") —
+            // and hard-coding 'booked' here erased both. That is why every paperwork button failed
+            // with nothing to explain it: the reason was computed, sent, and then overwritten.
+            'last_status'          => ($b['last_status'] ?? '') ?: 'booked',
             'last_status_at'       => Carbon::now(),
             // A rebook-after-cancel must not leave a zombie row that reads both booked AND cancelled.
             'cancelled_at'         => null,
             'cancelled_reason'     => null,
-            // Same reasoning, and it was missed: a shipment that just booked has no failure. The
-            // stale text outlived the problem and actively lied — a vendor's pin was corrected and
-            // Porter booked fine, while the row still read "restricted_location" from the attempt
-            // before, so a working booking looked broken to whoever opened the order.
-            'failure_reason'       => null,
+            // Still cleared on a genuinely clean book — stale text outlived the problem and lied
+            // (a corrected pin booked fine while the row still read "restricted_location" from the
+            // attempt before). But when the service DOES report a reason, that reason is current
+            // and is the only thing telling the operator why the parcel is stuck.
+            'failure_reason'       => ($b['failure_reason'] ?? '') ?: null,
         ])->save();
 
         // Activity log — one seam covers manual dispatch AND the auto-book listener.
@@ -430,11 +436,14 @@ class ShippingServiceClient
             return $d;
         }
         $p = (array) ($d['pickup'] ?? []);
-        // Shiprocket answers pickup_status + response.pickup_scheduled_date + pickup_token_number;
-        // the service may already have normalized those, so read both spellings.
+        // The service normalizes Shiprocket's response.pickup_scheduled_date to `scheduled_date`
+        // (PickupResult in internal/partner/types.go). That key was missing from this read, so we
+        // matched neither spelling and pickup_scheduled_at was written NULL on every successful
+        // pickup — which is why the button never flipped to "Re-schedule" and no date ever showed.
+        // `scheduled_date` first; the other two stay as tolerated aliases.
         $fill = array_filter([
-            'pickup_scheduled_at' => $this->time($p['scheduled_at'] ?? $p['pickup_scheduled_date'] ?? null),
-            'pickup_token'        => trim((string) ($p['token'] ?? $p['pickup_token_number'] ?? '')) ?: null,
+            'pickup_scheduled_at' => $this->time($p['scheduled_date'] ?? $p['scheduled_at'] ?? $p['pickup_scheduled_date'] ?? null),
+            'pickup_token'        => trim((string) ($p['pickup_token_number'] ?? $p['token'] ?? '')) ?: null,
         ], static fn ($v) => $v !== null);
         if ($fill) {
             $shipment->forceFill($fill + ['last_status_at' => Carbon::now()])->save();
@@ -959,6 +968,21 @@ class ShippingServiceClient
         // any legacy flat keys. Same-city partners (Porter/Borzo) are lat/lng-driven, so a
         // missed read here would quote/book against 0,0.
         $loc = (array) ($a['location'] ?? $ship['location'] ?? []);
+        $lat = (float) ($loc['lat'] ?? $a['lat'] ?? $a['latitude'] ?? 0);
+        $lng = (float) ($loc['lng'] ?? $a['lng'] ?? $a['longitude'] ?? 0);
+
+        // Fall back to geocoding the written address. Roughly 40% of real orders arrive with no
+        // coordinates (the customer neither shared GPS nor map-picked), and the hyperlocal lane is
+        // refused outright when either end is 0,0 — so Porter, Borzo AND Shiprocket Quick all
+        // vanish from the options list and the operator is told the route is uncovered. The
+        // address is on the order; we just were not reading it.
+        if (!$lat || !$lng) {
+            $geo = $this->geocodeDrop($a);
+            if ($geo) {
+                [$lat, $lng] = $geo;
+            }
+        }
+
         return [
             'name'    => (string) ($order->customer_name ?? $a['name'] ?? 'Customer'),
             'phone'   => $this->digits($order->customer_contact ?? ($a['phone'] ?? '')),
@@ -966,9 +990,49 @@ class ShippingServiceClient
             'city'    => (string) ($a['city'] ?? ''),
             'state'   => (string) ($a['state'] ?? ''),
             'pincode' => (string) ($a['zip'] ?? $a['pincode'] ?? $a['postal_code'] ?? ''),
-            'lat'     => (float) ($loc['lat'] ?? $a['lat'] ?? $a['latitude'] ?? 0),
-            'lng'     => (float) ($loc['lng'] ?? $a['lng'] ?? $a['longitude'] ?? 0),
+            'lat'     => $lat,
+            'lng'     => $lng,
         ] + $this->addressDetail($a);
+    }
+
+    /**
+     * Geocode a drop address that arrived without coordinates, cached by address so a quote fan-out
+     * across four partners costs one Google call rather than four. Returns [lat, lng] or null.
+     *
+     * Deliberately fail-soft: geocoding is a best-effort improvement on a missing value, so a
+     * missing API key, a timeout, or a no-result answer must leave the address exactly as it was
+     * rather than break quoting.
+     */
+    private function geocodeDrop(array $a): ?array
+    {
+        $key = 'ship:geo:' . sha1(json_encode([
+            $a['street_address'] ?? $a['address'] ?? '',
+            $a['city'] ?? '',
+            $a['state'] ?? '',
+            $a['zip'] ?? $a['pincode'] ?? $a['postal_code'] ?? '',
+        ]));
+
+        try {
+            $hit = Cache::remember($key, now()->addDays(30), function () use ($a) {
+                $geo = app(\Marvel\Services\GeoMatchService::class)->geocode([
+                    'street_address' => $a['street_address'] ?? $a['address'] ?? null,
+                    'city'           => $a['city'] ?? null,
+                    'state'          => $a['state'] ?? null,
+                    'zip'            => $a['zip'] ?? $a['pincode'] ?? $a['postal_code'] ?? null,
+                    'country'        => $a['country'] ?? 'India',
+                ]);
+                // Cache the miss too, as a sentinel — an unmappable address should not be retried
+                // on every single quote.
+                return $geo ?: ['miss' => true];
+            });
+        } catch (\Throwable $e) {
+            return null;
+        }
+
+        if (!is_array($hit) || !empty($hit['miss']) || empty($hit['lat']) || empty($hit['lng'])) {
+            return null;
+        }
+        return [(float) $hit['lat'], (float) $hit['lng']];
     }
 
     private function items(Shipment $shipment): array
