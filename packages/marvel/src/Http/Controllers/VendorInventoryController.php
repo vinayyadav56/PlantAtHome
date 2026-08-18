@@ -148,35 +148,51 @@ class VendorInventoryController extends CoreController
         $ids = collect($page->items())->pluck('id')->all();
         $mine = VendorProductPrice::where('shop_id', $shopId)->whereIn('product_id', $ids)
             ->get()->groupBy('product_id');
+        // Each row serializes as a PLAIN ARRAY built here, for two reasons. (1) Product uses the
+        // kodeine Metable trait, whose setAttribute() reroutes any non-column assignment
+        // ($p->already_attached = …) into the products_meta relation — the value reads back fine
+        // in PHP but silently VANISHES from the JSON, which is exactly how the vendor annotations
+        // shipped broken. (2) It drops the model's default $appends (ratings, my_review,
+        // blocked_dates, …) — each is an accessor that runs a query PER ROW during serialization
+        // (~76ms/row → ~2s for a page of 20) — and none are used by the vendor catalogue.
         $page->getCollection()->transform(function ($p) use ($mine) {
-            // Drop the Product model's default $appends (ratings, total_reviews,
-            // rating_count, my_review, in_wishlist, blocked_dates,
-            // translated_languages) — each is an accessor that runs a query PER ROW
-            // during JSON serialization (the real cost: ~76ms/row → ~2s for a page of
-            // 20). None are used by the vendor catalogue, which only needs name / sku /
-            // image / variants / my_inventory. Variations append availability too, so
-            // clear those as well (another `availabilities` query per variation row).
-            $p->setAppends([]);
-            if ($p->relationLoaded('variation_options')) {
-                $p->variation_options->each->setAppends([]);
-            }
             $rows = $mine[$p->id] ?? collect();
-            $p->already_attached = $rows->isNotEmpty();
-            $p->pending_approval = $p->status !== ProductStatus::PUBLISH;
+            $variants = $p->relationLoaded('variation_options') ? $p->variation_options : collect();
             // The variants this vendor can still add: master variants minus theirs. The UI
             // renders ONLY these, so an already-sold size is never selectable again.
-            $attachedVariantIds = $rows->pluck('variation_option_id')->filter()->all();
-            $p->available_variants = $p->relationLoaded('variation_options')
-                ? $p->variation_options->reject(fn ($v) => in_array($v->id, $attachedVariantIds, true))->values()
-                : collect();
-            $p->my_inventory = $rows->map(fn ($r) => [
-                'id'                   => $r->id,
-                'variation_option_id'  => $r->variation_option_id,
-                'vendor_selling_price' => $r->vendor_selling_price !== null ? (float) $r->vendor_selling_price : null,
-                'stock_qty'            => (int) ($r->stock_qty ?? 0),
-                'fulfillment_mode'     => $r->fulfillment_mode,
-            ])->values();
-            return $p;
+            $attachedVariantIds = $rows->pluck('variation_option_id')->filter()
+                ->map(fn ($v) => (int) $v)->all();
+            $variantArr = fn ($v) => [
+                'id'         => (int) $v->id,
+                'product_id' => (int) $v->product_id,
+                'title'      => $v->title,
+                'sku'        => $v->sku,
+                'price'      => $v->price,
+            ];
+            return [
+                'id'                 => (int) $p->id,
+                'name'               => $p->name,
+                'slug'               => $p->slug,
+                'sku'                => $p->sku,
+                'image'              => $p->image,
+                'type_id'            => $p->type_id,
+                'product_type'       => $p->product_type,
+                'price'              => $p->price,
+                'status'             => $p->status,
+                'already_attached'   => $rows->isNotEmpty(),
+                'pending_approval'   => $p->status !== ProductStatus::PUBLISH,
+                'variation_options'  => $variants->map($variantArr)->values(),
+                'available_variants' => $variants
+                    ->reject(fn ($v) => in_array((int) $v->id, $attachedVariantIds, true))
+                    ->map($variantArr)->values(),
+                'my_inventory'       => $rows->map(fn ($r) => [
+                    'id'                   => $r->id,
+                    'variation_option_id'  => $r->variation_option_id,
+                    'vendor_selling_price' => $r->vendor_selling_price !== null ? (float) $r->vendor_selling_price : null,
+                    'stock_qty'            => (int) ($r->stock_qty ?? 0),
+                    'fulfillment_mode'     => $r->fulfillment_mode,
+                ])->values(),
+            ];
         });
         return $page;
     }

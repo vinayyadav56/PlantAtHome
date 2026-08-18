@@ -195,7 +195,7 @@ final class VendorCatalogAvailabilityTest extends TestCase
     {
         $items = $this->search(33);
         $this->assertArrayHasKey(1, $items);
-        $this->assertCount(4, $items[1]->available_variants);
+        $this->assertCount(4, $items[1]['available_variants']);
     }
 
     /** Mandate Test 2 + Case B: partial attach leaves only the remaining variants. */
@@ -207,7 +207,7 @@ final class VendorCatalogAvailabilityTest extends TestCase
         ]);
         $items = $this->search(33);
         $this->assertArrayHasKey(2, $items, 'a partially attached plant must stay visible');
-        $remaining = collect($items[2]->available_variants)->pluck('title')->all();
+        $remaining = collect($items[2]['available_variants'])->pluck('title')->all();
         $this->assertSame(['Large'], $remaining);
     }
 
@@ -259,6 +259,6 @@ final class VendorCatalogAvailabilityTest extends TestCase
         $this->assertArrayNotHasKey(1, $this->search(33), 'vendor 33 owns all of Plant A');
         $other = $this->search(44);
         $this->assertArrayHasKey(1, $other, 'vendor 44 never touched Plant A');
-        $this->assertCount(4, $other[1]->available_variants);
+        $this->assertCount(4, $other[1]['available_variants']);
     }
 }
