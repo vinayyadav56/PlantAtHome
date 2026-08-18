@@ -32,6 +32,26 @@ class ShippingServiceClient
         return !empty($this->baseUrl) && !empty($this->apiKey);
     }
 
+    /**
+     * Seconds to wait on the shipping service, floored above the service's OWN upstream budget.
+     *
+     * This is not a preference, it is an ordering constraint: the Go service allows a partner 25s
+     * before it gives up and returns a considered error ("KYC verification is mandated…"). If our
+     * timeout is shorter we abandon the connection first and can never receive that answer — every
+     * slow partner call becomes "Network error contacting shipping service." instead.
+     *
+     * The Integrations UI exposes this field, and it was set to 15 in the database, i.e. ten
+     * seconds before the service could possibly reply. A floor makes that unconfigurable rather
+     * than relying on nobody typing a small number.
+     *
+     * An explicit per-call timeout (the Delivery Optimizer's tight budget) is deliberately NOT
+     * floored — that path degrades to an estimate on purpose.
+     */
+    private function defaultTimeout(): int
+    {
+        return max(35, (int) config('services.shipping_service.timeout', 35));
+    }
+
     /** Ranked multi-partner quotes from the service. */
     public function quoteShipment(Shipment $shipment, string $mode, bool $cod, float $codAmount): array
     {
@@ -169,7 +189,7 @@ class ShippingServiceClient
         if (empty($bodies) || !$this->configured()) {
             return ['ok' => false, 'results' => []];
         }
-        $timeout = $timeoutMs !== null ? max(0.05, $timeoutMs / 1000) : (float) config('services.shipping_service.timeout', 25);
+        $timeout = $timeoutMs !== null ? max(0.05, $timeoutMs / 1000) : (float) $this->defaultTimeout();
 
         // Prefer the bulk endpoint when the service exposes it.
         $batch = $this->request('post', '/v1/quotes/batch', ['quotes' => array_values($bodies)], $timeout);
@@ -1151,7 +1171,7 @@ class ShippingServiceClient
                     ->withHeaders(['X-Api-Key' => $this->apiKey]) // shared secret — header only, never logged
                     ->acceptJson();
             } else {
-                $http = Http::timeout((int) config('services.shipping_service.timeout', 25))
+                $http = Http::timeout($this->defaultTimeout())
                     ->withHeaders(['X-Api-Key' => $this->apiKey])
                     ->acceptJson();
             }

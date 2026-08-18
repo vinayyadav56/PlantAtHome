@@ -418,6 +418,25 @@ final class CourierOperationsTest extends TestCase
         $this->assertSame(77.2433, $sent['drop']['lng']);
     }
 
+    /**
+     * Ordering constraint, not a preference: the Go service allows a partner 25s before returning
+     * a considered error. A shorter timeout here abandons the connection first, so that error can
+     * never arrive and every slow call reads as a network fault. The Integrations UI exposes this
+     * field and staging had it set to 15.
+     */
+    public function test_the_shipping_timeout_cannot_be_set_below_the_services_own_budget(): void
+    {
+        config(['services.shipping_service.timeout' => 15]);
+
+        $ref = new \ReflectionMethod(ShippingServiceClient::class, 'defaultTimeout');
+        $ref->setAccessible(true);
+        $this->assertGreaterThanOrEqual(
+            35,
+            $ref->invoke(new ShippingServiceClient()),
+            'a stored 15s means we hang up 10s before the service can answer',
+        );
+    }
+
     public function test_a_partner_refusal_is_a_failure_not_an_empty_success(): void
     {
         $shipment = $this->shipment(['provider_order_id' => 'P1', 'awb_number' => 'A1', 'status' => 'assigned']);
