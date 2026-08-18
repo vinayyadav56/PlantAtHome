@@ -113,14 +113,19 @@ class CourierPartnerProxyController extends CoreController
         // Bounds mirror the service contract (default 50, max 200) so a bad page size fails here
         // with a 422 instead of burning an upstream call.
         $validated = $request->validate([
-            'limit'  => 'sometimes|integer|min:1|max:200',
-            'before' => 'sometimes|integer|min:1',
+            'limit'    => 'sometimes|integer|min:1|max:200',
+            'before'   => 'sometimes|integer|min:1',
+            'after'    => 'sometimes|integer|min:1',
+            'order_id' => 'sometimes|string|max:64',
         ]);
         $query = [];
-        foreach (['limit', 'before'] as $key) {
+        foreach (['limit', 'before', 'after'] as $key) {
             if (array_key_exists($key, $validated)) {
                 $query[$key] = (int) $validated[$key];
             }
+        }
+        if (!empty($validated['order_id'])) {
+            $query['order_id'] = (string) $validated['order_id'];
         }
 
         return $this->passthrough(fn (ShippingServiceClient $c) => $c->getPartnerWebhooks($code, $query));
@@ -166,12 +171,44 @@ class CourierPartnerProxyController extends CoreController
             // Keep a RECORDED order's status fresh — but never CREATE one here (tracking an id we never
             // recorded shouldn't manufacture a row).
             function (array $data) use ($code, $pid): void {
-                \App\Models\PartnerConsoleOrder::where('partner_code', $code)
+                $row = \App\Models\PartnerConsoleOrder::where('partner_code', $code)
                     ->where('provider_order_id', $pid)
-                    ->update([
-                        'last_status'     => $data['status'] ?? null,
-                        'last_tracked_at' => now(),
-                    ]);
+                    ->first();
+                if (!$row) {
+                    return; // deliberately never creates a row
+                }
+                // A refused or empty track used to write last_status = NULL and bump
+                // last_tracked_at — wiping a real status and making the row look freshly
+                // polled. A failure is recorded as a failure; the status only moves on data,
+                // and only forward (the lifecycle guard owns the rules).
+                if (($data['ok'] ?? null) === false) {
+                    $row->forceFill([
+                        'last_error'         => (string) ($data['error'] ?? 'track failed'),
+                        'last_error_payload' => $data,
+                        'last_error_at'      => now(),
+                    ])->save();
+                    return;
+                }
+                $status = trim((string) ($data['status'] ?? ''));
+                if ($status === '') {
+                    return; // Porter's swallowed-429 shape — nothing learned, nothing written
+                }
+                $raw = null;
+                if (is_string($data['exchange']['response']['body'] ?? null)) {
+                    $raw = json_decode($data['exchange']['response']['body'], true);
+                }
+                $mapped = \App\Services\PartnerOrderLifecycle::fromNormalized(
+                    is_array($raw) ? (string) ($raw['status'] ?? $status) : $status,
+                );
+                if ($mapped !== null) {
+                    \App\Services\PartnerOrderLifecycle::apply($row, $mapped, 'track');
+                }
+                $row->forceFill([
+                    'last_status'             => $status,
+                    'latest_tracking_payload' => is_array($raw) ? $raw : null,
+                    'last_tracked_at'         => now(),
+                    'track_failures'          => 0,
+                ])->save();
             }
         );
     }
@@ -211,7 +248,19 @@ class CourierPartnerProxyController extends CoreController
             // A refused simulation must not be stamped: passthrough runs this whenever the HTTP
             // call succeeded, which includes the ok:false partner-refusal envelope.
             function (array $data) use ($request, $code, $pid, $flow): void {
+                $httpStatus = (int) ($data['exchange']['response']['status'] ?? 0);
                 if (($data['ok'] ?? null) === false) {
+                    // A refused flow is still evidence — flow_already_initiated in particular is
+                    // a known condition, not a mystery. Recorded on the row, never stamped as
+                    // running, and never a reason to touch the order's status.
+                    \App\Models\PartnerConsoleOrder::where('partner_code', $code)
+                        ->where('provider_order_id', $pid)
+                        ->update([
+                            'simulation_response'    => json_encode($data),
+                            'simulation_http_status' => $httpStatus,
+                            'last_error'             => (string) ($data['error'] ?? 'flow refused'),
+                            'last_error_at'          => now(),
+                        ]);
                     return;
                 }
                 $stamp = [
@@ -223,7 +272,13 @@ class CourierPartnerProxyController extends CoreController
 
                 \App\Models\PartnerConsoleOrder::where('partner_code', $code)
                     ->where('provider_order_id', $pid)
-                    ->update($stamp + ['simulation_started_by' => optional($request->user())->id]);
+                    ->update($stamp + [
+                        'simulation_started_by'  => optional($request->user())->id,
+                        // Porter answers a successful initiate with a bare {} — recorded as the
+                        // success it is, exactly as received.
+                        'simulation_response'    => json_encode($data),
+                        'simulation_http_status' => $httpStatus,
+                    ]);
             }
         );
     }
@@ -243,20 +298,44 @@ class CourierPartnerProxyController extends CoreController
             function (array $data) use ($request, $code, $body): void {
                 $pid = trim((string) ($data['provider_order_id'] ?? ''));
                 if ($pid === '') {
+                    // The attempt FAILED before a CRN existed. That row is exactly what an
+                    // operator needs when the partner refuses bookings — a ledger that only
+                    // remembers successes cannot answer "why did nothing get created?".
+                    // create(), never updateOrCreate with a null id: Eloquent turns null into
+                    // whereNull and would collapse every failure into one endlessly-rewritten row.
+                    \App\Models\PartnerConsoleOrder::create([
+                        'partner_code'       => $code,
+                        'provider_order_id'  => null,
+                        'origin'             => 'console',
+                        'mode'               => $body['mode'] ?? null,
+                        'cod_amount_paise'   => (int) ($body['cod_amount_paise'] ?? 0),
+                        'request'            => $body,
+                        'response'           => $data,
+                        'last_error'         => (string) ($data['error'] ?? 'booking failed'),
+                        'last_error_payload' => $data,
+                        'last_error_at'      => now(),
+                        'created_by'         => optional($request->user())->id,
+                    ]);
                     return;
                 }
-                \App\Models\PartnerConsoleOrder::updateOrCreate(
+                $row = \App\Models\PartnerConsoleOrder::updateOrCreate(
                     ['partner_code' => $code, 'provider_order_id' => $pid],
                     [
+                        'origin'           => 'console',
                         'mode'             => $body['mode'] ?? null,
                         'cod_amount_paise' => (int) ($body['cod_amount_paise'] ?? 0),
                         'request'          => $body,
                         'response'         => $data,
                         'last_status'      => $data['status'] ?? null,
+                        // The contract's create response carries the partner's tracking page.
+                        'tracking_url'     => $data['tracking_url'] ?? ($data['exchange']['response']['body'] ?? null ? (json_decode((string) $data['exchange']['response']['body'], true)['tracking_url'] ?? null) : null),
                         'last_tracked_at'  => now(),
                         'created_by'       => optional($request->user())->id,
                     ]
                 );
+                // A freshly created Porter order opens at `open` — recorded through the guard so
+                // the ledger's very first status is real, not inferred.
+                \App\Services\PartnerOrderLifecycle::apply($row, 'open', 'create');
             }
         );
     }
@@ -272,7 +351,30 @@ class CourierPartnerProxyController extends CoreController
             'provider_order_id' => (string) $validated['provider_order_id'],
         ]);
 
-        return $this->passthrough(fn (ShippingServiceClient $c) => $c->partnerTestCancel($code, $body));
+        $pid = (string) $validated['provider_order_id'];
+
+        return $this->passthrough(
+            fn (ShippingServiceClient $c) => $c->partnerTestCancel($code, $body),
+            // Cancellation is stamped ONLY on the partner's confirmed success — the mandate's
+            // rule is that cancelled comes from the partner or from a confirmed cancel call,
+            // never from absence, failure, or a guess. A refused cancel records the refusal.
+            function (array $data) use ($code, $pid): void {
+                $row = \App\Models\PartnerConsoleOrder::where('partner_code', $code)
+                    ->where('provider_order_id', $pid)->first();
+                if (!$row) {
+                    return;
+                }
+                if (($data['ok'] ?? null) === false) {
+                    $row->forceFill([
+                        'last_error'         => (string) ($data['error'] ?? 'cancel failed'),
+                        'last_error_payload' => $data,
+                        'last_error_at'      => now(),
+                    ])->save();
+                    return;
+                }
+                \App\Services\PartnerOrderLifecycle::apply($row, 'cancelled', 'cancel');
+            }
+        );
     }
 
     /**
@@ -298,13 +400,24 @@ class CourierPartnerProxyController extends CoreController
             'pickup.lng'       => 'required|numeric',
             'pickup.address'   => 'sometimes|nullable|string|max:500',
             'pickup.pincode'   => 'sometimes|nullable|string|max:16',
+            'pickup.name'      => 'sometimes|nullable|string|max:120',
+            'pickup.phone'     => 'sometimes|nullable|string|max:20',
+            'pickup.city'      => 'sometimes|nullable|string|max:120',
+            'pickup.state'     => 'sometimes|nullable|string|max:120',
+            'pickup.landmark'  => 'sometimes|nullable|string|max:255',
             'drop'             => 'required|array',
             'drop.lat'         => 'required|numeric',
             'drop.lng'         => 'required|numeric',
             'drop.address'     => 'sometimes|nullable|string|max:500',
             'drop.pincode'     => 'sometimes|nullable|string|max:16',
+            'drop.name'        => 'sometimes|nullable|string|max:120',
+            'drop.phone'       => 'sometimes|nullable|string|max:20',
+            'drop.city'        => 'sometimes|nullable|string|max:120',
+            'drop.state'       => 'sometimes|nullable|string|max:120',
+            'drop.landmark'    => 'sometimes|nullable|string|max:255',
             'weight_grams'     => 'sometimes|integer|min:1',
             'cod_amount_paise' => 'sometimes|integer|min:0',
+            'mode'             => 'sometimes|nullable|string|in:instant,same_city,courier',
         ]);
 
         $payload = [
@@ -316,17 +429,30 @@ class CourierPartnerProxyController extends CoreController
                 $payload[$key] = (int) $validated[$key];
             }
         }
+        if (!empty($validated['mode'])) {
+            $payload['mode'] = (string) $validated['mode'];
+        }
         return $payload;
     }
 
     private function leg(array $a): array
     {
-        return [
+        // Porter's create-order contract carries customer/pickup CONTACT detail, and riders use
+        // it to find a gate or call the customer. This used to rebuild the leg as lat/lng/
+        // address/pincode only, silently dropping every name and phone the console form sent —
+        // contradicting the form's own promise that those fields reach the partner.
+        $leg = [
             'lat'     => (float) ($a['lat'] ?? 0),
             'lng'     => (float) ($a['lng'] ?? 0),
             'address' => (string) ($a['address'] ?? ''),
             'pincode' => (string) ($a['pincode'] ?? ''),
         ];
+        foreach (['name', 'phone', 'city', 'state', 'landmark'] as $key) {
+            if (!empty($a[$key])) {
+                $leg[$key] = (string) $a[$key];
+            }
+        }
+        return $leg;
     }
 
     /**

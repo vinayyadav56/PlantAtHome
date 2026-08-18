@@ -34,7 +34,7 @@ final class PartnerConsoleOrderTest extends TestCase
         Schema::create('partner_console_orders', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->string('partner_code', 32)->index();
-            $t->string('provider_order_id', 191);
+            $t->string('provider_order_id', 191)->nullable();
             $t->string('mode', 32)->nullable();
             $t->unsignedBigInteger('cod_amount_paise')->default(0);
             $t->json('request')->nullable();
@@ -44,6 +44,29 @@ final class PartnerConsoleOrderTest extends TestCase
             $t->unsignedBigInteger('created_by')->nullable();
             $t->timestamps();
             $t->unique(['partner_code', 'provider_order_id']);
+            $t->string('origin', 16)->default('console');
+            $t->unsignedBigInteger('shipment_id')->nullable();
+            $t->unsignedBigInteger('order_id')->nullable();
+            $t->string('partner_status', 24)->nullable();
+            $t->string('previous_partner_status', 24)->nullable();
+            $t->timestamp('status_changed_at')->nullable();
+            $t->string('status_source', 16)->nullable();
+            $t->text('tracking_url')->nullable();
+            $t->json('latest_tracking_payload')->nullable();
+            $t->json('simulation_response')->nullable();
+            $t->smallInteger('simulation_http_status')->nullable();
+            $t->string('driver_name', 120)->nullable();
+            $t->string('driver_phone', 32)->nullable();
+            $t->string('vehicle_number', 32)->nullable();
+            $t->text('last_error')->nullable();
+            $t->json('last_error_payload')->nullable();
+            $t->timestamp('last_error_at')->nullable();
+            $t->unsignedTinyInteger('track_failures')->default(0);
+            $t->timestamp('accepted_at')->nullable();
+            $t->timestamp('live_at')->nullable();
+            $t->timestamp('ended_at')->nullable();
+            $t->timestamp('cancelled_at')->nullable();
+            $t->timestamp('reopened_at')->nullable();
         });
     }
 
@@ -90,11 +113,33 @@ final class PartnerConsoleOrderTest extends TestCase
         PartnerConsoleOrder::create(['partner_code' => 'porter', 'provider_order_id' => 'CRN1']);
         PartnerConsoleOrder::create(['partner_code' => 'borzo', 'provider_order_id' => 'B1']);
 
+        // index() now returns the paginator AS AN ARRAY with a first-page summary riding along —
+        // the dashboard's status chips come from the same request as the rows.
         $all = $this->controller()->index(Request::create('/', 'GET'));
-        $this->assertSame(2, $all->total());
+        $this->assertSame(2, $all['total']);
+        $this->assertSame(2, $all['summary']['total']);
 
         $porter = $this->controller()->index(Request::create('/', 'GET', ['partner' => 'porter']));
-        $this->assertSame(1, $porter->total());
-        $this->assertSame('CRN1', $porter->items()[0]->provider_order_id);
+        $this->assertSame(1, $porter['total']);
+        $this->assertSame('CRN1', $porter['data'][0]['provider_order_id']);
+        $this->assertSame(1, $porter['summary']['total'], 'the summary follows the partner filter');
+    }
+
+    public function test_index_filters_by_status_and_crn(): void
+    {
+        PartnerConsoleOrder::create(['partner_code' => 'porter', 'provider_order_id' => 'CRN1', 'partner_status' => 'live']);
+        PartnerConsoleOrder::create(['partner_code' => 'porter', 'provider_order_id' => 'CRN2', 'partner_status' => 'cancelled']);
+        PartnerConsoleOrder::create(['partner_code' => 'porter', 'provider_order_id' => null, 'last_error' => 'refused']);
+
+        $live = $this->controller()->index(Request::create('/', 'GET', ['status' => 'live']));
+        $this->assertSame(1, $live['total']);
+        $this->assertSame('CRN1', $live['data'][0]['provider_order_id']);
+
+        $failed = $this->controller()->index(Request::create('/', 'GET', ['status' => 'failed']));
+        $this->assertSame(1, $failed['total'], 'failed = attempts that never got a CRN');
+
+        $crn = $this->controller()->index(Request::create('/', 'GET', ['crn' => 'CRN2']));
+        $this->assertSame(1, $crn['total']);
+        $this->assertSame(1, $crn['summary']['failed']);
     }
 }

@@ -856,6 +856,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // Partner Orders: every console test/book is recorded (above); list them + manually add a known
     // provider order id (e.g. an existing Porter CRN) so it can be re-tracked. Tracking reuses test/track.
     Route::get('courier/console-orders', [\App\Http\Controllers\PartnerConsoleOrderController::class, 'index']);
+    Route::get('courier/console-orders/{id}', [\App\Http\Controllers\PartnerConsoleOrderController::class, 'show'])->whereNumber('id');
     Route::post('courier/console-orders', [\App\Http\Controllers\PartnerConsoleOrderController::class, 'store'])
         ->middleware('throttle:30,1');
     // Route::get('messages/get-conversations/{shop_id}', [ConversationController::class, 'getConversationByShopId']);

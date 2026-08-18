@@ -84,6 +84,13 @@ class Kernel extends ConsoleKernel
         // creates runs + enqueues jobs (never sends inline), so it's fast.
         $schedule->command('marketing:dispatch-due')->everyMinute()->withoutOverlapping();
 
+        // Partner-order ledger: mirror partner webhooks from the shipping service and keep
+        // /partner-orders' lifecycle state live. Every minute because Porter's UAT simulator
+        // advances a flow every ~60s and its Track API allows one call per order per minute —
+        // any slower and the intermediate states are unobservable, which is exactly the bug
+        // this exists to fix. Bounded per pass; 5-minute mutex expiry per the house rule.
+        $schedule->command('console-orders:reconcile')->everyMinute()->withoutOverlapping(5);
+
         // Batch AI image generation: recover stalled rows / orphaned batches /
         // missed finalize (safety net over the `images` queue worker), and
         // daily retention prune of generated files (audit rows are kept).

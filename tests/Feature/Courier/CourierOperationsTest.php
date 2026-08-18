@@ -76,11 +76,34 @@ final class CourierOperationsTest extends TestCase
         Schema::create('partner_console_orders', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->string('partner_code', 32);
-            $t->string('provider_order_id', 191);
+            $t->string('provider_order_id', 191)->nullable();
             $t->unsignedTinyInteger('simulation_flow_type')->nullable();
             $t->timestamp('simulation_started_at')->nullable();
             $t->unsignedBigInteger('simulation_started_by')->nullable();
             $t->timestamps();
+            $t->string('origin', 16)->default('console');
+            $t->unsignedBigInteger('shipment_id')->nullable();
+            $t->unsignedBigInteger('order_id')->nullable();
+            $t->string('partner_status', 24)->nullable();
+            $t->string('previous_partner_status', 24)->nullable();
+            $t->timestamp('status_changed_at')->nullable();
+            $t->string('status_source', 16)->nullable();
+            $t->text('tracking_url')->nullable();
+            $t->json('latest_tracking_payload')->nullable();
+            $t->json('simulation_response')->nullable();
+            $t->smallInteger('simulation_http_status')->nullable();
+            $t->string('driver_name', 120)->nullable();
+            $t->string('driver_phone', 32)->nullable();
+            $t->string('vehicle_number', 32)->nullable();
+            $t->text('last_error')->nullable();
+            $t->json('last_error_payload')->nullable();
+            $t->timestamp('last_error_at')->nullable();
+            $t->unsignedTinyInteger('track_failures')->default(0);
+            $t->timestamp('accepted_at')->nullable();
+            $t->timestamp('live_at')->nullable();
+            $t->timestamp('ended_at')->nullable();
+            $t->timestamp('cancelled_at')->nullable();
+            $t->timestamp('reopened_at')->nullable();
         });
         Schema::create('shipments', function (Blueprint $t) {
             $t->bigIncrements('id');
