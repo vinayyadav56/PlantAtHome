@@ -22,7 +22,13 @@ class VendorInventoryWriter
     /**
      * @param int   $shopId  the vendor's shop (authoritative — set by the controller)
      * @param array $items   [{product_id|sku, variation_option_id|size, vendor_selling_price, cost_price?, stock_qty?, fulfillment_mode?, moq?, lead_time_days?}]
-     * @param array $opts     ['user_id'=>?, 'period_type'=>'monthly', 'effective_from'=>null, 'effective_to'=>null]
+     * @param array $opts     ['user_id'=>?, 'period_type'=>'monthly', 'effective_from'=>null, 'effective_to'=>null,
+     *                          'skip_existing'=>false]
+     *
+     * skip_existing: attach-only semantics. An identity (shop+product+variant+period) that
+     * already exists is counted as skipped and NEVER updated — the add-from-catalog flow uses
+     * this so an accidental duplicate submit cannot silently overwrite a vendor's live price.
+     * The price-sheet import and my-inventory edits keep the default upsert.
      * @return array{saved:int, skipped:int, errors:array, items:array}
      */
     public function writeItems(int $shopId, array $items, array $opts = []): array
@@ -32,6 +38,7 @@ class VendorInventoryWriter
             'effectiveFrom' => $opts['effective_from'] ?? null,
             'effectiveTo'   => $opts['effective_to'] ?? null,
             'userId'        => $opts['user_id'] ?? null,
+            'skipExisting'  => (bool) ($opts['skip_existing'] ?? false),
         ];
 
         $saved = 0;
@@ -55,8 +62,10 @@ class VendorInventoryWriter
                 $savedRows[] = $res['row'];
             } else {
                 $skipped++;
-                if (count($errors) < 200) {
-                    $errors[] = ['index' => $i, 'error' => $res['error']];
+                // An attach-only skip is the dedupe rule working, not a failure — it carries no
+                // error and must not pollute the error list a vendor reads to fix real rows.
+                if (empty($res['skipped']) && count($errors) < 200) {
+                    $errors[] = ['index' => $i, 'error' => $res['error'] ?? 'skipped'];
                 }
             }
         }
@@ -167,6 +176,11 @@ class VendorInventoryWriter
         ];
         $row = VendorProductPrice::withTrashed()->firstOrNew($keys);
         $isNew = !$row->exists;
+        if (!$isNew && $ctx['skipExisting']) {
+            // Attach-only: this identity is already the vendor's. Touching nothing is the
+            // contract — the row may carry a live price a re-submitted form must not clobber.
+            return ['ok' => false, 'skipped' => true, 'product_id' => (int) $product->id, 'row' => $row];
+        }
         $row->fill($values);
         if ($isNew) {
             $row->created_by_user_id = $ctx['userId'];
@@ -176,8 +190,14 @@ class VendorInventoryWriter
         } catch (\Illuminate\Database\QueryException $e) {
             // With the unique index on (shop, product, variant, period, effective_from), a
             // concurrent insert can win the race. Reload the now-existing row and apply our
-            // values so the attach stays idempotent instead of throwing a duplicate error.
+            // values so the attach stays idempotent instead of throwing a duplicate error —
+            // unless this is an attach-only write, where the loser is a duplicate submit and
+            // must be SKIPPED, not applied over the winner.
             if ($this->isUniqueViolation($e)) {
+                if ($ctx['skipExisting']) {
+                    $row = VendorProductPrice::withTrashed()->where($keys)->firstOrFail();
+                    return ['ok' => false, 'skipped' => true, 'product_id' => (int) $product->id, 'row' => $row];
+                }
                 $row = VendorProductPrice::withTrashed()->where($keys)->firstOrFail();
                 $row->fill($values);
                 $row->save();

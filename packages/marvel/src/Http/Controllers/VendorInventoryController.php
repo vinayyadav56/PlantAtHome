@@ -3,6 +3,7 @@
 namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Maatwebsite\Excel\Facades\Excel;
 use Marvel\Database\Models\PriceImportBatch;
 use Marvel\Database\Models\Product;
@@ -110,6 +111,36 @@ class VendorInventoryController extends CoreController
             $query->whereHas('categories', fn ($c) => $c->where('categories.id', $cid));
         }
 
+        // ── Vendor-specific availability ─────────────────────────────────────────────────
+        // The catalogue this vendor sees is: master variants − variants they already sell.
+        // A product with NOTHING remaining is excluded from the response entirely (a simple
+        // product they already sell counts as fully attached). Server-side by design: the
+        // frontend filtering this used to rely on reset on every refresh and could re-offer
+        // variants the vendor already had.
+        $attached = VendorProductPrice::where('shop_id', $shopId)
+            ->get(['product_id', 'variation_option_id'])
+            ->groupBy('product_id')
+            ->map(fn ($rows) => $rows->pluck('variation_option_id')->all());
+
+        if ($attached->isNotEmpty()) {
+            $attachedProductIds = $attached->keys()->all();
+            $variantCounts = DB::table('variation_options')
+                ->whereIn('product_id', $attachedProductIds)
+                ->selectRaw('product_id, count(*) c')->groupBy('product_id')->pluck('c', 'product_id');
+            $fullyAttached = collect($attachedProductIds)->filter(function ($pid) use ($attached, $variantCounts) {
+                $variantTotal = (int) ($variantCounts[$pid] ?? 0);
+                $attachedIds = collect($attached[$pid]);
+                if ($variantTotal === 0) {
+                    // Simple product: owning the null-variant row means owning the product.
+                    return $attachedIds->contains(null) || $attachedIds->isNotEmpty();
+                }
+                return $attachedIds->filter(fn ($v) => $v !== null)->unique()->count() >= $variantTotal;
+            })->values()->all();
+            if (!empty($fullyAttached)) {
+                $query->whereNotIn('id', $fullyAttached);
+            }
+        }
+
         $select = ['id', 'name', 'slug', 'sku', 'image', 'type_id', 'product_type', 'price', 'status'];
         $page = $query->select($select)->orderBy('name')->paginate($limit);
 
@@ -132,6 +163,12 @@ class VendorInventoryController extends CoreController
             $rows = $mine[$p->id] ?? collect();
             $p->already_attached = $rows->isNotEmpty();
             $p->pending_approval = $p->status !== ProductStatus::PUBLISH;
+            // The variants this vendor can still add: master variants minus theirs. The UI
+            // renders ONLY these, so an already-sold size is never selectable again.
+            $attachedVariantIds = $rows->pluck('variation_option_id')->filter()->all();
+            $p->available_variants = $p->relationLoaded('variation_options')
+                ? $p->variation_options->reject(fn ($v) => in_array($v->id, $attachedVariantIds, true))->values()
+                : collect();
             $p->my_inventory = $rows->map(fn ($r) => [
                 'id'                   => $r->id,
                 'variation_option_id'  => $r->variation_option_id,
@@ -168,7 +205,11 @@ class VendorInventoryController extends CoreController
         ]);
         $shopId = $this->resolveShopId($request);
         $result = (new VendorInventoryWriter())->writeItems($shopId, $request->input('items'), [
-            'user_id' => optional($request->user())->id,
+            'user_id'       => optional($request->user())->id,
+            // Attach-only: adding from the catalogue must never overwrite an identity the vendor
+            // already sells — a duplicate submit is counted as skipped, and the live price stays.
+            // Editing an existing listing happens on My Inventory, which keeps upsert semantics.
+            'skip_existing' => true,
         ]);
         return response()->json($result);
     }

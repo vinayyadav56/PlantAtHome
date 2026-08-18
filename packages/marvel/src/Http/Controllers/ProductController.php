@@ -864,7 +864,14 @@ class ProductController extends CoreController
             $language = $request->language ?? DEFAULT_LANGUAGE;
             $user = $request->user();
             $limit = isset($request->limit) ? $request->limit : 10;
-            $product = $this->repository->where('language', DEFAULT_LANGUAGE)->where('slug', $slug)->orWhere('id', $slug)->firstOrFail();
+            // A param is an ID only when it is fully numeric; anything else is a slug, matched
+            // EXACTLY. The old `->where('slug', $slug)->orWhere('id', $slug)` let MySQL
+            // numerically coerce any digit-prefixed slug — '30-cm-spiral-stick-lucky-bamboo-plant'
+            // casts to 30, so that URL opened product 30 ("Exotic Veg Box") instead of the bamboo,
+            // and 32 catalog slugs start with a size ("30-cm-…", "8-inch-…"). The unparenthesized
+            // orWhere also let the id branch escape the language filter. findBySlugOrId has always
+            // done this correctly — use it.
+            $product = $this->repository->findBySlugOrId($slug);
             if (
                 in_array('variation_options.digital_file', explode(';', $request->with)) || in_array('digital_file', explode(';', $request->with))
             ) {
