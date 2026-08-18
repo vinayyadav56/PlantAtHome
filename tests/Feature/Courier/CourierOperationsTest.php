@@ -71,6 +71,17 @@ final class CourierOperationsTest extends TestCase
             $t->decimal('unit_price')->default(0);
             $t->timestamps();
         });
+        // The simulate-flow proxy stamps both this and the shipment; without the table the
+        // console update throws before the assertion is reached.
+        Schema::create('partner_console_orders', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->string('partner_code', 32);
+            $t->string('provider_order_id', 191);
+            $t->unsignedTinyInteger('simulation_flow_type')->nullable();
+            $t->timestamp('simulation_started_at')->nullable();
+            $t->unsignedBigInteger('simulation_started_by')->nullable();
+            $t->timestamps();
+        });
         Schema::create('shipments', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->unsignedBigInteger('order_id');
@@ -93,6 +104,8 @@ final class CourierOperationsTest extends TestCase
             $t->string('manifest_url')->nullable();
             $t->timestamp('pickup_scheduled_at')->nullable();
             $t->string('pickup_token')->nullable();
+            $t->unsignedTinyInteger('simulation_flow_type')->nullable();
+            $t->timestamp('simulation_started_at')->nullable();
             $t->string('ndr_reason')->nullable();
             $t->unsignedTinyInteger('ndr_attempts')->default(0);
             $t->timestamp('ndr_action_at')->nullable();
@@ -435,6 +448,63 @@ final class CourierOperationsTest extends TestCase
             $ref->invoke(new ShippingServiceClient()),
             'a stored 15s means we hang up 10s before the service can answer',
         );
+    }
+
+    /** A Request whose user() is a super admin — the proxy re-checks SUPER_ADMIN itself. */
+    private function adminRequest(array $body): Request
+    {
+        $request = new Request($body);
+        $request->setUserResolver(fn () => new class {
+            public $id = 1;
+            public function hasPermissionTo($permission): bool
+            {
+                return true;
+            }
+        });
+        return $request;
+    }
+
+    /**
+     * Starting a Porter UAT flow must record WHICH flow, on the shipment.
+     *
+     * The stamp existed but only targeted `partner_console_orders`, and that table only has rows
+     * for orders the Integrations console created. The simulator people use runs on a real
+     * shipment's CRN, so the update matched zero rows every time and the flow was recorded nowhere
+     * durable — which is why a page refresh forgot it and offered "Start" again.
+     */
+    public function test_starting_a_flow_records_it_on_the_shipment(): void
+    {
+        $shipment = $this->shipment([
+            'provider'          => 'porter',
+            'provider_order_id' => 'CRN-SIM-1',
+            'status'            => 'assigned',
+        ]);
+        Http::fake(['*/simulate-flow' => Http::response(['ok' => true], 200)]);
+
+        $req = $this->adminRequest(['provider_order_id' => 'CRN-SIM-1', 'flow_type' => 3]);
+        (new \Marvel\Http\Controllers\CourierPartnerProxyController())->simulateFlow($req, 'porter');
+
+        $fresh = $shipment->fresh();
+        $this->assertSame(3, (int) $fresh->simulation_flow_type, 'the chosen flow was not recorded');
+        $this->assertNotNull($fresh->simulation_started_at);
+    }
+
+    /** A refused simulation must not be recorded as running. */
+    public function test_a_refused_flow_is_not_stamped(): void
+    {
+        $shipment = $this->shipment([
+            'provider'          => 'porter',
+            'provider_order_id' => 'CRN-SIM-2',
+            'status'            => 'assigned',
+        ]);
+        Http::fake(['*/simulate-flow' => Http::response(
+            ['ok' => false, 'error' => 'porter: flow already initiated for this order'], 200,
+        )]);
+
+        $req = $this->adminRequest(['provider_order_id' => 'CRN-SIM-2', 'flow_type' => 3]);
+        (new \Marvel\Http\Controllers\CourierPartnerProxyController())->simulateFlow($req, 'porter');
+
+        $this->assertNull($shipment->fresh()->simulation_flow_type, 'a refused flow was recorded as running');
     }
 
     public function test_a_partner_refusal_is_a_failure_not_an_empty_success(): void

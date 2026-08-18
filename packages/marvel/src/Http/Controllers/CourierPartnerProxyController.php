@@ -199,17 +199,31 @@ class CourierPartnerProxyController extends CoreController
 
         return $this->passthrough(
             fn (ShippingServiceClient $c) => $c->partnerSimulateFlow($code, $pid, $flow),
-            // Stamp the simulation on the console record when one exists. Never CREATE a row: the
-            // CRN being simulated usually belongs to a real shipment, not a console probe, and
+            // Stamp the simulation wherever this CRN actually lives. Never CREATE a console row:
+            // the CRN being simulated usually belongs to a real shipment, not a console probe, and
             // manufacturing a console order for it would put a shipment in the wrong ledger.
+            //
+            // That "usually" was the bug. Both stamps are `where(...)->update(...)`, and for the
+            // simulator people actually use — mounted on an order's shipment panel — there is no
+            // console row, so the console stamp wrote ZERO rows every time. The flow was recorded
+            // nowhere durable, and the browser's in-memory record died on refresh.
+            //
+            // A refused simulation must not be stamped: passthrough runs this whenever the HTTP
+            // call succeeded, which includes the ok:false partner-refusal envelope.
             function (array $data) use ($request, $code, $pid, $flow): void {
+                if (($data['ok'] ?? null) === false) {
+                    return;
+                }
+                $stamp = [
+                    'simulation_flow_type'  => $flow,
+                    'simulation_started_at' => now(),
+                ];
+
+                \Marvel\Database\Models\Shipment::where('provider_order_id', $pid)->update($stamp);
+
                 \App\Models\PartnerConsoleOrder::where('partner_code', $code)
                     ->where('provider_order_id', $pid)
-                    ->update([
-                        'simulation_flow_type'   => $flow,
-                        'simulation_started_at'  => now(),
-                        'simulation_started_by'  => optional($request->user())->id,
-                    ]);
+                    ->update($stamp + ['simulation_started_by' => optional($request->user())->id]);
             }
         );
     }

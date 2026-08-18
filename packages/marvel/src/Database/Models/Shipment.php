@@ -22,6 +22,11 @@ class Shipment extends Model
         'shipped_at'           => 'datetime',
         'delivered_at'         => 'datetime',
         'last_status_at'       => 'datetime',
+        // Which Porter UAT flow is running on this shipment, and since when. The simulator reads
+        // these back to restore itself after a page refresh — the flow used to live only in a
+        // module-level Map in the browser.
+        'simulation_flow_type'  => 'integer',
+        'simulation_started_at' => 'datetime',
     ];
 
     /**
