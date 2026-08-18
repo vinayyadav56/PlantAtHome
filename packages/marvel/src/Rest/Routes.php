@@ -490,8 +490,10 @@ Route::group(['middleware' => ['auth:sanctum', 'can:' . Permission::CUSTOMER, 'e
     Route::put('me/contacts', [ContactController::class, 'updateContacts']);
     Route::post('me/email-otp/send', [ContactController::class, 'sendEmailOtp'])->middleware('throttle:6,1');
     Route::post('me/email-otp/verify', [ContactController::class, 'verifyEmailOtp'])->middleware('throttle:10,1');
-    // Register this device's Expo push token for order/delivery push notifications.
+    // Register this device's Expo push token for order/delivery push notifications, and release
+    // it on sign-out so the previous account stops being reachable on a device it no longer owns.
     Route::post('device-tokens', [\App\Http\Controllers\DeviceTokenController::class, 'store'])->middleware('throttle:30,1');
+    Route::delete('device-tokens', [\App\Http\Controllers\DeviceTokenController::class, 'destroy'])->middleware('throttle:30,1');
     Route::apiResource('orders', OrderController::class, [
         'only' => ['index'],
     ]);
