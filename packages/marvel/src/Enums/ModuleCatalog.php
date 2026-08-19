@@ -63,6 +63,10 @@ final class ModuleCatalog
             ],
             'settings' => [
                 'settings'      => array_merge(self::CRUD, ['edit']),
+                // Test-data cleanup is destructive, so it is its OWN permission rather than
+                // riding on settings.edit — it can be granted to nobody without taking away
+                // ordinary settings access.
+                'testdata'      => ['view', 'cleanup'],
                 'cities'        => self::CRUD,
                 'states'        => self::CRUD,
                 'delivery'      => ['view', 'edit'],

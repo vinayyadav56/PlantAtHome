@@ -71,6 +71,7 @@ use Marvel\Http\Controllers\ProductContentBatchController;
 use Marvel\Http\Controllers\LocationCaptureController;
 use Marvel\Http\Controllers\InventoryReviewController;
 use Marvel\Http\Controllers\PlantTaxonomyController;
+use Marvel\Http\Controllers\TestDataCleanupController;
 use Marvel\Http\Controllers\VendorInventoryController;
 use Marvel\Http\Controllers\SettlementController;
 use Marvel\Http\Controllers\ReportController;
@@ -823,6 +824,16 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
 });
 
 Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sanctum']], function () {
+    // Test Data Management: preview / execute / restore module cleanups + baseline re-seed.
+    // Every guarantee (protected-table deny list, snapshot, transaction, launch guard) lives
+    // in the services — these routes only authorise and delegate.
+    Route::get('test-data/modules', [TestDataCleanupController::class, 'index']);
+    Route::post('test-data/preview', [TestDataCleanupController::class, 'preview']);
+    Route::post('test-data/execute', [TestDataCleanupController::class, 'execute']);
+    Route::get('test-data/runs', [TestDataCleanupController::class, 'runs']);
+    Route::post('test-data/runs/{id}/restore', [TestDataCleanupController::class, 'restore'])->whereNumber('id');
+    Route::post('test-data/seed-baseline', [TestDataCleanupController::class, 'seedBaseline']);
+
     // Catalog taxonomy (admin-owned): attribute definitions + terms, dynamic collections,
     // plant varieties, product term assignment.
     Route::post('plant-attributes', [PlantTaxonomyController::class, 'storeDefinition']);
