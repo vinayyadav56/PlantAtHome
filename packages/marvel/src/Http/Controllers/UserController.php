@@ -962,7 +962,11 @@ class UserController extends CoreController
     protected function getOtpGateway($channel = null)
     {
         $gateway = $this->resolveOtpGatewayName($channel);
-        $gateWayClass = "Marvel\\Otp\\Gateways\\" . ucfirst($gateway) . 'Gateway';
+        $gateWayClass = "Marvel\\Otp\\Gateways\\" . ucfirst((string) $gateway) . 'Gateway';
+        if (!$gateway || !class_exists($gateWayClass)) {
+            // e.g. ACTIVE_OTP_GATEWAY empty ⇒ "…\Gateways\Gateway", which does not exist.
+            throw new \RuntimeException("OTP gateway '{$gateway}' is not configured.");
+        }
         return new OtpGateway(new $gateWayClass());
     }
 
@@ -1054,6 +1058,21 @@ class UserController extends CoreController
             ];
         } catch (MarvelException $e) {
             throw new MarvelException(INVALID_GATEWAY);
+        } catch (\Throwable $e) {
+            // A provider SDK that is unconfigured (or a gateway name that resolves to no class)
+            // throws a plain Error/Exception, which used to escape as a bare HTTP 500 on a
+            // public auth endpoint — no code for the client to branch on, and nothing telling
+            // an operator which provider is misconfigured. Answer with the same structured
+            // failure the provider-refused path uses, and log the detail server-side.
+            Log::error('otp.gateway_error', [
+                'provider' => $gatewayName ?? 'unresolved',
+                'error'    => $e->getMessage(),
+            ]);
+            return response()->json([
+                'message' => OTP_SEND_FAIL,
+                'success' => false,
+                'code'    => 'OTP_GATEWAY_UNAVAILABLE',
+            ], 503);
         }
     }
 
