@@ -44,6 +44,7 @@ on:
           - sku-gen
           - recompute-availability
           - cities-seed
+          - taxonomy-seed
           - company-address
           - v2-backfill-dry
           - v2-backfill
@@ -89,7 +90,7 @@ jobs:
             img-limit10)   ARGS="plantathome:repair-plant-images --limit=10" ;;
             img-full)      ARGS="plantathome:repair-plant-images" ;;
             img-rollback)  ARGS="plantathome:repair-plant-images --rollback" ;;
-            cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
+            cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             *) echo "Unknown mode"; exit 1 ;;
@@ -192,6 +193,22 @@ jobs:
                 php artisan marvel:recompute-city-availability
                 php artisan cache:clear 2>/dev/null || true
                 echo "==> RECOMPUTE-AVAILABILITY COMPLETE"
+                ;;
+
+              taxonomy-seed)
+                echo "==> Ensuring latest code on EC2..."
+                git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || true
+                echo "==> Re-syncing marvel path package + autoloader (new seeders)..."
+                composer reinstall marvel/shop --no-interaction 2>&1 | tail -3 || true
+                composer dump-autoload -o 2>/dev/null || true
+                echo "==> Plant taxonomy: attributes, category restructure (in place), collections."
+                echo "    Idempotent; categories are matched BY SLUG so URLs and product links survive,"
+                echo "    and characteristic-categories are folded onto the plants themselves."
+                php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAttributeDefinitionSeeder" --force
+                php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantTaxonomySeeder" --force
+                php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantCollectionSeeder" --force
+                php artisan cache:clear 2>/dev/null || true
+                echo "==> TAXONOMY-SEED COMPLETE"
                 ;;
 
               cities-seed)
