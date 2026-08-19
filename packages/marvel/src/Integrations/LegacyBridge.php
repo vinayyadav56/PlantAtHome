@@ -49,8 +49,10 @@ class LegacyBridge
                 default      => '',
             },
             'whatsapp' => match ($field) {
-                'access_token' => config('services.whatsapp.access_token') ?? env('WHATSAPP_ACCESS_TOKEN'),
-                default        => '',
+                'access_token'         => config('services.whatsapp.access_token') ?? env('WHATSAPP_ACCESS_TOKEN'),
+                'app_secret'           => config('services.whatsapp.app_secret') ?? env('WHATSAPP_APP_SECRET'),
+                'webhook_verify_token' => config('services.whatsapp.webhook_verify_token') ?? env('WHATSAPP_WEBHOOK_VERIFY_TOKEN'),
+                default                => '',
             },
             'sendgrid' => match ($field) {
                 'api_key' => env('SENDGRID_API_KEY'),

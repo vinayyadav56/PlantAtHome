@@ -103,6 +103,7 @@ class ConnectionTester
             'anthropic' => $this->testAnthropic(),
             'sendgrid'  => $this->testBearer('https://api.sendgrid.com/v3/scopes', $this->integrations->secret('sendgrid', 'api_key')),
             'google_maps' => $this->testGoogleMaps(),
+            'whatsapp'  => $this->testWhatsapp(),
             default => $this->result(
                 IntegrationProvider::HEALTH_UNKNOWN,
                 false,
@@ -327,5 +328,43 @@ class ConnectionTester
     private function result(string $status, bool $ok, string $message, array $detail = []): array
     {
         return ['status' => $status, 'ok' => $ok, 'message' => $message, 'detail' => $detail];
+    }
+
+    /**
+     * Read-only WhatsApp probe: fetch the phone number's own record. Verifies the token, the
+     * phone-number id and that the number is registered — the three things that break sends —
+     * without messaging anyone.
+     */
+    private function testWhatsapp(): array
+    {
+        $token = $this->integrations->secret('whatsapp', 'access_token') ?: config('services.whatsapp.access_token');
+        $phoneId = $this->integrations->config('whatsapp', 'phone_number_id') ?: config('services.whatsapp.phone_number_id');
+        $version = $this->integrations->config('whatsapp', 'api_version') ?: (config('services.whatsapp.api_version') ?: 'v21.0');
+
+        if (!$token || !$phoneId) {
+            return $this->result(IntegrationProvider::HEALTH_FAILING, false,
+                'Add both the access token and the Phone Number ID, then test again.');
+        }
+
+        try {
+            $res = \Illuminate\Support\Facades\Http::withToken($token)->timeout(8)
+                ->get("https://graph.facebook.com/{$version}/{$phoneId}", [
+                    'fields' => 'display_phone_number,verified_name,quality_rating,code_verification_status',
+                ]);
+            $body = $res->json() ?? [];
+
+            if ($res->successful()) {
+                $name = $body['verified_name'] ?? 'unnamed';
+                $number = $body['display_phone_number'] ?? $phoneId;
+                $quality = $body['quality_rating'] ?? 'unknown';
+                return $this->result(IntegrationProvider::HEALTH_CONNECTED, true,
+                    "Connected to {$number} ({$name}); quality rating {$quality}.", $body);
+            }
+            // Meta's own words are far more useful than a generic failure.
+            $msg = $body['error']['message'] ?? 'Meta rejected the request.';
+            return $this->result(IntegrationProvider::HEALTH_FAILING, false, $msg, $body);
+        } catch (\Throwable $e) {
+            return $this->result(IntegrationProvider::HEALTH_FAILING, false, $e->getMessage());
+        }
     }
 }

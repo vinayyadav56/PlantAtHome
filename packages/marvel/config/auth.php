@@ -134,6 +134,13 @@ return [
     | Gateway used when a client explicitly requests the "sms" channel (so an app can
     | offer both an SMS button and a WhatsApp button regardless of the global default).
     */
+    /*
+     | Gateway for TRANSACTIONAL notifications (order updates), independent of the login-OTP
+     | gateway above. Lets order updates go out on WhatsApp while login codes stay on SMS
+     | (or vice versa). Unset => falls back to active_otp_gateway, i.e. previous behaviour.
+     */
+    'notify_gateway' => env('NOTIFY_GATEWAY'),
+
     'sms_otp_gateway' => env('SMS_OTP_GATEWAY', 'msg91'),
 
 ];

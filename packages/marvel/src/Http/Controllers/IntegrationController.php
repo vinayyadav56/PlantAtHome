@@ -219,6 +219,19 @@ class IntegrationController extends CoreController
      */
     private function webhook(ProviderDefinition $def): ?array
     {
+        // WhatsApp posts to OUR api directly (not through the shipping service), and its panel
+        // answers a different question — the callback URL + verify token to paste into Meta.
+        if ($def->slug === 'whatsapp') {
+            $base = rtrim((string) config('app.url'), '/');
+            return [
+                'url'         => $base === '' ? null : "{$base}/api/webhooks/whatsapp",
+                'secret_set'  => $this->integrations->credentialsSet('whatsapp')['webhook_verify_token'] ?? false,
+                'auth_header' => 'X-Hub-Signature-256',
+                'token_field' => 'webhook_verify_token',
+                'note' => 'Optional. Register in Meta → your app → WhatsApp → Configuration, subscribing to "messages". Without it OTP and order updates still send; you simply do not receive delivery receipts or customer replies.',
+            ];
+        }
+
         // Only the delivery partners post status callbacks to us today.
         $tokenField = match ($def->slug) {
             'porter'     => 'webhook_token',

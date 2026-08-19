@@ -21,6 +21,9 @@ trait SmsTrait
         try {
             $order = $smsArray['order'];
             $smsGateway = $this->getOtpGateway();
+            if (!$smsGateway) {
+                return; // no messaging provider configured — not an error, just nothing to send
+            }
             $userType = $this->getWhichUserWillGetSms($smsArray['smsEventName'], $smsArray['language']);
             if ($userType['customer'] == true) {
                 $smsGateway->sendSms($order->customer_contact, $smsArray['customerMessage']);
@@ -54,6 +57,9 @@ trait SmsTrait
         try {
             $order = $smsArray['order'];
             $smsGateway = $this->getOtpGateway();
+            if (!$smsGateway) {
+                return; // no messaging provider configured — not an error, just nothing to send
+            }
             $userType = $this->getWhichUserWillGetSms($smsArray['smsEventName'], $smsArray['language']);
 
             if ($userType['customer'] && $order->parent_id == null) {
@@ -109,8 +115,19 @@ trait SmsTrait
      */
     protected function getOtpGateway()
     {
-        $gateway = config('auth.active_otp_gateway');
+        // Transactional notifications (order updates) and login OTP are different jobs and can
+        // sensibly use different providers: WhatsApp for order updates a customer keeps, SMS for
+        // the login code. This used to read `active_otp_gateway` only, so the two were welded
+        // together — switching order updates to WhatsApp also switched login, and vice versa.
+        // `auth.notify_gateway` decouples them and falls back to the old behaviour when unset.
+        $gateway = config('auth.notify_gateway') ?: config('auth.active_otp_gateway');
         $gateWayClass = "Marvel\\Otp\\Gateways\\" . ucfirst($gateway) . 'Gateway';
+        if (!class_exists($gateWayClass)) {
+            // A misconfigured provider must never break order processing — the notification is
+            // skipped and the order flow continues.
+            \Illuminate\Support\Facades\Log::warning('notification gateway missing', ['gateway' => $gateway]);
+            return null;
+        }
         return new OtpGateway(new $gateWayClass());
     }
 
