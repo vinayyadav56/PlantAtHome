@@ -166,6 +166,13 @@ class ItemAssignmentService
         foreach ($vendors as $v) {
             $shopId = (int) $v['shop_id'];
 
+            // Hard filter 0 — review. vendorsForProduct is deliberately unfiltered (the
+            // admin supply panel shows pending rows with a badge), so LIVE assignment must
+            // drop anything an admin has not approved.
+            if (($v['review_status'] ?? 'approved') !== 'approved') {
+                continue;
+            }
+
             // Hard filter 1 — inventory. An untracked row (track_stock = false) is always
             // sellable; a tracked row must have enough free stock for this line's quantity.
             $stockQty = (int) ($v['stock_qty'] ?? 0);

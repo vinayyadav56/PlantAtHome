@@ -116,7 +116,8 @@ class PricingService
     private function availableRowsQuery(int $productId, ?int $variationOptionId)
     {
         $today = Carbon::today()->toDateString();
-        $query = VendorProductPrice::where('product_id', $productId)
+        // approved(): unreviewed vendor offers must never price anything a customer sees.
+        $query = VendorProductPrice::approved()->where('product_id', $productId)
             ->where(fn ($q) => $q->whereNull('effective_from')->orWhere('effective_from', '<=', $today))
             ->where(fn ($q) => $q->whereNull('effective_to')->orWhere('effective_to', '>=', $today))
             ->where('is_available', true)
@@ -139,7 +140,11 @@ class PricingService
     public function nearestCost(int $productId, ?int $variationOptionId, ?array $latLng = null): ?VendorProductPrice
     {
         $today = Carbon::today()->toDateString();
-        $query = VendorProductPrice::where('product_id', $productId)
+        // approved() here too: a product whose ONLY mapping is an unreviewed row must behave
+        // exactly as if that row does not exist (its pre-attach state: master-catalog price in
+        // serviceable-unmapped cities, which is admin-vetted) — not flip to "available in 6h"
+        // on the strength of an offer no admin has seen.
+        $query = VendorProductPrice::approved()->where('product_id', $productId)
             ->where(fn ($q) => $q->whereNull('effective_from')->orWhere('effective_from', '<=', $today))
             ->where(fn ($q) => $q->whereNull('effective_to')->orWhere('effective_to', '>=', $today));
 

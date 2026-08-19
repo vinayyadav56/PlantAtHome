@@ -69,6 +69,7 @@ use Marvel\Http\Controllers\ImageBatchController;
 use Marvel\Http\Controllers\LoraModelController;
 use Marvel\Http\Controllers\ProductContentBatchController;
 use Marvel\Http\Controllers\LocationCaptureController;
+use Marvel\Http\Controllers\InventoryReviewController;
 use Marvel\Http\Controllers\VendorInventoryController;
 use Marvel\Http\Controllers\SettlementController;
 use Marvel\Http\Controllers\ReportController;
@@ -819,6 +820,12 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
 });
 
 Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sanctum']], function () {
+    // Vendor-inventory review pipeline: nothing a vendor submits goes live without an
+    // explicit admin decision recorded here.
+    Route::get('admin/inventory-reviews', [InventoryReviewController::class, 'index']);
+    Route::get('admin/inventory-reviews/{id}', [InventoryReviewController::class, 'show'])->whereNumber('id');
+    Route::post('admin/inventory-reviews/bulk', [InventoryReviewController::class, 'bulk']);
+    Route::post('admin/inventory-reviews/{id}/action', [InventoryReviewController::class, 'action'])->whereNumber('id');
     // Courier / shipping-microservice config: master switch + default package + per-partner
     // (Borzo / Shiprocket / Go shipping-service) enable + non-secret settings + ENCRYPTED
     // credentials. GET returns masked status (never secret values); POST encrypt-saves.

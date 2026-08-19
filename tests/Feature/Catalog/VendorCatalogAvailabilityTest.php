@@ -34,6 +34,7 @@ final class VendorCatalogAvailabilityTest extends TestCase
             ],
         ]);
         DB::purge('sqlite');
+        \Marvel\Database\Models\VendorProductPrice::resetReviewStatics();
 
         Schema::create('products', function (Blueprint $t) {
             $t->bigIncrements('id');
@@ -83,6 +84,12 @@ final class VendorCatalogAvailabilityTest extends TestCase
             $t->string('fulfillment_mode')->nullable();
             $t->string('source')->nullable();
             $t->unsignedBigInteger('updated_by_user_id')->nullable();
+            $t->string('review_status')->default('approved');
+            $t->text('review_comment')->nullable();
+            $t->unsignedBigInteger('reviewed_by_user_id')->nullable();
+            $t->timestamp('reviewed_at')->nullable();
+            $t->timestamp('submitted_at')->nullable();
+            $t->timestamp('approved_at')->nullable();
             $t->integer('moq')->nullable();
             $t->integer('lead_time_days')->nullable();
             $t->unsignedBigInteger('created_by_user_id')->nullable();

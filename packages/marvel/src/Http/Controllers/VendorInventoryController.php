@@ -30,6 +30,9 @@ class VendorInventoryController extends CoreController
         $user = $request->user();
         $shops = $user ? $user->shops : collect();
         $isAdmin = $user && $user->hasPermissionTo(Permission::SUPER_ADMIN);
+        // Review-pipeline actor context: a super-admin editing on a vendor's behalf writes
+        // as admin (their rows stay approved); vendors' writes enter the review queue.
+        VendorProductPrice::actAsAdminIf($user);
 
         if ($request->filled('shop_id')) {
             $requested = (int) $request->input('shop_id');
@@ -227,7 +230,42 @@ class VendorInventoryController extends CoreController
             // Editing an existing listing happens on My Inventory, which keeps upsert semantics.
             'skip_existing' => true,
         ]);
+        // One in-app + email notification per submission batch (not per row — a 20-size
+        // attach must not fire 20 bells). Vendor-actor rows enter the queue as pending.
+        if (($result['saved'] ?? 0) > 0 && !\Marvel\Database\Models\VendorProductPrice::$adminActor) {
+            $this->notifySubmitted($request, $shopId, (int) $result['saved']);
+        }
+        $result['review'] = \Marvel\Database\Models\VendorProductPrice::$adminActor ? 'approved' : 'pending_review';
         return response()->json($result);
+    }
+
+    /** Best-effort "submitted for review" notification — never fails the write. */
+    private function notifySubmitted(Request $request, int $shopId, int $count): void
+    {
+        try {
+            $shop = \Marvel\Database\Models\Shop::find($shopId);
+            if (!$shop?->owner_id) {
+                return;
+            }
+            \Marvel\Database\Models\NotifyLogs::create([
+                'receiver'             => $shop->owner_id,
+                'sender'               => optional($request->user())->id,
+                'notify_type'          => 'inventory_review',
+                'notify_receiver_type' => 'vendor',
+                'is_read'              => false,
+                'notify_tracker'       => 'submitted',
+                'notify_text'          => "{$count} inventory item(s) submitted for review. They stay hidden from customers until an admin approves them.",
+            ]);
+            $email = \Illuminate\Support\Facades\DB::table('users')->where('id', $shop->owner_id)->value('email');
+            if ($email && class_exists(\Marvel\Services\EmailService::class)) {
+                app(\Marvel\Services\EmailService::class)->send('vendor-inventory-submitted', $email, [
+                    'vendor_name'  => $shop->name,
+                    'product_name' => "{$count} item(s)",
+                ]);
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('inventory submit notify failed', ['shop' => $shopId, 'error' => $e->getMessage()]);
+        }
     }
 
     /** GET /vendor/inventory — the caller's attached rows. */

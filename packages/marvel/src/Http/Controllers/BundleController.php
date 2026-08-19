@@ -262,7 +262,9 @@ class BundleController extends CoreController
         $today = Carbon::today()->toDateString();
 
         // Cheapest available vendor cost per product (effective today).
-        $costSub = VendorProductPrice::query()
+        // approved() must match BundlePricingService's roll-up or the builder's cost
+        // column disagrees with the saved breakdown.
+        $costSub = VendorProductPrice::approved()
             ->select('product_id', DB::raw('MIN(cost_price) as min_cost'))
             ->where('is_available', true)
             ->where('cost_price', '>', 0)

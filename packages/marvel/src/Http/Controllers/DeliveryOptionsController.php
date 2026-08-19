@@ -139,6 +139,10 @@ class DeliveryOptionsController extends CoreController
                 DB::table('vendor_product_prices')
                     ->where('product_id', $productId)
                     ->where('is_available', true)
+                    // Raw query — the Eloquent approved() scope does not apply here, and
+                    // soft-deleted rows were never excluded on this path either.
+                    ->where('review_status', 'approved')
+                    ->whereNull('deleted_at')
                     ->select('shop_id')
             ))
             ->get();
@@ -313,6 +317,8 @@ class DeliveryOptionsController extends CoreController
         try {
             $w = (int) DB::table('vendor_product_prices')
                 ->where('product_id', $productId)
+                ->where('review_status', 'approved')
+                ->whereNull('deleted_at')
                 ->whereNotNull('weight')
                 ->where('weight', '>', 0)
                 ->max('weight');

@@ -18,6 +18,9 @@ class PriceSheetController extends CoreController
     /** Admin: import a vendor price sheet (.xlsx/.csv). */
     public function import(Request $request)
     {
+        // Admin-gated route: price-sheet rows are the admin-vetted catalogue and are
+        // auto-approved by the review pipeline.
+        \Marvel\Database\Models\VendorProductPrice::$adminActor = true;
         $request->validate([
             'shop_id'     => 'required|integer|exists:Marvel\Database\Models\Shop,id',
             'period_type' => 'nullable|in:weekly,monthly',

@@ -84,7 +84,7 @@ class BundlePricingService
             return 0.0;
         }
 
-        $costByProduct = VendorProductPrice::query()
+        $costByProduct = VendorProductPrice::approved()
             ->select('product_id', DB::raw('MIN(cost_price) as min_cost'))
             ->whereIn('product_id', $ids)
             ->where('is_available', true)

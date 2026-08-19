@@ -96,6 +96,10 @@ class AvailabilityService
                 'shop_id'                 => $r->shop_id,
                 'vendor_product_price_id' => $r->id,
                 'vendor_name'             => optional($r->shop)->name,
+                // Deliberately unfiltered here: the admin supply panel must SEE pending
+                // rows (with a badge). Live order assignment hard-filters on this field
+                // in ItemAssignmentService::candidatesFor.
+                'review_status'           => $r->review_status ?? 'approved',
                 'variation_option_id'     => $r->variation_option_id,
                 'cost_price'           => (float) $r->cost_price,
                 'vendor_selling_price' => $r->vendor_selling_price !== null ? (float) $r->vendor_selling_price : null,
@@ -145,7 +149,7 @@ class AvailabilityService
             // builds, and the second query is a single indexed IN.
             $pairs = $this->effective(
                 $this->excludeHeldVendors(
-                    VendorProductPrice::whereIn('product_id', $productIds)
+                    VendorProductPrice::approved()->whereIn('product_id', $productIds)
                         ->whereIn('shop_id', $shopIds)
                         ->where('is_available', true)
                 )
@@ -180,7 +184,7 @@ class AvailabilityService
         // stock (stock_qty - reserved_qty <= 0) is out of stock and excluded.
         $rows = $this->effective(
             $this->excludeHeldVendors(
-                VendorProductPrice::where('product_id', $productId)
+                VendorProductPrice::approved()->where('product_id', $productId)
                     ->where('is_available', true)
                     ->where(fn ($q) => $q->where('vendor_selling_price', '>', 0)->orWhere('cost_price', '>', 0))
                     ->where(fn ($q) => $q->where('track_stock', false)->orWhereRaw('(stock_qty - reserved_qty) > 0'))

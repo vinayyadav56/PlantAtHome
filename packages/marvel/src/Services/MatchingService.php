@@ -161,7 +161,7 @@ class MatchingService
         if (empty($productIds)) {
             return [];
         }
-        return VendorProductPrice::whereIn('product_id', $productIds)
+        return VendorProductPrice::approved()->whereIn('product_id', $productIds)
             ->where('is_available', true)
             ->where('cost_price', '>', 0)
             ->distinct()
@@ -184,7 +184,7 @@ class MatchingService
         if (empty($productIds)) {
             return [];
         }
-        $rows = VendorProductPrice::whereIn('product_id', $productIds)
+        $rows = VendorProductPrice::approved()->whereIn('product_id', $productIds)
             ->where('is_available', true)
             ->get(['shop_id', 'product_id', 'vendor_selling_price', 'cost_price']);
 

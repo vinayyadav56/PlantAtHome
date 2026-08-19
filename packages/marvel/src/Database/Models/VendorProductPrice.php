@@ -5,6 +5,7 @@ namespace Marvel\Database\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\SoftDeletes;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * A vendor's (shop's) cost for a product / size, for a time window. cost_price is
@@ -18,6 +19,77 @@ class VendorProductPrice extends Model
     protected $table = 'vendor_product_prices';
 
     public $guarded = [];
+
+    public const REVIEW_DRAFT    = 'draft';
+    public const REVIEW_PENDING  = 'pending_review';
+    public const REVIEW_APPROVED = 'approved';
+    public const REVIEW_REJECTED = 'rejected';
+    public const REVIEW_CHANGES  = 'changes_requested';
+
+    public const REVIEW_STATUSES = [
+        self::REVIEW_DRAFT,
+        self::REVIEW_PENDING,
+        self::REVIEW_APPROVED,
+        self::REVIEW_REJECTED,
+        self::REVIEW_CHANGES,
+    ];
+
+    /**
+     * A change to any of these on an APPROVED row invalidates the approval: the admin
+     * signed off on THIS offer, and a new price / delivery mode / variant identity is a
+     * different offer. Deliberately excludes stock_qty / track_stock / is_available —
+     * vendors adjust those daily and de-listing on every stock update would make the
+     * pipeline unusable (owner decision).
+     */
+    public const MATERIAL_FIELDS = ['vendor_selling_price', 'fulfillment_mode', 'variation_option_id'];
+
+    /**
+     * Request-scoped actor flag. Admin-owned write paths (price-sheet import, admin
+     * manual rows, super-admins editing on a vendor's behalf) set this true so their
+     * writes are auto-approved; everything else is a vendor submission and enters the
+     * review queue. The review controller's own status writes go through the query
+     * builder, which skips model events entirely.
+     */
+    public static bool $adminActor = false;
+
+    /**
+     * Pending audit transitions keyed by spl_object_id. NEVER stored on the model —
+     * Eloquent's magic __set would turn a loose property into an attribute and ship
+     * it in the INSERT as a nonexistent column.
+     */
+    private static array $pendingTransitions = [];
+
+    /**
+     * Cached column presence. PUBLIC and resettable on purpose: phpunit runs every
+     * stub-schema test file in one process, and each file re-creates the table with or
+     * without the review columns — a stale cache would either skip the hook or write a
+     * nonexistent column. Test setUp() calls resetReviewStatics().
+     */
+    public static ?bool $hasReviewColumn = null;
+
+    /** Reset request/process-scoped review state (tests + long-running workers). */
+    public static function resetReviewStatics(): void
+    {
+        static::$hasReviewColumn = null;
+        static::$adminActor = false;
+        static::$pendingTransitions = [];
+    }
+
+    /** Set the actor flag from the acting user (super-admins write as admin). */
+    public static function actAsAdminIf($user): void
+    {
+        try {
+            static::$adminActor = (bool) ($user && $user->hasPermissionTo('super_admin'));
+        } catch (\Throwable) {
+            static::$adminActor = false;
+        }
+    }
+
+    /** Customer-facing predicate: only admin-approved rows may price or list anything. */
+    public function scopeApproved($query)
+    {
+        return $query->where('vendor_product_prices.review_status', self::REVIEW_APPROVED);
+    }
 
     protected $casts = [
         'cost_price'           => 'float',
@@ -53,6 +125,87 @@ class VendorProductPrice extends Model
                 (string) ($row->period_type ?? ''),
                 $from,
             ]);
+        });
+
+        // ── Review-state machine ─────────────────────────────────────────────────────
+        // ONE transition point for every write path (VendorInventoryWriter, the vendor
+        // updateInventory fill-and-save, and the Excel import's direct upsert) — a hook
+        // that lived only in the writer missed two of the three and left bypasses.
+        static::saving(function (VendorProductPrice $row) {
+            if (static::$hasReviewColumn === null) {
+                static::$hasReviewColumn = Schema::hasColumn($row->getTable(), 'review_status');
+            }
+            if (!static::$hasReviewColumn) {
+                return; // stub schemas in old tests
+            }
+
+            $vendorActor = !static::$adminActor
+                && ($row->source === 'vendor' || $row->created_by_user_id || $row->updated_by_user_id);
+
+            if (!$row->exists) {
+                if ($row->review_status === null || !in_array($row->review_status, self::REVIEW_STATUSES, true)) {
+                    $row->review_status = $vendorActor ? self::REVIEW_PENDING : self::REVIEW_APPROVED;
+                }
+                if ($row->review_status === self::REVIEW_PENDING) {
+                    $row->submitted_at = $row->submitted_at ?? now();
+                    self::$pendingTransitions[spl_object_id($row)] = [null, self::REVIEW_PENDING, 'submitted'];
+                } elseif ($row->review_status === self::REVIEW_APPROVED) {
+                    $row->approved_at = $row->approved_at ?? now();
+                    self::$pendingTransitions[spl_object_id($row)] = [null, self::REVIEW_APPROVED, 'approved'];
+                }
+                return;
+            }
+
+            if (!$vendorActor) {
+                return; // admin/system edits never demote their own approvals here
+            }
+
+            $prev = $row->getOriginal('review_status') ?? self::REVIEW_APPROVED;
+
+            // Restoring a soft-deleted row is a material change: delete + re-add must not
+            // resurrect a stale approval.
+            $restored = $row->isDirty('deleted_at') && $row->deleted_at === null
+                && $row->getOriginal('deleted_at') !== null;
+
+            if ($prev === self::REVIEW_APPROVED && ($restored || $row->isDirty(self::MATERIAL_FIELDS))) {
+                $row->review_status = self::REVIEW_PENDING;
+                $row->submitted_at  = now();
+                self::$pendingTransitions[spl_object_id($row)] = [$prev, self::REVIEW_PENDING, 'material_change'];
+                return;
+            }
+
+            // Any vendor edit to a rejected / changes-requested row is the resubmission.
+            if (in_array($prev, [self::REVIEW_REJECTED, self::REVIEW_CHANGES], true)
+                && $row->isDirty() && !$row->isDirty('review_status')) {
+                $row->review_status = self::REVIEW_PENDING;
+                $row->submitted_at  = now();
+                self::$pendingTransitions[spl_object_id($row)] = [$prev, self::REVIEW_PENDING, 'resubmitted'];
+            }
+        });
+
+        // Audit AFTER the row exists (new rows have no id at saving-time).
+        static::saved(function (VendorProductPrice $row) {
+            $key = spl_object_id($row);
+            if (!isset(self::$pendingTransitions[$key])) {
+                return;
+            }
+            [$prev, $new, $action] = self::$pendingTransitions[$key];
+            unset(self::$pendingTransitions[$key]);
+            try {
+                VendorInventoryReview::log(
+                    $row,
+                    $prev,
+                    $new,
+                    $action,
+                    $row->updated_by_user_id ?? $row->created_by_user_id,
+                );
+            } catch (\Throwable $e) {
+                // The audit table may not exist in stub-schema tests; a missing audit row
+                // must never abort the inventory write itself.
+                \Illuminate\Support\Facades\Log::warning('vendor-inventory review audit failed', [
+                    'row' => $row->id, 'action' => $action, 'error' => $e->getMessage(),
+                ]);
+            }
         });
     }
 

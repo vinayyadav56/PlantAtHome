@@ -32,6 +32,7 @@ final class CityAvailabilityRecomputeTest extends TestCase
             ],
         ]);
         DB::purge('sqlite');
+        \Marvel\Database\Models\VendorProductPrice::resetReviewStatics();
 
         Schema::create('settings', function (Blueprint $t) {
             $t->bigIncrements('id');
@@ -71,6 +72,9 @@ final class CityAvailabilityRecomputeTest extends TestCase
             $t->integer('reserved_qty')->default(0);
             $t->date('effective_from')->nullable();
             $t->date('effective_to')->nullable();
+            $t->string('review_status')->default('approved');
+            $t->timestamp('submitted_at')->nullable();
+            $t->timestamp('approved_at')->nullable();
             $t->timestamps();
             $t->softDeletes();
         });
