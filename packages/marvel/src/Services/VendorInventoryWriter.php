@@ -113,6 +113,20 @@ class VendorInventoryWriter
             $variationOptionId = $vo->id;
         }
 
+        // A deactivated master plant accepts no NEW listings (deactivating a plant stops it
+        // spreading). Existing rows keep working — vendors already selling it are not punished
+        // for an admin's catalog decision.
+        if ($product->status !== \Marvel\Enums\ProductStatus::PUBLISH) {
+            $isNewListing = !VendorProductPrice::withTrashed()
+                ->where('shop_id', $shopId)
+                ->where('product_id', $product->id)
+                ->where('variation_option_id', $variationOptionId)
+                ->exists();
+            if ($isNewListing) {
+                return ['ok' => false, 'error' => 'This plant is not active in the catalogue — new listings are closed.'];
+            }
+        }
+
         // cost_price is admin-only (the hidden buy price that drives margin + profit). This is the
         // vendor self-serve writer, so we IGNORE any client-supplied cost and require a selling price.
         $sellRaw = $item['vendor_selling_price'] ?? $item['selling_price'] ?? null;

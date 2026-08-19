@@ -70,6 +70,7 @@ use Marvel\Http\Controllers\LoraModelController;
 use Marvel\Http\Controllers\ProductContentBatchController;
 use Marvel\Http\Controllers\LocationCaptureController;
 use Marvel\Http\Controllers\InventoryReviewController;
+use Marvel\Http\Controllers\PlantTaxonomyController;
 use Marvel\Http\Controllers\VendorInventoryController;
 use Marvel\Http\Controllers\SettlementController;
 use Marvel\Http\Controllers\ReportController;
@@ -137,6 +138,8 @@ Route::get("products/calculate-rental-price", [ProductController::class, 'calcul
 // PlantAtHome — distinct plant-attribute values + counts + price histogram for the
 // storefront filter rail. Public + cached; registered BEFORE the products apiResource
 // so `filter-facets` is never captured by the products/{product} show param.
+Route::get('plant-attributes', [PlantTaxonomyController::class, 'definitions']);
+Route::get('plant-collections', [PlantTaxonomyController::class, 'collections']);
 Route::get('products/filter-facets', [ProductController::class, 'filterFacets'])->middleware('throttle:120,1');
 // Bulk import/export carry an in-controller hasPermission() check; add a throttle
 // so the public routes can't be abused for bulk-write storms / catalog scraping.
@@ -820,6 +823,22 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
 });
 
 Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sanctum']], function () {
+    // Catalog taxonomy (admin-owned): attribute definitions + terms, dynamic collections,
+    // plant varieties, product term assignment.
+    Route::post('plant-attributes', [PlantTaxonomyController::class, 'storeDefinition']);
+    Route::put('plant-attributes/{id}', [PlantTaxonomyController::class, 'updateDefinition'])->whereNumber('id');
+    Route::delete('plant-attributes/{id}', [PlantTaxonomyController::class, 'destroyDefinition'])->whereNumber('id');
+    Route::post('plant-attributes/{id}/terms', [PlantTaxonomyController::class, 'storeTerm'])->whereNumber('id');
+    Route::post('plant-attributes/{id}/terms/reorder', [PlantTaxonomyController::class, 'reorderTerms'])->whereNumber('id');
+    Route::put('plant-attribute-terms/{id}', [PlantTaxonomyController::class, 'updateTerm'])->whereNumber('id');
+    Route::post('plant-collections', [PlantTaxonomyController::class, 'storeCollection']);
+    Route::put('plant-collections/{id}', [PlantTaxonomyController::class, 'updateCollection'])->whereNumber('id');
+    Route::delete('plant-collections/{id}', [PlantTaxonomyController::class, 'destroyCollection'])->whereNumber('id');
+    Route::get('plant-varieties', [PlantTaxonomyController::class, 'varieties']);
+    Route::post('plant-varieties', [PlantTaxonomyController::class, 'storeVariety']);
+    Route::put('products/{id}/plant-terms', [PlantTaxonomyController::class, 'syncProductTerms'])->whereNumber('id');
+    Route::get('catalog-summary', [PlantTaxonomyController::class, 'summary']);
+
     // Vendor-inventory review pipeline: nothing a vendor submits goes live without an
     // explicit admin decision recorded here.
     Route::get('admin/inventory-reviews', [InventoryReviewController::class, 'index']);

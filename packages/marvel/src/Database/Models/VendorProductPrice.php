@@ -25,6 +25,8 @@ class VendorProductPrice extends Model
     public const REVIEW_APPROVED = 'approved';
     public const REVIEW_REJECTED = 'rejected';
     public const REVIEW_CHANGES  = 'changes_requested';
+    /** Admin pulled a previously-approved offer off the storefront (re-approve to restore). */
+    public const REVIEW_SUSPENDED = 'suspended';
 
     public const REVIEW_STATUSES = [
         self::REVIEW_DRAFT,
@@ -32,6 +34,7 @@ class VendorProductPrice extends Model
         self::REVIEW_APPROVED,
         self::REVIEW_REJECTED,
         self::REVIEW_CHANGES,
+        self::REVIEW_SUSPENDED,
     ];
 
     /**

@@ -72,6 +72,7 @@ class ProductRepository extends BaseRepository
         'plantAttribute.growth_rate' => 'in',
         'plantAttribute.difficulty_level' => 'in',
         'plantAttribute.height_range' => 'in',
+        'plantTerms.slug'                  => 'in',
         'plantAttribute.pet_friendly',
         // Size chips filter through the variations axis (Small/Medium/Large);
         // in_stock backs the "in stock only" toggle — the storefronts used to

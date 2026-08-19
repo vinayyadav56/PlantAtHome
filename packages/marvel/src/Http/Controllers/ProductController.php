@@ -383,6 +383,31 @@ class ProductController extends CoreController
             }
         }
 
+        // ── admin-defined facets ────────────────────────────────────────────────
+        // Every active definition flagged is_facet becomes a filter section on the
+        // storefront automatically — adding "Suitable Spaces > Balcony" is a data edit,
+        // never a code change (that is the whole point of the taxonomy work).
+        $dynamic = [];
+        try {
+            $definitions = \Marvel\Database\Models\PlantAttributeDefinition::active()
+                ->where('is_facet', true)->with('terms')->orderBy('sort')->get();
+            $counts = $total > 0
+                ? DB::table('plant_attribute_product')->whereIn('product_id', $ids)
+                    ->selectRaw('term_id, COUNT(*) as cnt')->groupBy('term_id')->pluck('cnt', 'term_id')
+                : collect();
+            foreach ($definitions as $def) {
+                $terms = $def->terms
+                    ->map(fn ($t) => ['slug' => $t->slug, 'value' => $t->value, 'count' => (int) ($counts[$t->id] ?? 0)])
+                    ->filter(fn ($t) => $t['count'] > 0)
+                    ->values()->all();
+                if ($terms) {
+                    $dynamic[] = ['slug' => $def->slug, 'name' => $def->name, 'type' => $def->type, 'terms' => $terms];
+                }
+            }
+        } catch (\Throwable $e) {
+            $dynamic = []; // pre-migration deploys must not break the facets endpoint
+        }
+
         return [
             'total'  => $total,
             'facets' => [
@@ -393,6 +418,7 @@ class ProductController extends CoreController
                 'difficulty_level'  => $facets['difficulty_level'],
                 'pet_friendly'      => $petFriendly,
                 'price'             => $price,
+                'dynamic'           => $dynamic,
             ],
         ];
     }
@@ -441,6 +467,26 @@ class ProductController extends CoreController
             ->withCount('reviews')
             ->withAvg('reviews', 'rating')
             ->where('language', DEFAULT_LANGUAGE);
+
+        // Botanical text search: a shopper typing "sansevieria" or a common name should find
+        // the plant even though only `name` is Prettus-searchable. Applied as an explicit
+        // whereHas OR-group (never through the Prettus `search` rewrite, which smears a
+        // colon-less term across every searchable field).
+        if ($request->filled('text')) {
+            $term = trim((string) $request->input('text'));
+            if ($term !== '') {
+                $products_query->where(function ($w) use ($term) {
+                    $like = '%' . $term . '%';
+                    $w->where('products.name', 'like', $like)
+                      ->orWhere('products.variety_name', 'like', $like)
+                      ->orWhereHas('plantAttribute', function ($p) use ($like) {
+                          $p->where('scientific_name', 'like', $like)
+                            ->orWhere('hindi_name', 'like', $like)
+                            ->orWhere('common_names', 'like', $like);
+                      });
+                });
+            }
+        }
 
         // PERF/correctness: this PUBLIC endpoint had no default status filter, so a caller
         // that omitted `search=status:publish` got the whole draft pool too (thousands of
@@ -556,11 +602,12 @@ class ProductController extends CoreController
         }
 
         $request->merge(['shop_id' => \Marvel\Database\Models\Shop::masterId()]);
-        // Vendors publish straight to the live catalog like admins. If the form
-        // didn't send a status, default a vendor create to PUBLISH (go live);
-        // an explicit status (e.g. Draft) is honored.
-        if (!$isSuperAdmin && !$request->filled('status')) {
-            $request->merge(['status' => \Marvel\Enums\ProductStatus::PUBLISH]);
+        // The master catalog belongs to Admin. A vendor may PROPOSE a plant that is missing,
+        // but it enters review — it never goes live on their say-so, and the client's status
+        // is ignored rather than trusted (a crafted `status: publish` must not self-publish).
+        // Admin creates are unaffected.
+        if (!$isSuperAdmin) {
+            $request->merge(['status' => \Marvel\Enums\ProductStatus::UNDER_REVIEW]);
         }
 
         try {
@@ -603,6 +650,10 @@ class ProductController extends CoreController
         return Product::whereRaw('LOWER(name) = ?', [mb_strtolower($name)])
             ->where('language', DEFAULT_LANGUAGE)
             ->when($typeId, fn ($q) => $q->where('type_id', $typeId))
+            // A variety carries its master's name as a prefix ("Snake Plant — Laurentii"),
+            // so exact-name matching already separates them; this only guards against a
+            // variety row shadowing a master lookup.
+            ->whereNull('master_product_id')
             ->first();
     }
 
@@ -967,6 +1018,16 @@ class ProductController extends CoreController
         }
         $product = Product::find((int) $productId);
         if (!$product || !$product->proposed_by_shop_id) {
+            return false;
+        }
+        // A vendor owns their PROPOSAL, not the catalog entry it becomes. While it is under
+        // review (or was sent back) they can correct and resubmit it; once an admin publishes
+        // it, the master record is Admin's — the vendor manages their inventory against it.
+        if (!in_array($product->status, [
+            \Marvel\Enums\ProductStatus::UNDER_REVIEW,
+            \Marvel\Enums\ProductStatus::DRAFT,
+            'rejected',
+        ], true)) {
             return false;
         }
         return \Marvel\Database\Models\Shop::where('owner_id', $user->id)

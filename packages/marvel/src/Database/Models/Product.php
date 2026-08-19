@@ -126,6 +126,25 @@ class Product extends Model
     /**
      * @return HasOne
      */
+    /** The master plant this row is a VARIETY of (null when this IS a master plant). */
+    public function masterPlant()
+    {
+        return $this->belongsTo(Product::class, 'master_product_id');
+    }
+
+    /** Varieties of this master plant — each its own product with its own sizes + inventory. */
+    public function varieties()
+    {
+        return $this->hasMany(Product::class, 'master_product_id')->where('status', 'publish');
+    }
+
+    /** Admin-defined discovery characteristics (Suitable Spaces, Special Characteristics…). */
+    public function plantTerms()
+    {
+        return $this->belongsToMany(PlantAttributeTerm::class, 'plant_attribute_product', 'product_id', 'term_id')
+            ->withPivot('definition_id');
+    }
+
     public function plantAttribute(): HasOne
     {
         return $this->hasOne(PlantAttribute::class, 'product_id');

@@ -28,6 +28,7 @@ class InventoryReviewController extends Controller
         'approve'         => VendorProductPrice::REVIEW_APPROVED,
         'reject'          => VendorProductPrice::REVIEW_REJECTED,
         'request_changes' => VendorProductPrice::REVIEW_CHANGES,
+        'suspend'         => VendorProductPrice::REVIEW_SUSPENDED,
     ];
 
     /** GET /admin/inventory-reviews — the queue. */
@@ -115,7 +116,7 @@ class InventoryReviewController extends Controller
     public function action(Request $request, int $id)
     {
         $validated = $request->validate([
-            'action'  => 'required|in:approve,reject,request_changes',
+            'action'  => 'required|in:approve,reject,request_changes,suspend',
             'comment' => 'required_unless:action,approve|nullable|string|max:2000',
             // Optimistic concurrency: the status the admin SAW when acting. A stale
             // action (someone else reviewed first) is refused, never silently applied.
@@ -141,7 +142,7 @@ class InventoryReviewController extends Controller
         $validated = $request->validate([
             'ids'     => 'required|array|min:1|max:200',
             'ids.*'   => 'integer',
-            'action'  => 'required|in:approve,reject,request_changes',
+            'action'  => 'required|in:approve,reject,request_changes,suspend',
             'comment' => 'required_unless:action,approve|nullable|string|max:2000',
         ]);
 
@@ -199,7 +200,12 @@ class InventoryReviewController extends Controller
             return ['ok' => false, 'status' => 409, 'error' => 'Another review landed first — reload and re-check.'];
         }
 
-        VendorInventoryReview::log($row, $prev, $new, $action === 'approve' ? 'approved' : ($action === 'reject' ? 'rejected' : 'changes_requested'), $adminId, $comment);
+        VendorInventoryReview::log($row, $prev, $new, match ($action) {
+            'approve' => 'approved',
+            'reject'  => 'rejected',
+            'suspend' => 'suspended',
+            default   => 'changes_requested',
+        }, $adminId, $comment);
 
         // Visibility must change NOW, in both directions (approve ⇒ listed, reject a
         // previously-approved row ⇒ de-listed).
@@ -228,6 +234,7 @@ class InventoryReviewController extends Controller
                 VendorProductPrice::REVIEW_APPROVED => 'approved',
                 VendorProductPrice::REVIEW_REJECTED => 'rejected',
                 VendorProductPrice::REVIEW_CHANGES  => 'sent back with change requests',
+                VendorProductPrice::REVIEW_SUSPENDED => 'suspended by an admin',
             ][$status] ?? $status;
             $text = "Your inventory for \"{$product?->name}\" was {$label}."
                 . ($comment ? " Reason: {$comment}" : '');
@@ -246,6 +253,7 @@ class InventoryReviewController extends Controller
                 VendorProductPrice::REVIEW_APPROVED => 'vendor-inventory-approved',
                 VendorProductPrice::REVIEW_REJECTED => 'vendor-inventory-rejected',
                 VendorProductPrice::REVIEW_CHANGES  => 'vendor-inventory-changes-requested',
+                VendorProductPrice::REVIEW_SUSPENDED => 'vendor-inventory-rejected',
             ][$status] ?? null;
             $ownerEmail = DB::table('users')->where('id', $ownerId)->value('email');
             if ($eventKey && $ownerEmail && class_exists(\Marvel\Services\EmailService::class)) {
