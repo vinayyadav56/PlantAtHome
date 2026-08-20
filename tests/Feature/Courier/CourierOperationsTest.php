@@ -732,6 +732,66 @@ final class CourierOperationsTest extends TestCase
         );
     }
 
+    // ── the courier-order option blocks ──────────────────────────────────────────────────────
+
+    private function dispatchWith(array $options, int $shipmentId)
+    {
+        // The address gate runs before the options validator (correctly — there is no point
+        // validating a delivery's extras when nobody knows where it goes), so give it one.
+        $shipment = Shipment::find($shipmentId);
+        DB::table('orders')->where('id', $shipment->order_id)->update([
+            'shipping_address' => json_encode(['address' => [
+                'street_address' => 'H-12 Hauz Khas', 'city' => 'Delhi', 'state' => 'Delhi',
+                'zip' => '110016', 'location' => ['lat' => 28.5, 'lng' => 77.1],
+            ]]),
+        ]);
+        $req = Request::create('/x', 'POST', ['options' => $options]);
+        $req->setUserResolver(fn () => new class {
+            public function hasPermissionTo() { return true; }
+            public function can() { return true; }
+        });
+        return (new CourierShipmentController())->dispatchShipment($req, $shipmentId);
+    }
+
+    public function test_a_half_filled_billing_address_is_refused(): void
+    {
+        $shipment = $this->shipment();
+        // Shiprocket stops copying the recipient across the moment a billing block appears, so a
+        // partial payer would ship the parcel to a half-filled address.
+        $res = $this->dispatchWith(['billing' => ['name' => 'Accounts Dept']], $shipment->id);
+
+        $this->assertSame(422, $res->getStatusCode());
+        $errors = $res->getData(true)['errors'] ?? [];
+        foreach (['options.billing.address', 'options.billing.city', 'options.billing.pincode'] as $field) {
+            $this->assertArrayHasKey($field, $errors, "$field was not demanded alongside a billing block");
+        }
+    }
+
+    public function test_a_malformed_gstin_is_refused_before_the_partner_sees_it(): void
+    {
+        $shipment = $this->shipment();
+        $res = $this->dispatchWith(['tax' => ['gstin' => 'NOT-A-GSTIN']], $shipment->id);
+
+        $this->assertSame(422, $res->getStatusCode());
+        $this->assertArrayHasKey('options.tax.gstin', $res->getData(true)['errors'] ?? []);
+    }
+
+    public function test_an_abandoned_section_does_not_reach_the_partner(): void
+    {
+        $shipment = $this->shipment();
+        Http::fake(['*/v1/shipments' => Http::response(['partner' => 'shiprocket'], 200)]);
+
+        // The operator opened Tax and Charges, typed nothing, and booked.
+        $this->dispatchWith([
+            'tax'     => ['gstin' => '', 'invoice_no' => null],
+            'charges' => ['shipping' => null],
+        ], $shipment->id);
+
+        $opts = (array) ($this->lastBody()['options'] ?? []);
+        $this->assertArrayNotHasKey('tax', $opts, 'an empty tax block still reached the adapter');
+        $this->assertArrayNotHasKey('charges', $opts, 'an empty charges block still reached the adapter');
+    }
+
     public function test_quoting_never_filters_by_a_stored_courier(): void
     {
         $shipment = $this->shipment(['courier_company_id' => 999, 'fulfillment_mode' => 'same_city']);

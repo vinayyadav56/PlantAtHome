@@ -176,10 +176,52 @@ class CourierShipmentController extends CoreController
                 'options.window_start'    => 'nullable|date',
                 'options.window_end'      => 'nullable|date|after_or_equal:options.window_start',
                 'options.instructions'    => 'nullable|string|max:1000',
+
+                // ── courier-partner order detail (Shiprocket) ────────────────────────────────
+                'options.shipping_mode'   => 'nullable|string|in:surface,air',
+                'options.order_type'      => 'nullable|string|max:64',
+                'options.is_document'     => 'nullable|boolean',
+                'options.tags'            => 'nullable|string|max:191',
+                'options.reseller_name'   => 'nullable|string|max:191',
+
+                'options.charges'             => 'nullable|array',
+                'options.charges.shipping'    => 'nullable|numeric|min:0|max:1000000',
+                'options.charges.gift_wrap'   => 'nullable|numeric|min:0|max:1000000',
+                'options.charges.transaction' => 'nullable|numeric|min:0|max:1000000',
+                'options.charges.discount'    => 'nullable|numeric|min:0|max:1000000',
+
+                'options.tax'              => 'nullable|array',
+                // 15 chars, and the 2-digit state code + PAN + entity/Z/checksum shape. Rejecting
+                // a malformed GSTIN here beats Shiprocket rejecting the whole order for it.
+                'options.tax.gstin'        => 'nullable|string|regex:/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][0-9A-Z]{3}$/',
+                'options.tax.invoice_no'   => 'nullable|string|max:64',
+                'options.tax.eway_bill_no' => 'nullable|string|max:32',
+
+                'options.billing'          => 'nullable|array',
+                // Required WITH: a partial payer is worse than none — Shiprocket stops copying the
+                // recipient across the moment a billing block appears, so an incomplete one ships
+                // the parcel to a half-filled address.
+                'options.billing.name'     => 'required_with:options.billing|string|max:191',
+                'options.billing.phone'    => 'required_with:options.billing|string|max:20',
+                'options.billing.email'    => 'nullable|email|max:191',
+                'options.billing.address'  => 'required_with:options.billing|string|max:255',
+                'options.billing.line2'    => 'nullable|string|max:255',
+                'options.billing.city'     => 'required_with:options.billing|string|max:120',
+                'options.billing.state'    => 'required_with:options.billing|string|max:120',
+                'options.billing.pincode'  => 'required_with:options.billing|string|max:12',
+                'options.billing.country'  => 'nullable|string|max:64',
             ], [
                 'options.loaders.max'          => 'Borzo allows at most 11 people including the driver.',
                 'options.window_end.after_or_equal' => 'The latest arrival time must not be before the earliest.',
                 'options.payment_method.in'    => 'Choose account balance, cash, or a bank card.',
+                'options.tax.gstin.regex'      => 'That does not look like a GSTIN — 15 characters, e.g. 07AABCU9603R1ZM.',
+                'options.shipping_mode.in'     => 'Choose Surface or Air.',
+                'options.billing.name.required_with'    => 'A separate billing address needs a name.',
+                'options.billing.address.required_with' => 'A separate billing address needs a street address.',
+                'options.billing.city.required_with'    => 'A separate billing address needs a city.',
+                'options.billing.state.required_with'   => 'A separate billing address needs a state.',
+                'options.billing.pincode.required_with' => 'A separate billing address needs a pincode.',
+                'options.billing.phone.required_with'   => 'A separate billing address needs a phone number.',
             ])['options'] ?? [];
         } catch (\Illuminate\Validation\ValidationException $e) {
             // Field-keyed so the wizard can pin each message to its own input.
@@ -208,7 +250,33 @@ class CourierShipmentController extends CoreController
             ], 422);
         }
 
-        return array_filter($data, static fn ($v) => $v !== null && $v !== '');
+        return $this->pruneEmpty($data);
+    }
+
+    /**
+     * Drop nulls and blanks, at every level.
+     *
+     * The nested blocks (charges, tax, billing) arrive with a key per input the operator saw, so a
+     * section they opened and abandoned would otherwise reach the adapter as an object full of
+     * nulls — and a non-nil billing block is what switches Shiprocket out of "bill the recipient".
+     * The adapter guards on the address being present too; this keeps the wire clean as well.
+     */
+    private function pruneEmpty(array $data): array
+    {
+        $out = [];
+        foreach ($data as $k => $v) {
+            if (is_array($v)) {
+                $v = $this->pruneEmpty($v);
+                if ($v !== []) {
+                    $out[$k] = $v;
+                }
+                continue;
+            }
+            if ($v !== null && $v !== '') {
+                $out[$k] = $v;
+            }
+        }
+        return $out;
     }
 
     /**

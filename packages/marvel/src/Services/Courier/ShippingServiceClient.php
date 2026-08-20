@@ -1154,13 +1154,30 @@ class ShippingServiceClient
         $out = [];
         foreach ($shipment->items as $it) {
             $p = $it->product ?? null;
-            $out[] = [
+            $line = [
                 'name'       => (string) ($p->name ?? ('Item #' . $it->product_id)),
                 'sku'        => (string) ($p->sku ?? ('SKU-' . $it->product_id)),
                 'qty'        => max(1, (int) ($it->order_quantity ?? 1)),
                 'unit_price' => (float) ($it->unit_price ?? 0),
                 'weight_g'   => (int) ($p->weight ?? 0),
             ];
+            // HSN and per-line tax reach the courier's tax invoice when the catalogue knows them.
+            // It does not yet — there is no hsn/tax column on products — so these are absent on
+            // every order today and the courier applies its own defaults. Read defensively rather
+            // than left out entirely: the moment the columns exist this starts working with no
+            // further change, and until then it costs one isset() per line.
+            // getAttributes(), NOT $p->hsn: Product is kodeine Metable, so reading an attribute
+            // that is not a column falls through to a products_meta lookup — a query per line per
+            // booking, and an outright failure anywhere that table is absent. The raw column bag
+            // answers the only question being asked: does the catalogue carry this yet?
+            $cols = $p ? $p->getAttributes() : [];
+            foreach (['hsn', 'tax_rate'] as $key) {
+                $v = $cols[$key] ?? null;
+                if ($v !== null && $v !== '') {
+                    $line[$key] = $key === 'hsn' ? (string) $v : (float) $v;
+                }
+            }
+            $out[] = $line;
         }
         return $out;
     }
