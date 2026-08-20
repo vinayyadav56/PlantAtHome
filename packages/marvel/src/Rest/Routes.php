@@ -1034,6 +1034,8 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // Retry waybill allocation for a booking stuck on awb_pending — the same call the reconcile
     // sweep makes, available to whoever is looking at the stuck shipment.
     Route::post('shipments/{id}/assign-awb', [CourierShipmentController::class, 'assignAwb']);
+    // Exchange: a replacement out and the original collected back, created as one partner order.
+    Route::post('shipments/{id}/exchange', [CourierShipmentController::class, 'createExchange']);
     // Shiprocket has no reassign endpoint — assign/awb with status:"reassign" IS the mechanism.
     // Refused once the parcel has been picked up.
     Route::post('shipments/{id}/reassign-courier', [CourierShipmentController::class, 'reassignCourier']);

@@ -423,6 +423,12 @@ class CourierService
      * Cancel only the AWB, leaving the partner order alive — what a reassignment or a re-pack
      * needs. cancel() above kills the whole order.
      */
+    /** Create an exchange (replacement out, original collected back) — both legs in one call. */
+    public function createExchange(Shipment $shipment, array $payload): array
+    {
+        return $this->offline() ?? $this->shippingClient()->createExchange($shipment, $payload);
+    }
+
     /** Retry waybill allocation for a shipment stuck without one. */
     public function assignAwb(Shipment $shipment): array
     {

@@ -835,6 +835,62 @@ final class CourierOperationsTest extends TestCase
         $this->assertNull($shipment->fresh()->awb_number, 'a refusal must not stamp a waybill');
     }
 
+    // ── exchange ─────────────────────────────────────────────────────────────────────────────
+
+    private function exchangePayload(array $over = []): array
+    {
+        return array_replace_recursive([
+            'return_reason' => 'Wrong size',
+            'items' => [[
+                'name' => 'Jade Plant Large', 'sku' => 'JD-L', 'qty' => 1, 'unit_price' => 800,
+                'hsn' => '0602', 'returned_name' => 'Jade Plant Small', 'returned_sku' => 'JD-S',
+            ]],
+            'return_package'   => ['length_cm' => 10, 'breadth_cm' => 10, 'height_cm' => 10, 'weight_kg' => 0.5],
+            'exchange_package' => ['length_cm' => 11, 'breadth_cm' => 11, 'height_cm' => 11, 'weight_kg' => 1],
+        ], $over);
+    }
+
+    private function exchange(array $payload, int $shipmentId)
+    {
+        $req = Request::create('/x', 'POST', $payload);
+        return (new CourierShipmentController())->createExchange($req, $shipmentId);
+    }
+
+    /**
+     * Shiprocket addresses the seller by its own NUMERIC location id — not the nickname every
+     * forward booking uses — and that id is only captured on a fresh registration. Naming the
+     * vendor to re-register beats relaying a field error about a parameter nobody filled in.
+     */
+    public function test_an_exchange_without_a_recorded_location_id_says_which_vendor_to_fix(): void
+    {
+        $shipment = $this->shipment(['provider_order_id' => 'SR1', 'awb_number' => 'A1']);
+        $res = $this->exchange($this->exchangePayload(), $shipment->id);
+
+        $this->assertSame(409, $res->getStatusCode());
+        $this->assertStringContainsString('Re-register the pickup location', $res->getData(true)['error'] ?? '');
+    }
+
+    public function test_an_exchange_item_without_an_hsn_is_refused_with_a_reason(): void
+    {
+        $shipment = $this->shipment(['provider_order_id' => 'SR1', 'awb_number' => 'A1']);
+        $payload = $this->exchangePayload();
+        unset($payload['items'][0]['hsn']);
+
+        $res = $this->exchange($payload, $shipment->id);
+
+        $this->assertSame(422, $res->getStatusCode());
+        $this->assertStringContainsString('HSN', $res->getData(true)['error'] ?? '');
+    }
+
+    public function test_an_exchange_needs_both_parcels_measured(): void
+    {
+        $shipment = $this->shipment(['provider_order_id' => 'SR1', 'awb_number' => 'A1']);
+        foreach (['return_package', 'exchange_package'] as $which) {
+            $res = $this->exchange($this->exchangePayload([$which => ['weight_kg' => 0]]), $shipment->id);
+            $this->assertSame(422, $res->getStatusCode(), "$which was accepted without a weight");
+        }
+    }
+
     public function test_quoting_never_filters_by_a_stored_courier(): void
     {
         $shipment = $this->shipment(['courier_company_id' => 999, 'fulfillment_mode' => 'same_city']);

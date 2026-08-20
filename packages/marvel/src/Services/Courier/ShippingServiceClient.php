@@ -405,6 +405,38 @@ class ShippingServiceClient
      * Cancelling the order instead would strand the manifest and force a fresh create.
      */
     /**
+     * Create an exchange: a replacement shipped out while the original is collected back.
+     *
+     * ONE call at the partner producing TWO orders, so this returns both legs. Anything that
+     * records only one has lost half the exchange — the buyer is expecting a collection AND a
+     * delivery, and they are tracked separately from here.
+     *
+     * The seller location is Shiprocket's numeric id, taken from the registered pickup row. A
+     * door that was registered before that id was captured cannot serve an exchange; the caller
+     * is told which vendor to re-register rather than being handed the partner's field error.
+     */
+    public function createExchange(Shipment $shipment, array $payload): array
+    {
+        $d = $this->unwrap($this->request('post', $this->shipmentPath($shipment, '/exchange'), $payload), 'Exchange creation failed.');
+        if (empty($d['ok'])) {
+            return $d;
+        }
+        $ex = (array) ($d['exchange'] ?? []);
+        $forward = (array) ($ex['forward'] ?? []);
+        $return = (array) ($ex['return'] ?? []);
+
+        \Marvel\Database\Models\OrderEvent::record($shipment->order_id, 'shipment.exchange_created', [
+            'shipment_id'         => $shipment->id,
+            'forward_order_id'    => $forward['provider_order_id'] ?? null,
+            'forward_shipment_id' => $forward['provider_shipment_id'] ?? null,
+            'return_order_id'     => $return['provider_order_id'] ?? null,
+            'return_shipment_id'  => $return['provider_shipment_id'] ?? null,
+        ]);
+
+        return ['ok' => true, 'exchange' => $ex];
+    }
+
+    /**
      * Allocate the waybill for a booking that has an order but none.
      *
      * The 10-minute reconcile already retries this, but only it could: a shipment sitting on

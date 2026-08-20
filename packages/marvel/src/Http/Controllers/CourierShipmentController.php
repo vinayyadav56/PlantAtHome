@@ -375,6 +375,120 @@ class CourierShipmentController extends CoreController
      * courier swap needs.
      */
     /**
+     * POST shipments/{id}/exchange — send a replacement and collect the original.
+     *
+     * The operator supplies what only they know: which item is being swapped for what, why, and
+     * how big each parcel is. Everything else is resolved here — the buyer's address from the
+     * order, the seller's numeric Shiprocket location from the registered pickup row — so the
+     * form asks for the exchange, not for an API request.
+     */
+    public function createExchange(Request $request, $id)
+    {
+        $shipment = $this->shipment($id);
+        if ($resp = $this->requireBooking($shipment, 'create an exchange')) {
+            return $resp;
+        }
+
+        try {
+            $data = $request->validate([
+                'return_reason'          => 'required|string|max:191',
+                'payment_method'         => 'nullable|string|in:prepaid,cod',
+                'qc_check'               => 'nullable|boolean',
+                'items'                  => 'required|array|min:1',
+                'items.*.name'           => 'required|string|max:191',
+                'items.*.sku'            => 'required|string|max:191',
+                'items.*.qty'            => 'required|integer|min:1',
+                'items.*.unit_price'     => 'required|numeric|min:0',
+                // Required by Shiprocket per line, and our catalogue has no HSN column — so it
+                // can only come from the person filling this in.
+                'items.*.hsn'            => 'required|string|max:32',
+                'items.*.returned_name'  => 'required|string|max:191',
+                'items.*.returned_sku'   => 'required|string|max:191',
+                'items.*.returned_id'    => 'nullable|string|max:64',
+                // Two parcels, both mandatory: the item coming back and the one going out are
+                // rarely the same size, and deriving one from the other misprices a leg.
+                'return_package.length_cm'   => 'required|numeric|gt:0',
+                'return_package.breadth_cm'  => 'required|numeric|gt:0',
+                'return_package.height_cm'   => 'required|numeric|gt:0',
+                'return_package.weight_kg'   => 'required|numeric|gt:0',
+                'exchange_package.length_cm'  => 'required|numeric|gt:0',
+                'exchange_package.breadth_cm' => 'required|numeric|gt:0',
+                'exchange_package.height_cm'  => 'required|numeric|gt:0',
+                'exchange_package.weight_kg'  => 'required|numeric|gt:0',
+            ], [
+                'items.*.hsn.required' => 'Each item needs an HSN code — the courier raises a tax invoice for an exchange and the catalogue does not carry one.',
+                'return_package.weight_kg.gt' => 'The returned parcel needs a weight.',
+                'exchange_package.weight_kg.gt' => 'The replacement parcel needs a weight.',
+            ]);
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            return response()->json(['ok' => false, 'error' => $e->validator->errors()->first(), 'errors' => $e->errors()], 422);
+        }
+
+        // Shiprocket addresses the seller by its own NUMERIC location id, which is not the
+        // nickname every forward booking uses. A door registered before that id was captured
+        // cannot serve an exchange, and saying which vendor to re-register is more useful than
+        // relaying a field error about a parameter the operator never filled in.
+        $door = $this->courier()->pickupLocationFor($shipment);
+        $sellerLocationId = trim((string) ($door->provider_pickup_code ?? ''));
+        if ($sellerLocationId === '') {
+            return $this->conflict(
+                'This vendor\'s pickup location has no Shiprocket location id recorded, which an exchange needs. '
+                . 'Re-register the pickup location for ' . ($shipment->shop->name ?? ('vendor #' . $shipment->shop_id)) . ', then try again.',
+            );
+        }
+
+        $order = $shipment->order;
+        $buyer = $this->exchangeBuyerAddress($order);
+
+        $res = $this->courier()->createExchange($shipment, [
+            'exchange_order_ref' => 'EX-' . $order->tracking_number . '-' . $shipment->id,
+            'return_order_ref'   => 'RT-' . $order->tracking_number . '-' . $shipment->id,
+            'order_date'         => now()->toDateString(),
+            'payment_method'     => $data['payment_method'] ?? 'prepaid',
+            'return_reason'      => $data['return_reason'],
+            'qc_check'           => (bool) ($data['qc_check'] ?? false),
+            // Both buyer legs are the SAME person: we collect the original from them and deliver
+            // the replacement to them. Shiprocket keeps them as separate blocks because they need
+            // not match, but from an order they do.
+            'buyer_pickup'  => $buyer,
+            'buyer_drop'    => $buyer,
+            'seller_pickup_location_id'   => $sellerLocationId,
+            'seller_shipping_location_id' => $sellerLocationId,
+            'items'            => array_map(static fn ($i) => [
+                'name'          => $i['name'],
+                'sku'           => $i['sku'],
+                'qty'           => (int) $i['qty'],
+                'unit_price'    => (float) $i['unit_price'],
+                'hsn'           => $i['hsn'],
+                'returned_name' => $i['returned_name'],
+                'returned_sku'  => $i['returned_sku'],
+                'returned_id'   => $i['returned_id'] ?? null,
+            ], $data['items']),
+            'sub_total'        => array_sum(array_map(static fn ($i) => (float) $i['unit_price'] * (int) $i['qty'], $data['items'])),
+            'return_package'   => $data['return_package'],
+            'exchange_package' => $data['exchange_package'],
+        ]);
+
+        return response()->json($res, !empty($res['ok']) ? 200 : 409);
+    }
+
+    /** The buyer, in the shape the exchange payload wants. Reuses the order's own address. */
+    private function exchangeBuyerAddress($order): array
+    {
+        $ship = (array) ($order->shipping_address ?? []);
+        $a = (array) ($ship['address'] ?? $ship);
+        return [
+            'name'    => (string) ($order->customer_name ?? $a['name'] ?? 'Customer'),
+            'phone'   => (string) ($order->customer_contact ?? $a['phone'] ?? ''),
+            'address' => (string) ($a['street_address'] ?? $a['address'] ?? ''),
+            'line2'   => (string) ($a['street_address2'] ?? $a['line2'] ?? ''),
+            'city'    => (string) ($a['city'] ?? ''),
+            'state'   => (string) ($a['state'] ?? ''),
+            'pincode' => (string) ($a['zip'] ?? $a['pincode'] ?? ''),
+        ];
+    }
+
+    /**
      * POST shipments/{id}/assign-awb — retry waybill allocation.
      *
      * Guarded on the two states where it makes no sense rather than letting the partner explain
