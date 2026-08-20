@@ -77,6 +77,8 @@ final class ShipmentLaneQuoteTest extends TestCase
             $t->string('provider')->nullable();
             $t->string('provider_order_id')->nullable();
             $t->string('provider_reference', 64)->nullable();
+            $t->json('pickup_snapshot')->nullable();
+            $t->unsignedBigInteger('pickup_location_id')->nullable();
             $t->string('awb_number')->nullable();
             $t->timestamps();
         });

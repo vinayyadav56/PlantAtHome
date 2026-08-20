@@ -277,9 +277,13 @@ class ShippingServiceClient
      * override cannot bypass the runtime master switch or mode/COD eligibility — an
      * ineligible code comes back as "partner not available: X" rather than booking.
      */
+    /** The door buildRequest resolved for the request currently being sent. See book(). */
+    private ?int $resolvedPickupLocationId = null;
+
     public function book(Shipment $shipment, string $mode, bool $cod, float $codAmount, ?string $partnerCode = null, ?int $courierId = null, array $options = []): array
     {
-        $res = $this->request('post', '/v1/shipments', $this->buildRequest($shipment, $mode, $cod, $codAmount, $partnerCode, $courierId, $options));
+        $body = $this->buildRequest($shipment, $mode, $cod, $codAmount, $partnerCode, $courierId, $options);
+        $res = $this->request('post', '/v1/shipments', $body);
         if (empty($res['ok'])) {
             $shipment->forceFill(['last_status' => 'book_failed', 'failure_reason' => $res['error'] ?? 'shipping service'])->save();
             // Structured, correlatable failure record: shipment id doubles as
@@ -310,6 +314,17 @@ class ShippingServiceClient
             // prints order_name (30321) while every call takes order_id (330321). Showing only
             // the latter left the operator with a number that appears nowhere in Borzo's UI.
             'provider_reference'   => ($b['provider_reference'] ?? '') ?: null,
+            // Freeze the door this leg actually left from. Taken from the body we JUST SENT
+            // rather than re-resolving, so the record cannot drift from the request even if the
+            // vendor edits their address a second later. `pickup_location_id` gets its first
+            // production writer here — it has been a read-only column since it was added.
+            'pickup_location_id'   => $this->resolvedPickupLocationId,
+            'pickup_snapshot'      => ($body['pickup'] ?? null) ? array_filter([
+                'location_name' => $body['pickup_location'] ?? null,
+                'address'       => $body['pickup'],
+                'partner'       => $b['partner'] ?? $partnerCode,
+                'booked_at'     => Carbon::now()->toIso8601String(),
+            ], static fn ($v) => $v !== null && $v !== '') : null,
             'provider_shipment_id' => ($b['provider_shipment_id'] ?? '') ?: null,
             'awb_number'           => ($b['awb_number'] ?? '') ?: null,
             'courier_name'         => ($b['courier_name'] ?? '') ?: null,
@@ -391,12 +406,27 @@ class ShippingServiceClient
      */
     public function cancelAwb(Shipment $shipment, ?string $reason = null): array
     {
-        $res = $this->request('post', $this->shipmentPath($shipment, '/cancel'), ['reason' => $reason]);
+        // Was posting to /cancel — the SAME path as cancel() — so everything the docblock above
+        // promises was unreachable: the booking ended either way and a courier change meant
+        // recreating the order. /cancel-awb voids only the waybill and returns the shipment to
+        // awb_pending with the partner order intact.
+        $res = $this->request('post', $this->shipmentPath($shipment, '/cancel-awb'), ['reason' => $reason]);
         $d = $this->unwrap($res, 'AWB cancellation failed.');
         if (empty($d['ok'])) {
             return $d;
         }
-        $this->stampCancelled($shipment, $reason, 'awb');
+        // Deliberately NOT stampCancelled(): the shipment is not cancelled, it is awaiting a new
+        // waybill. Stamping it cancelled is what made this indistinguishable from cancel().
+        $shipment->forceFill([
+            'awb_number'     => null,
+            'last_status'    => 'awb_pending',
+            'last_status_at' => Carbon::now(),
+        ])->save();
+
+        \Marvel\Database\Models\OrderEvent::record($shipment->order_id, 'shipment.awb_voided', [
+            'shipment_id' => $shipment->id,
+            'reason'      => $reason,
+        ]);
 
         return ['ok' => true, 'shipment' => $shipment->fresh()];
     }
@@ -851,6 +881,10 @@ class ShippingServiceClient
         // vendor's default, else the legacy shops.pickup_location_name. Every leg used to be sent
         // from the shop-level nickname regardless of where the stock actually sits.
         $pickup = $courier->pickupLocationFor($shipment);
+        // Remembered for the snapshot in book(). Resolving a second time there would be a second
+        // read of a table an operator can edit between the two calls — the record must describe
+        // the request that actually went out, not a re-derivation of it.
+        $this->resolvedPickupLocationId = optional($pickup)->id;
         return [
             // Empty string, not null: the service treats "" as "no override" and
             // routes normally, whereas a null would have to be special-cased there.

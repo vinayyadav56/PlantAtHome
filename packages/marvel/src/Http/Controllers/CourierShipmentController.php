@@ -630,7 +630,20 @@ class CourierShipmentController extends CoreController
     public function updatePickupLocation(Request $request, $id)
     {
         $location = VendorPickupLocation::findOrFail($id);
-        $location->fill($this->validatePickupLocation($request, false))->save();
+        $location->fill($this->validatePickupLocation($request, false));
+
+        // A verified row whose ADDRESS just changed is no longer verified — the partner still
+        // holds the old address, and (see the ponytail note above) Shiprocket has no update API
+        // to push the new one. Leaving it `verified` was silent divergence: every booking quoted
+        // the partner's stale door while the admin showed a green badge. Demoting to `pending`
+        // makes the mismatch visible and routes the operator to the documented fix (register a
+        // new label). Contact/label edits don't demote — the partner key is the address.
+        $addressDirty = $location->isDirty(['address', 'address_2', 'city', 'state', 'pincode', 'lat', 'lng']);
+        if ($addressDirty && $location->status === 'verified') {
+            $location->status = 'pending';
+            $location->last_error = 'Address changed after registration — the partner still has the old address. Register again (or add a new label) before booking from this door.';
+        }
+        $location->save();
         if ($location->is_default) {
             $this->demoteOtherDefaults($location);
         }

@@ -69,6 +69,8 @@ final class AutoBookShipmentsTest extends TestCase
             $t->string('status')->default('pending');
             $t->string('provider_order_id')->nullable();
             $t->string('provider_reference', 64)->nullable();
+            $t->json('pickup_snapshot')->nullable();
+            $t->unsignedBigInteger('pickup_location_id')->nullable();
             $t->string('awb_number')->nullable();
             $t->timestamps();
         });

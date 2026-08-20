@@ -78,6 +78,8 @@ final class CourierOperationsTest extends TestCase
             $t->string('partner_code', 32);
             $t->string('provider_order_id', 191)->nullable();
             $t->string('provider_reference', 64)->nullable();
+            $t->json('pickup_snapshot')->nullable();
+            $t->unsignedBigInteger('pickup_location_id')->nullable();
             $t->unsignedTinyInteger('simulation_flow_type')->nullable();
             $t->timestamp('simulation_started_at')->nullable();
             $t->unsignedBigInteger('simulation_started_by')->nullable();
@@ -119,6 +121,8 @@ final class CourierOperationsTest extends TestCase
             $t->string('provider')->nullable();
             $t->string('provider_order_id')->nullable();
             $t->string('provider_reference', 64)->nullable();
+            $t->json('pickup_snapshot')->nullable();
+            $t->unsignedBigInteger('pickup_location_id')->nullable();
             $t->string('provider_shipment_id')->nullable();
             $t->string('awb_number')->nullable();
             $t->string('courier_name')->nullable();
@@ -684,6 +688,48 @@ final class CourierOperationsTest extends TestCase
         foreach (['building' => '12', 'entrance' => '2', 'floor' => '4', 'intercom' => '4421', 'note' => 'Gate 2, ask security'] as $k => $want) {
             $this->assertSame($want, $drop[$k] ?? null, "access detail '$k' was flattened away instead of sent as its own field");
         }
+    }
+
+    // ── the pickup snapshot ──────────────────────────────────────────────────────────────────
+
+    public function test_booking_freezes_the_pickup_it_actually_used(): void
+    {
+        $shipment = $this->shipment();
+        Http::fake(['*/v1/shipments' => Http::response(['partner' => 'shiprocket'], 200)]);
+
+        (new ShippingServiceClient())->book($this->reload($shipment), 'courier', false, 0.0);
+
+        $snap = $shipment->fresh()->pickup_snapshot;
+        $this->assertIsArray($snap, 'no snapshot was taken — history will re-resolve to the vendor\'s current address');
+        $sentPickup = $this->lastBody()['pickup'] ?? [];
+        // assertEquals, not assertSame: the snapshot round-trips through JSON, which has no
+        // int/float distinction, so a 0.0 coordinate returns as 0. Value equality is the claim.
+        $this->assertEquals(
+            $sentPickup,
+            $snap['address'] ?? null,
+            'the snapshot must be the address that was SENT, not a re-derivation of it',
+        );
+    }
+
+    public function test_the_snapshot_does_not_follow_the_vendor_when_they_move(): void
+    {
+        $shipment = $this->shipment();
+        Http::fake(['*/v1/shipments' => Http::response(['partner' => 'shiprocket'], 200)]);
+        (new ShippingServiceClient())->book($this->reload($shipment), 'courier', false, 0.0);
+        $before = $shipment->fresh()->pickup_snapshot;
+
+        // The vendor relocates after the parcel has already gone out.
+        // Query builder, not the model: Shop's sluggable writes a `slug` column this stub schema
+        // does not carry. The point of the test is the vendor's address changing, by any route.
+        DB::table('shops')->where('id', $shipment->shop_id)->update([
+            'address' => json_encode(['street_address' => 'SOMEWHERE ELSE', 'city' => 'Mumbai', 'state' => 'MH', 'zip' => '400001']),
+        ]);
+
+        $this->assertSame(
+            $before,
+            $shipment->fresh()->pickup_snapshot,
+            'a vendor address edit rewrote the history of an already-dispatched shipment',
+        );
     }
 
     public function test_quoting_never_filters_by_a_stored_courier(): void

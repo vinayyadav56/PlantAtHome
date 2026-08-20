@@ -93,6 +93,8 @@ final class ShipmentStatusVocabularyTest extends TestCase
             $t->string('provider')->nullable();
             $t->string('provider_order_id')->nullable();
             $t->string('provider_reference', 64)->nullable();
+            $t->json('pickup_snapshot')->nullable();
+            $t->unsignedBigInteger('pickup_location_id')->nullable();
             $t->string('last_status')->nullable();
             $t->timestamp('last_status_at')->nullable();
             $t->timestamp('rto_at')->nullable();

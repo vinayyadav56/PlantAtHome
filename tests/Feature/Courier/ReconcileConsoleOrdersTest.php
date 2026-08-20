@@ -39,6 +39,8 @@ final class ReconcileConsoleOrdersTest extends TestCase
             $t->string('partner_code', 32);
             $t->string('provider_order_id', 191)->nullable();
             $t->string('provider_reference', 64)->nullable();
+            $t->json('pickup_snapshot')->nullable();
+            $t->unsignedBigInteger('pickup_location_id')->nullable();
             $t->string('origin', 16)->default('console');
             $t->unsignedBigInteger('shipment_id')->nullable();
             $t->unsignedBigInteger('order_id')->nullable();
@@ -92,6 +94,8 @@ final class ReconcileConsoleOrdersTest extends TestCase
             $t->string('provider')->nullable();
             $t->string('provider_order_id')->nullable();
             $t->string('provider_reference', 64)->nullable();
+            $t->json('pickup_snapshot')->nullable();
+            $t->unsignedBigInteger('pickup_location_id')->nullable();
             $t->string('status')->default('pending');
             $t->string('last_status')->nullable();
             $t->string('mode', 32)->nullable();

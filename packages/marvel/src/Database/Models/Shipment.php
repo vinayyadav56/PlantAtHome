@@ -27,6 +27,9 @@ class Shipment extends Model
         // module-level Map in the browser.
         'simulation_flow_type'  => 'integer',
         'simulation_started_at' => 'datetime',
+        // What this leg was dispatched FROM, frozen at booking. Never recomputed — see the
+        // migration: resolving it live meant a vendor address edit rewrote history.
+        'pickup_snapshot'       => 'array',
     ];
 
     /**

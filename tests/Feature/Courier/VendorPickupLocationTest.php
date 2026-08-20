@@ -5,10 +5,12 @@ declare(strict_types=1);
 namespace Tests\Feature\Courier;
 
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\Order;
+use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Database\Models\Shipment;
 use Marvel\Database\Models\VendorPickupLocation;
 use Marvel\Services\Courier\CourierService;
@@ -80,6 +82,7 @@ final class VendorPickupLocationTest extends TestCase
             $t->string('provider')->nullable();
             $t->string('provider_order_id')->nullable();
             $t->string('provider_reference', 64)->nullable();
+            $t->json('pickup_snapshot')->nullable();
             $t->string('provider_shipment_id')->nullable();
             $t->string('awb_number')->nullable();
             $t->string('courier_name')->nullable();
@@ -276,6 +279,60 @@ final class VendorPickupLocationTest extends TestCase
     }
 
     // ── pickup resolution ────────────────────────────────────────────────
+
+    // ── needs-sync ───────────────────────────────────────────────────────────────────────────
+
+    /**
+     * Shiprocket has no update-pickup API: a registered door keeps whatever address it was
+     * registered with. Leaving the row `verified` after a local address edit meant the admin
+     * showed a green badge over an address the partner had never seen, and every booking left
+     * from the old yard. Demoting to `pending` is what makes that visible.
+     */
+    public function test_editing_a_registered_doors_address_demotes_it_to_pending(): void
+    {
+        $this->shop(5);
+        $door = $this->location(5, ['status' => 'verified', 'provider_location_name' => 'shop-5']);
+
+        $req = Request::create('/x', 'PUT', [
+            'shop_id' => 5,
+            'label'   => $door->label,
+            'address' => 'A COMPLETELY DIFFERENT YARD',
+            'city'    => $door->city,
+            'state'   => $door->state,
+            'pincode' => $door->pincode,
+            'phone'   => $door->phone,
+        ]);
+        (new CourierShipmentController())->updatePickupLocation($req, $door->id);
+
+        $fresh = $door->fresh();
+        $this->assertSame('pending', $fresh->status, 'a moved door still claims the partner knows about it');
+        $this->assertNotEmpty($fresh->last_error, 'nothing tells the operator why it went pending');
+        $this->assertSame('shop-5', $fresh->provider_location_name, 'the registered nickname must survive — it is the partner key');
+    }
+
+    public function test_editing_only_the_contact_leaves_a_verified_door_alone(): void
+    {
+        $this->shop(5);
+        $door = $this->location(5, ['status' => 'verified', 'provider_location_name' => 'shop-5']);
+
+        $req = Request::create('/x', 'PUT', [
+            'shop_id'      => 5,
+            'label'        => $door->label,
+            'address'      => $door->address,
+            'city'         => $door->city,
+            'state'        => $door->state,
+            'pincode'      => $door->pincode,
+            'phone'        => $door->phone,
+            'contact_name' => 'A New Person',
+        ]);
+        (new CourierShipmentController())->updatePickupLocation($req, $door->id);
+
+        $this->assertSame(
+            'verified',
+            $door->fresh()->status,
+            'the partner keys on the ADDRESS — a contact change must not force a re-registration',
+        );
+    }
 
     public function test_pickup_resolution_stays_inside_the_shipments_own_vendor(): void
     {
