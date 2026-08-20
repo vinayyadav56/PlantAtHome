@@ -427,7 +427,54 @@ class CourierShipmentController extends CoreController
     /** GET shipments/{id}/courier-track — live status (admin view). */
     public function track(Request $request, $id)
     {
-        return response()->json($this->courier()->track($this->shipment($id)));
+        $shipment = $this->shipment($id);
+        $res = (array) $this->courier()->track($shipment);
+
+        // A shipments row is reused across every booking attempt, so a tracking response scoped
+        // only to the shipment cannot say WHICH booking it describes — that is how a cancelled
+        // attempt's rider and flow kept surfacing on the booking that replaced it. The ledger row
+        // for the CURRENT provider_order_id is the per-attempt truth, so the answer carries it.
+        $res['booking'] = $this->currentBooking($shipment, $res);
+
+        return response()->json($res);
+    }
+
+    /**
+     * Resolve (and freshen) the ledger row for the shipment's CURRENT booking.
+     *
+     * The reconcile pass deliberately leaves origin=shipment rows alone, so for a real customer
+     * shipment this live call is the only thing that ever sees the rider — persist it here or the
+     * driver card stays empty until a webhook happens to arrive.
+     */
+    private function currentBooking(Shipment $shipment, array $res): ?array
+    {
+        $pid = trim((string) $shipment->provider_order_id);
+        if ($pid === '') {
+            return null;
+        }
+        $row = \App\Models\PartnerConsoleOrder::where('provider_order_id', $pid)->first();
+        if (!$row) {
+            return null;
+        }
+
+        $body = $res['exchange']['response']['body'] ?? null;
+        if (is_string($body)) {
+            $decoded = json_decode($body, true);
+            $body = is_array($decoded) ? $decoded : null;
+        }
+        if ($row->syncDriverFrom(is_array($body) ? $body : null)) {
+            \Illuminate\Support\Facades\Log::info('courier.booking.driver', [
+                'order_id'          => $shipment->order_id,
+                'shipment_id'       => $shipment->id,
+                'provider'          => $shipment->provider,
+                'provider_order_id' => $pid,
+                // Last 4 only — a rider's number is personal data and does not belong in logs.
+                'driver_phone_last4' => substr(preg_replace('/\D/', '', (string) $row->driver_phone), -4) ?: null,
+                'event_type'        => 'driver_assigned',
+            ]);
+        }
+
+        return $row->toBookingPayload();
     }
 
     /** POST shops/{id}/sync-pickup — register the vendor's DEFAULT door as a provider pickup location. */

@@ -3,6 +3,7 @@
 namespace Marvel\Services\Courier;
 
 use Carbon\Carbon;
+use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\CourierPartnerConfig;
 use Marvel\Database\Models\Settings;
 use Marvel\Database\Models\Shipment;
@@ -191,8 +192,28 @@ class CourierService
             case 'cancelled':
                 return ['shipment_status' => 'cancelled', 'order_status' => null];
             case 'assigned':
-                return ['shipment_status' => 'assigned', 'order_status' => null];
+            case 'packed':
+                return ['shipment_status' => $shipmentStatus, 'order_status' => null];
+            case 'pending':
+                // The state a booking starts in. A no-op in practice (book() already stamps it and
+                // the rank guard refuses a sideways move), but mapping it explicitly is what keeps
+                // `default` meaning "we have never heard of this word" instead of "shrug".
+                return ['shipment_status' => 'pending', 'order_status' => null];
+            case 'reopened':
+                // Porter's assigned rider dropped and it is searching again — the ONE legal step
+                // backwards (see PartnerOrderLifecycle, which ranks it beside `accepted` for the
+                // same reason). It used to fall through to `default` and vanish: the ledger
+                // recorded the reopen, the shipment never did, so the drawer went on showing a
+                // rider who had already cancelled. order_status stays null — a reopen is not a
+                // customer-visible downgrade.
+                return ['shipment_status' => 'reopened', 'order_status' => null];
             default:
+                // Every word the shipping service can emit is handled above; reaching here means
+                // a partner adapter learned a new one and this table did not. Silently returning
+                // null is what let `reopened` disappear for months, so it is now audible.
+                if (trim($shipmentStatus) !== '') {
+                    Log::warning('courier.status.unmapped', ['normalized_status' => $shipmentStatus]);
+                }
                 return ['shipment_status' => null, 'order_status' => null];
         }
     }
@@ -760,7 +781,15 @@ class CourierService
         // ndr shares out_for_delivery's rank: a failed attempt is the same point of the journey,
         // not a step past it — and the reattempt (out_for_delivery again) has to be able to follow
         // it, which a strict `>` would refuse, freezing the shipment at ndr forever.
-        $rank = ['pending' => 0, 'assigned' => 1, 'packed' => 1, 'shipped' => 2, 'out_for_delivery' => 3, 'ndr' => 3, 'delivered' => 4];
+        //
+        // `reopened` shares assigned's rank for the same reason ndr shares out_for_delivery's: it
+        // is the same point of the journey re-entered, not a step past it, and the rider that
+        // follows it (assigned again) has to be able to land.
+        $rank = ['pending' => 0, 'assigned' => 1, 'reopened' => 1, 'packed' => 1, 'shipped' => 2, 'in_transit' => 2, 'out_for_delivery' => 3, 'ndr' => 3, 'delivered' => 4];
+        // States that may interrupt any pre-terminal status, and that a shipment must be able to
+        // LEAVE at the same rank it entered them (otherwise it freezes there forever).
+        $interrupts = ['cancelled', 'ndr', 'reopened'];
+        $resumable  = ['ndr', 'reopened'];
         $cur = (string) $shipment->status;
         $curStage = $this->rtoStage($cur, (string) $shipment->last_status);
         $inStage  = self::RTO_STAGES[$target] ?? 0;
@@ -793,12 +822,13 @@ class CourierService
                 $shipment->forceFill(['last_status_at' => $now])->save();
                 return $map;
             }
-        } elseif (!in_array($target, ['cancelled', 'ndr'], true) && ($rank[$target] ?? 0) <= ($rank[$cur] ?? 0)) {
-            // cancelled and ndr interrupt at any pre-terminal point (both happen mid-journey, so a
-            // forward-only rank comparison would never admit them). Everything else must move up
-            // the rank — except the reattempt OUT of ndr, which sits at the same rank and would
-            // otherwise be rejected, freezing the shipment at ndr forever.
-            if (!($cur === 'ndr' && ($rank[$target] ?? 0) >= $rank['ndr'])) {
+        } elseif (!in_array($target, $interrupts, true) && ($rank[$target] ?? 0) <= ($rank[$cur] ?? 0)) {
+            // cancelled, ndr and reopened interrupt at any pre-terminal point (all three happen
+            // mid-journey, so a forward-only rank comparison would never admit them). Everything
+            // else must move up the rank — except the move OUT of an interrupt state, which sits
+            // at the same rank and would otherwise be rejected, freezing the shipment there
+            // forever (the ndr reattempt, and the second rider after a Porter reopen).
+            if (!(in_array($cur, $resumable, true) && ($rank[$target] ?? 0) >= ($rank[$cur] ?? 0))) {
                 $shipment->forceFill(['last_status_at' => $now])->save();
                 return $map; // same or backward → no-op
             }

@@ -297,6 +297,11 @@ class ShippingServiceClient
             return ['ok' => false, 'error' => $res['error'] ?? 'Shipping service book failed.'];
         }
         $b = (array) ($res['data'] ?? []);
+        // Captured before the overwrite: the attempt this booking replaces. Without it a rebook
+        // is indistinguishable from a first booking in the logs.
+        $previousBookingId = $shipment->provider_order_id;
+        $previousFlow      = $shipment->simulation_flow_type;
+        $previousStatus    = $shipment->last_status;
         $shipment->forceFill([
             'provider'             => $b['partner'] ?? null,
             'mode'                 => $b['mode'] ?? $mode,
@@ -321,12 +326,35 @@ class ShippingServiceClient
             // A rebook-after-cancel must not leave a zombie row that reads both booked AND cancelled.
             'cancelled_at'         => null,
             'cancelled_reason'     => null,
+            // One shipments row is REUSED across every booking attempt — only provider_order_id
+            // changes. So anything describing "the current booking" has to be cleared here or it
+            // silently outlives the booking it belonged to. The simulation stamp did exactly that:
+            // a rebook landed a new CRN on a row still stamped with the previous attempt's flow,
+            // and the admin then rendered that dead flow as running against the new booking
+            // (dropdown locked, tracking frozen). Per-attempt history lives in
+            // partner_console_orders; these two columns are only a cache of the CURRENT attempt.
+            'simulation_flow_type'   => null,
+            'simulation_started_at'  => null,
             // Still cleared on a genuinely clean book — stale text outlived the problem and lied
             // (a corrected pin booked fine while the row still read "restricted_location" from the
             // attempt before). But when the service DOES report a reason, that reason is current
             // and is the only thing telling the operator why the parcel is stuck.
             'failure_reason'       => ($b['failure_reason'] ?? '') ?: null,
         ])->save();
+
+        Log::info('courier.booking.opened', [
+            'order_id'            => $shipment->order_id,
+            'shipment_id'         => $shipment->id,
+            'provider'            => $shipment->provider,
+            'provider_order_id'   => $shipment->provider_order_id,
+            'previous_booking_id' => $previousBookingId,
+            'previous_flow_id'    => $previousFlow,
+            'previous_status'     => $previousStatus,
+            'provider_status'     => $shipment->status,
+            'normalized_status'   => $shipment->last_status,
+            'mode'                => $shipment->mode,
+            'event_type'          => $previousBookingId ? 'rebooked' : 'booked',
+        ]);
 
         // Activity log — one seam covers manual dispatch AND the auto-book listener.
         \Marvel\Database\Models\OrderEvent::record($shipment->order_id, 'shipment.booked', [
@@ -673,12 +701,27 @@ class ShippingServiceClient
             'last_status_at'   => Carbon::now(),
             'cancelled_at'     => Carbon::now(),
             'cancelled_reason' => $reason,
+            // Closing the booking closes its flow. Leaving the stamp behind kept a dead flow
+            // reading as "running" — the operator saw a locked dropdown and a frozen tracker on
+            // a booking that no longer exists. The attempt's own record survives in
+            // partner_console_orders; nothing historical is destroyed here.
+            'simulation_flow_type'  => null,
+            'simulation_started_at' => null,
         ])->save();
 
         \Marvel\Database\Models\OrderEvent::record($shipment->order_id, 'shipment.cancelled', [
             'shipment_id' => $shipment->id,
             'reason'      => $reason,
             'scope'       => $scope,
+        ]);
+
+        Log::info('courier.booking.closed', [
+            'order_id'          => $shipment->order_id,
+            'shipment_id'       => $shipment->id,
+            'provider'          => $shipment->provider,
+            'provider_order_id' => $shipment->provider_order_id,
+            'scope'             => $scope,
+            'event_type'        => 'booking_cancelled',
         ]);
     }
 

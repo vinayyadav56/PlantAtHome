@@ -43,6 +43,12 @@ final class PartnerOrderLifecycleTest extends TestCase
             $t->timestamp('ended_at')->nullable();
             $t->timestamp('cancelled_at')->nullable();
             $t->timestamp('reopened_at')->nullable();
+            $t->string('last_status', 32)->nullable();
+            $t->string('driver_name', 120)->nullable();
+            $t->string('driver_phone', 32)->nullable();
+            $t->string('vehicle_number', 32)->nullable();
+            $t->unsignedTinyInteger('simulation_flow_type')->nullable();
+            $t->timestamp('simulation_started_at')->nullable();
             $t->timestamps();
         });
     }
@@ -156,5 +162,45 @@ final class PartnerOrderLifecycleTest extends TestCase
         $this->assertSame('reopened', PartnerOrderLifecycle::fromEvent('order_reopen'));
         $this->assertSame('cancelled', PartnerOrderLifecycle::fromEvent('order_cancel'));
         $this->assertNull(PartnerOrderLifecycle::fromEvent('order_unknown'));
+    }
+
+    /**
+     * Two partner payload shapes carry the same fact, and the phone arrives nested. Both were
+     * being re-derived at each call site; syncDriverFrom is the one place that knows the mapping.
+     */
+    public function test_driver_details_are_read_from_either_payload_shape(): void
+    {
+        $webhook = $this->row();
+        $this->assertTrue($webhook->syncDriverFrom([
+            'order_details' => ['driver_details' => [
+                'driver_name' => 'Hinthlal Yadav',
+                'mobile' => ['country_code' => '+91', 'mobile_number' => '9876543210'],
+                'vehicle_number' => 'MH-04-FU-2737',
+            ]],
+        ]));
+        $this->assertSame('Hinthlal Yadav', $webhook->fresh()->driver_name);
+        $this->assertSame('+919876543210', $webhook->fresh()->driver_phone, 'nested mobile must be flattened');
+
+        $tracked = PartnerConsoleOrder::create(['partner_code' => 'porter', 'provider_order_id' => 'CRN2']);
+        $this->assertTrue($tracked->syncDriverFrom(['partner_info' => ['name' => 'Asha R', 'vehicle_number' => 'DL-01-AA-1']]));
+        $this->assertSame('Asha R', $tracked->fresh()->driver_name);
+
+        // A later payload without the rider must not erase a rider we already know.
+        $this->assertFalse($webhook->syncDriverFrom(['partner_info' => []]));
+        $this->assertSame('Hinthlal Yadav', $webhook->fresh()->driver_name);
+        $this->assertFalse($webhook->syncDriverFrom(null));
+    }
+
+    public function test_booking_payload_omits_a_rider_the_partner_never_reported(): void
+    {
+        $bare = $this->row('open');
+        $payload = $bare->toBookingPayload();
+        $this->assertSame('CRN1', $payload['provider_order_id']);
+        $this->assertSame('open', $payload['provider_status']);
+        // Null, not an object of empty strings — the admin renders the rider card on truthiness.
+        $this->assertNull($payload['driver'], 'an unassigned rider must not render a rider card');
+
+        $bare->syncDriverFrom(['partner_info' => ['name' => 'Asha R']]);
+        $this->assertSame(['name' => 'Asha R'], $bare->fresh()->toBookingPayload()['driver']);
     }
 }

@@ -90,6 +90,8 @@ final class VendorPickupLocationTest extends TestCase
             $t->timestamp('last_status_at')->nullable();
             $t->timestamp('cancelled_at')->nullable();
             $t->string('cancelled_reason')->nullable();
+            $t->unsignedTinyInteger('simulation_flow_type')->nullable();
+            $t->timestamp('simulation_started_at')->nullable();
             $t->string('failure_reason')->nullable();
             $t->timestamps();
         });

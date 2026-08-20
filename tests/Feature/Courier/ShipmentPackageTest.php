@@ -88,6 +88,8 @@ final class ShipmentPackageTest extends TestCase
             $t->string('failure_reason')->nullable();
             $t->string('cancelled_reason')->nullable();
             $t->timestamp('cancelled_at')->nullable();
+            $t->unsignedTinyInteger('simulation_flow_type')->nullable();
+            $t->timestamp('simulation_started_at')->nullable();
             $t->timestamps();
         });
         Schema::create('products', function (Blueprint $t) {

@@ -107,6 +107,8 @@ final class VendorShipmentGroupingTest extends TestCase
             $t->string('failure_reason')->nullable();
             $t->string('cancelled_reason')->nullable();
             $t->timestamp('cancelled_at')->nullable();
+            $t->unsignedTinyInteger('simulation_flow_type')->nullable();
+            $t->timestamp('simulation_started_at')->nullable();
             $t->timestamps();
         });
         Schema::create('order_events', function (Blueprint $t) {
@@ -482,6 +484,8 @@ final class VendorShipmentGroupingTest extends TestCase
             'order_id' => $order->id, 'shop_id' => 5, 'fulfillment_mode' => 'local',
             'status' => 'cancelled', 'provider_order_id' => 'CRN-OLD-1',
             'cancelled_at' => now(), 'cancelled_reason' => 'operator cancel',
+            // The previous attempt's simulated flow, still stamped on the row.
+            'simulation_flow_type' => 2, 'simulation_started_at' => now()->subHours(3),
         ]);
 
         $res = (new ShippingServiceClient())->book($shipment, 'same_city', false, 0.0);
@@ -492,6 +496,12 @@ final class VendorShipmentGroupingTest extends TestCase
         $this->assertEquals(123.45, (float) $fresh->booked_cost);
         $this->assertNull($fresh->cancelled_at, 'rebook must clear cancelled_at');
         $this->assertNull($fresh->cancelled_reason);
+        // The whole point of the lifecycle fix: one shipments row serves every attempt, so a
+        // new booking must not inherit the previous one's flow. Leaving it behind is what made
+        // the admin show a dead flow as running (dropdown locked, tracking frozen) on a booking
+        // that had only just been created.
+        $this->assertNull($fresh->simulation_flow_type, 'rebook inherited the previous flow');
+        $this->assertNull($fresh->simulation_started_at);
     }
 
     public function test_dispatch_refused_on_live_booked_shipment(): void

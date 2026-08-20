@@ -158,15 +158,7 @@ class ReconcileConsoleOrdersCommand extends Command
 
     private function stampDriver(PartnerConsoleOrder $row, array $body): void
     {
-        $d = $body['order_details']['driver_details'] ?? null;
-        if (!is_array($d)) {
-            return;
-        }
-        $row->forceFill([
-            'driver_name'    => $d['driver_name'] ?? $row->driver_name,
-            'driver_phone'   => $d['mobile'] ?? $row->driver_phone,
-            'vehicle_number' => $d['vehicle_number'] ?? $row->vehicle_number,
-        ])->save();
+        $row->syncDriverFrom($body);
     }
 
     /** Mirror shipment bookings into the ledger and keep their status in step — no partner calls. */
@@ -257,13 +249,7 @@ class ReconcileConsoleOrdersCommand extends Command
                     'last_status'             => $status,
                     'track_failures'          => 0,
                 ])->save();
-                if (is_array($raw['partner_info'] ?? null)) {
-                    $row->forceFill([
-                        'driver_name'    => $raw['partner_info']['name'] ?? $raw['partner_info']['partner_name'] ?? $row->driver_name,
-                        'driver_phone'   => $raw['partner_info']['mobile'] ?? $row->driver_phone,
-                        'vehicle_number' => $raw['partner_info']['vehicle_number'] ?? $row->vehicle_number,
-                    ])->save();
-                }
+                $row->syncDriverFrom($raw);
                 $tracked++;
             } catch (\Throwable $e) {
                 // One unreachable partner must not abort the rest of the pass.
