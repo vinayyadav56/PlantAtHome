@@ -122,8 +122,93 @@ class CourierShipmentController extends CoreController
             }
         }
 
-        $res = $this->courier()->book($shipment, $partner, $courierId > 0 ? $courierId : null);
+        $options = $this->validateDeliveryOptions($request);
+        if ($options instanceof \Illuminate\Http\JsonResponse) {
+            return $options;
+        }
+
+        $res = $this->courier()->book($shipment, $partner, $courierId > 0 ? $courierId : null, $options);
         return response()->json($res, !empty($res['ok']) ? 200 : 409);
+    }
+
+    /**
+     * Validate the booking wizard's delivery options.
+     *
+     * This endpoint had NO validation of any kind — it forwarded three optional keys and trusted
+     * the partner to complain. That was survivable while the only inputs were a partner code and
+     * a courier id; it is not once an operator can set an insured value, a collection amount and
+     * a time window, because the partner's complaint about those arrives as an untranslated
+     * parameter_errors blob after a real API call.
+     *
+     * Deliberately duplicated with the Go adapter's validateBorzoOptions rather than deferring to
+     * it: this layer turns a bad value into a FIELD error the wizard can attach to the input the
+     * operator is looking at, while the adapter's copy is the guarantee for callers that never
+     * come through here (the console, the auto-book listener, a future integration).
+     *
+     * @return array|\Illuminate\Http\JsonResponse validated options, or a 422 to return as-is
+     */
+    private function validateDeliveryOptions(Request $request)
+    {
+        if (!$request->has('options')) {
+            return [];
+        }
+
+        try {
+            $data = $request->validate([
+                'options'                 => 'array',
+                'options.delivery_type'   => 'nullable|string|in:standard,endofday',
+                'options.vehicle_id'      => 'nullable|string|max:32',
+                'options.insurance_amount' => 'nullable|numeric|min:0|max:1000000',
+                'options.route_optimize'  => 'nullable|boolean',
+                // Borzo counts the driver inside this number, so 11 is the ceiling, not 11 extra.
+                'options.loaders'         => 'nullable|integer|min:0|max:11',
+                'options.moto_box'        => 'nullable|boolean',
+                'options.thermo_box'      => 'nullable|boolean',
+                'options.return_required' => 'nullable|boolean',
+                'options.promo_code'      => 'nullable|string|max:64',
+                'options.payment_method'  => 'nullable|string|in:balance,cash,bank_card',
+                'options.bank_card_id'    => 'nullable|string|max:64',
+                'options.collect_amount'  => 'nullable|numeric|min:0|max:1000000',
+                'options.cash_voucher'    => 'nullable|boolean',
+                'options.buyout_amount'   => 'nullable|numeric|min:0|max:1000000',
+                'options.notify_client'   => 'nullable|boolean',
+                'options.notify_recipient' => 'nullable|boolean',
+                'options.window_start'    => 'nullable|date',
+                'options.window_end'      => 'nullable|date|after_or_equal:options.window_start',
+                'options.instructions'    => 'nullable|string|max:1000',
+            ], [
+                'options.loaders.max'          => 'Borzo allows at most 11 people including the driver.',
+                'options.window_end.after_or_equal' => 'The latest arrival time must not be before the earliest.',
+                'options.payment_method.in'    => 'Choose account balance, cash, or a bank card.',
+            ])['options'] ?? [];
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            // Field-keyed so the wizard can pin each message to its own input.
+            return response()->json(['ok' => false, 'error' => $e->validator->errors()->first(), 'errors' => $e->errors()], 422);
+        }
+
+        // Cross-field rules the provider enforces, stated in the operator's language. End-of-day
+        // is a different Borzo product: it assigns the vehicle and schedules the window itself,
+        // and rejects the whole order if either is supplied.
+        if (($data['delivery_type'] ?? null) === 'endofday') {
+            $conflict = null;
+            if (trim((string) ($data['vehicle_id'] ?? '')) !== '') {
+                $conflict = ['options.vehicle_id' => ['End-of-day deliveries do not take a vehicle choice — Borzo assigns one.']];
+            } elseif (!empty($data['window_start']) || !empty($data['window_end'])) {
+                $conflict = ['options.window_start' => ['End-of-day deliveries do not take a delivery time window.']];
+            }
+            if ($conflict) {
+                return response()->json(['ok' => false, 'error' => reset($conflict)[0], 'errors' => $conflict], 422);
+            }
+        }
+        if (!empty($data['bank_card_id']) && ($data['payment_method'] ?? null) !== 'bank_card') {
+            return response()->json([
+                'ok'     => false,
+                'error'  => 'A card was selected but the payment method is not bank card.',
+                'errors' => ['options.payment_method' => ['Choose "Bank card" to pay with the selected card.']],
+            ], 422);
+        }
+
+        return array_filter($data, static fn ($v) => $v !== null && $v !== '');
     }
 
     /**

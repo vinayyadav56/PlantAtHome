@@ -235,7 +235,7 @@ class CourierService
      * (courier → Shiprocket; instant/same-city → cheapest of Borzo/Porter), idempotent on
      * shipment_ref so a retry never double-books.
      */
-    public function book(Shipment $shipment, ?string $partnerCode = null, ?int $courierId = null): array
+    public function book(Shipment $shipment, ?string $partnerCode = null, ?int $courierId = null, array $options = []): array
     {
         // Root-cause guard for SELF-delivery vendors: this is the single funnel
         // every booking path routes through (auto-book listener, admin book +
@@ -268,7 +268,7 @@ class CourierService
         $cod = $order && PaymentGatewayType::isCashOnDelivery($order->payment_gateway);
         // $courierId travels as an ARGUMENT, never off the row: see buildRequest's note — a
         // persisted choice replayed on a later booking is a stale rate card.
-        return $this->shippingClient()->book($shipment, $this->modeOf($shipment), (bool) $cod, $this->shipmentCodAmount($shipment, $order), $partnerCode, $courierId);
+        return $this->shippingClient()->book($shipment, $this->modeOf($shipment), (bool) $cod, $this->shipmentCodAmount($shipment, $order), $partnerCode, $courierId, $options);
     }
 
     /**

@@ -633,6 +633,59 @@ final class CourierOperationsTest extends TestCase
         $this->assertSame(42, $this->lastBody()['courier_id']);
     }
 
+    // ── the booking wizard's delivery options ────────────────────────────────────────────────
+
+    public function test_delivery_options_reach_the_shipping_service(): void
+    {
+        $shipment = $this->shipment(['fulfillment_mode' => 'same_city']);
+        Http::fake(['*/v1/shipments' => Http::response(['partner' => 'borzo', 'provider_order_id' => '1'], 200)]);
+
+        (new ShippingServiceClient())->book($this->reload($shipment), 'same_city', false, 0.0, 'borzo', null, [
+            'vehicle_id' => '7', 'insurance_amount' => 5000, 'loaders' => 2, 'collect_amount' => 250,
+        ]);
+
+        // Cast because the client sends options as a JSON OBJECT, not an array: an empty PHP
+        // array would encode as `[]`, which the Go service cannot decode into its options struct.
+        $opts = (array) ($this->lastBody()['options'] ?? []);
+        $this->assertSame('7', $opts['vehicle_id'] ?? null, 'the operator\'s vehicle choice never left Laravel');
+        $this->assertSame(5000, $opts['insurance_amount'] ?? null);
+        $this->assertSame(2, $opts['loaders'] ?? null);
+        $this->assertSame(250, $opts['collect_amount'] ?? null);
+    }
+
+    public function test_options_are_always_sent_even_when_empty(): void
+    {
+        $shipment = $this->shipment();
+        Http::fake(['*/v1/shipments' => Http::response(['partner' => 'shiprocket'], 200)]);
+
+        (new ShippingServiceClient())->book($this->reload($shipment), 'courier', false, 0.0);
+
+        $this->assertArrayHasKey(
+            'options',
+            $this->lastBody(),
+            'an absent key makes "no options chosen" indistinguishable from "an admin too old to send them"',
+        );
+    }
+
+    public function test_access_detail_on_the_address_reaches_the_partner_as_separate_fields(): void
+    {
+        $shipment = $this->shipment();
+        $shipment->order->forceFill(['shipping_address' => ['address' => [
+            'street_address' => 'H-12 Hauz Khas', 'city' => 'Delhi', 'state' => 'Delhi', 'zip' => '110016',
+            'location' => ['lat' => 28.5, 'lng' => 77.1],
+            'building' => '12', 'entrance' => '2', 'floor' => '4', 'intercom' => '4421',
+            'courier_note' => 'Gate 2, ask security',
+        ]]])->save();
+        Http::fake(['*/v1/shipments' => Http::response(['partner' => 'borzo'], 200)]);
+
+        (new ShippingServiceClient())->book($this->reload($shipment), 'same_city', false, 0.0, 'borzo');
+
+        $drop = $this->lastBody()['drop'] ?? [];
+        foreach (['building' => '12', 'entrance' => '2', 'floor' => '4', 'intercom' => '4421', 'note' => 'Gate 2, ask security'] as $k => $want) {
+            $this->assertSame($want, $drop[$k] ?? null, "access detail '$k' was flattened away instead of sent as its own field");
+        }
+    }
+
     public function test_quoting_never_filters_by_a_stored_courier(): void
     {
         $shipment = $this->shipment(['courier_company_id' => 999, 'fulfillment_mode' => 'same_city']);

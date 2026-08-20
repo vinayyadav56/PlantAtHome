@@ -277,9 +277,9 @@ class ShippingServiceClient
      * override cannot bypass the runtime master switch or mode/COD eligibility — an
      * ineligible code comes back as "partner not available: X" rather than booking.
      */
-    public function book(Shipment $shipment, string $mode, bool $cod, float $codAmount, ?string $partnerCode = null, ?int $courierId = null): array
+    public function book(Shipment $shipment, string $mode, bool $cod, float $codAmount, ?string $partnerCode = null, ?int $courierId = null, array $options = []): array
     {
-        $res = $this->request('post', '/v1/shipments', $this->buildRequest($shipment, $mode, $cod, $codAmount, $partnerCode, $courierId));
+        $res = $this->request('post', '/v1/shipments', $this->buildRequest($shipment, $mode, $cod, $codAmount, $partnerCode, $courierId, $options));
         if (empty($res['ok'])) {
             $shipment->forceFill(['last_status' => 'book_failed', 'failure_reason' => $res['error'] ?? 'shipping service'])->save();
             // Structured, correlatable failure record: shipment id doubles as
@@ -841,7 +841,7 @@ class ShippingServiceClient
 
     // ── request building ──────────────────────────────────────────
 
-    private function buildRequest(Shipment $shipment, string $mode, bool $cod, float $codAmount, ?string $partnerCode = null, ?int $courierId = null): array
+    private function buildRequest(Shipment $shipment, string $mode, bool $cod, float $codAmount, ?string $partnerCode = null, ?int $courierId = null, array $options = []): array
     {
         $order = $shipment->order;
         $shop = $shipment->shop;
@@ -885,6 +885,10 @@ class ShippingServiceClient
             // The column is now an OUTPUT (what was chosen/allocated), never an input.
             'courier_id'      => max(0, (int) $courierId),
             'pickup_location' => $courier->pickupNameFor($shipment, $pickup),
+            // The operator's choices from the booking wizard. Sent as an object even when empty:
+            // the service always decodes it, and an absent key would make "no options" and "an
+            // older admin that cannot send options" indistinguishable at the adapter.
+            'options'         => (object) $options,
         ];
     }
 
@@ -1020,9 +1024,18 @@ class ShippingServiceClient
         };
 
         return array_filter([
-            'apartment' => $pick($a, ['apartment', 'apartment_address', 'flat', 'flat_no', 'building', 'house_no']),
+            'apartment' => $pick($a, ['apartment', 'apartment_address', 'flat', 'flat_no', 'house_no']),
             'line2'     => $pick($a, ['line2', 'street_address2', 'address_line_2', 'area', 'locality']),
             'landmark'  => $pick($a, ['landmark', 'nearby', 'near']),
+            // Access detail the courier is shown as its own labelled instruction rather than
+            // buried in the address line. Borzo carries all of these as real point fields;
+            // partners that do not simply ignore them. `building` no longer feeds `apartment` —
+            // they are different facts and Borzo has a slot for each.
+            'building'  => $pick($a, ['building', 'building_number', 'block']),
+            'entrance'  => $pick($a, ['entrance', 'entrance_number', 'gate']),
+            'floor'     => $pick($a, ['floor', 'floor_number']),
+            'intercom'  => $pick($a, ['intercom', 'intercom_code', 'door_code']),
+            'note'      => $pick($a, ['courier_note', 'delivery_note', 'note', 'instructions']),
         ], static fn ($v) => $v !== '');
     }
 
