@@ -280,6 +280,51 @@ final class VendorPickupLocationTest extends TestCase
 
     // ── pickup resolution ────────────────────────────────────────────────
 
+    // ── §67/§68 marketplace: origin recorded, and reused ─────────────────────────────────────
+
+    /**
+     * §68. Booking twice from the same door must reuse the SAME registered location, never
+     * register a second one — the duplicate-protection the spec asks for is the unique key
+     * (shop_id, partner, label) plus resolving through the existing row.
+     */
+    public function test_two_shipments_from_one_vendor_share_one_registered_door(): void
+    {
+        $this->shop(5);
+        $door = $this->location(5, ['status' => 'verified', 'provider_location_name' => 'shop-5']);
+
+        $a = $this->shipment(5);
+        $b = $this->shipment(5);
+
+        $courier = new CourierService();
+        $this->assertSame($door->id, $courier->pickupLocationFor($a)->id);
+        $this->assertSame($door->id, $courier->pickupLocationFor($b)->id);
+        $this->assertSame(
+            1,
+            VendorPickupLocation::where('shop_id', 5)->count(),
+            'a second shipment registered a second door instead of reusing the first',
+        );
+    }
+
+    /**
+     * §67. Each vendor's leg resolves to that vendor's OWN door. The rule that makes a
+     * three-vendor order into three correctly-addressed shipments is the same one tested here at
+     * two: resolution is scoped to the shipment's shop, never to whichever door was registered
+     * most recently.
+     */
+    public function test_each_vendors_leg_resolves_to_its_own_door(): void
+    {
+        $this->shop(5);
+        $this->shop(6);
+        $doorA = $this->location(5, ['status' => 'verified', 'provider_location_name' => 'shop-5']);
+        $doorB = $this->location(6, ['status' => 'verified', 'provider_location_name' => 'shop-6']);
+
+        $courier = new CourierService();
+        $this->assertSame($doorA->id, $courier->pickupLocationFor($this->shipment(5))->id);
+        $this->assertSame($doorB->id, $courier->pickupLocationFor($this->shipment(6))->id);
+        $this->assertSame('shop-5', $courier->pickupNameFor($this->shipment(5)));
+        $this->assertSame('shop-6', $courier->pickupNameFor($this->shipment(6)));
+    }
+
     // ── needs-sync ───────────────────────────────────────────────────────────────────────────
 
     /**

@@ -425,13 +425,17 @@ class OrderItemService
         $shopId = (int) $pick['shop_id'];
         $mode = $pick['fulfillment_mode'] ?? 'courier';
         $split = self::supportsSplitGroup() ? $item->split_group : null;
-        $key = self::groupKey($shopId, $mode, $split);
+        $pickupLocationId = self::pickupLocationIdFor($shopId);
+        $key = self::groupKey($shopId, $mode, $split, $pickupLocationId);
 
         if (!isset($shipments[$key])) {
             $eta = $pick['eta_days'] ?? null;
             $shipments[$key] = Shipment::create([
                 'order_id'             => $order->id,
                 'shop_id'              => $shopId,
+                // The door this leg leaves from, recorded when the group is formed rather than
+                // resolved again at booking — see pickupLocationIdFor.
+                'pickup_location_id'   => $pickupLocationId,
                 'fulfillment_mode'     => $mode,
                 'delivery_mode'        => self::shipmentDeliveryModeFor($shopId),
                 'status'               => 'pending',
@@ -567,10 +571,45 @@ class OrderItemService
      * separately" marker (large orders that need two vehicles), so it has to
      * survive regroup() — otherwise the rows merge straight back together.
      */
-    private static function groupKey(int $shopId, string $mode, $splitGroup = null): string
+    private static function groupKey(int $shopId, string $mode, $splitGroup = null, $pickupLocationId = null): string
     {
         $split = $splitGroup === null || $splitGroup === '' ? '' : ':' . $splitGroup;
-        return $shopId . ':' . $mode . $split;
+        // The physical ORIGIN, not just the vendor. A courier collects from an address, so two
+        // doors is two collections however you label them — one shipment naming both is a
+        // shipment nobody can actually pick up.
+        //
+        // Inert today, deliberately: nothing yet says which of a vendor's doors holds which
+        // stock, so every line resolves to the same default door and the grouping is unchanged.
+        // The term is here so the day a location-aware inventory signal exists, splitting is a
+        // data change rather than a rewrite of the grouping rule.
+        $door = $pickupLocationId ? ':L' . $pickupLocationId : '';
+        return $shopId . ':' . $mode . $split . $door;
+    }
+
+    /**
+     * Which of the vendor's doors this line ships from.
+     *
+     * The vendor's default today — candidatesFor selects a SHOP, and neither it nor order_items
+     * carries a location, so there is no per-line signal to be more specific with. Resolving it
+     * here anyway is what puts the answer on the shipment: shipments.pickup_location_id existed
+     * with no production writer at all, so every leg silently booked whatever the default was at
+     * BOOKING time rather than what was chosen at assignment.
+     *
+     * Null on any failure — the pickup table is deploy-lag guarded elsewhere for the same reason,
+     * and a missing door must never stop an order being grouped.
+     */
+    private static function pickupLocationIdFor(int $shopId): ?int
+    {
+        try {
+            if (!\Illuminate\Support\Facades\Schema::hasTable('vendor_pickup_locations')) {
+                return null;
+            }
+            $id = \Marvel\Database\Models\VendorPickupLocation::where('shop_id', $shopId)
+                ->orderByDesc('is_default')->orderBy('id')->value('id');
+            return $id ? (int) $id : null;
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /**

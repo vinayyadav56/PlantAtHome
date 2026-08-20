@@ -176,6 +176,10 @@ class CourierShipmentController extends CoreController
                 'options.window_start'    => 'nullable|date',
                 'options.window_end'      => 'nullable|date|after_or_equal:options.window_start',
                 'options.instructions'    => 'nullable|string|max:1000',
+                // Porter caps this at 256 and rejects the order over it. Validated here so the
+                // operator is told before the booking goes out; the adapter also truncates, for
+                // callers that never pass through this endpoint.
+                'options.internal_note'   => 'nullable|string|max:256',
 
                 // ── courier-partner order detail (Shiprocket) ────────────────────────────────
                 'options.shipping_mode'   => 'nullable|string|in:surface,air',
@@ -216,6 +220,7 @@ class CourierShipmentController extends CoreController
                 'options.payment_method.in'    => 'Choose account balance, cash, or a bank card.',
                 'options.tax.gstin.regex'      => 'That does not look like a GSTIN — 15 characters, e.g. 07AABCU9603R1ZM.',
                 'options.shipping_mode.in'     => 'Choose Surface or Air.',
+                'options.internal_note.max'    => 'Porter allows at most 256 characters in the internal note.',
                 'options.billing.name.required_with'    => 'A separate billing address needs a name.',
                 'options.billing.address.required_with' => 'A separate billing address needs a street address.',
                 'options.billing.city.required_with'    => 'A separate billing address needs a city.',
