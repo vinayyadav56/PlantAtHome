@@ -374,6 +374,25 @@ class CourierShipmentController extends CoreController
      * create), while cancel/shipment/awbs voids just this waybill — which is what a re-pack or a
      * courier swap needs.
      */
+    /**
+     * POST shipments/{id}/assign-awb — retry waybill allocation.
+     *
+     * Guarded on the two states where it makes no sense rather than letting the partner explain
+     * it after a round trip: a shipment with a waybill, and one that was never booked.
+     */
+    public function assignAwb(Request $request, $id)
+    {
+        $shipment = $this->shipment($id);
+        if ($resp = $this->requireBooking($shipment, 'allocate a waybill')) {
+            return $resp;
+        }
+        if (trim((string) $shipment->awb_number) !== '') {
+            return $this->conflict('This shipment already has a waybill (' . $shipment->awb_number . ').');
+        }
+        $res = $this->courier()->assignAwb($shipment);
+        return response()->json($res, !empty($res['ok']) ? 200 : 409);
+    }
+
     public function cancelAwb(Request $request, $id)
     {
         $shipment = $this->shipment($id);

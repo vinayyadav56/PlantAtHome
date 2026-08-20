@@ -404,6 +404,38 @@ class ShippingServiceClient
      * moving while the partner order survives, which is what a reassignment or a re-pack needs.
      * Cancelling the order instead would strand the manifest and force a fresh create.
      */
+    /**
+     * Allocate the waybill for a booking that has an order but none.
+     *
+     * The 10-minute reconcile already retries this, but only it could: a shipment sitting on
+     * awb_pending — the state that most often means an account condition rather than a delay —
+     * gave the operator nothing to press. Shiprocket answers a refusal with HTTP 200, an empty
+     * awb_code and the reason in awb_assign_error, so the error text IS the actionable content
+     * and is surfaced verbatim.
+     */
+    public function assignAwb(Shipment $shipment): array
+    {
+        $d = $this->unwrap($this->request('post', $this->shipmentPath($shipment, '/assign-awb'), []), 'Waybill allocation failed.');
+        if (empty($d['ok'])) {
+            return $d;
+        }
+        $b = (array) ($d['booking'] ?? []);
+        $shipment->forceFill(array_filter([
+            'awb_number'     => ($b['awb_number'] ?? '') ?: null,
+            'courier_name'   => ($b['courier_name'] ?? '') ?: null,
+            'tracking_url'   => ($b['tracking_url'] ?? '') ?: null,
+            'last_status'    => 'booked',
+            'last_status_at' => Carbon::now(),
+        ], static fn ($v) => $v !== null))->save();
+
+        \Marvel\Database\Models\OrderEvent::record($shipment->order_id, 'shipment.awb_assigned', [
+            'shipment_id' => $shipment->id,
+            'awb_number'  => $shipment->fresh()->awb_number,
+        ]);
+
+        return ['ok' => true, 'shipment' => $shipment->fresh()];
+    }
+
     public function cancelAwb(Shipment $shipment, ?string $reason = null): array
     {
         // Was posting to /cancel — the SAME path as cancel() — so everything the docblock above

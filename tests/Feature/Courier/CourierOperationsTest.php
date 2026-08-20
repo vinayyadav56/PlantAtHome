@@ -792,6 +792,49 @@ final class CourierOperationsTest extends TestCase
         $this->assertArrayNotHasKey('charges', $opts, 'an empty charges block still reached the adapter');
     }
 
+    // ── retrying a stuck waybill ─────────────────────────────────────────────────────────────
+
+    public function test_a_shipment_that_already_has_a_waybill_is_not_reallocated(): void
+    {
+        $shipment = $this->shipment(['provider_order_id' => 'SR1', 'awb_number' => 'AWB123']);
+        $req = Request::create('/x', 'POST');
+        $res = (new CourierShipmentController())->assignAwb($req, $shipment->id);
+
+        $this->assertSame(409, $res->getStatusCode());
+        $this->assertStringContainsString('AWB123', $res->getData(true)['error'] ?? '');
+    }
+
+    public function test_allocating_a_waybill_persists_what_the_partner_returned(): void
+    {
+        $shipment = $this->shipment(['provider_order_id' => 'SR1', 'provider_shipment_id' => 'S9']);
+        Http::fake(['*/assign-awb' => Http::response([
+            'ok' => true,
+            'booking' => ['awb_number' => 'AWB999', 'courier_name' => 'Delhivery', 'tracking_url' => 'https://t/AWB999'],
+        ], 200)]);
+
+        (new ShippingServiceClient())->assignAwb($this->reload($shipment));
+
+        $fresh = $shipment->fresh();
+        $this->assertSame('AWB999', $fresh->awb_number);
+        $this->assertSame('Delhivery', $fresh->courier_name);
+        $this->assertSame('booked', $fresh->last_status);
+    }
+
+    public function test_a_refused_allocation_surfaces_the_partners_reason(): void
+    {
+        $shipment = $this->shipment(['provider_order_id' => 'SR1', 'provider_shipment_id' => 'S9']);
+        // Shiprocket refuses with 200 + the reason; that text is the whole actionable content.
+        Http::fake(['*/assign-awb' => Http::response([
+            'ok' => false, 'error' => 'KYC verification is mandated for your account',
+        ], 200)]);
+
+        $res = (new ShippingServiceClient())->assignAwb($this->reload($shipment));
+
+        $this->assertFalse($res['ok']);
+        $this->assertStringContainsString('KYC', $res['error']);
+        $this->assertNull($shipment->fresh()->awb_number, 'a refusal must not stamp a waybill');
+    }
+
     public function test_quoting_never_filters_by_a_stored_courier(): void
     {
         $shipment = $this->shipment(['courier_company_id' => 999, 'fulfillment_mode' => 'same_city']);

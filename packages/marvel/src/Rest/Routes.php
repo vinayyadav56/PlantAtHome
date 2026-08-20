@@ -1031,6 +1031,9 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // Two different cancels: cancel-shipment kills the partner ORDER, cancel-awb voids only the
     // waybill (the order survives, which is what a re-pack or a courier swap needs).
     Route::post('shipments/{id}/cancel-awb', [CourierShipmentController::class, 'cancelAwb']);
+    // Retry waybill allocation for a booking stuck on awb_pending — the same call the reconcile
+    // sweep makes, available to whoever is looking at the stuck shipment.
+    Route::post('shipments/{id}/assign-awb', [CourierShipmentController::class, 'assignAwb']);
     // Shiprocket has no reassign endpoint — assign/awb with status:"reassign" IS the mechanism.
     // Refused once the parcel has been picked up.
     Route::post('shipments/{id}/reassign-courier', [CourierShipmentController::class, 'reassignCourier']);

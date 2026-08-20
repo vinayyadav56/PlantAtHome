@@ -423,6 +423,12 @@ class CourierService
      * Cancel only the AWB, leaving the partner order alive — what a reassignment or a re-pack
      * needs. cancel() above kills the whole order.
      */
+    /** Retry waybill allocation for a shipment stuck without one. */
+    public function assignAwb(Shipment $shipment): array
+    {
+        return $this->offline() ?? $this->shippingClient()->assignAwb($shipment);
+    }
+
     public function cancelAwb(Shipment $shipment, ?string $reason = null): array
     {
         return $this->offline() ?? $this->shippingClient()->cancelAwb($shipment, $reason);
