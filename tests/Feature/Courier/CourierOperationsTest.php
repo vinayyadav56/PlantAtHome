@@ -108,6 +108,29 @@ final class CourierOperationsTest extends TestCase
             $t->timestamp('cancelled_at')->nullable();
             $t->timestamp('reopened_at')->nullable();
         });
+        // Allocation ledger: WHICH UNITS of an order line ride on WHICH shipment. Shipment::items()
+        // is a belongsToMany through this table, so every stub that has `shipments` needs it too.
+        Schema::create('shipment_items', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('shipment_id');
+            $t->unsignedBigInteger('order_item_id');
+            $t->unsignedInteger('quantity')->default(1);
+            $t->string('status', 32)->default('pending');
+            $t->timestamps();
+        });
+        Schema::create('shipment_packages', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('shipment_id');
+            $t->unsignedSmallInteger('package_number')->default(1);
+            $t->unsignedInteger('weight_g')->nullable();
+            $t->decimal('length_cm', 6, 2)->nullable();
+            $t->decimal('breadth_cm', 6, 2)->nullable();
+            $t->decimal('height_cm', 6, 2)->nullable();
+            $t->decimal('declared_value', 14, 2)->nullable();
+            $t->string('contents', 255)->nullable();
+            $t->boolean('fragile')->default(false);
+            $t->timestamps();
+        });
         Schema::create('shipments', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->unsignedBigInteger('order_id');
@@ -573,6 +596,63 @@ final class CourierOperationsTest extends TestCase
         $this->assertSame('FWD1', $fresh->awb_number);
     }
 
+    /**
+     * A return REVERSES the leg. buildRequest describes the forward journey — pickup is the vendor
+     * door, drop is the customer — and createReturn reused it verbatim, so the "return" told the
+     * courier to collect from the warehouse and deliver to the customer: a second forward shipment.
+     * The service, its adapter and the admin client all documented the opposite; only the one
+     * implementation between them disagreed, which is why nothing caught it.
+     */
+    public function test_a_return_collects_from_the_customer_not_the_vendor(): void
+    {
+        $shipment = $this->shipment([
+            'provider' => 'shiprocket', 'provider_order_id' => 'P1', 'awb_number' => 'FWD1', 'status' => 'delivered',
+        ]);
+        Http::fake(['*/returns' => Http::response(['ok' => true, 'return' => ['awb_number' => 'RET1']], 200)]);
+
+        (new CourierShipmentController())->createReturn(Request::create('/return', 'POST'), $shipment->id);
+
+        $sent = null;
+        Http::assertSent(function ($req) use (&$sent) {
+            if (!str_contains($req->url(), '/returns')) {
+                return false;
+            }
+            $sent = $req->data();
+            return true;
+        });
+        // The customer's address (from the order) is the ORIGIN of a return.
+        $this->assertSame('Customer', $sent['pickup']['name'], 'pickup must be the customer');
+        $this->assertSame('2 Road', $sent['pickup']['address']);
+        $this->assertSame('Vendor 5', $sent['drop']['name'], 'the vendor door is the DESTINATION of a return');
+        // The vendor's registered pickup nickname is not the origin of a reverse leg; left in, the
+        // partner prices the collection from the warehouse it is being returned to.
+        $this->assertSame('', $sent['pickup_location']);
+    }
+
+    /**
+     * The return endpoint was hardcoded to shiprocket, so "Create return" on a Porter delivery
+     * posted a Shiprocket order for a shipment Shiprocket had never carried — which is exactly how
+     * an operator got a Shiprocket validation error on a Porter job.
+     */
+    public function test_a_return_is_asked_of_the_partner_that_carried_the_parcel(): void
+    {
+        $shipment = $this->shipment([
+            'provider' => 'porter', 'courier_name' => 'Porter',
+            'provider_order_id' => 'CRN1', 'awb_number' => 'FWD1', 'status' => 'delivered',
+        ]);
+        Http::fake(['*/v1/partners/porter/returns' => Http::response(
+            ['ok' => false, 'error' => 'porter does not book returns'],
+            200,
+        )]);
+
+        $res = (new CourierShipmentController())->createReturn(Request::create('/return', 'POST'), $shipment->id);
+
+        Http::assertSent(fn ($req) => str_contains($req->url(), '/v1/partners/porter/returns'));
+        $this->assertSame(409, $res->getStatusCode());
+        // Named by the courier the operator picked, not by our partner code, and it says what to do.
+        $this->assertStringContainsString('Porter cannot book return pickups', $res->getData()->error);
+    }
+
     public function test_a_reassignment_voids_the_paperwork_that_names_the_old_waybill(): void
     {
         $shipment = $this->shipment([
@@ -987,7 +1067,9 @@ final class CourierOperationsTest extends TestCase
     {
         $order = Order::create([
             'tracking_number'  => 'T' . random_int(10000000, 99999999),
-            'shipping_address' => json_encode(['city' => 'Delhi', 'zip' => '110001', 'street_address' => '2 Road']),
+            // NOT json_encode()d: the model already casts shipping_address to json, so encoding
+            // here stored a double-encoded string and every drop address read back empty.
+            'shipping_address' => ['city' => 'Delhi', 'zip' => '110001', 'street_address' => '2 Road'],
         ]);
         $productId = $this->nextProductId++;
         DB::table('products')->insert(['id' => $productId, 'name' => 'Areca Palm', 'sku' => 'AP' . $productId]);

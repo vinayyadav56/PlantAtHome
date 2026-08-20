@@ -705,8 +705,24 @@ class ShippingServiceClient
      */
     public function createReturn(Shipment $shipment, ?string $reason = null): array
     {
+        $req = $this->buildRequest($shipment, 'courier', false, 0);
+        // REVERSE the leg. buildRequest describes the FORWARD journey — pickup is the vendor door
+        // and drop is the customer — and every other caller wants exactly that, so the swap lives
+        // here rather than in the builder. Sending it unswapped told the courier to collect from
+        // the vendor and deliver to the customer: a second forward shipment wearing the word
+        // "return", which is what shipped before this line existed.
+        [$req['pickup'], $req['drop']] = [$req['drop'], $req['pickup']];
+        // A return leaves the customer's door, so the vendor's registered pickup nickname is not
+        // the origin any more. Left in, Shiprocket would price the reverse leg from the warehouse.
+        $req['pickup_location'] = '';
+
+        // Ask the partner that CARRIED the parcel. This was hardcoded to shiprocket, so clicking
+        // "Create return" on a Porter delivery posted a Shiprocket order for a shipment Shiprocket
+        // had never heard of — the "shiprocket" heading on an error about a Porter job.
+        $code = trim((string) $shipment->provider) ?: 'shiprocket';
+
         $d = $this->unwrap(
-            $this->request('post', '/v1/partners/shiprocket/returns', $this->buildRequest($shipment, 'courier', false, 0) + ['reason' => $reason]),
+            $this->request('post', '/v1/partners/' . rawurlencode($code) . '/returns', $req + ['reason' => $reason]),
             'Return creation failed.',
         );
         if (empty($d['ok'])) {
@@ -1221,7 +1237,9 @@ class ShippingServiceClient
             $line = [
                 'name'       => (string) ($p->name ?? ('Item #' . $it->product_id)),
                 'sku'        => (string) ($p->sku ?? ('SKU-' . $it->product_id)),
-                'qty'        => max(1, (int) ($it->order_quantity ?? 1)),
+                // shipped_qty, NOT order_quantity: a line split 3 + 2 rides two parcels, and
+                // the ordered figure describes the whole line on both of them.
+                'qty'        => $it->shipped_qty,
                 'unit_price' => (float) ($it->unit_price ?? 0),
                 'weight_g'   => (int) ($p->weight ?? 0),
             ];
@@ -1261,20 +1279,22 @@ class ShippingServiceClient
         foreach ($shipment->items as $it) {
             $p = $it->product ?? null;
             $w = $p && (int) ($p->weight ?? 0) > 0 ? (int) $p->weight : 500;
-            $g += $w * max(1, (int) ($it->order_quantity ?? 1));
+            $g += $w * $it->shipped_qty;
         }
         return max(1, $g);
     }
 
-    /** Goods value on this leg (line subtotal when stored, else unit price × qty). */
+    /**
+     * Goods value on this leg — THIS parcel's share of each line, not the whole line.
+     * shipped_subtotal prorates the stored subtotal by the allocated units (and falls
+     * back to unit price × allocated units when no subtotal was stored), so a split
+     * line does not declare, and insure, its full value on both parcels.
+     */
     private function declaredValue(Shipment $shipment): float
     {
         $v = 0.0;
         foreach ($shipment->items as $it) {
-            $sub = $it->subtotal ?? null;
-            $v += $sub !== null
-                ? (float) $sub
-                : (float) ($it->unit_price ?? 0) * max(1, (int) ($it->order_quantity ?? 1));
+            $v += $it->shipped_subtotal;
         }
         return round($v, 2);
     }

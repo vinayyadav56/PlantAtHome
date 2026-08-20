@@ -61,6 +61,29 @@ final class ShipmentLaneQuoteTest extends TestCase
             $t->decimal('unit_price')->default(0);
             $t->timestamps();
         });
+        // Allocation ledger: WHICH UNITS of an order line ride on WHICH shipment. Shipment::items()
+        // is a belongsToMany through this table, so every stub that has `shipments` needs it too.
+        Schema::create('shipment_items', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('shipment_id');
+            $t->unsignedBigInteger('order_item_id');
+            $t->unsignedInteger('quantity')->default(1);
+            $t->string('status', 32)->default('pending');
+            $t->timestamps();
+        });
+        Schema::create('shipment_packages', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('shipment_id');
+            $t->unsignedSmallInteger('package_number')->default(1);
+            $t->unsignedInteger('weight_g')->nullable();
+            $t->decimal('length_cm', 6, 2)->nullable();
+            $t->decimal('breadth_cm', 6, 2)->nullable();
+            $t->decimal('height_cm', 6, 2)->nullable();
+            $t->decimal('declared_value', 14, 2)->nullable();
+            $t->string('contents', 255)->nullable();
+            $t->boolean('fragile')->default(false);
+            $t->timestamps();
+        });
         Schema::create('shipments', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->unsignedBigInteger('order_id');

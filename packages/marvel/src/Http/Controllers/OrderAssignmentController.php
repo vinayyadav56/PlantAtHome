@@ -367,7 +367,9 @@ class OrderAssignmentController extends CoreController
                     'name'     => $it->product->name ?? null,
                     'slug'     => $it->product->slug ?? null,
                     'image'    => $it->product->image ?? null,
-                    'quantity' => (int) $it->order_quantity,
+                    // The units in THIS parcel. order_quantity would show all 5 of a
+                    // 3 + 2 split on both deliveries.
+                    'quantity' => $it->shipped_qty,
                 ])->values(),
             ])->values(),
         ];

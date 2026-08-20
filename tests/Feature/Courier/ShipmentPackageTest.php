@@ -62,6 +62,29 @@ final class ShipmentPackageTest extends TestCase
             $t->decimal('unit_price')->default(0);
             $t->timestamps();
         });
+        // Allocation ledger: WHICH UNITS of an order line ride on WHICH shipment. Shipment::items()
+        // is a belongsToMany through this table, so every stub that has `shipments` needs it too.
+        Schema::create('shipment_items', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('shipment_id');
+            $t->unsignedBigInteger('order_item_id');
+            $t->unsignedInteger('quantity')->default(1);
+            $t->string('status', 32)->default('pending');
+            $t->timestamps();
+        });
+        Schema::create('shipment_packages', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('shipment_id');
+            $t->unsignedSmallInteger('package_number')->default(1);
+            $t->unsignedInteger('weight_g')->nullable();
+            $t->decimal('length_cm', 6, 2)->nullable();
+            $t->decimal('breadth_cm', 6, 2)->nullable();
+            $t->decimal('height_cm', 6, 2)->nullable();
+            $t->decimal('declared_value', 14, 2)->nullable();
+            $t->string('contents', 255)->nullable();
+            $t->boolean('fragile')->default(false);
+            $t->timestamps();
+        });
         Schema::create('shipments', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->unsignedBigInteger('order_id');
@@ -185,8 +208,15 @@ final class ShipmentPackageTest extends TestCase
         $shipment = Shipment::create(array_merge([
             'order_id' => $order->id, 'shop_id' => 5, 'fulfillment_mode' => 'courier', 'status' => 'pending',
         ], $shipmentAttrs));
-        OrderItem::create([
+        $item = OrderItem::create([
             'order_id' => $order->id, 'product_id' => $productId, 'shipment_id' => $shipment->id, 'order_quantity' => 2,
+        ]);
+        // The parcel's contents live in the allocation ledger — `shipment_id` on the line is only
+        // the derived single-parcel pointer. Writing the column alone leaves Shipment::items()
+        // empty, and every estimate then falls back to the default box.
+        DB::table('shipment_items')->insert([
+            'shipment_id' => $shipment->id, 'order_item_id' => $item->id, 'quantity' => 2,
+            'status' => 'pending', 'created_at' => now(), 'updated_at' => now(),
         ]);
         return $shipment;
     }

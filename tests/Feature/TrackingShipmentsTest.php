@@ -58,6 +58,29 @@ final class TrackingShipmentsTest extends TestCase
             $t->timestamps();
             $t->softDeletes();
         });
+        // Allocation ledger: WHICH UNITS of an order line ride on WHICH shipment. Shipment::items()
+        // is a belongsToMany through this table, so every stub that has `shipments` needs it too.
+        Schema::create('shipment_items', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('shipment_id');
+            $t->unsignedBigInteger('order_item_id');
+            $t->unsignedInteger('quantity')->default(1);
+            $t->string('status', 32)->default('pending');
+            $t->timestamps();
+        });
+        Schema::create('shipment_packages', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('shipment_id');
+            $t->unsignedSmallInteger('package_number')->default(1);
+            $t->unsignedInteger('weight_g')->nullable();
+            $t->decimal('length_cm', 6, 2)->nullable();
+            $t->decimal('breadth_cm', 6, 2)->nullable();
+            $t->decimal('height_cm', 6, 2)->nullable();
+            $t->decimal('declared_value', 14, 2)->nullable();
+            $t->string('contents', 255)->nullable();
+            $t->boolean('fragile')->default(false);
+            $t->timestamps();
+        });
         Schema::create('shipments', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->unsignedBigInteger('order_id');
@@ -163,10 +186,16 @@ final class TrackingShipmentsTest extends TestCase
             'name' => 'Monstera Deliciosa', 'slug' => 'monstera-deliciosa',
             'created_at' => now(), 'updated_at' => now(),
         ]);
-        DB::table('order_items')->insert([
+        $itemId = DB::table('order_items')->insertGetId([
             'order_id' => $orderId, 'product_id' => $productId,
             'shipment_id' => $shipmentId, 'order_quantity' => 2,
             'created_at' => now(), 'updated_at' => now(),
+        ]);
+        // What the customer sees on the tracking page is the parcel's CONTENTS, which are the
+        // allocation rows — `shipment_id` on the line is only the derived single-parcel pointer.
+        DB::table('shipment_items')->insert([
+            'shipment_id' => $shipmentId, 'order_item_id' => $itemId, 'quantity' => 2,
+            'status' => 'pending', 'created_at' => now(), 'updated_at' => now(),
         ]);
 
         $res = $this->getJson('/api/orders/' . $this->tracking($orderId) . '/shipments?token=' . str_repeat('t', 48));

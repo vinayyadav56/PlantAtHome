@@ -4,10 +4,12 @@ namespace Marvel\Services;
 
 use Carbon\Carbon;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\Order;
 use Marvel\Database\Models\OrderItem;
 use Marvel\Database\Models\Settings;
 use Marvel\Database\Models\Shipment;
+use Marvel\Database\Models\ShipmentItem;
 use Marvel\Database\Models\VendorProductPrice;
 
 /**
@@ -413,10 +415,118 @@ class OrderItemService
         $lockedShipmentIds = Shipment::where('order_id', $order->id)->get()
             ->filter(fn ($s) => self::isLiveBooked($s))
             ->pluck('id')->all();
-        $lockedItemIds = $lockedShipmentIds
-            ? OrderItem::where('order_id', $order->id)->whereIn('shipment_id', $lockedShipmentIds)->pluck('id')->all()
-            : [];
-        return [$lockedShipmentIds, $lockedItemIds];
+
+        if (!$lockedShipmentIds) {
+            return [[], []];
+        }
+
+        // Via allocations, not order_items.shipment_id: that column is NULL for a line
+        // split across parcels, so a scalar lookup would report a booked line as free
+        // and let a re-plan move goods out from under a courier already carrying them.
+        $lockedItemIds = self::supportsAllocations()
+            ? ShipmentItem::whereIn('shipment_id', $lockedShipmentIds)
+                ->pluck('order_item_id')->unique()->values()->all()
+            : OrderItem::where('order_id', $order->id)
+                ->whereIn('shipment_id', $lockedShipmentIds)->pluck('id')->all();
+
+        return [$lockedShipmentIds, array_map('intval', $lockedItemIds)];
+    }
+
+    /**
+     * Railway/EC2 migrate in the background after deploy — same guard as
+     * supportsSplitGroup/supportsMarginSnapshot, so assignment keeps working on a box
+     * whose schema has not caught up yet.
+     */
+    private static function supportsAllocations(): bool
+    {
+        static $has = null;
+        if ($has === null) {
+            try {
+                $has = Schema::hasTable('shipment_items');
+            } catch (\Throwable $e) {
+                $has = false;
+            }
+        }
+        return $has;
+    }
+
+    /** The group identity of an EXISTING shipment — the match key for reconcile-in-place. */
+    private static function groupKeyOfShipment(Shipment $s): string
+    {
+        return self::groupKey(
+            (int) $s->shop_id,
+            $s->fulfillment_mode ?: 'courier',
+            self::supportsSplitGroup() ? $s->split_group : null,
+            $s->pickup_location_id ? (int) $s->pickup_location_id : null,
+        );
+    }
+
+    /**
+     * Make this shipment's allocations exactly $allocs (a list of
+     * ['order_item_id' => int, 'quantity' => int]). Updates in place so allocation ids —
+     * and therefore any per-parcel status already stamped on them — survive a re-plan.
+     */
+    private static function syncAllocations(Shipment $shipment, array $allocs): void
+    {
+        if (!self::supportsAllocations()) {
+            return;
+        }
+
+        $existing = ShipmentItem::where('shipment_id', $shipment->id)->get()->keyBy('order_item_id');
+        $keep = [];
+
+        foreach ($allocs as $alloc) {
+            $itemId = (int) $alloc['order_item_id'];
+            $qty = max(1, (int) $alloc['quantity']);
+            $keep[] = $itemId;
+
+            $row = $existing->get($itemId);
+            if ($row) {
+                if ((int) $row->quantity !== $qty) {
+                    $row->update(['quantity' => $qty]);
+                }
+                continue;
+            }
+            ShipmentItem::create([
+                'shipment_id'   => $shipment->id,
+                'order_item_id' => $itemId,
+                'quantity'      => $qty,
+                'status'        => 'pending',
+            ]);
+        }
+
+        ShipmentItem::where('shipment_id', $shipment->id)
+            ->whereNotIn('order_item_id', $keep ?: [0])
+            ->delete();
+    }
+
+    /**
+     * Refresh the DERIVED order_items.shipment_id pointer for a whole order.
+     *
+     * Exactly one allocation -> that shipment. Zero or several -> NULL. NULL for a split
+     * line is deliberate: an unmigrated reader then omits the line rather than showing
+     * every unit on every parcel, and undercounting is the safe direction for anything
+     * that reaches a courier or a card.
+     */
+    private static function syncItemShipmentColumn(Order $order): void
+    {
+        if (!self::supportsAllocations()) {
+            return;
+        }
+
+        $byItem = ShipmentItem::whereIn(
+            'order_item_id',
+            OrderItem::where('order_id', $order->id)->pluck('id')
+        )->get()->groupBy('order_item_id');
+
+        foreach (OrderItem::where('order_id', $order->id)->get() as $item) {
+            $shipmentIds = ($byItem->get($item->id) ?? collect())
+                ->pluck('shipment_id')->unique()->values();
+            $target = $shipmentIds->count() === 1 ? (int) $shipmentIds->first() : null;
+            if ((int) $item->shipment_id !== (int) $target) {
+                $item->update(['shipment_id' => $target]);
+            }
+        }
     }
 
     /** Set an item's assignment + attach it to the matching shipment (create if needed). */
@@ -492,6 +602,16 @@ class OrderItemService
             $update['margin_percent_snapshot'] = isset($pick['margin_percent']) ? (float) $pick['margin_percent'] : null;
         }
         $item->update($update);
+
+        // The allocation is the real link; shipment_id above is its derived shadow. An
+        // auto-assigned line always travels whole — a quantity split is an explicit
+        // operator action (splitByQuantity), never something the scorer produces.
+        if (self::supportsAllocations()) {
+            ShipmentItem::updateOrCreate(
+                ['shipment_id' => $shipment->id, 'order_item_id' => $item->id],
+                ['quantity' => max(1, (int) $item->order_quantity), 'status' => 'pending'],
+            );
+        }
     }
 
     /**

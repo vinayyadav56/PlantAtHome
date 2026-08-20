@@ -82,6 +82,29 @@ final class VendorShipmentGroupingTest extends TestCase
             $t->string('item_status')->default('pending');
             $t->timestamps();
         });
+        // Allocation ledger: WHICH UNITS of an order line ride on WHICH shipment. Shipment::items()
+        // is a belongsToMany through this table, so every stub that has `shipments` needs it too.
+        Schema::create('shipment_items', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('shipment_id');
+            $t->unsignedBigInteger('order_item_id');
+            $t->unsignedInteger('quantity')->default(1);
+            $t->string('status', 32)->default('pending');
+            $t->timestamps();
+        });
+        Schema::create('shipment_packages', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('shipment_id');
+            $t->unsignedSmallInteger('package_number')->default(1);
+            $t->unsignedInteger('weight_g')->nullable();
+            $t->decimal('length_cm', 6, 2)->nullable();
+            $t->decimal('breadth_cm', 6, 2)->nullable();
+            $t->decimal('height_cm', 6, 2)->nullable();
+            $t->decimal('declared_value', 14, 2)->nullable();
+            $t->string('contents', 255)->nullable();
+            $t->boolean('fragile')->default(false);
+            $t->timestamps();
+        });
         Schema::create('shipments', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->unsignedBigInteger('order_id');
@@ -184,12 +207,27 @@ final class VendorShipmentGroupingTest extends TestCase
 
     private function makeItem(Order $order, array $attrs = []): OrderItem
     {
-        return OrderItem::create(array_merge([
+        $item = OrderItem::create(array_merge([
             'order_id'       => $order->id,
             'product_id'     => 1,
             'order_quantity' => 1,
             'unit_price'     => 100,
         ], $attrs));
+        // A line that sits on a parcel needs its ALLOCATION row, not just the derived
+        // `shipment_id` pointer — lock detection and the courier payload both read the ledger, so
+        // a fixture that writes only the column describes a shipment with nothing in it.
+        if (!empty($attrs['shipment_id'])) {
+            \Illuminate\Support\Facades\DB::table('shipment_items')->insert([
+                'shipment_id'   => $attrs['shipment_id'],
+                'order_item_id' => $item->id,
+                'quantity'      => (int) ($attrs['order_quantity'] ?? 1),
+                'status'        => 'pending',
+                'created_at'    => now(),
+                'updated_at'    => now(),
+            ]);
+        }
+
+        return $item;
     }
 
     private function service(int $vendorShopId = 7): OrderItemService

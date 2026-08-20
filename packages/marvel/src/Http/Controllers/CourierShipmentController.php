@@ -674,6 +674,13 @@ class CourierShipmentController extends CoreController
         }
 
         $res = $this->courier()->createReturn($shipment, $request->input('reason'));
+        // The service answers "<code> does not book returns" for a partner with no reverse API.
+        // True, but it names our partner code at an operator who picked a courier by its brand —
+        // and it only ever reaches anyone whose admin predates the `returns` capability gate.
+        if (empty($res['ok']) && str_contains(strtolower((string) ($res['error'] ?? '')), 'does not book returns')) {
+            $name = $shipment->courier_name ?: ucfirst((string) $shipment->provider);
+            $res['error'] = "{$name} cannot book return pickups. Arrange the collection as a new delivery from the customer's address, or move this order to a courier partner that supports returns.";
+        }
         return response()->json($res, !empty($res['ok']) ? 200 : 409);
     }
 

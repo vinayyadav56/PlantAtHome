@@ -4,6 +4,7 @@ namespace Marvel\Database\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 
 /** A fulfilment unit grouping order_items by vendor + mode (internal; never customer-facing). */
@@ -72,8 +73,29 @@ class Shipment extends Model
         return $this->belongsTo(Shop::class, 'shop_id');
     }
 
-    public function items(): HasMany
+    /**
+     * The lines in this parcel, each carrying the ALLOCATED quantity on its pivot.
+     *
+     * Reads `$it->shipped_qty` / `$it->shipped_subtotal`, never `order_quantity` /
+     * `subtotal` — a line split 3 + 2 appears on two shipments, and the ordered figures
+     * describe the whole line on both. Using them is how a split parcel declares 5 units
+     * twice to the courier and collects COD twice.
+     */
+    public function items(): BelongsToMany
     {
-        return $this->hasMany(OrderItem::class, 'shipment_id');
+        return $this->belongsToMany(OrderItem::class, 'shipment_items', 'shipment_id', 'order_item_id')
+            ->withPivot(['quantity', 'status'])
+            ->withTimestamps();
+    }
+
+    /** The allocation rows themselves — for writes; `items()` is the read side. */
+    public function allocations(): HasMany
+    {
+        return $this->hasMany(ShipmentItem::class, 'shipment_id');
+    }
+
+    public function packages(): HasMany
+    {
+        return $this->hasMany(ShipmentPackage::class, 'shipment_id');
     }
 }

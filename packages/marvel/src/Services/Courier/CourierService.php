@@ -150,10 +150,10 @@ class CourierService
         if ($payable <= 0) {
             return 0.0;
         }
-        $legGoods = (float) $shipment->items->sum(function ($i) {
-            $sub = $i->subtotal ?? null;
-            return $sub !== null ? (float) $sub : (float) ($i->unit_price ?? 0) * max(1, (int) ($i->order_quantity ?? 1));
-        });
+        // shipped_subtotal, NOT the line subtotal: on a 3 + 2 quantity split both parcels
+        // would otherwise claim the WHOLE line, each ratio would round up toward 1.0, and
+        // the driver would collect the order's cash twice.
+        $legGoods = (float) $shipment->items->sum(fn ($i) => $i->shipped_subtotal);
         $orderGoods = (float) ($order->amount ?? 0);
         if ($orderGoods <= 0 || $legGoods <= 0) {
             $count = max(1, Shipment::where('order_id', $order->id)->count());
