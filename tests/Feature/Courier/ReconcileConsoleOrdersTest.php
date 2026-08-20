@@ -38,6 +38,7 @@ final class ReconcileConsoleOrdersTest extends TestCase
             $t->bigIncrements('id');
             $t->string('partner_code', 32);
             $t->string('provider_order_id', 191)->nullable();
+            $t->string('provider_reference', 64)->nullable();
             $t->string('origin', 16)->default('console');
             $t->unsignedBigInteger('shipment_id')->nullable();
             $t->unsignedBigInteger('order_id')->nullable();
@@ -90,6 +91,7 @@ final class ReconcileConsoleOrdersTest extends TestCase
             $t->unsignedBigInteger('order_id');
             $t->string('provider')->nullable();
             $t->string('provider_order_id')->nullable();
+            $t->string('provider_reference', 64)->nullable();
             $t->string('status')->default('pending');
             $t->string('last_status')->nullable();
             $t->string('mode', 32)->nullable();
@@ -117,6 +119,48 @@ final class ReconcileConsoleOrdersTest extends TestCase
             'received_at'     => now()->toIso8601String(),
             'raw_body'        => json_encode(['status' => $event, 'order_id' => $crn, 'order_details' => $details]),
         ];
+    }
+
+    /**
+     * Borzo nests the id under `order.order_id`; Porter sends it top-level. Reading only the top
+     * level filed every Borzo callback as "no order_id in payload", so the ledger could never
+     * learn anything from Borzo even when a callback arrived and verified.
+     *
+     * `order_changed` carries no status of its own — the authenticated re-fetch is the authority —
+     * so the assertion is that the ROW gets created and linked, ready for the track pass, not
+     * that a status was applied.
+     */
+    public function test_a_borzo_callback_with_a_nested_order_id_is_captured(): void
+    {
+        Http::fake([
+            'ship.test/v1/partners/borzo/webhooks*' => Http::response(['partner_code' => 'borzo', 'items' => [[
+                'id'              => 41,
+                'event_type'      => 'order_changed',
+                'signature_valid' => true,
+                'processed'       => false,
+                'received_at'     => now()->toIso8601String(),
+                // The real Borzo shape — id one level down, not at the root.
+                'raw_body'        => json_encode(['event_type' => 'order_changed', 'order' => ['order_id' => 330321, 'status' => 'available']]),
+            ]]], 200),
+            'ship.test/v1/partners/*/webhooks*' => Http::response(['partner_code' => 'x', 'items' => []], 200),
+            'ship.test/*'                       => Http::response(['ok' => true], 200),
+        ]);
+
+        $this->artisan('console-orders:reconcile')->assertExitCode(0);
+
+        $event = PartnerWebhookEvent::where('source_webhook_log_id', 41)->first();
+        $this->assertNotNull($event, 'the Borzo callback was not mirrored at all');
+        $this->assertSame('330321', $event->porter_order_id, 'the nested order.order_id was not read');
+        $this->assertNotSame(
+            'no order_id in payload',
+            $event->processing_error,
+            'the nested id was still being missed — this is the exact bug the fix targets',
+        );
+
+        $row = PartnerConsoleOrder::where('partner_code', 'borzo')->where('provider_order_id', '330321')->first();
+        $this->assertNotNull($row, 'a Borzo CRN unknown to both ledgers must be captured, not lost');
+        $this->assertSame('webhook', $row->origin);
+        $this->assertNotNull($event->partner_console_order_id, 'the event was not linked to its ledger row');
     }
 
     public function test_webhooks_are_mirrored_and_drive_the_lifecycle(): void

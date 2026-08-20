@@ -34,6 +34,7 @@ final class PartnerOrderLifecycleTest extends TestCase
             $t->bigIncrements('id');
             $t->string('partner_code', 32);
             $t->string('provider_order_id', 191)->nullable();
+            $t->string('provider_reference', 64)->nullable();
             $t->string('partner_status', 24)->nullable();
             $t->string('previous_partner_status', 24)->nullable();
             $t->timestamp('status_changed_at')->nullable();

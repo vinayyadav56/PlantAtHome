@@ -77,6 +77,7 @@ final class CourierOperationsTest extends TestCase
             $t->bigIncrements('id');
             $t->string('partner_code', 32);
             $t->string('provider_order_id', 191)->nullable();
+            $t->string('provider_reference', 64)->nullable();
             $t->unsignedTinyInteger('simulation_flow_type')->nullable();
             $t->timestamp('simulation_started_at')->nullable();
             $t->unsignedBigInteger('simulation_started_by')->nullable();
@@ -117,6 +118,7 @@ final class CourierOperationsTest extends TestCase
             $t->unsignedInteger('weight_g')->nullable();
             $t->string('provider')->nullable();
             $t->string('provider_order_id')->nullable();
+            $t->string('provider_reference', 64)->nullable();
             $t->string('provider_shipment_id')->nullable();
             $t->string('awb_number')->nullable();
             $t->string('courier_name')->nullable();

@@ -72,6 +72,7 @@ final class TrackingShipmentsTest extends TestCase
             $t->decimal('shipping_cost', 10, 2)->nullable();
             $t->decimal('booked_cost', 10, 2)->nullable();
             $t->string('provider_order_id')->nullable();
+            $t->string('provider_reference', 64)->nullable();
             $t->integer('eta_days')->nullable();
             $t->date('expected_delivery_at')->nullable();
             $t->timestamp('shipped_at')->nullable();

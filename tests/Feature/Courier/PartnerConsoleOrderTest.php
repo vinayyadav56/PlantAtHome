@@ -35,6 +35,7 @@ final class PartnerConsoleOrderTest extends TestCase
             $t->bigIncrements('id');
             $t->string('partner_code', 32)->index();
             $t->string('provider_order_id', 191)->nullable();
+            $t->string('provider_reference', 64)->nullable();
             $t->string('mode', 32)->nullable();
             $t->unsignedBigInteger('cod_amount_paise')->default(0);
             $t->json('request')->nullable();

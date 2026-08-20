@@ -75,6 +75,25 @@ class ReconcileConsoleOrdersCommand extends Command
         return self::SUCCESS;
     }
 
+    /**
+     * The partner's order id, wherever that partner chose to put it.
+     *
+     * Porter sends it top-level (`order_id`); Borzo nests it under `order.order_id` in an
+     * `order_changed` envelope. Reading only the top level meant every Borzo callback was filed
+     * as `ignored / "no order_id in payload"` — the ledger could never learn anything from Borzo
+     * even when a callback did arrive and verify.
+     */
+    private function webhookOrderId(array $body): string
+    {
+        foreach ([$body['order_id'] ?? null, $body['order']['order_id'] ?? null, $body['data']['order_id'] ?? null] as $candidate) {
+            $id = trim((string) ($candidate ?? ''));
+            if ($id !== '') {
+                return $id;
+            }
+        }
+        return '';
+    }
+
     /** @return array{0:int,1:int} [mirrored, applied] */
     private function mirrorWebhooks(ShippingServiceClient $client, string $code, int $limit): array
     {
@@ -87,7 +106,7 @@ class ReconcileConsoleOrdersCommand extends Command
         $mirrored = $applied = 0;
         foreach (($res['data']['items'] ?? []) as $item) {
             $body = json_decode((string) ($item['raw_body'] ?? ''), true);
-            $orderId = is_array($body) ? trim((string) ($body['order_id'] ?? '')) : '';
+            $orderId = $this->webhookOrderId(is_array($body) ? $body : []);
 
             $event = PartnerWebhookEvent::firstOrCreate(
                 ['source_webhook_log_id' => (int) $item['id']],
@@ -119,7 +138,13 @@ class ReconcileConsoleOrdersCommand extends Command
 
                 $status = PartnerOrderLifecycle::fromEvent((string) $event->event_type);
                 if ($status === null) {
+                    // Carries no status of its own — Borzo's `order_changed` is a notification
+                    // that something moved, not a claim about what. That is not nothing: the
+                    // ledger row above is now created and linked, so pass 3 will track it and
+                    // learn the real state from an authenticated fetch. Recorded as ignored
+                    // because no status was APPLIED, with the reason spelled out.
                     $event->processing_status = 'ignored';
+                    $event->processing_error = 'event carries no status — row linked, awaiting track';
                 } elseif (PartnerOrderLifecycle::apply($row, $status, 'webhook')) {
                     $applied++;
                     $event->processing_status = 'applied';

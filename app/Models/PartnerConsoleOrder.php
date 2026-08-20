@@ -112,6 +112,9 @@ class PartnerConsoleOrder extends Model
 
         return [
             'provider_order_id' => $this->provider_order_id,
+            // What the partner's own console prints. Falls back to the API id so the UI always
+            // has something to show for partners where the two are the same.
+            'provider_reference' => $this->provider_reference ?: $this->provider_order_id,
             'provider'          => $this->partner_code,
             'flow_type'         => $this->simulation_flow_type,
             'flow_started_at'   => optional($this->simulation_started_at)->toIso8601String(),

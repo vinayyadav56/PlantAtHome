@@ -77,6 +77,7 @@ final class ShipmentPackageTest extends TestCase
             $t->decimal('height_cm', 6, 2)->nullable();
             $t->string('provider')->nullable();
             $t->string('provider_order_id')->nullable();
+            $t->string('provider_reference', 64)->nullable();
             $t->string('provider_shipment_id')->nullable();
             $t->string('awb_number')->nullable();
             $t->string('courier_name')->nullable();

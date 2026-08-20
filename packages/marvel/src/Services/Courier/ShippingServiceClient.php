@@ -306,6 +306,10 @@ class ShippingServiceClient
             'provider'             => $b['partner'] ?? null,
             'mode'                 => $b['mode'] ?? $mode,
             'provider_order_id'    => ($b['provider_order_id'] ?? '') ?: null,
+            // The partner's OWN order number when it differs from the API key — Borzo's cabinet
+            // prints order_name (30321) while every call takes order_id (330321). Showing only
+            // the latter left the operator with a number that appears nowhere in Borzo's UI.
+            'provider_reference'   => ($b['provider_reference'] ?? '') ?: null,
             'provider_shipment_id' => ($b['provider_shipment_id'] ?? '') ?: null,
             'awb_number'           => ($b['awb_number'] ?? '') ?: null,
             'courier_name'         => ($b['courier_name'] ?? '') ?: null,

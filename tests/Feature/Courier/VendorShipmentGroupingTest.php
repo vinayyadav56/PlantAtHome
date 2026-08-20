@@ -96,6 +96,7 @@ final class VendorShipmentGroupingTest extends TestCase
             $t->date('expected_delivery_at')->nullable();
             $t->string('provider')->nullable();
             $t->string('provider_order_id')->nullable();
+            $t->string('provider_reference', 64)->nullable();
             $t->string('provider_shipment_id')->nullable();
             $t->string('awb_number')->nullable();
             $t->string('courier_name')->nullable();

@@ -51,6 +51,7 @@ final class ShipmentReconcileTest extends TestCase
             $t->string('status')->default('pending');
             $t->string('provider')->nullable();
             $t->string('provider_order_id')->nullable();
+            $t->string('provider_reference', 64)->nullable();
             $t->string('awb_number')->nullable();
             $t->string('tracking_url')->nullable();
             $t->string('last_status')->nullable();

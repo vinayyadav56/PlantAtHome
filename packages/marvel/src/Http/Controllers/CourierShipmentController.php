@@ -474,7 +474,15 @@ class CourierShipmentController extends CoreController
             ]);
         }
 
-        return $row->toBookingPayload();
+        $payload = $row->toBookingPayload();
+        // The shipment row is where book() records the partner's own reference, so prefer it over
+        // the ledger's copy — the ledger may have been created by a reconcile that never saw the
+        // booking response.
+        if (trim((string) $shipment->provider_reference) !== '') {
+            $payload['provider_reference'] = $shipment->provider_reference;
+        }
+
+        return $payload;
     }
 
     /** POST shops/{id}/sync-pickup — register the vendor's DEFAULT door as a provider pickup location. */
