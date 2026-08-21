@@ -9,14 +9,20 @@ use Marvel\Notifications\ProductRejectedNotification;
 class ProductReviewRejectedListener implements ShouldQueue
 {   
     /**
-     * Handle the event.
+     * Notify the vendor who PROPOSED the plant.
      *
-     * @param  ProductReview $event
-     * @return void
+     * Not $event->product->shop->owner: since the single-master-catalog cutover every product
+     * is owned by the master shop, so that expression notifies the admin about the admin's own
+     * decision and the proposing vendor hears nothing. The proposer is on proposed_by_shop_id.
      */
     public function handle(ProductReviewRejected $event)
     {
-        $vendor = $event->product->shop->owner;
+        $vendor = optional($event->product->proposedByShop)->owner
+            // Fall back to the owning shop for pre-cutover products, which have no proposer.
+            ?? optional($event->product->shop)->owner;
+        if (!$vendor) {
+            return;
+        }
         $vendor->notify(new ProductRejectedNotification($event->product));
     }
 }

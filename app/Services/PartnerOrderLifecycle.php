@@ -89,7 +89,11 @@ class PartnerOrderLifecycle
         if (in_array($incoming, self::TERMINAL, true)) {
             return true; // cancel/end interrupt any non-terminal state
         }
-        return self::RANK[$incoming] > self::RANK[$current];
+        // $current comes off a DB column, not a constant. An unknown word — a foreign
+        // partner_status, a hand-edited row, an older writer — must not fatal the reconcile
+        // sweep for every row after it. Rank it below everything so a real partner status
+        // can still replace it.
+        return self::RANK[$incoming] > (self::RANK[$current] ?? -1);
     }
 
     /**

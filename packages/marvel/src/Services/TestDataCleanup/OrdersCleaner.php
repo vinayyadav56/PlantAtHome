@@ -99,6 +99,16 @@ class OrdersCleaner implements CleanerContract
         }
         $plan->step('partner_console_orders', $pcoIds, 'id', 'partner order ledger');
 
+        // Keyed on shipment_id, not order_id, so the order_id loop below cannot reach them —
+        // and neither table carries an FK (see their migrations), so nothing cascades either.
+        // Left behind they are permanent orphans that the integrity check then reports forever.
+        foreach (['shipment_items', 'shipment_packages'] as $table) {
+            if (Schema::hasTable($table)) {
+                $rowIds = DB::table($table)->whereIn('shipment_id', $shipmentIds ?: [0])->pluck('id')->all();
+                $plan->step($table, $rowIds, 'id');
+            }
+        }
+
         foreach ([
             ['delivery_quotes', 'order_id'],
             ['delivery_partner_earnings', 'order_id'],

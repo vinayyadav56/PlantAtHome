@@ -3,6 +3,7 @@
 namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 use Marvel\Database\Models\DeliveryPartner;
 use Marvel\Database\Models\Order;
 use Marvel\Database\Models\OrderEvent;
@@ -94,15 +95,26 @@ class OrderAssignmentController extends CoreController
     public function items($id)
     {
         $order = Order::with([
-            'items.product:id,name,slug,sku',
+            // weight + dims come along so the club/confirm panel can total a PROPOSED
+            // parcel client-side, with no endpoint and no network call per checkbox tick.
+            'items.product:id,name,slug,sku,weight,length,breadth,height',
             'items.assignedShop:id,name',
             // shop address + registered pickup fields drive the "confirm dispatch" popup's pickup panel.
             'shipments.shop:id,name,address,pickup_location_name,pickup_postcode',
         ])->findOrFail($id);
+        // Allocations are returned FLAT rather than nested under items: the admin joins
+        // them both ways (lines of a parcel, parcels of a line) and a nested shape would
+        // force one of those to be reconstructed client-side.
+        $allocations = \Marvel\Database\Models\ShipmentItem::whereIn(
+            'order_item_id',
+            $order->items->pluck('id')
+        )->get(['id', 'shipment_id', 'order_item_id', 'quantity', 'status']);
+
         return [
-            'order_id'  => $order->id,
-            'items'     => $order->items,
-            'shipments' => $order->shipments,
+            'order_id'    => $order->id,
+            'items'       => $order->items,
+            'shipments'   => $order->shipments,
+            'allocations' => $allocations,
         ];
     }
 
@@ -180,22 +192,106 @@ class OrderAssignmentController extends CoreController
     public function splitShipment($id, Request $request)
     {
         $request->validate([
-            'order_item_ids'   => 'required|array|min:1',
-            'order_item_ids.*' => 'required|integer',
-            'separate'         => 'nullable|boolean',
+            // Legacy shape: move WHOLE lines. Still what the vendor-split buttons send.
+            'order_item_ids'     => 'required_without:items|array|min:1|max:200',
+            'order_item_ids.*'   => 'required|integer',
+            'separate'           => 'nullable|boolean',
+            // Quantity shape: move SOME UNITS of a line onto a new parcel.
+            'items'              => 'required_without:order_item_ids|array|min:1|max:200',
+            'items.*.order_item_id' => 'required|integer',
+            'items.*.quantity'      => 'required|integer|min:1',
+            'reason'             => ['nullable', 'string', Rule::in(self::SPLIT_REASONS)],
+            'notes'              => 'nullable|string|max:500',
         ]);
         $order = Order::findOrFail($id);
+
+        if ($request->filled('items')) {
+            // The quantity path records its own event (it knows which parcel it minted).
+            return response()->json((new OrderItemService())->splitByQuantity(
+                $order,
+                $request->input('items'),
+                $request->input('reason'),
+                $request->input('notes'),
+            ));
+        }
+
         $result = (new OrderItemService())->splitShipment(
             $order,
             $request->input('order_item_ids'),
             $request->boolean('separate', true)
         );
         OrderEvent::record($order->id, 'shipment.split', [
-            'lines' => $result['applied'],
+            'mode'     => 'line',
+            'lines'    => $result['applied'],
             'separate' => $request->boolean('separate', true),
+            'reason'   => $request->input('reason'),
+            'notes'    => $request->input('notes'),
         ]);
         return response()->json($result);
     }
+
+    /**
+     * Admin: POST orders/{id}/club-items — put the selected lines into ONE shipment.
+     *
+     * With `target_shipment_id` this is "move these items into that parcel"; without it,
+     * "create a parcel holding exactly these". Same operation, different destination.
+     * Clubbing never books anything — quoting and booking stay separate, later steps.
+     */
+    public function clubItems($id, Request $request)
+    {
+        $request->validate([
+            'order_item_ids'     => 'required|array|min:1|max:200',
+            'order_item_ids.*'   => 'required|integer',
+            'target_shipment_id' => 'nullable|integer',
+            'reason'             => ['nullable', 'string', Rule::in(self::SPLIT_REASONS)],
+            'notes'              => 'nullable|string|max:500',
+        ]);
+        $order = Order::findOrFail($id);
+
+        return response()->json((new OrderItemService())->clubItems(
+            $order,
+            $request->input('order_item_ids'),
+            $request->input('target_shipment_id') !== null ? (int) $request->input('target_shipment_id') : null,
+            $request->input('reason'),
+            $request->input('notes'),
+        ));
+    }
+
+    /**
+     * Admin: POST orders/{id}/merge-shipments — combine parcels of one vendor door into a
+     * new one. Refused when any source has reached a state the physical world has already
+     * acted on (booked, picked up, delivered, bounced).
+     */
+    public function mergeShipments($id, Request $request)
+    {
+        $request->validate([
+            'shipment_ids'   => 'required|array|min:2|max:50',
+            'shipment_ids.*' => 'required|integer',
+            'reason'         => ['nullable', 'string', Rule::in(self::SPLIT_REASONS)],
+            'notes'          => 'nullable|string|max:500',
+        ]);
+        $order = Order::findOrFail($id);
+
+        $result = (new OrderItemService())->mergeShipments(
+            $order,
+            $request->input('shipment_ids'),
+            $request->input('reason'),
+            $request->input('notes'),
+        );
+
+        return response()->json($result, $result['shipment_id'] ? 200 : 422);
+    }
+
+    /**
+     * Why a parcel was split. A closed set so the ops dashboard can group by it; kept as
+     * plain strings rather than an enum because BenSampo enums in this codebase feed
+     * migrations, and this one must never reach a column definition.
+     */
+    private const SPLIT_REASONS = [
+        'CAPACITY_LIMIT', 'WEIGHT_LIMIT', 'DIMENSION_LIMIT', 'PRODUCT_RESTRICTION',
+        'VENDOR_REQUEST', 'CUSTOMER_REQUEST', 'DIFFERENT_DELIVERY_DATE',
+        'PROVIDER_RESTRICTION', 'PACKAGE_CONFIGURATION', 'MANUAL_ADMIN_SPLIT',
+    ];
 
     /**
      * Admin: approve / reassign. Body: vendor_shop_id?, delivery_partner_id?,
@@ -347,8 +443,16 @@ class OrderAssignmentController extends CoreController
             // (tracking numbers are date+6-digits, guessable at scale) learns nothing.
             return ['shipments' => []];
         }
-        $rows = Shipment::with('items.product:id,name,slug,image')
-            ->where('order_id', $order->id)->get();
+        // items() joins shipment_items. Railway/EC2 migrate in the BACKGROUND after a deploy,
+        // so on the deploy that ships that table there is a window where this code is live and
+        // the table is not — and this route is public. Degrade to "no parcels yet" rather than
+        // 500 at a customer refreshing their tracking page; the window closes on its own.
+        try {
+            $rows = Shipment::with('items.product:id,name,slug,image')
+                ->where('order_id', $order->id)->get();
+        } catch (\Throwable $e) {
+            return ['shipments' => []];
+        }
         return [
             'shipments' => $rows->map(fn ($s) => [
                 'fulfillment_mode'     => $s->fulfillment_mode,

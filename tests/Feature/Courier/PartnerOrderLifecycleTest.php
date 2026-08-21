@@ -204,4 +204,18 @@ final class PartnerOrderLifecycleTest extends TestCase
         $bare->syncDriverFrom(['partner_info' => ['name' => 'Asha R']]);
         $this->assertSame(['name' => 'Asha R'], $bare->fresh()->toBookingPayload()['driver']);
     }
+
+    public function test_a_status_outside_the_vocabulary_degrades_instead_of_fataling(): void
+    {
+        // partner_status comes off a DB column, not a constant: a foreign word (an older
+        // writer, a hand-edited row, a partner that invented a state) must not raise
+        // "Undefined array key" and kill the reconcile sweep for every row after it.
+        $this->assertTrue(
+            PartnerOrderLifecycle::shouldApply('failed', 'open'),
+            'an unknown current status ranks below everything, so a real one can replace it',
+        );
+        $this->assertTrue(PartnerOrderLifecycle::shouldApply('something-new', 'live'));
+        // Unknown INCOMING is still refused — we only accept the partner's vocabulary.
+        $this->assertFalse(PartnerOrderLifecycle::shouldApply('open', 'not-a-status'));
+    }
 }

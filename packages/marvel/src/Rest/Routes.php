@@ -809,6 +809,15 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     // group that meant ANY logged-in customer could re-parcel ANY order by id.
     Route::post('orders/{id}/split-shipment', [OrderAssignmentController::class, 'splitShipment'])
         ->middleware('permission:' . Permission::SUPER_ADMIN);
+    // Shipment planner: club selected lines into one parcel (or move them into an
+    // existing one), and combine parcels of the same vendor door. super_admin for the
+    // SAME reason as split-shipment above — both findOrFail the order and re-parcel it
+    // with no ownership check of their own, so a weaker gate in this auth-only group
+    // would let any logged-in customer re-parcel any order by id.
+    Route::post('orders/{id}/club-items', [OrderAssignmentController::class, 'clubItems'])
+        ->middleware('permission:' . Permission::SUPER_ADMIN);
+    Route::post('orders/{id}/merge-shipments', [OrderAssignmentController::class, 'mergeShipments'])
+        ->middleware('permission:' . Permission::SUPER_ADMIN);
 
     Route::get('integrations', [IntegrationController::class, 'index'])
         ->middleware('permission:settings.integrations.view');
@@ -1016,6 +1025,8 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // Parcel weight/dimensions for the booking modal. Saved BEFORE rates are
     // fetched — couriers price on (volumetric) weight.
     Route::post('shipments/{id}/package', [CourierShipmentController::class, 'updatePackage']);
+    Route::get('shipments/{id}/packages', [CourierShipmentController::class, 'packages']);
+    Route::get('shipments/{id}/replan', [CourierShipmentController::class, 'replan']);
     // Manual RTO: webhooks record partner-reported bounces automatically; this is for
     // the ones the operator learns about by phone. Track-and-act-manually by design —
     // no automatic restock or refund.

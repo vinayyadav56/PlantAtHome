@@ -140,13 +140,31 @@ class CourierService
     public function shipmentCodAmount(Shipment $shipment, $order): float
     {
         $explicit = (float) ($shipment->cod_amount ?? 0);
-        if ($explicit > 0) {
+        // A CANCELLED parcel is re-plannable (REPLANNABLE_STATUSES) and units can leave it,
+        // but cod_amount is still the figure book() froze at the PREVIOUS booking. Re-deriving
+        // is the only safe read: a 5-unit parcel cancelled, split 3 + 2 and rebooked would
+        // otherwise demand the WHOLE order's cash on the 3-unit half and its share again on
+        // the 2-unit half.
+        if ($explicit > 0 && $shipment->status !== 'cancelled') {
             return round($explicit, 2);
         }
         if (!$order) {
             return 0.0;
         }
         $payable = (float) ($order->paid_total ?? $order->amount ?? 0);
+        // paid_total is the GROSS order value: storeOrder() computes it as
+        // amount + tax + delivery - discount and never nets off wallet points, which are
+        // recorded separately in order_wallet_points and DEBITED from the customer at
+        // checkout. Collecting the gross at the door charges them a second time for money
+        // the wallet already took.
+        //
+        // Guarded: the relation and its table can be absent on a partial deploy, and a
+        // missing ledger must fall back to the gross rather than fail the booking.
+        try {
+            $payable -= (float) ($order->wallet_point->amount ?? 0);
+        } catch (\Throwable $e) {
+            // wallet ledger unreachable — the gross figure stands
+        }
         if ($payable <= 0) {
             return 0.0;
         }
@@ -155,7 +173,12 @@ class CourierService
         // the driver would collect the order's cash twice.
         $legGoods = (float) $shipment->items->sum(fn ($i) => $i->shipped_subtotal);
         $orderGoods = (float) ($order->amount ?? 0);
-        if ($orderGoods <= 0 || $legGoods <= 0) {
+        // A leg that HOLDS lines worth nothing collects nothing — the ratio below already
+        // answers 0 for it. Only a leg with NO allocations at all is the degenerate the even
+        // split exists for. Without the isEmpty() test a parcel carrying only a free or
+        // zero-priced line took a FULL even share on top of the paying parcel's share, and the
+        // legs stopped summing to the payable: a 1000 order collected 1500 at the door.
+        if ($orderGoods <= 0 || ($legGoods <= 0 && $shipment->items->isEmpty())) {
             $count = max(1, Shipment::where('order_id', $order->id)->count());
             return round($payable / $count, 2);
         }
@@ -253,6 +276,53 @@ class CourierService
         if (($shipment->provider_order_id || $shipment->awb_number) && $shipment->status !== 'cancelled') {
             return ['ok' => false, 'error' => 'This vendor shipment is already booked — cancel the existing booking first to rebook.'];
         }
+        // An assignment is a SNAPSHOT, and this is the last moment it can be checked before a
+        // real courier is sent to a real address. A vendor can soft-delete the inventory row,
+        // zero the stock, lose review approval or drop the service area between checkout and
+        // dispatch — nothing upstream repairs order_items when they do. So re-verify against
+        // live inventory here, repair what can be repaired, and refuse what cannot.
+        //
+        // Placed AFTER the already-booked guard (a sealed parcel must never be re-planned) and
+        // BEFORE the pickup blocker, which has to judge the shipment as it will actually ship —
+        // and before the client stamps BOOKING_IN_FLIGHT.
+        //
+        // Resolved from the container so tests can bind a service with a stubbed engine.
+        try {
+            $reval = app(\Marvel\Services\OrderItemService::class)->revalidateShipmentAssignments($shipment);
+        } catch (\Throwable $e) {
+            // Only DETECTION-phase failures reach here (a repair failure is reported as stale
+            // inside the service). An infrastructure fault must not block dispatch outright.
+            Log::warning('courier.revalidation.error', [
+                'shipment_id' => $shipment->id,
+                'error'       => $e->getMessage(),
+            ]);
+            $reval = ['skipped' => 'error', 'moved' => [], 'stale' => [], 'replanned_shipment_ids' => []];
+        }
+
+        if (!empty($reval['stale'])) {
+            return [
+                'ok'    => false,
+                'code'  => 'STALE_ASSIGNMENT',
+                'error' => 'The assigned vendor no longer has ' . count($reval['stale'])
+                    . ' line(s) on this shipment, and no other vendor currently does — reassign or cancel those lines first.',
+                'items'     => $reval['stale'],
+                'replanned' => $reval['replanned_shipment_ids'] ?? [],
+            ];
+        }
+
+        if (!empty($reval['moved'])) {
+            // regroup() moved lines onto other vendors' parcels and may have emptied this one.
+            $shipment = Shipment::with(['order', 'items'])->find($shipment->id);
+            if (!$shipment) {
+                return [
+                    'ok'        => false,
+                    'code'      => 'REASSIGNED',
+                    'error'     => 'Every line moved to another vendor — dispatch the new shipment(s) instead.',
+                    'replanned' => $reval['replanned_shipment_ids'],
+                ];
+            }
+        }
+
         // Courier lanes reference the vendor's pickup location BY NICKNAME, and Shiprocket rejects
         // the order if that nickname was never registered on the account. Refuse here with an
         // actionable message: the alternative is a partner 422 per booking that reads like a
@@ -268,7 +338,16 @@ class CourierService
         $cod = $order && PaymentGatewayType::isCashOnDelivery($order->payment_gateway);
         // $courierId travels as an ARGUMENT, never off the row: see buildRequest's note — a
         // persisted choice replayed on a later booking is a stale rate card.
-        return $this->shippingClient()->book($shipment, $this->modeOf($shipment), (bool) $cod, $this->shipmentCodAmount($shipment, $order), $partnerCode, $courierId, $options);
+        $res = $this->shippingClient()->book($shipment, $this->modeOf($shipment), (bool) $cod, $this->shipmentCodAmount($shipment, $order), $partnerCode, $courierId, $options);
+
+        // Tell the caller about parcels a re-plan minted: the admin UI prompts to dispatch them,
+        // and the auto-book listener books them in the same run rather than leaving them for the
+        // undispatched sweep to alarm on hours later.
+        if (!empty($reval['replanned_shipment_ids'])) {
+            $res['replanned'] = $reval['replanned_shipment_ids'];
+        }
+
+        return $res;
     }
 
     /**

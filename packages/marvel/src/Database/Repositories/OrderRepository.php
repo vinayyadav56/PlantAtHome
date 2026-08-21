@@ -414,7 +414,12 @@ class OrderRepository extends BaseRepository
         $this->consumeCouponIfAny($coupon ?? null, $order, $user);
 
         if (($useWalletPoints || $request->isFullWalletPayment) && $user) {
-            $this->storeOrderWalletPoint(round($request['paid_total'], 2) - $amount, $order->id);
+            // $amount is NULL when the customer has no wallet row at all, and `paid_total - null`
+            // is `paid_total` — which recorded the ENTIRE order as wallet-paid when not a single
+            // point existed. Harmless while nothing read this ledger; it stops being harmless the
+            // moment COD nets it off the cash due at the door (see shipmentCodAmount).
+            $covered = round($request['paid_total'], 2) - ($amount ?? round($request['paid_total'], 2));
+            $this->storeOrderWalletPoint($covered, $order->id);
             $this->manageWalletAmount(round($request['paid_total'], 2), $user->id);
         }
 

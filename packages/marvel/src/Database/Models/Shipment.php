@@ -2,6 +2,7 @@
 
 namespace Marvel\Database\Models;
 
+use Carbon\Carbon;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
@@ -10,6 +11,9 @@ use Illuminate\Database\Eloquent\Relations\HasMany;
 /** A fulfilment unit grouping order_items by vendor + mode (internal; never customer-facing). */
 class Shipment extends Model
 {
+    /** last_status while a partner call is in flight — see isLiveBooked(). */
+    public const BOOKING_IN_FLIGHT = 'booking';
+
     protected $table = 'shipments';
 
     public $guarded = [];
@@ -60,7 +64,37 @@ class Shipment extends Model
      */
     public function isLiveBooked(): bool
     {
+        // A booking IN FLIGHT counts as sealed. provider_order_id / awb_number only exist
+        // AFTER the partner call returns, so for the seconds that call is running the row
+        // read as free — long enough for a merge or club to delete it out from under a
+        // pickup that is really happening, leaving a billed collection with no shipments
+        // row and a deaf status webhook. book() stamps the claim before it dials out.
+        //
+        // Time-boxed so a crashed worker cannot seal a parcel forever.
+        if ($this->last_status === self::BOOKING_IN_FLIGHT && $this->last_status_at) {
+            try {
+                if (Carbon::parse($this->last_status_at)->gt(Carbon::now()->subMinutes(5))) {
+                    return true;
+                }
+            } catch (\Throwable $e) {
+                // an unparseable stamp is not a claim
+            }
+        }
+
         return ($this->provider_order_id || $this->awb_number) && $this->status !== 'cancelled';
+    }
+
+    /**
+     * Has a partner ever been told about this parcel?
+     *
+     * Broader than isLiveBooked(): a CANCELLED booking keeps its provider ids, and the status
+     * callback still arrives keyed on this row's id (shipment_ref). Deleting such a row makes
+     * every later callback land on nothing and strands the AWB, so re-planning may empty one
+     * but must never remove it.
+     */
+    public function wasEverBooked(): bool
+    {
+        return (bool) ($this->provider_order_id || $this->awb_number);
     }
 
     public function order(): BelongsTo

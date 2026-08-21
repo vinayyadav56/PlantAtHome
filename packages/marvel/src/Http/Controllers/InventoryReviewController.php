@@ -287,9 +287,60 @@ class InventoryReviewController extends Controller
         $titles = $variantIds->isEmpty()
             ? collect()
             : DB::table('variation_options')->whereIn('id', $variantIds)->pluck('title', 'id');
-        $rows->each(function ($vpp) use ($titles) {
+        $others = $this->otherVendorCounts($rows);
+
+        $rows->each(function ($vpp) use ($titles, $others) {
             optional($vpp->product)->setAppends([]);
             $vpp->variant_title = $vpp->variation_option_id ? ($titles[$vpp->variation_option_id] ?? null) : null;
+            // How many OTHER vendors already carry this exact variant. The reviewer's first
+            // question about a submission is whether the platform already has this plant and
+            // at what price — answering it here saves leaving the queue to find out.
+            $vpp->other_vendors_count = (int) ($others[$this->variantKey($vpp)] ?? 0);
+            if ($vpp->other_vendors_count > 0) {
+                $vpp->other_vendors_count--; // the row's own shop is in the group
+            }
         });
+    }
+
+    /** shop-agnostic identity of a listing: the MASTER product + variant, never the name. */
+    private function variantKey($row): string
+    {
+        return ((int) $row->product_id) . ':' . ((int) ($row->variation_option_id ?? 0));
+    }
+
+    /**
+     * Distinct vendor count per (product, variant) across the page, in ONE grouped query.
+     *
+     * Counts every review status on purpose — the popover shows each vendor's own state, and
+     * a reviewer deciding on a duplicate needs to see pending siblings too, not just live ones.
+     *
+     * @return array<string, int> variantKey => distinct shop count (INCLUDING the row's own)
+     */
+    private function otherVendorCounts($rows): array
+    {
+        $pairs = $rows->map(fn ($r) => [(int) $r->product_id, (int) ($r->variation_option_id ?? 0)])
+            ->unique(fn ($p) => $p[0] . ':' . $p[1])->values();
+        if ($pairs->isEmpty()) {
+            return [];
+        }
+
+        $counts = DB::table('vendor_product_prices')
+            ->selectRaw('product_id, COALESCE(variation_option_id, 0) as variant_id, COUNT(DISTINCT shop_id) as vendors')
+            ->whereNull('deleted_at')
+            ->whereIn('product_id', $pairs->map(fn ($p) => $p[0])->unique()->values())
+            ->groupBy('product_id', 'variant_id')
+            ->get();
+
+        $wanted = $pairs->mapWithKeys(fn ($p) => [$p[0] . ':' . $p[1] => true])->all();
+
+        $out = [];
+        foreach ($counts as $c) {
+            $key = ((int) $c->product_id) . ':' . ((int) $c->variant_id);
+            if (isset($wanted[$key])) {
+                $out[$key] = (int) $c->vendors;
+            }
+        }
+
+        return $out;
     }
 }

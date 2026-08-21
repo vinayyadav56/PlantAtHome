@@ -330,9 +330,9 @@ class ProductRepository extends BaseRepository
             $data['slug'] = $this->makeSlug($request);
 
             if ($setting->options["isProductReview"] ?? false) {
-                // Master-catalog model: both admins and vendors may create a
-                // product that goes live immediately, so PUBLISH is a valid
-                // create status alongside draft/under_review.
+                // PUBLISH is a valid create status here because an ADMIN may create straight
+                // into the live catalogue. A vendor never reaches this branch with it — the
+                // controller overwrites their status with under_review before calling us.
                 if (in_array($request->status, [ProductStatus::DRAFT, ProductStatus::UNDER_REVIEW, ProductStatus::PUBLISH], true)) {
                     $data['status'] = $request->status;
                 } else {

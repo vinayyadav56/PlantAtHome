@@ -207,6 +207,11 @@ class ReconcileConsoleOrdersCommand extends Command
         // those); tracking them here too would double-bill Porter's 1/min/order.
         $rows = PartnerConsoleOrder::where('origin', 'shipment')
             ->whereNotNull('shipment_id')
+            // A refused booking attempt is a row with NO CRN. It can never match a shipment's
+            // provider_order_id, so the loop below skips it — but it stays non-terminal forever
+            // and its updated_at never moves, so it sits at the head of this ordering and eats a
+            // slot on every pass. 100 of them stall the mirror for every real booking.
+            ->whereNotNull('provider_order_id')
             ->where(fn ($q) => $q->whereNull('partner_status')->orWhereNotIn('partner_status', PartnerOrderLifecycle::TERMINAL))
             ->orderBy('updated_at')->limit(100)->get();
         foreach ($rows as $row) {

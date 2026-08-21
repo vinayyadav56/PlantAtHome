@@ -247,7 +247,11 @@ class VendorProductPrice extends Model
         if ($qty === 0) {
             return true;
         }
-        return static::where('id', $id)
+        // withTrashed: a vendor removing the product SOFT-deletes this row, and the global
+        // scope then made the release a silent no-op — leaving reserved_qty inflated forever
+        // on a row that can still be restored. Releasing a hold is always safe; only
+        // reserveStock must refuse a dead row.
+        return static::withTrashed()->where('id', $id)
             ->where('reserved_qty', '>=', $qty)
             ->update(['reserved_qty' => \Illuminate\Support\Facades\DB::raw("reserved_qty - {$qty}")]) > 0;
     }

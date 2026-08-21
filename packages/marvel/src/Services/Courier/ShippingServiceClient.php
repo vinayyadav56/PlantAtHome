@@ -2,11 +2,13 @@
 
 namespace Marvel\Services\Courier;
 
+use App\Models\PartnerConsoleOrder;
 use Carbon\Carbon;
 use Illuminate\Http\Client\Pool;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\Shipment;
 
 /**
@@ -280,9 +282,111 @@ class ShippingServiceClient
     /** The door buildRequest resolved for the request currently being sent. See book(). */
     private ?int $resolvedPickupLocationId = null;
 
+    /**
+     * Append this booking ATTEMPT to the partner-order ledger — success or failure.
+     *
+     * The shipments row holds only the CURRENT attempt (one row, reused, provider_order_id
+     * overwritten), so without this a Porter refusal followed by a Borzo success left no
+     * trace of Porter at all: the failure path never reached this table, and the reconcile
+     * sweep that mirrors bookings into it filters on a non-null provider_order_id, which a
+     * failed attempt does not have.
+     *
+     * Never allowed to break a booking — a missing audit row is not worth a 500 on a parcel
+     * that is otherwise fine, and this table lags behind on freshly-migrated boxes.
+     */
+    private function recordAttempt(
+        Shipment $shipment,
+        ?string $partnerCode,
+        string $mode,
+        array $request,
+        array $res,
+        ?array $data
+    ): void {
+        try {
+            if (!Schema::hasTable('partner_console_orders')) {
+                return;
+            }
+
+            $partner = (string) ($data['partner'] ?? $partnerCode ?? $shipment->provider ?? 'unknown');
+            $providerOrderId = $data ? (($data['provider_order_id'] ?? '') ?: null) : null;
+
+            $attemptNo = 1 + (int) PartnerConsoleOrder::where('shipment_id', $shipment->id)->count();
+
+            $payload = [
+                'origin'      => 'shipment',
+                'shipment_id' => $shipment->id,
+                'order_id'    => $shipment->order_id,
+                'mode'        => $mode,
+                'attempt_no'  => $attemptNo,
+                'request'     => $request,
+                'response'    => $res['data'] ?? $res,
+            ];
+
+            if ($providerOrderId === null) {
+                // create(), NOT updateOrCreate(): the unique index is
+                // (partner_code, provider_order_id) and matching on a NULL id turns into
+                // whereNull — every failed attempt for a partner would collapse onto one
+                // row and the history this table exists for would be a single overwrite.
+                PartnerConsoleOrder::create($payload + [
+                    'partner_code'    => $partner,
+                    'last_status'     => 'book_failed',
+                    // NO partner_status: that column carries the PARTNER's own vocabulary
+                    // (PartnerOrderLifecycle::RANK) and 'failed' is not in it. A refused
+                    // attempt never reached a partner lifecycle at all, and a NULL
+                    // partner_status alongside a NULL provider_order_id is already how a
+                    // failed attempt is identified.
+                    'partner_status'  => null,
+                    'last_error'      => $res['error'] ?? 'shipping service',
+                    'last_error_at'   => Carbon::now(),
+                ]);
+
+                return;
+            }
+
+            // updateOrCreate on success: the per-minute reconcile sweep may already have
+            // minted this row from the shipment.
+            PartnerConsoleOrder::updateOrCreate(
+                ['partner_code' => $partner, 'provider_order_id' => $providerOrderId],
+                $payload + [
+                    'provider_reference' => ($data['provider_reference'] ?? '') ?: null,
+                    'last_status'        => ($data['last_status'] ?? '') ?: 'booked',
+                    'tracking_url'       => ($data['tracking_url'] ?? '') ?: null,
+                    'last_error'         => null,
+                ],
+            );
+        } catch (\Throwable $e) {
+            Log::warning('courier.attempt.record_failed', [
+                'shipment_id' => $shipment->id,
+                'error'       => $e->getMessage(),
+            ]);
+        }
+    }
+
     public function book(Shipment $shipment, string $mode, bool $cod, float $codAmount, ?string $partnerCode = null, ?int $courierId = null, array $options = []): array
     {
         $body = $this->buildRequest($shipment, $mode, $cod, $codAmount, $partnerCode, $courierId, $options);
+
+        // CLAIM the row before dialling out. The seal (isLiveBooked) reads provider_order_id
+        // and awb_number, neither of which exists until this call returns — so for the whole
+        // partner round-trip the parcel reads as free and a concurrent merge or club would
+        // happily delete it, leaving a real, billed pickup with no shipments row and a status
+        // webhook that lands on nothing. Both branches below overwrite last_status, so the
+        // claim never outlives the call; isLiveBooked also time-boxes it to 5 minutes in case
+        // this process dies mid-flight.
+        //
+        // Guarded: these columns post-date some deployments (and some test schemas), and a
+        // missing column must degrade to the old behaviour, not fail the booking.
+        try {
+            if (Schema::hasColumn('shipments', 'last_status') && Schema::hasColumn('shipments', 'last_status_at')) {
+                Shipment::whereKey($shipment->id)->update([
+                    'last_status'    => Shipment::BOOKING_IN_FLIGHT,
+                    'last_status_at' => Carbon::now(),
+                ]);
+            }
+        } catch (\Throwable $e) {
+            // never block a booking on its own audit stamp
+        }
+
         $res = $this->request('post', '/v1/shipments', $body);
         if (empty($res['ok'])) {
             $shipment->forceFill(['last_status' => 'book_failed', 'failure_reason' => $res['error'] ?? 'shipping service'])->save();
@@ -298,6 +402,8 @@ class ShippingServiceClient
                 'http_status' => $res['status'] ?? null,
                 'error'       => $res['error'] ?? null,
             ]);
+            $this->recordAttempt($shipment, $partnerCode, $mode, $body, $res, null);
+
             return ['ok' => false, 'error' => $res['error'] ?? 'Shipping service book failed.'];
         }
         $b = (array) ($res['data'] ?? []);
@@ -360,6 +466,8 @@ class ShippingServiceClient
             // and is the only thing telling the operator why the parcel is stuck.
             'failure_reason'       => ($b['failure_reason'] ?? '') ?: null,
         ])->save();
+
+        $this->recordAttempt($shipment, $partnerCode, $mode, $body, $res, $b);
 
         Log::info('courier.booking.opened', [
             'order_id'            => $shipment->order_id,

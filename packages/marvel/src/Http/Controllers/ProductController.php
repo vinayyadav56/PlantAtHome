@@ -570,11 +570,11 @@ class ProductController extends CoreController
     public function ProductStore(Request $request)
     {
         // ── Single-shop master catalog ─────────────────────────────────────────
-        // Every product belongs to THE master PlantAtHome shop. Both a super admin
-        // and a store owner (vendor) create directly into the master catalog and
-        // the product goes LIVE immediately (no review gate). A vendor create is
-        // still attributed to their shop via proposed_by_shop_id so they retain
-        // edit/delete rights over their own products.
+        // Every product belongs to THE master PlantAtHome shop, but the two actors are NOT
+        // equivalent: a super admin creates straight into the live catalogue, while a vendor
+        // PROPOSES — the status is server-forced to under_review below (a crafted
+        // `status: publish` must not self-publish) and attributed via proposed_by_shop_id,
+        // which is also what keeps their edit/delete rights over their own proposal.
         $user = $request->user();
         $isSuperAdmin = $user && $user->hasPermissionTo(Permission::SUPER_ADMIN);
         $vendorShopId = null;
@@ -1068,9 +1068,18 @@ class ProductController extends CoreController
         $data = $request->validate([
             'id'     => ['required', 'integer', 'exists:products,id'],
             'status' => ['required', 'in:publish,rejected,under_review,draft,unpublish'],
+            // A rejection the vendor cannot act on just gets re-submitted unchanged.
+            'note'   => ['required_if:status,rejected', 'nullable', 'string', 'max:2000'],
         ]);
         $product = Product::findOrFail((int) $data['id']);
         $product->status = $data['status'];
+        if (\Illuminate\Support\Facades\Schema::hasColumn('products', 'review_note')) {
+            // Cleared on publish: a note explaining a rejection that no longer applies is
+            // worse than none, because the vendor reads it as a live objection.
+            $product->review_note = $data['status'] === \Marvel\Enums\ProductStatus::PUBLISH
+                ? null
+                : ($data['note'] ?? $product->review_note);
+        }
         $product->save();
         $this->bustResponseCache('products');
         // A newly-published proposal becomes attachable/visible; refresh projections.
@@ -1078,6 +1087,18 @@ class ProductController extends CoreController
             (new \Marvel\Services\AvailabilityService())->recomputeForProduct((int) $product->id);
         } catch (\Throwable $e) {
             // projection refresh must never fail the status change
+        }
+        // The review QUEUE decides through this endpoint, but only the heavier
+        // PUT products/{id} path ever fired these — so approving or rejecting from the queue
+        // notified the proposing vendor of nothing at all.
+        try {
+            if ($data['status'] === \Marvel\Enums\ProductStatus::PUBLISH) {
+                event(new \Marvel\Events\ProductReviewApproved($product));
+            } elseif ($data['status'] === \Marvel\Enums\ProductStatus::REJECTED) {
+                event(new \Marvel\Events\ProductReviewRejected($product));
+            }
+        } catch (\Throwable $e) {
+            // a notification must never fail the decision it reports
         }
         return $product->fresh();
     }

@@ -76,6 +76,17 @@ class ShopController extends CoreController
             // total_earnings and payment_info to any signed-in customer.
             $query->with('balance');
         }
+
+        // Group the vendor list by BUSINESS VERTICAL. A vendor has no vertical column of its
+        // own — its verticals are the verticals of the categories it supplies, which
+        // `category_shop` already records — so this reads through that pivot rather than
+        // duplicating the fact on shops. Server-side because the list is paginated: filtering
+        // the current page in the browser would silently hide matches on every other page.
+        if ($request->filled('vertical')) {
+            $slug = (string) $request->input('vertical');
+            $query->whereHas('categories.type', fn ($t) => $t->where('slug', $slug));
+        }
+
         return $query;
     }
 

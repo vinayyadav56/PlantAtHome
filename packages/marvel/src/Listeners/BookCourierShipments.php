@@ -87,21 +87,60 @@ class BookCourierShipments implements ShouldQueue
         }
 
         $failed = [];
-        foreach ($shipments as $shipment) {
-            try {
-                $res = $courier->book($shipment);
-            } catch (Throwable $e) {
-                // Booking one leg must never abort the others.
-                $res = ['ok' => false, 'error' => $e->getMessage()];
+        $seen = [];
+
+        // Multi-PASS, because booking can now create work for itself: the pre-booking
+        // revalidation may move a line to another vendor, which mints a NEW parcel and
+        // reports it back as `replanned`. That is not a failure, so nothing throws, so the
+        // retry below never fires — the new parcel would sit unbooked until the undispatched
+        // sweep alarmed on it hours later. Bounded at 3: a re-plan of a re-plan is already
+        // pathological, and anything still pending joins $failed and takes the normal retry.
+        for ($pass = 0; $pass < 3 && $shipments->isNotEmpty(); $pass++) {
+            $replanned = [];
+
+            foreach ($shipments as $shipment) {
+                $seen[] = (int) $shipment->id;
+                try {
+                    $res = $courier->book($shipment);
+                } catch (Throwable $e) {
+                    // Booking one leg must never abort the others.
+                    $res = ['ok' => false, 'error' => $e->getMessage()];
+                }
+
+                foreach ((array) ($res['replanned'] ?? []) as $newId) {
+                    $replanned[] = (int) $newId;
+                }
+
+                // REASSIGNED means every line left this parcel for a new one we are about to
+                // book — the empty original is not a failure to retry, it no longer exists.
+                $reassigned = ($res['code'] ?? null) === 'REASSIGNED' && !empty($res['replanned']);
+
+                if (empty($res['ok']) && !$reassigned) {
+                    $failed[] = $shipment->id;
+                    Log::warning('courier.autobook.failed', [
+                        'order_id'    => $order->id,
+                        'shipment_id' => $shipment->id,
+                        'error'       => $res['error'] ?? 'unknown',
+                    ]);
+                }
             }
-            if (empty($res['ok'])) {
-                $failed[] = $shipment->id;
-                Log::warning('courier.autobook.failed', [
-                    'order_id'    => $order->id,
-                    'shipment_id' => $shipment->id,
-                    'error'       => $res['error'] ?? 'unknown',
-                ]);
-            }
+
+            $pending = array_values(array_diff(array_unique($replanned), $seen));
+            $shipments = $pending
+                ? Shipment::with(['order', 'items'])
+                    ->whereIn('id', $pending)
+                    ->whereNull('provider_order_id')
+                    ->whereNull('awb_number')
+                    ->whereNotIn('status', ['cancelled', 'delivered', 'rto'])
+                    ->courierEligible()
+                    ->get()
+                : collect();
+        }
+
+        // Anything the pass budget did not reach is treated as unbooked, so the retry below
+        // picks it up rather than leaving it silently stranded.
+        foreach ($shipments as $stranded) {
+            $failed[] = $stranded->id;
         }
 
         // Any leg still unbooked ⇒ throw so the queue retries with backoff (already-booked legs

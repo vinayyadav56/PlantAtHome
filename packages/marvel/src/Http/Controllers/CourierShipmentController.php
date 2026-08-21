@@ -4,12 +4,15 @@ namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\Address;
 use Marvel\Database\Models\Shipment;
+use Marvel\Database\Models\ShipmentPackage;
 use Marvel\Database\Models\Shop;
 use Marvel\Database\Models\VendorPickupLocation;
 use Marvel\Enums\Permission;
 use Marvel\Services\Courier\CourierService;
+use Marvel\Services\ShipmentPlanner;
 
 /**
  * Admin courier operations (C3): book a courier shipment with the provider, (re)allocate the
@@ -949,10 +952,20 @@ class CourierShipmentController extends CoreController
     public function updatePackage(Request $request, $id)
     {
         $data = $request->validate([
+            // Single-parcel shape — unchanged, still what the parcel editor sends.
             'weight_g'   => 'nullable|integer|min:1|max:100000',
             'length_cm'  => 'nullable|numeric|min:1|max:300',
             'breadth_cm' => 'nullable|numeric|min:1|max:300',
             'height_cm'  => 'nullable|numeric|min:1|max:300',
+            // Multi-parcel shape.
+            'packages'                 => 'nullable|array|max:20',
+            'packages.*.weight_g'      => 'nullable|integer|min:1|max:100000',
+            'packages.*.length_cm'     => 'nullable|numeric|min:1|max:300',
+            'packages.*.breadth_cm'    => 'nullable|numeric|min:1|max:300',
+            'packages.*.height_cm'     => 'nullable|numeric|min:1|max:300',
+            'packages.*.declared_value' => 'nullable|numeric|min:0',
+            'packages.*.contents'      => 'nullable|string|max:255',
+            'packages.*.fragile'       => 'nullable|boolean',
         ]);
 
         $shipment = $this->shipment($id);
@@ -963,14 +976,176 @@ class CourierShipmentController extends CoreController
             ], 409);
         }
 
-        $shipment->forceFill([
-            'weight_g'   => $data['weight_g'] ?? null,
-            'length_cm'  => $data['length_cm'] ?? null,
-            'breadth_cm' => $data['breadth_cm'] ?? null,
-            'height_cm'  => $data['height_cm'] ?? null,
-        ])->save();
+        // is_array, NOT has(): `{"packages": null}` passes has() and would wipe every parcel
+        // row while silently ignoring the flat weight sent alongside it. An explicit empty
+        // array still clears them — that is a real instruction; null is not.
+        if (is_array($request->input('packages'))) {
+            $this->replacePackages($shipment, (array) $request->input('packages'));
+        } else {
+            $shipment->forceFill([
+                'weight_g'   => $data['weight_g'] ?? null,
+                'length_cm'  => $data['length_cm'] ?? null,
+                'breadth_cm' => $data['breadth_cm'] ?? null,
+                'height_cm'  => $data['height_cm'] ?? null,
+            ])->save();
+            // Keep the parcel list in step with the single-parcel editor, so the two
+            // surfaces never disagree about what is in this shipment.
+            $this->syncSinglePackage($shipment);
+        }
 
-        return response()->json(['ok' => true, 'shipment' => $shipment->fresh()]);
+        $shipment = $shipment->fresh();
+
+        return response()->json([
+            'ok'       => true,
+            'shipment' => $shipment,
+            'packages' => $this->packagesOf($shipment),
+        ]);
+    }
+
+    /**
+     * GET shipments/{id}/replan — what to do about a parcel nothing will carry.
+     *
+     * Returns the parcel's own totals plus a PROPOSED split. Creates nothing: a provider
+     * refusal is an input to PlantAtHome's planning decision, never an instruction to
+     * destroy the shipment. `capacity_kg` may be passed from the capacity a partner
+     * reported on its quote; otherwise the planner falls back to a conservative default.
+     */
+    public function replan(Request $request, $id)
+    {
+        $request->validate(['capacity_kg' => 'nullable|numeric|min:0.1|max:10000']);
+
+        $shipment = $this->shipment($id);
+        $planner = new ShipmentPlanner($this->courier());
+        $capacity = $request->filled('capacity_kg') ? (float) $request->input('capacity_kg') : null;
+
+        return response()->json([
+            'shipment_id' => (int) $shipment->id,
+            'summary'     => $planner->summarize($shipment),
+            'proposal'    => $planner->proposeSplit($shipment, $capacity),
+            // Why the operator is on this screen at all — book() stamps these on a refusal.
+            'needs_replanning' => ($shipment->last_status ?? '') === 'book_failed',
+            'failure_reason'   => $shipment->failure_reason,
+        ]);
+    }
+
+    /** GET shipments/{id}/packages — the parcels recorded for this shipment. */
+    public function packages($id)
+    {
+        $shipment = $this->shipment($id);
+
+        return response()->json([
+            'shipment_id' => (int) $shipment->id,
+            'packages'    => $this->packagesOf($shipment),
+            // The partner is booked for ONE parcel: buildRequest() sends a single flat
+            // weight + L/B/H and the Go shipping-service has no packages[] field. The
+            // admin surfaces this so nobody reads three rows as three booked parcels.
+            'booked_as_single_parcel' => true,
+            'rollup' => [
+                'weight_g'   => $shipment->weight_g,
+                'length_cm'  => $shipment->length_cm,
+                'breadth_cm' => $shipment->breadth_cm,
+                'height_cm'  => $shipment->height_cm,
+            ],
+        ]);
+    }
+
+    private function packagesOf(Shipment $shipment)
+    {
+        if (!Schema::hasTable('shipment_packages')) {
+            return [];
+        }
+
+        return ShipmentPackage::where('shipment_id', $shipment->id)->orderBy('package_number')->get();
+    }
+
+    /**
+     * Replace this shipment's parcels and recompute the flat rollup that is actually sent
+     * to the partner.
+     *
+     * Weights SUM; dimensions take the LARGEST single box rather than summing, for the
+     * same reason packageDims() already gives: three boxes are not one box three times as
+     * long, and a courier prices the volumetric weight of each parcel it carries.
+     */
+    private function replacePackages(Shipment $shipment, array $packages): void
+    {
+        if (!Schema::hasTable('shipment_packages')) {
+            return;
+        }
+
+        DB::transaction(function () use ($shipment, $packages) {
+            // Re-check UNDER A LOCK. The 409 above ran before the transaction opened, so a
+            // booking that started in between would have its parcel rewritten underneath it —
+            // the courier is then carrying a box whose declared weight has since changed.
+            $fresh = Shipment::whereKey($shipment->id)->lockForUpdate()->first();
+            if ($fresh && $fresh->isLiveBooked()) {
+                return;
+            }
+
+            ShipmentPackage::where('shipment_id', $shipment->id)->delete();
+
+            $number = 0;
+            $totalWeight = 0;
+            $dims = ['length_cm' => 0.0, 'breadth_cm' => 0.0, 'height_cm' => 0.0];
+            $biggestVolume = -1.0;
+
+            foreach ($packages as $package) {
+                $number++;
+                $row = ShipmentPackage::create([
+                    'shipment_id'    => $shipment->id,
+                    'package_number' => $number,
+                    'weight_g'       => $package['weight_g'] ?? null,
+                    'length_cm'      => $package['length_cm'] ?? null,
+                    'breadth_cm'     => $package['breadth_cm'] ?? null,
+                    'height_cm'      => $package['height_cm'] ?? null,
+                    'declared_value' => $package['declared_value'] ?? null,
+                    'contents'       => $package['contents'] ?? null,
+                    'fragile'        => (bool) ($package['fragile'] ?? false),
+                ]);
+
+                $totalWeight += (int) ($row->weight_g ?? 0);
+                $volume = (float) ($row->length_cm ?? 0) * (float) ($row->breadth_cm ?? 0) * (float) ($row->height_cm ?? 0);
+                if ($volume > $biggestVolume) {
+                    $biggestVolume = $volume;
+                    $dims = [
+                        'length_cm'  => $row->length_cm,
+                        'breadth_cm' => $row->breadth_cm,
+                        'height_cm'  => $row->height_cm,
+                    ];
+                }
+            }
+
+            // No parcels recorded => back to NULL, which means "derive from product data,
+            // then settings, then 20x15x15" — not "an empty box was measured".
+            $shipment->forceFill(array_merge(
+                ['weight_g' => $totalWeight > 0 ? $totalWeight : null],
+                $number > 0 ? $dims : ['length_cm' => null, 'breadth_cm' => null, 'height_cm' => null],
+            ))->save();
+        });
+    }
+
+    /** Mirror a single-parcel edit into the parcel list (or clear it when everything is null). */
+    private function syncSinglePackage(Shipment $shipment): void
+    {
+        if (!Schema::hasTable('shipment_packages')) {
+            return;
+        }
+
+        $hasAny = $shipment->weight_g !== null || $shipment->length_cm !== null
+            || $shipment->breadth_cm !== null || $shipment->height_cm !== null;
+
+        ShipmentPackage::where('shipment_id', $shipment->id)->delete();
+        if (!$hasAny) {
+            return;
+        }
+
+        ShipmentPackage::create([
+            'shipment_id'    => $shipment->id,
+            'package_number' => 1,
+            'weight_g'       => $shipment->weight_g,
+            'length_cm'      => $shipment->length_cm,
+            'breadth_cm'     => $shipment->breadth_cm,
+            'height_cm'      => $shipment->height_cm,
+        ]);
     }
 
     /**
