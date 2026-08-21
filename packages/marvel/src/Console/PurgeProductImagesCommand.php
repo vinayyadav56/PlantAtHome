@@ -494,9 +494,11 @@ class PurgeProductImagesCommand extends Command
                 continue;
             }
             $n = 0;
-            DB::table($src['table'])->select(array_merge(['id'], $cols))->orderBy('id')
-                ->chunk(500, function ($chunk) use ($cols, &$keys, &$external, &$n) {
-                    foreach ($chunk as $row) {
+            // cursor(), not chunk(): chunking needs an orderable primary key and these tables do
+            // not all have one — pah_plant_image_backup has no `id` at all, which made a
+            // schema-agnostic sweep fail on a column that was never selected explicitly.
+            DB::table($src['table'])->select($cols)->cursor()
+                ->each(function ($row) use ($cols, &$keys, &$external, &$n) {
                         $touched = false;
                         foreach ($cols as $c) {
                             $v = $row->$c ?? null;
@@ -516,7 +518,6 @@ class PurgeProductImagesCommand extends Command
                         if ($touched) {
                             $n++;
                         }
-                    }
                 });
             $out[$src['table']] = $n;
         }
@@ -531,20 +532,26 @@ class PurgeProductImagesCommand extends Command
                 continue;
             }
             $stamp = now();
-            DB::table($src['table'])->orderBy('id')->chunk(500, function ($chunk) use ($src, $stamp) {
-                $rows = [];
-                foreach ($chunk as $row) {
-                    $rows[] = [
-                        'source_table' => $src['table'],
-                        'row_id'       => $row->id ?? 0,
-                        'payload'      => json_encode($row),
-                        'created_at'   => $stamp,
-                    ];
+            $buffer = [];
+            $flush = function () use (&$buffer) {
+                if ($buffer) {
+                    DB::table(self::LIBRARY_BACKUP)->insert($buffer);
+                    $buffer = [];
                 }
-                if ($rows) {
-                    DB::table(self::LIBRARY_BACKUP)->insert($rows);
+            };
+            DB::table($src['table'])->cursor()->each(function ($row) use ($src, $stamp, &$buffer, $flush) {
+                $buffer[] = [
+                    'source_table' => $src['table'],
+                    // 0 when the table has no id — the payload is the restore, not this column.
+                    'row_id'       => (int) ($row->id ?? 0),
+                    'payload'      => json_encode($row),
+                    'created_at'   => $stamp,
+                ];
+                if (count($buffer) >= 500) {
+                    $flush();
                 }
             });
+            $flush();
             DB::table($src['table'])->delete();
         }
     }
