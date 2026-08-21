@@ -36,6 +36,7 @@ use Marvel\Console\OpenAiSetupCommand;
 use Marvel\Console\OTPGatewaySetupCommand;
 use Marvel\Console\QueueConnectionSetupCommand;
 use Marvel\Console\SettingsDataImporter;
+use Marvel\Console\PurgeProductImagesCommand;
 use Marvel\Console\TestMailSendCommand;
 use Marvel\Console\TranslationEnabledCommand;
 use Marvel\Database\Models\Settings;
@@ -141,6 +142,7 @@ class ShopServiceProvider extends ServiceProvider
         DatabaseSetupCommand::class,
         MarvelInfoCommand::class,
         TestMailSendCommand::class,
+        PurgeProductImagesCommand::class,
     ];
 
     /**

@@ -6,6 +6,8 @@ name: Production Data Op (size-pricing / bundle / images / catalog)
 #   size-pricing : dry-run | limit10 | full | rollback
 #   bundle       : create-bundle | remove-bundle
 #   images       : img-dry-run | img-limit10 | img-full | img-rollback
+#   IMAGE PURGE (img-purge-files is IRREVERSIBLE — no bucket versioning):
+#     img-purge-dry | img-purge | img-purge-files | img-purge-rollback
 #   CATALOG REPLACE (destructive — backup first!):
 #     cat-backup   → mysqldump catalog tables → storage/app/backups + S3
 #     cat-restore  → restore the latest backup (rollback the replace)
@@ -34,6 +36,10 @@ on:
           - img-limit10
           - img-full
           - img-rollback
+          - img-purge-dry
+          - img-purge
+          - img-purge-files
+          - img-purge-rollback
           - cat-backup
           - cat-restore
           - cat-seed
@@ -90,6 +96,16 @@ jobs:
             img-limit10)   ARGS="plantathome:repair-plant-images --limit=10" ;;
             img-full)      ARGS="plantathome:repair-plant-images" ;;
             img-rollback)  ARGS="plantathome:repair-plant-images --rollback" ;;
+            # Product-image purge. Two phases on purpose: img-purge clears the columns and
+            # is undoable via img-purge-rollback; img-purge-files destroys the S3 objects
+            # and is NOT — the media bucket has no versioning. Run img-purge on EVERY
+            # environment before img-purge-files anywhere, because staging and production
+            # share the bucket and a file deleted under a live reference is a broken image
+            # on the storefront rather than a placeholder.
+            img-purge-dry)      ARGS="plantathome:purge-product-images --dry-run" ;;
+            img-purge)          ARGS="plantathome:purge-product-images --force" ;;
+            img-purge-files)    ARGS="plantathome:purge-product-images --purge-files --force" ;;
+            img-purge-rollback) ARGS="plantathome:purge-product-images --rollback --force" ;;
             cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
