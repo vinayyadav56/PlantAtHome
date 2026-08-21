@@ -270,16 +270,28 @@ class PurgeProductImagesCommand extends Command
 
     private function purgeFiles(): int
     {
-        $row = DB::table(self::BACKUP_TABLE)->whereNotNull('manifest')->orderByDesc('id')->first();
-        if (!$row) {
+        // EVERY manifest, not just the newest. The clearing pass can legitimately run more than
+        // once — an environment cleared before the library layer was understood recorded only the
+        // product-column keys, and a later run records the library's. Reading the last row alone
+        // would leave the earlier set on S3 while reporting a complete purge.
+        $rows = DB::table(self::BACKUP_TABLE)->whereNotNull('manifest')->orderBy('id')->pluck('manifest');
+        if ($rows->isEmpty()) {
             $this->error('No manifest found — run the clearing pass first so there is a record of what is being destroyed.');
             return self::FAILURE;
         }
-        $keys = json_decode($row->manifest, true) ?: [];
+        $merged = [];
+        foreach ($rows as $json) {
+            foreach ((json_decode($json, true) ?: []) as $k) {
+                $merged[$k] = true;
+            }
+        }
+        $keys = array_keys($merged);
+        sort($keys);
         if (!$keys) {
             $this->error('Manifest is empty.');
             return self::FAILURE;
         }
+        $this->line('  manifests merged: ' . $rows->count());
 
         // Refuse, do not skip. A non-product key in the manifest means the collector is wrong, and
         // the right response to that is to stop rather than to delete the safe-looking remainder.
