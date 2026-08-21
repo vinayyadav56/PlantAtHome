@@ -154,6 +154,16 @@ final class TestDataCleanupTest extends TestCase
             $t->unsignedBigInteger('owner_id')->nullable();
             $t->timestamps();
         });
+        // The V2 vendor context. A nursery IS the same vendor under the DDD modules, and it
+        // outlives its legacy shop — which is exactly the case the sweep has to cover.
+        Schema::create('nursery_nurseries', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->string('uuid')->nullable();
+            $t->string('name');
+            $t->string('slug');
+            $t->unsignedBigInteger('legacy_id')->nullable();
+            $t->timestamps();
+        });
         Schema::create('users', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->string('name')->nullable();
@@ -247,6 +257,45 @@ final class TestDataCleanupTest extends TestCase
 
         $this->assertNotContains(12, $shopStep['ids'], 'the master catalog shop must be excluded');
         $this->assertStringContainsString('master catalog shop', implode(' ', $plan->warnings));
+    }
+
+    public function test_a_full_wipe_takes_orphaned_nurseries_but_never_the_master(): void
+    {
+        // A nursery outlives its legacy shop. Staging carried two whose shops were already gone,
+        // and a sweep keyed off the shops being deleted never reached them — leaving live vendor
+        // records behind a wipe that reported success.
+        if (!\Illuminate\Support\Facades\Schema::hasTable('nursery_nurseries')) {
+            $this->markTestSkipped('V2 nursery tables are not in this stub schema.');
+        }
+        DB::table('nursery_nurseries')->insert([
+            ['id' => 10, 'uuid' => 'u-master', 'name' => 'PlantAtHome', 'slug' => 'plantathome', 'legacy_id' => 12, 'created_at' => now(), 'updated_at' => now()],
+            ['id' => 19, 'uuid' => 'u-orphan', 'name' => 'Gone Nursery', 'slug' => 'gone-nursery', 'legacy_id' => 999, 'created_at' => now(), 'updated_at' => now()],
+        ]);
+
+        $plan = (new VendorsCleaner())->plan(['all' => true]);
+        $step = collect($plan->steps)->firstWhere('table', 'nursery_nurseries');
+
+        $this->assertNotNull($step, 'a full wipe must plan the vendor nurseries');
+        $this->assertContains(19, $step['ids'], 'an orphaned vendor nursery must be swept');
+        $this->assertNotContains(10, $step['ids'], 'the master nursery is the catalogue holder, not a vendor');
+        $this->assertStringContainsString('Orphaned vendor nurseries', implode(' ', $plan->warnings));
+    }
+
+    public function test_a_targeted_wipe_leaves_unrelated_orphans_alone(): void
+    {
+        // Only a full wipe claims orphans — removing two named vendors must not quietly take
+        // unrelated stale records with it.
+        if (!\Illuminate\Support\Facades\Schema::hasTable('nursery_nurseries')) {
+            $this->markTestSkipped('V2 nursery tables are not in this stub schema.');
+        }
+        DB::table('nursery_nurseries')->insert([
+            ['id' => 19, 'uuid' => 'u-orphan', 'name' => 'Gone Nursery', 'slug' => 'gone-nursery', 'legacy_id' => 999, 'created_at' => now(), 'updated_at' => now()],
+        ]);
+
+        $plan = (new VendorsCleaner())->plan(['ids' => [33]]);
+        $step = collect($plan->steps)->firstWhere('table', 'nursery_nurseries');
+
+        $this->assertTrue($step === null || !in_array(19, $step['ids'], true), 'a targeted wipe must not sweep unrelated orphans');
     }
 
     public function test_a_shop_that_owns_products_is_refused(): void
