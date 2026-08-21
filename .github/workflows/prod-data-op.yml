@@ -44,6 +44,7 @@ on:
           - partner-caps-check
           - vendor-state
           - vendor-wipe
+          - vpp-review-check
           - cat-backup
           - cat-restore
           - cat-seed
@@ -112,7 +113,7 @@ jobs:
             img-purge-rollback) ARGS="plantathome:purge-product-images --rollback --force" ;;
             # shipment-items-check is READ-ONLY and takes no artisan args; it rides the
             # empty-ARGS list below and runs its own inline script.
-            shipment-items-check|partner-caps-check|vendor-state|vendor-wipe|cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
+            shipment-items-check|partner-caps-check|vendor-state|vendor-wipe|vpp-review-check|cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             *) echo "Unknown mode"; exit 1 ;;
@@ -162,6 +163,12 @@ jobs:
                 echo "JHJ1bm5lciA9IGFwcChcTWFydmVsXFNlcnZpY2VzXFRlc3REYXRhQ2xlYW51cFxDbGVhbnVwUnVubmVyOjpjbGFzcyk7CiRndWFyZCA9ICRydW5uZXItPmxhdW5jaEd1YXJkKCk7CmVjaG8gImxhdW5jaCBndWFyZDogIiwganNvbl9lbmNvZGUoJGd1YXJkKSwgIlxuIjsKZWNobyAicHJvZHVjdHMgQkVGT1JFOiAiLCBEQjo6dGFibGUoJ3Byb2R1Y3RzJyktPmNvdW50KCksICJcblxuIjsKJHJlcyA9ICRydW5uZXItPmV4ZWN1dGUobmV3IFxNYXJ2ZWxcU2VydmljZXNcVGVzdERhdGFDbGVhbnVwXFZlbmRvcnNDbGVhbmVyKCksIFsnYWxsJz0+dHJ1ZV0sIFsKICAgICdjb25maXJtX3BocmFzZScgICAgICAgID0+ICdSRVNFVCBQUk9EVUNUSU9OIFRFU1QgREFUQScsCiAgICAnYWNrbm93bGVkZ2UnICAgICAgICAgICA9PiB0cnVlLAogICAgJ2JhY2t1cF9yZWZlcmVuY2UnICAgICAgPT4gJ2NhdC1iYWNrdXAgcGFoLWNhdGFsb2ctMjAyNjA4MjEtMDkzNTM3LnNxbC5neicsCiAgICAvLyBPdmVycmlkZGVuIGRlbGliZXJhdGVseTogdGhlIGd1YXJkIGNvdW50cyBldmVyeSBwYXltZW50LXN1Y2Nlc3Mgb3JkZXIgb24gdGhlIGRhdGFiYXNlLCBhbmQKICAgIC8vIHRoZSBmb3VyIGluc2lkZSB0aGlzIHBsYW4gYXJlIFBpY2tiYXphciBkZW1vIGZpeHR1cmVzIGRhdGVkIDIwMjMtMTAtMjUgb24gZGVtbyBzaG9wcyB0aGF0CiAgICAvLyBvd24gemVybyBwcm9kdWN0cy4gUGxhbnRBdEhvbWUncyBvd24gb3JkZXJzIHNpdCBvbiB0aGUgbWFzdGVyIHNob3AgYW5kIGFyZSBub3QgaW4gdGhlIHBsYW4uCiAgICAnb3ZlcnJpZGVfbGF1bmNoX2d1YXJkJyA9PiB0cnVlLApdKTsKZWNobyAib3V0Y29tZTogIiwganNvbl9lbmNvZGUoY29sbGVjdCgkcmVzKS0+ZXhjZXB0KFsnc25hcHNob3QnXSktPmFsbCgpKSwgIlxuXG4iOwplY2hvICJwcm9kdWN0cyBBRlRFUiA6ICIsIERCOjp0YWJsZSgncHJvZHVjdHMnKS0+Y291bnQoKSwgIiAgIDwtIHRoZSBjYXNjYWRlIGd1YXJkXG4iOwplY2hvICJvcmRlcnMgIEFGVEVSICA6ICIsIERCOjp0YWJsZSgnb3JkZXJzJyktPmNvdW50KCksICJcbiI7CmZvcmVhY2ggKERCOjp0YWJsZSgnc2hvcHMnKS0+Z2V0KFsnaWQnLCdzbHVnJ10pIGFzICRzKSBlY2hvICIgIHN1cnZpdmluZyBzaG9wICN7JHMtPmlkfSB7JHMtPnNsdWd9XG4iOwo=" | base64 -d > /tmp/vwipe.php
                 php artisan tinker --execute="$(cat /tmp/vwipe.php)"
                 php artisan cache:clear 2>/dev/null || true
+                ;;
+
+              vpp-review-check)
+                echo "==> Checking for non-master-shop vendor_product_prices wrongly auto-approved (read-only)..."
+                echo "JG1hc3RlcklkID0gXE1hcnZlbFxEYXRhYmFzZVxNb2RlbHNcU2hvcDo6bWFzdGVySWQoKTsKZWNobyAibWFzdGVyIHNob3AgaWQ6IHskbWFzdGVySWR9XG5cbiI7CmVjaG8gIm5vbi1tYXN0ZXIgc2hvcHMgd2l0aCBBUFBST1ZFRCB2cHAgcm93cyAocG90ZW50aWFsIGxpdmUtYnVnIHZpY3RpbXMpOlxuIjsKJHJvd3MgPSBEQjo6dGFibGUoJ3ZlbmRvcl9wcm9kdWN0X3ByaWNlcycpCiAgICAtPndoZXJlKCdzaG9wX2lkJywnIT0nLCRtYXN0ZXJJZCkKICAgIC0+d2hlcmUoJ3Jldmlld19zdGF0dXMnLCdhcHByb3ZlZCcpCiAgICAtPnNlbGVjdFJhdygnc2hvcF9pZCwgY291bnQoKikgYycpCiAgICAtPmdyb3VwQnkoJ3Nob3BfaWQnKS0+Z2V0KCk7CmZvcmVhY2ggKCRyb3dzIGFzICRyKSB7CiAgICAkc2x1ZyA9IERCOjp0YWJsZSgnc2hvcHMnKS0+d2hlcmUoJ2lkJywkci0+c2hvcF9pZCktPnZhbHVlKCdzbHVnJyk7CiAgICBlY2hvICIgIHNob3AgI3skci0+c2hvcF9pZH0gKHskc2x1Z30pOiB7JHItPmN9IGFwcHJvdmVkIHJvdyhzKVxuIjsKfQplY2hvICJcbnRvdGFsIHN1Y2ggcm93czogIiwgJHJvd3MtPnN1bSgnYycpLCAiXG4iOwo=" | base64 -d > /tmp/vcheck.php
+                php artisan tinker --execute="$(cat /tmp/vcheck.php)"
                 ;;
 
               partner-caps-check)
