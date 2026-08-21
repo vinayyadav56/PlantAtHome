@@ -74,14 +74,21 @@ class PurgeProductImagesCommand extends Command
      * neither is refused rather than skipped quietly: a manifest containing one means the collector
      * is wrong, and deleting the safe-looking remainder would hide that.
      *
-     *   plants/{slug}/{n}.jpg        the image pipeline — 7,230 of 7,240 objects in the live catalog
-     *   {media.id}/{file}            spatie media library, incl. its conversions/ subfolder
+     *   plants/{slug}/{n}.jpg              the image pipeline — 7,235 of the 7,281 live objects
+     *   ai-instant/{file}                  instant_images
+     *   ai-batches/BATCH{n}/{sku}/{file}   image_generation_results
+     *   {media.id}/{file}                  spatie media library, incl. its conversions/ subfolder
      *
-     * The numeric form was assumed to be the only one until a dry-run showed otherwise; the guard
-     * refused the whole purge, which is exactly what it is for.
+     * Every one of these was found by the guard REFUSING a purge, not by reading the code: the
+     * numeric form was assumed to be the only layout, then plants/, then the two AI prefixes. Each
+     * refusal cost a minute; deleting the recognised subset and reporting success would have cost
+     * the objects it did not recognise. Enumerate the manifest's prefixes before adding to this
+     * list — one refusal at a time is the slow way to find out.
      */
     private const PRODUCT_KEY_PATTERNS = [
         '/^plants\/[^\/]+\/.+/',
+        '/^ai-batches\/[^\/]+\/.+/',
+        '/^ai-instant\/.+/',
         '/^\d+\/.+/',
     ];
 

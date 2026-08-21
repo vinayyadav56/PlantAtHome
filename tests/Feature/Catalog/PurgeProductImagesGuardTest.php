@@ -38,6 +38,8 @@ class PurgeProductImagesGuardTest extends TestCase
             ['plants/abelia-confetti/3.jpg', true, 'image-pipeline photo'],
             ['2504/ChatGPT-Image-Jun-9,-2026,-11_58_03-PM.png', true, 'spatie media original'],
             ['2504/conversions/ChatGPT-Image-Jun-9,-2026,-11_58_03-PM-thumbnail.jpg', true, 'spatie conversion'],
+            ['ai-batches/BATCH000007/PLT001_Areca_Palm/PLT001_Areca_Palm_1.png', true, 'image_generation_results output'],
+            ['ai-instant/some-generated-file.png', true, 'instant_images output'],
 
             // Everything else in the same bucket must be untouchable.
             ['backups/pah-catalog-20260821-050421.sql.gz', false, 'the catalog backup lives here — deleting it destroys the restore point'],
@@ -46,6 +48,8 @@ class PurgeProductImagesGuardTest extends TestCase
             ['plants/slug-only', false, 'no file component'],
             ['', false, 'empty key'],
             ['logo.svg', false, 'root-level asset'],
+            ['ai-batches/', false, 'a bare prefix names no object'],
+            ['ai-batches/BATCH000007', false, 'no file component'],
             ['../2504/x.png', false, 'traversal must not match the numeric layout'],
         ];
     }
