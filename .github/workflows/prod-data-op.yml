@@ -40,6 +40,7 @@ on:
           - img-purge
           - img-purge-files
           - img-purge-rollback
+          - shipment-items-check
           - cat-backup
           - cat-restore
           - cat-seed
@@ -106,7 +107,9 @@ jobs:
             img-purge)          ARGS="plantathome:purge-product-images --force" ;;
             img-purge-files)    ARGS="plantathome:purge-product-images --purge-files --force" ;;
             img-purge-rollback) ARGS="plantathome:purge-product-images --rollback --force" ;;
-            cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
+            # shipment-items-check is READ-ONLY and takes no artisan args; it rides the
+            # empty-ARGS list below and runs its own inline script.
+            shipment-items-check|cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             *) echo "Unknown mode"; exit 1 ;;
@@ -145,6 +148,12 @@ jobs:
             CATALOG_TABLES="products plant_attributes variation_options product_inclusions attribute_product category_product categories attributes attribute_values types"
 
             case "$OP_MODE" in
+              shipment-items-check)
+                echo "==> Verifying the shipment_items backfill (read-only)..."
+                echo "JGl0ZW1zID0gREI6OnRhYmxlKCdvcmRlcl9pdGVtcycpLT53aGVyZU5vdE51bGwoJ3NoaXBtZW50X2lkJyktPmNvdW50KCk7CiRhbGxvYyA9IERCOjp0YWJsZSgnc2hpcG1lbnRfaXRlbXMnKS0+Y291bnQoKTsKZWNobyAib3JkZXJfaXRlbXMgY2FycnlpbmcgYSBzaGlwbWVudF9pZCA6IHskaXRlbXN9XG4iOwplY2hvICJzaGlwbWVudF9pdGVtcyBhbGxvY2F0aW9ucyAgICAgICAgIDogeyRhbGxvY31cbiI7CmVjaG8gInNoaXBtZW50X3BhY2thZ2VzIHJvd3MgICAgICAgICAgICAgOiAiLCBEQjo6dGFibGUoJ3NoaXBtZW50X3BhY2thZ2VzJyktPmNvdW50KCksICJcbiI7CiRvcnBoYW4gPSBEQjo6dGFibGUoJ29yZGVyX2l0ZW1zJyktPndoZXJlTm90TnVsbCgnc2hpcG1lbnRfaWQnKQogICAgLT53aGVyZU5vdEluKCdpZCcsIGZ1bmN0aW9uICgkcSkgeyAkcS0+c2VsZWN0KCdvcmRlcl9pdGVtX2lkJyktPmZyb20oJ3NoaXBtZW50X2l0ZW1zJyk7IH0pLT5jb3VudCgpOwplY2hvICJsaW5lcyBvbiBhIHNoaXBtZW50IHdpdGggTk8gYWxsb2NhdGlvbjogeyRvcnBoYW59IiwgJG9ycGhhbiA/ICIgICA8LS0gQkFDS0ZJTEwgR0FQIiA6ICIgICAobm9uZSAtIGJhY2tmaWxsIGNvbXBsZXRlKSIsICJcbiI7CmZvcmVhY2ggKERCOjp0YWJsZSgnc2hpcG1lbnRzJyktPm9yZGVyQnlEZXNjKCdpZCcpLT5saW1pdCgzKS0+Z2V0KCkgYXMgJHMpIHsKICAgICRuID0gREI6OnRhYmxlKCdzaGlwbWVudF9pdGVtcycpLT53aGVyZSgnc2hpcG1lbnRfaWQnLCAkcy0+aWQpLT5jb3VudCgpOwogICAgZWNobyAiICBzaGlwbWVudCAjeyRzLT5pZH0gKHN0YXR1cyB7JHMtPnN0YXR1c30pOiB7JG59IGFsbG9jYXRlZCBsaW5lKHMpXG4iOwp9Cg==" | base64 -d > /tmp/bfcheck.php
+                php artisan tinker --execute="$(cat /tmp/bfcheck.php)"
+                ;;
+
               company-address)
                 echo "==> Setting company address in settings.options.contactDetails.location (all language rows)..."
                 echo "JGxvYyA9IFsKICAgICd6aXAnICAgICAgICAgICAgICA9PiAnMTIzMTAyJywKICAgICdjaXR5JyAgICAgICAgICAgICA9PiAnUmV3YXJpJywKICAgICdzdGF0ZScgICAgICAgICAgICA9PiAnSGFyeWFuYScsCiAgICAnY291bnRyeScgICAgICAgICAgPT4gJ0luZGlhJywKICAgICdzdHJlZXRfYWRkcmVzcycgICA9PiAnQy9PIENIT1RURUxBTCwgREhBTkkgU0hPQkhBIEJVUk9MSSwgQWhyb2QsIFBvbGljZSBzdGF0aW9uIEtob2wsIEFocm9kJywKICAgICdmb3JtYXR0ZWRBZGRyZXNzJyA9PiAnQy9PIENIT1RURUxBTCwgREhBTkkgU0hPQkhBIEJVUk9MSSwgQWhyb2QsIFBvbGljZSBzdGF0aW9uIEtob2wsIEFocm9kLCBSZXdhcmktMTIzMTAyLCBIYXJ5YW5hLCBJbmRpYScsCl07CiRyb3dzID0gXE1hcnZlbFxEYXRhYmFzZVxNb2RlbHNcU2V0dGluZ3M6OmFsbCgpOwpmb3JlYWNoICgkcm93cyBhcyAkcykgewogICAgJG9wdHMgPSAkcy0+b3B0aW9ucyA/PyBbXTsKICAgIGVjaG8gJ0JFRk9SRSBbJyAuICgkcy0+bGFuZ3VhZ2UgPz8gJz8nKSAuICddOiAnIC4ganNvbl9lbmNvZGUoJG9wdHNbJ2NvbnRhY3REZXRhaWxzJ11bJ2xvY2F0aW9uJ10gPz8gbnVsbCkgLiAiXG4iOwogICAgJGNkID0gJG9wdHNbJ2NvbnRhY3REZXRhaWxzJ10gPz8gW107CiAgICAkY2RbJ2xvY2F0aW9uJ10gPSAkbG9jOwogICAgJG9wdHNbJ2NvbnRhY3REZXRhaWxzJ10gPSAkY2Q7CiAgICAkcy0+b3B0aW9ucyA9ICRvcHRzOwogICAgJHMtPnNhdmUoKTsKICAgIGVjaG8gJ0FGVEVSICBbJyAuICgkcy0+bGFuZ3VhZ2UgPz8gJz8nKSAuICddOiAnIC4ganNvbl9lbmNvZGUoJHMtPmZyZXNoKCktPm9wdGlvbnNbJ2NvbnRhY3REZXRhaWxzJ11bJ2xvY2F0aW9uJ10gPz8gbnVsbCkgLiAiXG4iOwp9CmVjaG8gJ0RPTkU6ICcgLiBjb3VudCgkcm93cykgLiAiIHNldHRpbmdzIHJvdyhzKSB1cGRhdGVkXG4iOwo=" | base64 -d > /tmp/set-company-address.php
