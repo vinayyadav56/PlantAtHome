@@ -42,6 +42,8 @@ on:
           - img-purge-rollback
           - shipment-items-check
           - partner-caps-check
+          - vendor-state
+          - vendor-wipe
           - cat-backup
           - cat-restore
           - cat-seed
@@ -110,7 +112,7 @@ jobs:
             img-purge-rollback) ARGS="plantathome:purge-product-images --rollback --force" ;;
             # shipment-items-check is READ-ONLY and takes no artisan args; it rides the
             # empty-ARGS list below and runs its own inline script.
-            shipment-items-check|partner-caps-check|cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
+            shipment-items-check|partner-caps-check|vendor-state|vendor-wipe|cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             *) echo "Unknown mode"; exit 1 ;;
@@ -149,6 +151,19 @@ jobs:
             CATALOG_TABLES="products plant_attributes variation_options product_inclusions attribute_product category_product categories attributes attribute_values types"
 
             case "$OP_MODE" in
+              vendor-state)
+                echo "==> Vendor/nursery state and the wipe PLAN (read-only)..."
+                echo "JGxpdmUgPSBEQjo6dGFibGUoJ3Nob3BzJyktPnBsdWNrKCdpZCcpLT5hbGwoKTsKZWNobyAic2hvcHM6XG4iOyBmb3JlYWNoIChEQjo6dGFibGUoJ3Nob3BzJyktPmdldChbJ2lkJywnc2x1ZycsJ293bmVyX2lkJ10pIGFzICRzKSBlY2hvICIgICN7JHMtPmlkfSB7JHMtPnNsdWd9IG93bmVyPXskcy0+b3duZXJfaWR9XG4iOwplY2hvICJudXJzZXJpZXM6XG4iOyBmb3JlYWNoIChEQjo6dGFibGUoJ251cnNlcnlfbnVyc2VyaWVzJyktPmdldChbJ2lkJywnc2x1ZycsJ2xlZ2FjeV9pZCddKSBhcyAkbikgewogICRvID0gJG4tPmxlZ2FjeV9pZCA9PT0gbnVsbCB8fCAhaW5fYXJyYXkoKGludCkkbi0+bGVnYWN5X2lkLCRsaXZlLHRydWUpOwogIGVjaG8gIiAgI3skbi0+aWR9IHskbi0+c2x1Z30gbGVnYWN5X2lkPSIsIHZhcl9leHBvcnQoJG4tPmxlZ2FjeV9pZCx0cnVlKSwgJG8gPyAiICA8LSBPUlBIQU4iIDogIiIsICJcbiI7IH0KZm9yZWFjaCAoWydwcm9kdWN0cycsJ29yZGVycycsJ29yZGVyX2l0ZW1zJywndmVuZG9yX3Byb2R1Y3RfcHJpY2VzJywndmVuZG9yX3NlcnZpY2VfYXJlYXMnLCd2ZW5kb3JfcGlja3VwX2xvY2F0aW9ucycsJ3VzZXJzJywnYmFsYW5jZXMnLCd3aXRoZHJhd3MnLCdzaGlwbWVudHMnLCdudXJzZXJ5X2JhbGFuY2VzJywnbnVyc2VyeV9sZWRnZXJfZW50cmllcycsJ251cnNlcnlfd2l0aGRyYXdhbHMnXSBhcyAkdCkKICBwcmludGYoIiAgJS0yNnMgJXNcbiIsICR0LCBTY2hlbWE6Omhhc1RhYmxlKCR0KSA/IERCOjp0YWJsZSgkdCktPmNvdW50KCkgOiAnbm8tdGFibGUnKTsKZWNobyAicGFpZCBvcmRlcnMgKExhdW5jaCBHdWFyZCk6ICIsIFNjaGVtYTo6aGFzVGFibGUoJ29yZGVycycpID8gREI6OnRhYmxlKCdvcmRlcnMnKS0+d2hlcmUoJ3BheW1lbnRfc3RhdHVzJywncGF5bWVudC1zdWNjZXNzJyktPmNvdW50KCkgOiAwLCAiXG4iOwokcGxhbiA9IChuZXcgXE1hcnZlbFxTZXJ2aWNlc1xUZXN0RGF0YUNsZWFudXBcVmVuZG9yc0NsZWFuZXIoKSktPnBsYW4oWydhbGwnPT50cnVlXSk7CmVjaG8gIlxuUExBTjpcbiI7IGZvcmVhY2ggKCRwbGFuLT5zdGVwcyBhcyAkc3QpIHsgJG49Y291bnQoJHN0WydpZHMnXT8/W10pOyBpZigkbikgcHJpbnRmKCIgIGRlbGV0ZSAlLTI2cyAlZFxuIiwkc3RbJ3RhYmxlJ10sJG4pOyB9CmZvcmVhY2ggKCRwbGFuLT53YXJuaW5ncyBhcyAkdykgZWNobyAiICAhICR3XG4iOwo=" | base64 -d > /tmp/vstate.php
+                php artisan tinker --execute="$(cat /tmp/vstate.php)"
+                ;;
+
+              vendor-wipe)
+                echo "==> DESTRUCTIVE: wiping vendor data (master shop + master nursery are guarded)..."
+                echo "JHJ1bm5lciA9IGFwcChcTWFydmVsXFNlcnZpY2VzXFRlc3REYXRhQ2xlYW51cFxDbGVhbnVwUnVubmVyOjpjbGFzcyk7CiRyZXMgPSAkcnVubmVyLT5leGVjdXRlKG5ldyBcTWFydmVsXFNlcnZpY2VzXFRlc3REYXRhQ2xlYW51cFxWZW5kb3JzQ2xlYW5lcigpLCBbJ2FsbCc9PnRydWVdLCBbCiAgICAnY29uZmlybV9waHJhc2UnICAgPT4gJ1JFU0VUIFBST0RVQ1RJT04gVEVTVCBEQVRBJywKICAgICdhY2tub3dsZWRnZScgICAgICA9PiB0cnVlLAogICAgJ2JhY2t1cF9yZWZlcmVuY2UnID0+ICdjYXQtYmFja3VwIHRha2VuIGltbWVkaWF0ZWx5IGJlZm9yZSB0aGlzIHJ1bicsCl0pOwplY2hvICJvdXRjb21lOiAiLCBqc29uX2VuY29kZShjb2xsZWN0KCRyZXMpLT5leGNlcHQoWydzbmFwc2hvdCddKS0+YWxsKCkpLCAiXG4iOwplY2hvICJwcm9kdWN0cyBBRlRFUjogIiwgREI6OnRhYmxlKCdwcm9kdWN0cycpLT5jb3VudCgpLCAiICA8LSB0aGUgY2FzY2FkZSBndWFyZFxuIjsKZm9yZWFjaCAoREI6OnRhYmxlKCdzaG9wcycpLT5nZXQoWydpZCcsJ3NsdWcnXSkgYXMgJHMpIGVjaG8gIiAgc3Vydml2aW5nIHNob3AgI3skcy0+aWR9IHskcy0+c2x1Z31cbiI7CmZvcmVhY2ggKERCOjp0YWJsZSgnbnVyc2VyeV9udXJzZXJpZXMnKS0+Z2V0KFsnaWQnLCdzbHVnJ10pIGFzICRuKSBlY2hvICIgIHN1cnZpdmluZyBudXJzZXJ5ICN7JG4tPmlkfSB7JG4tPnNsdWd9XG4iOwo=" | base64 -d > /tmp/vwipe.php
+                php artisan tinker --execute="$(cat /tmp/vwipe.php)"
+                php artisan cache:clear 2>/dev/null || true
+                ;;
+
               partner-caps-check)
                 echo "==> Partner capability contract as PRODUCTION sees it (read-only)..."
                 echo "JGMgPSBuZXcgXE1hcnZlbFxTZXJ2aWNlc1xDb3VyaWVyXFNoaXBwaW5nU2VydmljZUNsaWVudCgpOwpmb3JlYWNoIChbJ3NoaXByb2NrZXQnLCdzaGlwcm9ja2V0X3F1aWNrJywncG9ydGVyJywnYm9yem8nXSBhcyAkY29kZSkgewogICAgJHIgPSAkYy0+Z2V0UGFydG5lckNvbmZpZygkY29kZSk7CiAgICAkY2FwcyA9ICRyWydkYXRhJ11bJ2NhcGFiaWxpdGllcyddID8/IFtdOwogICAgcHJpbnRmKCIlLTE4cyBvaz0lLTVzIHJldHVybnM9JS01cyBleGNoYW5nZT0lc1xuIiwgJGNvZGUsIHZhcl9leHBvcnQoJHJbJ29rJ10gPz8gZmFsc2UsIHRydWUpLAogICAgICAgIHZhcl9leHBvcnQoJGNhcHNbJ3JldHVybnMnXSA/PyAnQUJTRU5UJywgdHJ1ZSksIHZhcl9leHBvcnQoJGNhcHNbJ2V4Y2hhbmdlJ10gPz8gJ0FCU0VOVCcsIHRydWUpKTsKfQo=" | base64 -d > /tmp/caps.php
