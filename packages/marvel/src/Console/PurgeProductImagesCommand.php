@@ -46,13 +46,31 @@ class PurgeProductImagesCommand extends Command
     private const BACKUP_TABLE = 'pah_product_image_backup';
 
     /**
-     * A product attachment always lives under a numeric id prefix — `2505/file.png` and
-     * `2505/conversions/file-thumbnail.jpg`. Everything else in the bucket (backups/,
-     * shop-assets/, the site logo, category banners) must survive, so any key that does not match
-     * this is refused rather than skipped quietly: a manifest containing one is a bug, not a
-     * lucky escape.
+     * The two layouts product imagery actually uses, as an allowlist. Anything else in the bucket
+     * — backups/, shop-assets/, the site logo, category banners — must survive, so a key matching
+     * neither is refused rather than skipped quietly: a manifest containing one means the collector
+     * is wrong, and deleting the safe-looking remainder would hide that.
+     *
+     *   plants/{slug}/{n}.jpg        the image pipeline — 7,230 of 7,240 objects in the live catalog
+     *   {media.id}/{file}            spatie media library, incl. its conversions/ subfolder
+     *
+     * The numeric form was assumed to be the only one until a dry-run showed otherwise; the guard
+     * refused the whole purge, which is exactly what it is for.
      */
-    private const PRODUCT_KEY = '/^\d+\/.+/';
+    private const PRODUCT_KEY_PATTERNS = [
+        '/^plants\/[^\/]+\/.+/',
+        '/^\d+\/.+/',
+    ];
+
+    private function isProductKey(string $key): bool
+    {
+        foreach (self::PRODUCT_KEY_PATTERNS as $re) {
+            if (preg_match($re, $key)) {
+                return true;
+            }
+        }
+        return false;
+    }
 
     public function handle(): int
     {
@@ -165,14 +183,10 @@ class PurgeProductImagesCommand extends Command
             }
         });
 
-        // Dead media-library rows: the picker would otherwise list thumbnails that 404.
-        $detached = $this->detachAttachments($keys);
-
         Cache::flush();
 
         $this->line('');
         $this->info("Cleared {$rows} products. Snapshot saved to " . self::BACKUP_TABLE . '.');
-        $this->line("  attachments rows removed  : {$detached}");
         $this->line('  manifest objects recorded : ' . count($keys));
         $this->comment('Files still exist. Run with --purge-files to destroy them, or --rollback to undo.');
         return self::SUCCESS;
@@ -215,7 +229,7 @@ class PurgeProductImagesCommand extends Command
 
         // Refuse, do not skip. A non-product key in the manifest means the collector is wrong, and
         // the right response to that is to stop rather than to delete the safe-looking remainder.
-        $foreign = array_values(array_filter($keys, fn ($k) => !preg_match(self::PRODUCT_KEY, $k)));
+        $foreign = array_values(array_filter($keys, fn ($k) => !$this->isProductKey($k)));
         if ($foreign) {
             $this->error('Manifest contains keys outside the product-attachment layout; refusing to delete anything:');
             foreach (array_slice($foreign, 0, 10) as $k) {
@@ -265,8 +279,13 @@ class PurgeProductImagesCommand extends Command
             $this->line('  batch ' . ($i + 1) . " — {$deleted} deleted so far");
         }
 
+        $purged = $this->purgeMediaRecords($keys);
+        Cache::flush();
+
         $this->line('');
         $this->info("Deleted {$deleted} objects.");
+        $this->line("  media rows removed       : {$purged['media']}");
+        $this->line("  attachments rows removed : {$purged['attachments']}");
         if ($failed) {
             $this->warn(count($failed) . ' failed:');
             foreach (array_slice($failed, 0, 10) as $f) {
@@ -340,25 +359,63 @@ class PurgeProductImagesCommand extends Command
         }
     }
 
-    private function detachAttachments(array $keys): int
+    /**
+     * Removes the media-library rows that described the objects just deleted.
+     *
+     * Deliberately part of phase 2, not phase 1: a row describing a file should die WITH the file,
+     * and phase 1 has to stay something --rollback can fully undo. Left behind, these are 2.5k
+     * entries in the admin picker whose thumbnails 404.
+     *
+     * The join is the S3 layout itself — spatie stores each file at `{media.id}/{file_name}`, so
+     * the numeric prefix of a manifest key IS the media id. Only prefixes the manifest actually
+     * names are removed, which is what keeps the site logo, category banners and shop covers (all
+     * in the same table and the same bucket) intact.
+     *
+     * `attachments` is vestigial here — its url column is empty on every row — but the rows are
+     * still what `media.model_id` points at, so they go too rather than becoming orphans.
+     */
+    private function purgeMediaRecords(array $keys): array
     {
-        if (!Schema::hasTable('attachments') || !$keys) {
-            return 0;
+        if (!Schema::hasTable('media')) {
+            return ['media' => 0, 'attachments' => 0];
         }
-        $wanted = array_flip($keys);
-        $ids = [];
-        DB::table('attachments')->select('id', 'url')->orderBy('id')->chunk(500, function ($chunk) use ($wanted, &$ids) {
-            foreach ($chunk as $a) {
-                $path = urldecode(ltrim((string) parse_url((string) $a->url, PHP_URL_PATH), '/'));
-                if (isset($wanted[$path])) {
-                    $ids[] = $a->id;
-                }
+        // Only the spatie layout has media rows; plants/{slug}/ files were written by the
+        // image pipeline and were never in the media library.
+        $prefixes = [];
+        foreach ($keys as $k) {
+            $p = strtok($k, '/');
+            if (ctype_digit((string) $p)) {
+                $prefixes[(int) $p] = true;
             }
-        });
-        foreach (array_chunk($ids, 500) as $batch) {
-            DB::table('attachments')->whereIn('id', $batch)->delete();
         }
-        return count($ids);
+        $prefixes = array_keys($prefixes);
+        if (!$prefixes) {
+            return ['media' => 0, 'attachments' => 0];
+        }
+
+        $attachmentIds = [];
+        $mediaCount = 0;
+        foreach (array_chunk($prefixes, 500) as $batch) {
+            $rows = DB::table('media')->whereIn('id', $batch)
+                ->where('model_type', 'like', '%Attachment')
+                ->pluck('model_id', 'id');
+            $mediaCount += $rows->count();
+            foreach ($rows as $modelId) {
+                $attachmentIds[(int) $modelId] = true;
+            }
+            DB::table('media')->whereIn('id', $batch)
+                ->where('model_type', 'like', '%Attachment')
+                ->delete();
+        }
+
+        $attachmentIds = array_keys($attachmentIds);
+        $detached = 0;
+        if (Schema::hasTable('attachments')) {
+            foreach (array_chunk($attachmentIds, 500) as $batch) {
+                $detached += DB::table('attachments')->whereIn('id', $batch)->delete();
+            }
+        }
+        return ['media' => $mediaCount, 'attachments' => $detached];
     }
 
     private function ensureBackupTable(): void
