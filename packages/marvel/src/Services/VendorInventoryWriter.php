@@ -116,7 +116,17 @@ class VendorInventoryWriter
         // A deactivated master plant accepts no NEW listings (deactivating a plant stops it
         // spreading). Existing rows keep working — vendors already selling it are not punished
         // for an admin's catalog decision.
-        if ($product->status !== \Marvel\Enums\ProductStatus::PUBLISH) {
+        //
+        // The same rule now covers Master Catalog membership. This is the single write point for
+        // the vendor UI, the vendor spreadsheet upload AND the admin price-sheet import, so gating
+        // here closes all three at once — catalogSearch only hides a product from the picker, and
+        // a crafted product_id would otherwise walk straight past it.
+        //
+        // Membership is checked only when the column exists: the phpunit stub schemas build
+        // `products` by hand, and a hard reference would fail every suite that never opted in.
+        $notCurated = \Illuminate\Support\Facades\Schema::hasColumn('products', 'is_available_product')
+            && !$product->is_available_product;
+        if ($product->status !== \Marvel\Enums\ProductStatus::PUBLISH || $notCurated) {
             $isNewListing = !VendorProductPrice::withTrashed()
                 ->where('shop_id', $shopId)
                 ->where('product_id', $product->id)

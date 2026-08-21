@@ -198,6 +198,7 @@ class BundleController extends CoreController
         $plantIds = array_values(array_unique(array_map('intval', (array) $request->plant_ids)));
         $plants = Product::whereIn('id', $plantIds)
             ->where('product_type', '!=', ProductType::BUNDLE)
+            ->sellable()
             ->get()->keyBy('id');
 
         foreach ($plantIds as $pid) {
@@ -275,6 +276,9 @@ class BundleController extends CoreController
         $query = Product::query()
             ->leftJoinSub($costSub, 'vc', fn ($j) => $j->on('products.id', '=', 'vc.product_id'))
             ->where('products.product_type', '!=', ProductType::BUNDLE)
+            // Only the curated, switched-on catalogue is bundleable — a bundle whose component
+            // cannot be sold is broken the day it goes live.
+            ->sellable()
             ->select('products.*', 'vc.min_cost')
             // status: default to published-only unless an explicit status is given.
             ->when($request->status, fn ($q) => $q->where('products.status', $request->status), fn ($q) => $q->where('products.status', ProductStatus::PUBLISH))
@@ -411,8 +415,11 @@ class BundleController extends CoreController
             return collect();
         }
 
+        // Gated here as well as in the picker: this is what store/update/preview actually trust,
+        // and a crafted payload never goes near eligiblePlants().
         $products = Product::whereIn('id', array_keys($byId))
             ->where('product_type', '!=', ProductType::BUNDLE)
+            ->sellable()
             ->get();
 
         return $products->map(fn (Product $p) => ['product' => $p, 'quantity' => $byId[$p->id]])->values();

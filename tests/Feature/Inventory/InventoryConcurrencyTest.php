@@ -50,7 +50,10 @@ final class InventoryConcurrencyTest extends TestCase
             $t->boolean('listing_enabled')->default(true);
             $t->timestamp('available_at')->nullable();
             $t->unsignedBigInteger('available_by')->nullable();
-            $t->boolean('track_stock')->default(false);
+            // TRUE here, unlike the other stubs: every product in this suite exists to exercise a
+            // stock LIMIT, and untracked stock is unlimited by definition — the decrement would
+            // correctly skip and there would be nothing left to concurrency-test.
+            $t->boolean('track_stock')->default(true);
             $t->bigIncrements('id');
             $t->string('name')->nullable();
             $t->integer('quantity')->default(0);

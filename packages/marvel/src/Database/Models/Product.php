@@ -186,6 +186,25 @@ class Product extends Model
     }
 
     /**
+     * Products the platform may actually sell: curated into the Master Catalog AND switched on.
+     *
+     * One scope rather than a repeated pair of wheres, because a bundle can be composed through
+     * four different entry points (the picker, resolveLines, generate, and this model's
+     * syncInclusions via the generic /products endpoint) and gating only the picker leaves three
+     * ways round it.
+     *
+     * Column-guarded: the phpunit stub schemas build `products` by hand, so a hard reference would
+     * fail every suite that predates the catalogue layer.
+     */
+    public function scopeSellable($query)
+    {
+        if (!\Illuminate\Support\Facades\Schema::hasColumn('products', 'is_available_product')) {
+            return $query;
+        }
+        return $query->where('is_available_product', true)->where('listing_enabled', true);
+    }
+
+    /**
      * Rebuild this product's bundle items + buy-together add-ons from the admin
      * form. Each entry is an id or {id, quantity}. Pass null to leave unchanged.
      */
@@ -202,13 +221,20 @@ class Product extends Model
             ->filter()
             ->all();
         if ($candidateIds) {
-            $excludeBundleChildren = array_flip(
+            // Dropped for two reasons now: a bundle child (no bundle-of-bundle), or a product the
+            // admin has not curated into the Master Catalog and switched on. A bundle containing
+            // something the platform may not sell is broken on the day it goes live, and this
+            // method is reachable from the generic /products endpoint, which validates neither.
+            $sellableIds = static::query()->whereIn('id', $candidateIds)->sellable()
+                ->pluck('id')->map(fn ($x) => (int) $x)->all();
+            $excludeBundleChildren = array_flip(array_values(array_merge(
                 static::whereIn('id', $candidateIds)
                     ->where('product_type', \Marvel\Enums\ProductType::BUNDLE)
                     ->pluck('id')
                     ->map(fn ($x) => (int) $x)
-                    ->all()
-            );
+                    ->all(),
+                array_values(array_diff($candidateIds, $sellableIds)),
+            )));
         }
 
         $rows = [];

@@ -263,6 +263,53 @@ final class VendorCatalogAvailabilityTest extends TestCase
     }
 
     /** Mandate Test 7: availability is per-vendor. */
+    public function test_a_product_not_in_the_master_catalog_is_invisible_to_vendors(): void
+    {
+        // Rule: vendors select from the curated Available Products list, never from the raw
+        // catalogue. Product 1 is `publish` — status alone no longer makes it selectable.
+        \Illuminate\Support\Facades\DB::table('products')->where('id', 1)
+            ->update(['is_available_product' => false]);
+
+        $this->assertArrayNotHasKey(1, $this->search(33), 'an uncurated product must not appear in the vendor picker');
+    }
+
+    public function test_the_writer_refuses_a_new_listing_on_an_uncurated_product(): void
+    {
+        // Hiding it from the picker is not a gate — bulkAttach takes ids, and the vendor
+        // spreadsheet upload and the admin price-sheet import reach the same writer. This is the
+        // one place all three pass through.
+        \Illuminate\Support\Facades\DB::table('products')->where('id', 1)
+            ->update(['is_available_product' => false]);
+
+        $res = $this->attach(33, [['product_id' => 1, 'variation_option_id' => 11, 'vendor_selling_price' => 499]]);
+
+        $this->assertSame(0, $res['saved'] ?? -1, 'a crafted product_id must not walk past the catalogue gate');
+        $this->assertSame(
+            0,
+            \Marvel\Database\Models\VendorProductPrice::where('product_id', 1)->where('shop_id', 33)->count(),
+            'nothing may be written for an uncurated product',
+        );
+    }
+
+    public function test_an_existing_listing_survives_its_product_leaving_the_catalog(): void
+    {
+        // Same grandfathering the status check has always applied: pulling a product back must not
+        // punish a vendor who is already selling it, which is also why switching a listing off
+        // preserves vendor rows rather than deactivating them.
+        $this->attach(33, [['product_id' => 1, 'variation_option_id' => 11, 'vendor_selling_price' => 499]]);
+        \Illuminate\Support\Facades\DB::table('products')->where('id', 1)
+            ->update(['is_available_product' => false]);
+
+        $res = $this->attach(33, [['product_id' => 1, 'variation_option_id' => 11, 'vendor_selling_price' => 549]]);
+
+        $this->assertSame(
+            1,
+            \Marvel\Database\Models\VendorProductPrice::where('product_id', 1)->where('shop_id', 33)->count(),
+            'the existing row must survive',
+        );
+        $this->assertArrayHasKey('saved', $res);
+    }
+
     public function test_vendors_see_independent_availability(): void
     {
         $this->attach(33, [

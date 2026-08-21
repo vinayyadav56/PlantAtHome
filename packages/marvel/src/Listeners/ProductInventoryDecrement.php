@@ -41,6 +41,24 @@ class ProductInventoryDecrement
             return;
         }
 
+        // Untracked stock is UNLIMITED, so there is nothing to decrement and nothing to oversell.
+        // Without this, every order against the catalogue default (track_stock = false, quantity
+        // = 0) matches 0 rows on the atomic guard below and logs a spurious oversell — or, under
+        // the 'block' policy, refuses a sale the admin deliberately left uncapped.
+        //
+        // Column-guarded because the phpunit stubs build `products` by hand; a missing column
+        // reads as "tracked", which preserves the pre-catalogue behaviour exactly.
+        if (\Illuminate\Support\Facades\Schema::hasColumn('products', 'track_stock')) {
+            $tracked = (bool) Product::where('id', $productId)->value('track_stock');
+            if (!$tracked) {
+                // sold_quantity is still worth keeping — it is merchandising data, not a limit.
+                Product::where('id', $productId)->update([
+                    'sold_quantity' => DB::raw("COALESCE(sold_quantity, 0) + {$qty}"),
+                ]);
+                return;
+            }
+        }
+
         $affected = Product::where('id', $productId)
             ->where('quantity', '>=', $qty)
             ->update([

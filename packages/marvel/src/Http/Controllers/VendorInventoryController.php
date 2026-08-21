@@ -76,16 +76,27 @@ class VendorInventoryController extends CoreController
             ->exists();
         $query = Product::query()
             ->with(['variation_options:id,product_id,title,sku,price']);
+        // Master Catalog gate: a vendor may only stock what an admin has curated in. Applied to
+        // the PUBLISHED branch only — a vendor's own pending proposal is not in the catalogue yet
+        // by definition, and they must still be able to attach a rate to it while it waits, which
+        // is the whole reason that branch exists. Approval alone still does not make it listable:
+        // an admin has to move it in, and the storefront gate is what enforces that.
+        //
+        // Gated on membership, NOT on listing_enabled: stocking a curated product before its
+        // switch is flipped is how supply gets built ahead of go-live. Bundles gate on both,
+        // because a bundle containing something that cannot be sold is broken on the day.
+        $available = fn ($q) => $q->where('status', ProductStatus::PUBLISH)
+            ->where('is_available_product', true);
         if ($hasOwnProposals) {
-            $query->where(function ($w) use ($shopId) {
-                $w->where('status', ProductStatus::PUBLISH)
+            $query->where(function ($w) use ($shopId, $available) {
+                $w->where(fn ($pub) => $available($pub))
                     ->orWhere(function ($own) use ($shopId) {
                         $own->whereIn('status', [ProductStatus::UNDER_REVIEW, ProductStatus::DRAFT])
                             ->where('proposed_by_shop_id', $shopId);
                     });
             });
         } else {
-            $query->where('status', ProductStatus::PUBLISH);
+            $available($query);
         }
 
         if ($request->filled('q')) {
