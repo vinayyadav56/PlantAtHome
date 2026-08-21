@@ -199,14 +199,29 @@ class ProductImageController extends CoreController
         $search = trim((string) $request->input('name', ''));
         $limit  = (int) $request->input('limit', 20) ?: 20;
 
-        $type = Type::where('slug', 'plants')->where('language', 'en')->first();
-        if (!$type) {
-            return ['data' => [], 'current_page' => 1, 'last_page' => 1, 'per_page' => $limit, 'total' => 0];
-        }
-
-        $query = Product::where('type_id', $type->id)
+        // Vertical scope. This screen was pinned to `plants`, which made it unusable as the
+        // centralised image manager the catalogue actually needs — tools, pots and farmbox
+        // products have images too and had nowhere to manage them. `vertical` is a type SLUG so
+        // the client can build its pills from GET types rather than hardcoding a list that
+        // silently rots when a vertical is added; absent or `all` means every vertical.
+        $vertical = trim((string) $request->input('vertical', ''));
+        $query = Product::query()
             ->withCount('images')
             ->with('plantAttribute:id,product_id,scientific_name');
+
+        if ($vertical !== '' && $vertical !== 'all') {
+            $type = Type::where('slug', $vertical)->where('language', 'en')->first();
+            if (!$type) {
+                return ['data' => [], 'current_page' => 1, 'last_page' => 1, 'per_page' => $limit, 'total' => 0];
+            }
+            $query->where('type_id', $type->id);
+        }
+
+        // Varieties are a cut ACROSS verticals, not one of them — a plant variety is still a
+        // plant — so it is a separate flag rather than another pill value.
+        if ($request->boolean('variants_only') && \Illuminate\Support\Facades\Schema::hasColumn('products', 'master_product_id')) {
+            $query->whereNotNull('master_product_id');
+        }
 
         // Filter by image count using count-subquery constraints (NOT a `having`
         // on the withCount alias — that breaks paginate()'s separate count query).
