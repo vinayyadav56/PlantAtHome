@@ -44,6 +44,29 @@ class PurgeProductImagesCommand extends Command
     protected $description = 'Clear product image/gallery references, and optionally destroy the S3 objects behind them.';
 
     private const BACKUP_TABLE = 'pah_product_image_backup';
+    private const LIBRARY_BACKUP = 'pah_image_library_backup';
+
+    /**
+     * The stores that hold product imagery, beyond the products table itself.
+     *
+     * `products.image` / `products.gallery` are a DERIVED CACHE, not the source: `product_images`
+     * is the library, and .railway/start.sh runs `plantathome:sync-image-columns` on every staging
+     * boot, which rebuilt all 4,294 products' columns from it minutes after they were first
+     * cleared. Purging the cache alone is undone by the next deploy — and had the files been
+     * deleted in between, the rebuild would have pointed every product at a 404.
+     *
+     * Deliberately NOT listed, though they reference the same bucket: categories.image /
+     * banner_image, nursery_nurseries.logo / cover_image, delivery_partners.live_photo. Those are
+     * not product imagery and must survive. pah_product_image_backup is this command's own
+     * rollback data and is likewise left alone.
+     */
+    private const LIBRARIES = [
+        ['table' => 'product_images',            'columns' => ['url', 'thumbnail_url']],
+        ['table' => 'catalog_product_media',     'columns' => ['url']],
+        ['table' => 'instant_images',            'columns' => ['public_url']],
+        ['table' => 'image_generation_results',  'columns' => ['public_url']],
+        ['table' => 'pah_plant_image_backup',    'columns' => ['image', 'gallery']],
+    ];
 
     /**
      * The two layouts product imagery actually uses, as an allowlist. Anything else in the bucket
@@ -118,6 +141,9 @@ class PurgeProductImagesCommand extends Command
             }
         });
 
+        // The libraries are the SOURCE; the product columns above are a cache built from them.
+        $library = $this->scanLibraries($keys, $external);
+
         $keys = array_keys($keys);
         sort($keys);
 
@@ -127,6 +153,10 @@ class PurgeProductImagesCommand extends Command
         $this->line("    with image              : {$withImage}");
         $this->line("    with gallery            : {$withGallery}");
         $this->line('  distinct S3 objects       : ' . count($keys));
+        $this->line('  image libraries (the SOURCE the cache is rebuilt from):');
+        foreach ($library as $t => $n) {
+            $this->line('    ' . str_pad($t, 26) . $n . ' row(s)');
+        }
         if ($external) {
             // Not ours to delete and not on our bucket. Named rather than silently ignored: the
             // reference goes away with the column either way, and someone should know the count
@@ -181,6 +211,8 @@ class PurgeProductImagesCommand extends Command
             foreach (array_chunk($ids, 500) as $batch) {
                 DB::table('products')->whereIn('id', $batch)->update(['image' => null, 'gallery' => null]);
             }
+
+            $this->clearLibraries();
         });
 
         Cache::flush();
@@ -188,6 +220,7 @@ class PurgeProductImagesCommand extends Command
         $this->line('');
         $this->info("Cleared {$rows} products. Snapshot saved to " . self::BACKUP_TABLE . '.');
         $this->line('  manifest objects recorded : ' . count($keys));
+        $this->line('  library rows removed      : ' . array_sum($library));
         $this->comment('Files still exist. Run with --purge-files to destroy them, or --rollback to undo.');
         return self::SUCCESS;
     }
@@ -206,8 +239,29 @@ class PurgeProductImagesCommand extends Command
             DB::table('products')->where('id', $r->product_id)
                 ->update(['image' => $r->image, 'gallery' => $r->gallery]);
         }
+
+        // The libraries too. Restoring only the cache would leave the columns correct until the
+        // next sync-image-columns rebuilt them from an empty library and blanked them again —
+        // a rollback that silently undoes itself on the following deploy.
+        $restored = [];
+        if (Schema::hasTable(self::LIBRARY_BACKUP)) {
+            DB::table(self::LIBRARY_BACKUP)->orderBy('id')->chunk(500, function ($chunk) use (&$restored) {
+                foreach ($chunk as $b) {
+                    $payload = json_decode($b->payload, true);
+                    if (!is_array($payload) || !Schema::hasTable($b->source_table)) {
+                        continue;
+                    }
+                    DB::table($b->source_table)->insertOrIgnore($payload);
+                    $restored[$b->source_table] = ($restored[$b->source_table] ?? 0) + 1;
+                }
+            });
+        }
+
         Cache::flush();
         $this->info("Restored {$rows->count()} products.");
+        foreach ($restored as $t => $n) {
+            $this->line("  {$t}: {$n} row(s)");
+        }
         $this->comment('References only. Any S3 object already purged stays gone — those rows now point at 404s.');
         return self::SUCCESS;
     }
@@ -418,8 +472,111 @@ class PurgeProductImagesCommand extends Command
         return ['media' => $mediaCount, 'attachments' => $detached];
     }
 
+
+    /**
+     * Counts the library rows and folds their S3 keys into the manifest.
+     *
+     * These are what actually has to go: a purge that clears only products.image leaves the
+     * library intact, and the next `sync-image-columns` rebuilds every column from it.
+     */
+    private function scanLibraries(array &$keys, array &$external): array
+    {
+        $out = [];
+        foreach (self::LIBRARIES as $src) {
+            if (!Schema::hasTable($src['table'])) {
+                continue;
+            }
+            $cols = array_values(array_filter(
+                $src['columns'],
+                fn ($c) => Schema::hasColumn($src['table'], $c),
+            ));
+            if (!$cols) {
+                continue;
+            }
+            $n = 0;
+            DB::table($src['table'])->select(array_merge(['id'], $cols))->orderBy('id')
+                ->chunk(500, function ($chunk) use ($cols, &$keys, &$external, &$n) {
+                    foreach ($chunk as $row) {
+                        $touched = false;
+                        foreach ($cols as $c) {
+                            $v = $row->$c ?? null;
+                            if (!$this->filled($v)) {
+                                continue;
+                            }
+                            $touched = true;
+                            // These columns hold a BARE url on some tables and an image JSON blob
+                            // on others (pah_plant_image_backup mirrors products.image), so both
+                            // shapes are read.
+                            if (str_starts_with(ltrim((string) $v), '{') || str_starts_with(ltrim((string) $v), '[')) {
+                                $this->collectKeys($v, $keys, $external);
+                            } else {
+                                $this->collectUrl((string) $v, $keys, $external);
+                            }
+                        }
+                        if ($touched) {
+                            $n++;
+                        }
+                    }
+                });
+            $out[$src['table']] = $n;
+        }
+        return $out;
+    }
+
+    /** Snapshots each library row, then deletes it. Runs inside the caller's transaction. */
+    private function clearLibraries(): void
+    {
+        foreach (self::LIBRARIES as $src) {
+            if (!Schema::hasTable($src['table'])) {
+                continue;
+            }
+            $stamp = now();
+            DB::table($src['table'])->orderBy('id')->chunk(500, function ($chunk) use ($src, $stamp) {
+                $rows = [];
+                foreach ($chunk as $row) {
+                    $rows[] = [
+                        'source_table' => $src['table'],
+                        'row_id'       => $row->id ?? 0,
+                        'payload'      => json_encode($row),
+                        'created_at'   => $stamp,
+                    ];
+                }
+                if ($rows) {
+                    DB::table(self::LIBRARY_BACKUP)->insert($rows);
+                }
+            });
+            DB::table($src['table'])->delete();
+        }
+    }
+
+    /** A bare URL column, as opposed to the image JSON blob collectKeys() reads. */
+    private function collectUrl(string $url, array &$keys, array &$external): void
+    {
+        $host = parse_url((string) config('filesystems.disks.s3.url'), PHP_URL_HOST)
+            ?: config('filesystems.disks.s3.bucket') . '.s3.' . config('filesystems.disks.s3.region') . '.amazonaws.com';
+        $h = parse_url($url, PHP_URL_HOST);
+        $path = ltrim((string) parse_url($url, PHP_URL_PATH), '/');
+        if ($path === '') {
+            return;
+        }
+        if ($h === $host) {
+            $keys[urldecode($path)] = true;
+        } else {
+            $external[$h ?: 'unknown'] = true;
+        }
+    }
+
     private function ensureBackupTable(): void
     {
+        if (!Schema::hasTable(self::LIBRARY_BACKUP)) {
+            Schema::create(self::LIBRARY_BACKUP, function ($t) {
+                $t->bigIncrements('id');
+                $t->string('source_table', 64)->index();
+                $t->unsignedBigInteger('row_id');
+                $t->longText('payload');
+                $t->timestamp('created_at')->nullable();
+            });
+        }
         if (Schema::hasTable(self::BACKUP_TABLE)) {
             return;
         }
