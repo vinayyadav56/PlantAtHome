@@ -143,6 +143,27 @@ final class CatalogMembershipTest extends TestCase
         );
     }
 
+    public function test_all_products_can_exclude_drafts(): void
+    {
+        // Rule 13: a draft is unfinished work and belongs in My Draft Products, not in the
+        // repository you curate from. A negation cannot be expressed through the Prettus search
+        // grammar, which is why it is a server-side param rather than another `search=` key.
+        DB::table('products')->insert([
+            'id' => 4, 'name' => 'Half-written Fern', 'status' => 'draft', 'language' => 'en',
+            'is_available_product' => false, 'listing_enabled' => false,
+        ]);
+        $request = Request::create('/api/products', 'GET', [
+            'catalog_scope'  => 'all',
+            'exclude_status' => 'draft',
+        ]);
+        $request->headers->set('Authorization', 'Bearer an-admin-token');
+
+        $names = $this->namesFor($request);
+
+        $this->assertNotContains('Half-written Fern', $names, 'drafts must not appear in All Products');
+        $this->assertContains('Uncurated Palm', $names, 'the uncurated pool is still the point of this screen');
+    }
+
     public function test_the_opt_out_is_refused_without_authentication(): void
     {
         // Otherwise the gate is one query parameter deep.

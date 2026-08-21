@@ -285,6 +285,20 @@ class ProductController extends CoreController
             ->where('products.listing_enabled', true);
     }
 
+    /**
+     * `exclude_status=draft` — drafts are unfinished work and belong in My Draft Products.
+     *
+     * A negation, so it cannot be expressed through the Prettus `search` grammar, which only
+     * builds equality/in/between. Kept beside the catalogue gate for the same parity reason: both
+     * surfaces must apply it or the facet counts stop matching the list.
+     */
+    private function applyStatusExclusion($query, Request $request)
+    {
+        $raw = (string) $request->input('exclude_status', '');
+        $statuses = array_values(array_filter(array_map('trim', explode(',', $raw))));
+        return empty($statuses) ? $query : $query->whereNotIn('products.status', $statuses);
+    }
+
     private function facetBaseQuery(Request $request)
     {
         $query = Product::query()
@@ -295,6 +309,7 @@ class ProductController extends CoreController
         // Customer surfaces send hide_unpriced=1 (same gate as fetchProducts).
         $query = $this->applyUnpricedGate($query, $request);
         $query = $this->applyCatalogGate($query, $request);
+        $query = $this->applyStatusExclusion($query, $request);
 
         // Optional narrowing to the current listing context (vertical / category pages).
         if ($request->filled('type')) {
@@ -539,6 +554,7 @@ class ProductController extends CoreController
         // admin/vendor tooling is unaffected.
         $products_query = $this->applyUnpricedGate($products_query, $request);
         $products_query = $this->applyCatalogGate($products_query, $request);
+        $products_query = $this->applyStatusExclusion($products_query, $request);
 
         // City-first availability (single source of truth: AvailabilityService::cityScopeProductIds):
         //   - city has vendor inventory -> STRICT, only that inventory
