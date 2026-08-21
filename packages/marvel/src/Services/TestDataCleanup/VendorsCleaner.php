@@ -127,6 +127,43 @@ class VendorsCleaner implements CleanerContract
             $plan->step('location_capture_requests', DB::table('location_capture_requests')->whereIn('vendor_id', $ids)->pluck('id')->all(), 'id');
         }
 
+        // The V2 vendor context. A nursery is the same vendor under the DDD modules, bridged to
+        // the legacy shop by `nursery_nurseries.legacy_id` — so a wipe that removed only the shop
+        // left a live nursery behind, and the projection command would recreate the shop from it
+        // on the next boot. Ordering matters: nursery_documents and nursery_balances CASCADE from
+        // nursery_nurseries, but ledger entries and withdrawals are RESTRICT, so they must be
+        // deleted first or the parent delete is refused outright.
+        $nurseryIds = [];
+        $nurseryUuids = [];
+        if (Schema::hasTable('nursery_nurseries')) {
+            $rows = DB::table('nursery_nurseries')->whereIn('legacy_id', $ids)->get(['id', 'uuid']);
+            $nurseryIds = $rows->pluck('id')->all();
+            $nurseryUuids = $rows->pluck('uuid')->filter()->all();
+        }
+        if ($nurseryIds) {
+            foreach (['nursery_withdrawals', 'nursery_ledger_entries', 'nursery_balances', 'nursery_documents'] as $table) {
+                if (Schema::hasTable($table)) {
+                    $plan->step($table, DB::table($table)->whereIn('nursery_id', $nurseryIds)->pluck('id')->all(), 'id');
+                }
+            }
+        }
+
+        // Module tables keyed by the nursery UUID rather than a shop id. Missed, these are the
+        // rows that make a deleted vendor keep serving a city or holding a price override.
+        if ($nurseryUuids) {
+            foreach ([
+                'svc_vendor_areas', 'pricing_vendor_overrides', 'config_nursery_enablement',
+                'inv_items', 'inv_warehouses', 'catalog_product_proposals',
+            ] as $table) {
+                if (Schema::hasTable($table) && Schema::hasColumn($table, 'nursery_id')) {
+                    $plan->step($table, DB::table($table)->whereIn('nursery_id', $nurseryUuids)->pluck('id')->all(), 'id');
+                }
+            }
+        }
+        if ($nurseryIds) {
+            $plan->step('nursery_nurseries', $nurseryIds, 'id', 'the V2 nursery records');
+        }
+
         // Catalog rows a vendor proposed belong to the platform now — keep them, clear the
         // pointer. Same for an order's vendor reference on any order we are NOT deleting.
         if (Schema::hasTable('products') && Schema::hasColumn('products', 'proposed_by_shop_id')) {
