@@ -30,9 +30,6 @@ class VendorInventoryController extends CoreController
         $user = $request->user();
         $shops = $user ? $user->shops : collect();
         $isAdmin = $user && $user->hasPermissionTo(Permission::SUPER_ADMIN);
-        // Review-pipeline actor context: a super-admin editing on a vendor's behalf writes
-        // as admin (their rows stay approved); vendors' writes enter the review queue.
-        VendorProductPrice::actAsAdminIf($user);
 
         if ($request->filled('shop_id')) {
             $requested = (int) $request->input('shop_id');
@@ -41,6 +38,14 @@ class VendorInventoryController extends CoreController
             if (!$isAdmin && !$shops->contains('id', $requested)) {
                 abort(403, 'You do not own this vendor shop.');
             }
+            // Review-pipeline actor context, decided AFTER the shop is known: a super-admin
+            // writing to the platform's OWN master shop writes as admin (their rows stay
+            // approved) — that write genuinely is the admin curating the catalogue. Writing to
+            // any OTHER (real vendor) shop always enters the review queue, even when an admin's
+            // hands are on the keyboard, because the row is that vendor's supply claim, not the
+            // admin's. Deciding this by permission alone (ignoring which shop) let an admin
+            // auto-approve a brand-new vendor's entire initial catalogue.
+            VendorProductPrice::actAsAdminIf($user, $requested);
             return $requested;
         }
         $first = $shops->first();
@@ -52,6 +57,7 @@ class VendorInventoryController extends CoreController
         if ($shops->count() > 1) {
             abort(422, 'Your account manages more than one shop — please specify shop_id.');
         }
+        VendorProductPrice::actAsAdminIf($user, (int) $first->id);
         return (int) $first->id;
     }
 

@@ -35,6 +35,9 @@ final class VendorCatalogAvailabilityTest extends TestCase
         ]);
         DB::purge('sqlite');
         \Marvel\Database\Models\VendorProductPrice::resetReviewStatics();
+        // Otherwise whichever test in the WHOLE suite happens to call Shop::masterId() first
+        // poisons every later test's notion of "the master shop" with a stale id.
+        \Marvel\Database\Models\Shop::resetMasterIdCache();
 
         Schema::create('products', function (Blueprint $t) {
             // Master Catalog membership + listing switch. Defaulted TRUE in stubs, not FALSE:
@@ -113,9 +116,16 @@ final class VendorCatalogAvailabilityTest extends TestCase
         Schema::create('shops', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->string('name')->nullable();
+            $t->string('slug')->nullable();
             $t->string('approval_status')->nullable();
             $t->timestamps();
         });
+        // The platform's own master shop — id fixed across every test in this file so
+        // Shop::masterId()'s in-process static cache (real code, not a test double: PHPUnit runs
+        // every test in this file in the SAME PHP process, so the cache persists across tests even
+        // though setUp() rebuilds the sqlite DB each time) resolves consistently no matter which
+        // test happens to prime it first.
+        DB::table('shops')->insert(['id' => 99, 'name' => 'PlantAtHome', 'slug' => 'plantathome', 'created_at' => now(), 'updated_at' => now()]);
         Schema::create('vendor_service_areas', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->unsignedBigInteger('shop_id');
@@ -322,5 +332,37 @@ final class VendorCatalogAvailabilityTest extends TestCase
         $other = $this->search(44);
         $this->assertArrayHasKey(1, $other, 'vendor 44 never touched Plant A');
         $this->assertCount(4, $other[1]['available_variants']);
+    }
+
+    /**
+     * Live bug: an admin added a NEW vendor's initial catalogue via this exact screen (asVendor's
+     * fake user is a super-admin acting via shop_id, mirroring the real admin session) and every
+     * row auto-approved, skipping the review queue — because the OLD rule read only the acting
+     * user's permission, never which shop the row actually belonged to.
+     */
+    public function test_an_admin_writing_to_a_real_vendor_shop_still_enters_review(): void
+    {
+        $this->attach(33, [['product_id' => 1, 'variation_option_id' => 11, 'vendor_selling_price' => 500]]);
+
+        $row = \Marvel\Database\Models\VendorProductPrice::where('shop_id', 33)->where('product_id', 1)->first();
+        $this->assertSame(
+            'pending_review',
+            $row->review_status,
+            'shop 33 is a real vendor — an admin acting on its behalf must not bypass review',
+        );
+    }
+
+    public function test_an_admin_writing_to_the_master_shop_stays_approved(): void
+    {
+        // Product 2 (Plant B) so this doesn't collide with product 1's rows from the test above —
+        // PHPUnit rebuilds the sqlite DB per test, but this keeps the intent obvious either way.
+        $this->attach(99, [['product_id' => 2, 'variation_option_id' => 21, 'vendor_selling_price' => 200]]);
+
+        $row = \Marvel\Database\Models\VendorProductPrice::where('shop_id', 99)->where('product_id', 2)->first();
+        $this->assertSame(
+            'approved',
+            $row->review_status,
+            'shop 99 IS the master shop — this genuinely is the admin curating the catalogue',
+        );
     }
 }

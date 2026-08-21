@@ -78,11 +78,29 @@ class VendorProductPrice extends Model
         static::$pendingTransitions = [];
     }
 
-    /** Set the actor flag from the acting user (super-admins write as admin). */
-    public static function actAsAdminIf($user): void
+    /**
+     * Set the actor flag from the acting user AND which shop the write targets.
+     *
+     * A super-admin is trusted as the review authority only for the platform's OWN master
+     * shop — that write genuinely IS the admin curating the catalogue. Writing on behalf of a
+     * genuine third-party vendor is still that vendor's supply claim, not the admin's, and must
+     * be vetted the same as if the vendor had submitted it themselves — an admin's hands on the
+     * keyboard don't make a vendor's inventory pre-approved.
+     *
+     * Found live: an admin added a new vendor's initial catalogue via the shared add-from-catalog
+     * screen and every row auto-approved, skipping the review queue entirely — the vendor's own
+     * `shop_id` was correct, but the OLD rule keyed only on the acting user's permission, with no
+     * regard for whose shop the row actually belonged to.
+     *
+     * $shopId is nullable so a caller with no shop context yet (or a stub schema in an old test)
+     * degrades to "not an admin actor" rather than throwing — the safer default is review, not
+     * silent approval.
+     */
+    public static function actAsAdminIf($user, ?int $shopId = null): void
     {
         try {
-            static::$adminActor = (bool) ($user && $user->hasPermissionTo('super_admin'));
+            $isSuperAdmin = (bool) ($user && $user->hasPermissionTo('super_admin'));
+            static::$adminActor = $isSuperAdmin && $shopId !== null && $shopId === Shop::masterId();
         } catch (\Throwable) {
             static::$adminActor = false;
         }

@@ -62,15 +62,28 @@ class Shop extends Model
     public const STATUS_ON_HOLD  = 'on_hold';
 
     /**
+     * Per-process cache for masterId(). A class-level static, not a function-local one, so a
+     * test can reset it explicitly — see resetMasterIdCache(). A function-local `static $id`
+     * would resolve to the SAME correctness in production (one real HTTP request = one fresh PHP
+     * execution context, so it was already effectively "per request"), but PHPUnit runs every
+     * test in one file, and every file in one suite, inside a SINGLE PHP process — so whichever
+     * test first calls masterId() poisons the cache for every test that runs after it, in any
+     * file, for the rest of that run. Found live: a new resettable regression test for the
+     * review pipeline (VendorCatalogAvailabilityTest) passed in isolation and failed only when
+     * the full suite ran, because an unrelated, earlier-running test had already cached a
+     * different shop's id as "the master shop".
+     */
+    private static ?int $masterIdCache = null;
+
+    /**
      * Single-shop model: every catalog product belongs to THE master PlantAtHome
      * shop; vendor shops are pure suppliers (inventory + service areas only).
-     * Find-or-create keeps fresh installs working; static-cached per request.
+     * Find-or-create keeps fresh installs working; cached for the life of the process.
      */
     public static function masterId(): int
     {
-        static $id = null;
-        if ($id !== null) {
-            return $id;
+        if (static::$masterIdCache !== null) {
+            return static::$masterIdCache;
         }
         $shop = static::where('slug', self::MASTER_SLUG)->first();
         if (!$shop) {
@@ -86,7 +99,13 @@ class Shop extends Model
                 'settings'  => ['is_master' => true],
             ]);
         }
-        return $id = (int) $shop->id;
+        return static::$masterIdCache = (int) $shop->id;
+    }
+
+    /** Test-only: clears the per-process masterId() cache so a fresh fixture is re-read. */
+    public static function resetMasterIdCache(): void
+    {
+        static::$masterIdCache = null;
     }
 
     /**
