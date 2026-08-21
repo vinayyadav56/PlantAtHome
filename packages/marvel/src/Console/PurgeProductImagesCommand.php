@@ -178,11 +178,16 @@ class PurgeProductImagesCommand extends Command
             $this->comment('--dry-run: nothing written.');
             return self::SUCCESS;
         }
-        if (!$rows) {
+        // Guarded on BOTH counts. Guarding on the product count alone made a second run a no-op
+        // wherever the columns had already been cleared — which is exactly the state an
+        // environment is in after a cache-only purge, so production reported "Nothing to clear"
+        // while its library sat untouched and would have refilled the columns on any resync.
+        $libraryRows = array_sum($library);
+        if (!$rows && !$libraryRows) {
             $this->comment('Nothing to clear.');
             return self::SUCCESS;
         }
-        if (!$this->confirmed("Clear image/gallery on {$rows} products? Files are NOT touched by this step.")) {
+        if (!$this->confirmed("Clear image/gallery on {$rows} product(s) and {$libraryRows} library row(s)? Files are NOT touched by this step.")) {
             return self::FAILURE;
         }
 
