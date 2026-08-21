@@ -69,6 +69,14 @@ final class DuplicateCheckoutTest extends TestCase
             $t->timestamps();
         });
         Schema::create('products', function (Blueprint $t) {
+            // Master Catalog membership + listing switch. Defaulted TRUE in stubs, not FALSE:
+            // production starts empty by design, but a fixture that had to opt every product in
+            // would make each existing test assert the new gate instead of what it was written for.
+            $t->boolean('is_available_product')->default(true);
+            $t->boolean('listing_enabled')->default(true);
+            $t->timestamp('available_at')->nullable();
+            $t->unsignedBigInteger('available_by')->nullable();
+            $t->boolean('track_stock')->default(false);
             $t->bigIncrements('id');
             $t->string('name')->nullable();
             $t->timestamps();

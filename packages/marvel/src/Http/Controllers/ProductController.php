@@ -260,6 +260,31 @@ class ProductController extends CoreController
         });
     }
 
+    /**
+     * Master Catalog gate, shared by the product list (fetchProducts) and the filter facets
+     * (facetBaseQuery) — the two MUST stay in parity or facet counts disagree with the list
+     * (locked by ProductFilterFacetsTest). Shared as a method for that reason: the unpriced gate
+     * above is a standing reminder that two copies of a predicate drift.
+     *
+     * Default-CLOSED. A product reaches the website only once an admin has moved it into the
+     * Master Catalog AND switched its listing on; anything else is invisible even if it is
+     * `publish`. The bearer-token test used by the status default cannot be reused here — a
+     * logged-in SHOPPER carries a Bearer exactly like admin tooling does, so keying off the token
+     * alone would show the whole uncurated catalogue to every signed-in customer.
+     *
+     * Admin surfaces opt out explicitly with `catalog_scope=all`, honoured only for an
+     * authenticated caller. All Products needs to show what is NOT in the catalogue — that is the
+     * screen an admin curates from.
+     */
+    private function applyCatalogGate($query, Request $request)
+    {
+        if ($request->input('catalog_scope') === 'all' && !empty($request->bearerToken())) {
+            return $query;
+        }
+        return $query->where('products.is_available_product', true)
+            ->where('products.listing_enabled', true);
+    }
+
     private function facetBaseQuery(Request $request)
     {
         $query = Product::query()
@@ -269,6 +294,7 @@ class ProductController extends CoreController
 
         // Customer surfaces send hide_unpriced=1 (same gate as fetchProducts).
         $query = $this->applyUnpricedGate($query, $request);
+        $query = $this->applyCatalogGate($query, $request);
 
         // Optional narrowing to the current listing context (vertical / category pages).
         if ($request->filled('type')) {
@@ -512,6 +538,7 @@ class ProductController extends CoreController
         // vendor rates) never render as buyable "₹0.00" cards. Opt-in param —
         // admin/vendor tooling is unaffected.
         $products_query = $this->applyUnpricedGate($products_query, $request);
+        $products_query = $this->applyCatalogGate($products_query, $request);
 
         // City-first availability (single source of truth: AvailabilityService::cityScopeProductIds):
         //   - city has vendor inventory -> STRICT, only that inventory
@@ -1054,6 +1081,115 @@ class ProductController extends CoreController
         return \Marvel\Database\Models\VendorProductPrice::where('product_id', $product->id)
             ->when($vendorShopId, fn ($q) => $q->where('shop_id', '!=', $vendorShopId))
             ->exists();
+    }
+
+    /**
+     * POST products/catalog/move { ids[] } — promote products into the Master Catalog.
+     *
+     * Membership and listing are separate acts on purpose: moving a product in leaves its switch
+     * OFF, so nothing reaches the website by a single click. `available_at` / `available_by` record
+     * who curated it, which the status column has never been able to answer.
+     *
+     * Idempotent — re-moving an already-available product leaves its switch and its audit stamp
+     * alone rather than silently un-publishing it.
+     */
+    public function moveToCatalog(Request $request)
+    {
+        $ids = $this->catalogIds($request);
+        $moved = Product::whereIn('id', $ids)->where('is_available_product', false)->pluck('id')->all();
+        if (!empty($moved)) {
+            Product::whereIn('id', $moved)->update([
+                'is_available_product' => true,
+                'listing_enabled'      => false,
+                'available_at'         => now(),
+                'available_by'         => optional($request->user())->id,
+            ]);
+            $this->afterCatalogChange($moved);
+        }
+        return ['ok' => true, 'moved' => count($moved), 'already_available' => count($ids) - count($moved)];
+    }
+
+    /**
+     * POST products/catalog/remove { ids[] } — take products back out of the Master Catalog.
+     *
+     * The product itself is untouched: it stays in All Products, keeps its status, and keeps every
+     * vendor row attached to it. Removing membership only makes it ineligible for the website and
+     * for NEW vendor/bundle selection, which is the whole point of a curated layer — a product
+     * pulled back must be restorable exactly as it was.
+     */
+    public function removeFromCatalog(Request $request)
+    {
+        $ids = $this->catalogIds($request);
+        Product::whereIn('id', $ids)->update([
+            'is_available_product' => false,
+            'listing_enabled'      => false,
+        ]);
+        $this->afterCatalogChange($ids);
+        return ['ok' => true, 'removed' => count($ids)];
+    }
+
+    /**
+     * PATCH products/{id}/listing { listing_enabled } — the on/off switch inside the catalogue.
+     *
+     * Refuses to switch on a product that is not a member: the switch is meaningless outside the
+     * Master Catalog, and allowing it would create a second, invisible way to publish.
+     */
+    public function setListing(Request $request, $id)
+    {
+        $this->authorizeCatalogAction($request);
+        $data = $request->validate(['listing_enabled' => ['required', 'boolean']]);
+        $product = Product::findOrFail((int) $id);
+        if ($data['listing_enabled'] && !$product->is_available_product) {
+            return response()->json([
+                'ok'    => false,
+                'error' => 'Move this product into Available Products before switching its listing on.',
+            ], 422);
+        }
+        $product->listing_enabled = (bool) $data['listing_enabled'];
+        $product->save();
+        $this->afterCatalogChange([(int) $product->id]);
+        return ['ok' => true, 'product' => ['id' => $product->id, 'listing_enabled' => $product->listing_enabled]];
+    }
+
+    /** Super-admin only: curating the catalogue decides what the whole platform may sell. */
+    private function authorizeCatalogAction(Request $request): void
+    {
+        if (!($request->user() && $request->user()->hasPermissionTo(Permission::SUPER_ADMIN))) {
+            throw new AuthorizationException(NOT_AUTHORIZED);
+        }
+    }
+
+    private function catalogIds(Request $request): array
+    {
+        $this->authorizeCatalogAction($request);
+        $data = $request->validate([
+            'ids'   => ['required', 'array', 'min:1', 'max:500'],
+            'ids.*' => ['integer', 'exists:products,id'],
+        ]);
+        return array_values(array_unique(array_map('intval', $data['ids'])));
+    }
+
+    /**
+     * Membership changes what the storefront may show, so the response cache and the per-city
+     * projection both have to be refreshed — the same pair updateStatus() refreshes, and for the
+     * same reason. Neither may fail the write: an operator who curated correctly must not see an
+     * error because a cache bust threw.
+     */
+    private function afterCatalogChange(array $ids): void
+    {
+        try {
+            $this->bustResponseCache('products');
+        } catch (\Throwable $e) {
+            // cache bust must never fail the curation
+        }
+        $svc = new \Marvel\Services\AvailabilityService();
+        foreach ($ids as $id) {
+            try {
+                $svc->recomputeForProduct((int) $id);
+            } catch (\Throwable $e) {
+                // projection refresh must never fail the curation
+            }
+        }
     }
 
     /**

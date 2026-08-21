@@ -930,6 +930,12 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // no full product payload). Publish also refreshes the city projection.
     Route::post('update-product-status', [ProductController::class, 'updateStatus']);
 
+    // Master Catalog curation. Membership (`catalog/move`) and the listing switch are separate
+    // endpoints because they are separate decisions: moving a product in never publishes it.
+    Route::post('products/catalog/move', [ProductController::class, 'moveToCatalog']);
+    Route::post('products/catalog/remove', [ProductController::class, 'removeFromCatalog']);
+    Route::patch('products/{id}/listing', [ProductController::class, 'setListing']);
+
     // Edit a vendor's commission after onboarding (approve-shop sets it initially).
     Route::post('update-shop-commission', [ShopController::class, 'updateCommission']);
 

@@ -80,6 +80,11 @@ class ProductRepository extends BaseRepository
         // those filters were silent no-ops until they moved into `search`.
         'variations.value' => 'in',
         'in_stock',
+        // Master Catalog membership + its listing switch. Listed here or Prettus drops them
+        // silently, exactly as it did for the size chips above; BOOLEAN_SEARCH_FIELDS below then
+        // coerces the value so a string can never reach the tinyint under MySQL STRICT.
+        'is_available_product',
+        'listing_enabled',
     ];
 
     /**
@@ -92,6 +97,8 @@ class ProductRepository extends BaseRepository
         'plantAttribute.pet_friendly',
         'in_stock',
         'is_rental',
+        'is_available_product',
+        'listing_enabled',
     ];
 
     protected $dataArray = [

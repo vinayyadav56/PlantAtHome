@@ -43,6 +43,12 @@ class Product extends Model
         'video' => 'json',
         'bundle_config' => 'array',
         'pricing_value' => 'float',
+        // Master Catalog membership + its listing switch. Cast so the admin gets real JSON
+        // booleans rather than the 0/1 MySQL hands back — a switch bound to "0" renders as ON.
+        'is_available_product' => 'boolean',
+        'listing_enabled' => 'boolean',
+        'track_stock' => 'boolean',
+        'available_at' => 'datetime',
     ];
 
     protected $appends = [
