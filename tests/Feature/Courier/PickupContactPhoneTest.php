@@ -75,10 +75,18 @@ final class PickupContactPhoneTest extends TestCase
         $this->assertSame('9990001111', $this->phoneFor($shop), 'an explicit address phone outranks the profile mobile');
     }
 
-    public function test_settings_contact_still_works_when_there_is_no_mobile(): void
+    public function test_settings_contact_still_wins_over_mobile(): void
     {
-        // The other staging vendor. Must keep working — this is the path that already booked.
-        $shop = $this->shop(['settings' => json_encode(['contact' => '919996469046'])]);
+        // The precedence that matters most. `mobile` is the better-populated column, but it goes
+        // LAST on purpose: a vendor that books today must keep sending exactly what it sends today.
+        // The staging pair proves why — settings.contact holds 919996469046 while the mobile
+        // backfill stored the bare 10-digit 9996469046, so leading with `mobile` would have
+        // swapped a country-coded number for a bare one on a working booking. The fallback is
+        // strictly additive: it only ever helps a vendor who would otherwise be refused.
+        $shop = $this->shop([
+            'mobile'   => '9996469046',
+            'settings' => json_encode(['contact' => '919996469046']),
+        ]);
 
         $this->assertSame('919996469046', $this->phoneFor($shop));
     }

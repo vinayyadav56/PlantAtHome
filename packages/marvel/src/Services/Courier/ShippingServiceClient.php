@@ -1226,7 +1226,16 @@ class ShippingServiceClient
             // `?:` not `??` at each step: a present-but-EMPTY value must fall through too. The
             // original `??` chain stopped at an empty-string address phone and never reached the
             // fallback at all. `?? ''` first so a missing key doesn't warn.
-            'phone'   => $this->digits(($a['phone'] ?? '') ?: (($shop->mobile ?? '') ?: ($shop->settings['contact'] ?? ''))),
+            //
+            // `mobile` goes LAST, after settings.contact, even though it is the better-populated
+            // column. Putting it first changed the payload of a vendor that already books: shop 34
+            // sends 919996469046 from settings.contact today, and `mobile` holds the bare 10-digit
+            // 9996469046 — the backfill stored substr(-10). Reordering would have silently swapped
+            // a country-coded number for a bare one on a working booking, to fix a different
+            // vendor. Appending instead is strictly additive: everyone who books today sends
+            // exactly what they sent before, and only a vendor who would otherwise be REFUSED
+            // gains a phone.
+            'phone'   => $this->digits(($a['phone'] ?? '') ?: (($shop->settings['contact'] ?? '') ?: ($shop->mobile ?? ''))),
             'address' => $this->pickupLine1($a),
             'city'    => (string) ($a['city'] ?? ''),
             'state'   => (string) ($a['state'] ?? ''),
