@@ -53,6 +53,12 @@ class Kernel extends ConsoleKernel
         // hold the lock for 24h.
         $schedule->command('courier:sweep-undispatched')->everyFifteenMinutes()->withoutOverlapping(5);
 
+        // The half the sweep above cannot see: it watches unbooked SHIPMENTS, and a shipment
+        // only exists once an order has a vendor. With auto-assignment opt-in, an unassigned
+        // order had no watchdog at all — no vendor, no shipment, and invisible to the vendor
+        // dashboards, so it just sat. Alarms only; assigning stays the operator's call.
+        $schedule->command('orders:sweep-unassigned')->everyFifteenMinutes()->withoutOverlapping(5);
+
         // Courier STATUS safety net (the other half of the sweep above, which only alarms on legs
         // that were never booked). Push delivery is partner webhook → Go outbox → our
         // /api/shipping/callback; every hop can drop an event, and a partner that was never given

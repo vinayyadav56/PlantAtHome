@@ -99,6 +99,25 @@ class CourierService
         return (bool) ($this->opts['enabled'] ?? false);
     }
 
+    /**
+     * Whether a courier is booked AUTOMATICALLY when an order becomes fulfillable.
+     *
+     * Separate from enabled() on purpose. `courier.enabled` is the master switch for the whole
+     * lane — it also gates the manual Book and Get-Quotes buttons — so it could not be used to
+     * stop auto-booking without disabling the very flow the operator wants to use instead.
+     *
+     * Default OFF: booking now waits for someone to press Book. env COURIER_AUTO_BOOK or
+     * settings.options.courier.auto_book, matching the toggle pattern used across this codebase.
+     */
+    public function autoBookEnabled(): bool
+    {
+        $env = env('COURIER_AUTO_BOOK');
+        if ($env !== null) {
+            return filter_var($env, FILTER_VALIDATE_BOOLEAN);
+        }
+        return (bool) ($this->opts['auto_book'] ?? false);
+    }
+
     /** Courier usable = master switch on AND the shipping service link configured. */
     public function enabled(): bool
     {

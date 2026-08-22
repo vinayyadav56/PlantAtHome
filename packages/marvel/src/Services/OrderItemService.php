@@ -42,6 +42,28 @@ class OrderItemService
     }
 
     /**
+     * Whether a new order assigns itself to vendors automatically.
+     *
+     * Default OFF: an order now waits for an admin to choose the vendor, because auto-assignment
+     * silently picked a supplier (and auto-booking then despatched a courier) before anyone could
+     * intervene. The manual path already exists end to end — POST orders/{id}/auto-assign-items
+     * runs THIS same service on demand, so turning the flag off removes the automation, not the
+     * capability.
+     *
+     * env MARKETPLACE_AUTO_ASSIGN or settings.options.assignment.auto_assign, matching
+     * reserveEnabled() above and every other operational toggle in this codebase.
+     */
+    public static function autoAssignEnabled(): bool
+    {
+        $env = env('MARKETPLACE_AUTO_ASSIGN');
+        if ($env !== null) {
+            return filter_var($env, FILTER_VALIDATE_BOOLEAN);
+        }
+        $settings = Settings::getData();
+        return (bool) ($settings?->options['assignment']['auto_assign'] ?? false);
+    }
+
+    /**
      * Release every still-held reservation on this order (cancel / re-plan). Idempotent.
      * $keepItemIds: items on live-booked (sealed) shipments — their stock stays reserved.
      */

@@ -575,7 +575,18 @@ class OrderRepository extends BaseRepository
             try {
                 $itemService = new \Marvel\Services\OrderItemService();
                 $itemService->writeForOrder($order, $products);
-                $itemService->assignAndGroup($order);
+                // Auto-assignment is opt-in (settings.options.assignment.auto_assign, default
+                // OFF): it used to pick a supplier the moment an order landed, and auto-booking
+                // then despatched a courier, so an operator never got to choose either. The lines
+                // above still get written — only the vendor CHOICE waits for a human.
+                //
+                // 🔴 Gated HERE, at the call site, never inside ItemAssignmentService: that engine
+                // is shared by checkout pricing (CheckoutRepository), the delivery optimiser, the
+                // location price preview and the admin candidate list, none of which persist
+                // anything. Gating it there would break checkout.
+                if (\Marvel\Services\OrderItemService::autoAssignEnabled()) {
+                    $itemService->assignAndGroup($order);
+                }
             } catch (\Throwable $e) {
                 Log::warning('order auto-assignment failed (order kept; assign from admin)', [
                     'order_id' => $order->id ?? null,

@@ -311,6 +311,20 @@ final class AutoBookShipmentsTest extends TestCase
         Log::shouldNotHaveReceived('warning');
     }
 
+    public function test_nothing_is_booked_when_auto_book_is_off(): void
+    {
+        // The default. An operator chooses the courier from the order page instead; manual
+        // booking is unaffected because it runs through CourierShipmentController::dispatchShipment,
+        // which only requires enabled() — deliberately NOT this flag.
+        $this->courier->autoBook = false;
+        $order = $this->makeOrder(['payment_gateway' => 'CASH_ON_DELIVERY', 'order_status' => 'order-processing']);
+        $this->makeShipment($order);
+
+        $this->book((object) ['order' => $order]);
+
+        $this->assertSame([], $this->courier->booked, 'auto-booking must not fire when the flag is off');
+    }
+
     public function test_self_delivery_legs_are_never_auto_booked(): void
     {
         $order = $this->makeOrder(['payment_gateway' => 'CASH_ON_DELIVERY', 'order_status' => 'order-processing']);
@@ -372,6 +386,18 @@ class FakeCourier extends CourierService
     public function enabled(): bool
     {
         return $this->on;
+    }
+
+    /**
+     * This suite is ABOUT auto-booking, so it opts in explicitly. The real implementation reads
+     * settings.options.courier.auto_book and defaults OFF — booking now waits for an operator —
+     * and `autoBook` below lets the one test that cares assert that the listener honours it.
+     */
+    public bool $autoBook = true;
+
+    public function autoBookEnabled(): bool
+    {
+        return $this->autoBook;
     }
 
     // $courierId: the auto-book listener never passes one — a courier chosen off a quote is only

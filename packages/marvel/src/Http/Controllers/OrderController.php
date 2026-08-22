@@ -124,6 +124,17 @@ class OrderController extends CoreController
 
         switch ($user) {
             case $user->hasPermissionTo(Permission::SUPER_ADMIN):
+                // A super admin viewing a VENDOR-SCOPED surface (/[shop]/orders passes shop_id)
+                // must see that vendor's orders, not the platform's. This branch used to return
+                // every parent order before shop_id was ever read, so opening any vendor's
+                // dashboard rendered the whole platform list — which is what it looked like from
+                // the outside: "all orders are showing in vendors dashboard". The precedent for
+                // "an admin may act on any shop, but scoped to THAT shop" is
+                // VendorInventoryController::resolveShopId(). With no shop_id the platform-wide
+                // list is still correct — that is the /orders admin screen.
+                if ($request->filled('shop_id') && (int) $request->shop_id > 0) {
+                    return $this->vendorScopedOrders([(int) $request->shop_id]);
+                }
                 return $this->repository->with(['children' => fn ($q) => $q->without('customer', 'products')])->where('id', '!=', null)->where('parent_id', '=', null);
                 break;
 
@@ -330,6 +341,16 @@ class OrderController extends CoreController
             // Single-shop model: the fulfilling vendor's claim comes from the assignment
             // layer (order_items.assigned_shop_id), not the order's (master) shop_id.
             || $this->vendorHasAssignment($user, $order);
+        $isOwner = $user && ((int) $user->id === (int) $order->customer_id);
+
+        // Child orders are split by VERTICAL, not by vendor, so a single child order can carry
+        // lines belonging to several suppliers — and returning it whole let vendor A read vendor
+        // B's products, quantities and prices. A vendor sees only the lines assigned to them.
+        // Deliberately NOT applied to the customer (who owns the entire order) or to a super
+        // admin (whose job is to see the whole thing).
+        if ($isVendor && !$isSuperAdmin && !$isOwner) {
+            $this->scopeOrderToVendorLines($order, $user);
+        }
 
         if (!$order->customer_id) {
             // GUEST order (no owner to authorise against). Staff who could see it
@@ -359,12 +380,68 @@ class OrderController extends CoreController
         }
 
         // REGISTERED-customer order: owner, the fulfilling vendor, or a super-admin only.
-        $isOwner = $user && ((int) $user->id === (int) $order->customer_id);
         if ($isSuperAdmin || $isOwner || $isVendor) {
             return $order;
         }
         // Not permitted — reveal NOTHING about whether this order exists (404, not 403).
         throw new ModelNotFoundException(NOT_FOUND);
+    }
+
+    /**
+     * Strip an order down to the lines this vendor actually supplies.
+     *
+     * Child orders are grouped by VERTICAL, so one child can hold several vendors' products.
+     * vendorScopedOrders() correctly lets a vendor SEE such an order (they have a line in it), but
+     * the detail response then carried every line — vendor A reading vendor B's products,
+     * quantities and unit prices. That is a tenancy breach, not a display quirk.
+     *
+     * The assignment layer is the truth: order_items on the PARENT order carry assigned_shop_id.
+     * Anything not assigned to this vendor is removed from the loaded relations, including on the
+     * nested children, so a parent order cannot leak through its child list either.
+     *
+     * Fails CLOSED: if the vendor's shop ids cannot be resolved, nothing is returned rather than
+     * everything.
+     */
+    private function scopeOrderToVendorLines($order, $user): void
+    {
+        try {
+            $shopIds = $user && $user->hasPermissionTo(Permission::STORE_OWNER)
+                ? $user->shops->pluck('id')->map(fn ($i) => (int) $i)->all()
+                : array_values(array_filter([(int) ($user->shop_id ?? 0)]));
+
+            $scope = function ($node) use ($shopIds) {
+                if (!$node || !$node->relationLoaded('products')) {
+                    return;
+                }
+                if (empty($shopIds)) {
+                    $node->setRelation('products', $node->products->take(0));
+                    return;
+                }
+                // assigned_shop_id lives on the PARENT's order_items; a child order defers to it.
+                $parentId = $node->parent_id ? (int) $node->parent_id : (int) $node->id;
+                $mine = \Marvel\Database\Models\OrderItem::where('order_id', $parentId)
+                    ->whereIn('assigned_shop_id', $shopIds)
+                    ->pluck('product_id')
+                    ->map(fn ($i) => (int) $i)
+                    ->all();
+                $node->setRelation(
+                    'products',
+                    $node->products->filter(fn ($p) => in_array((int) $p->id, $mine, true))->values(),
+                );
+            };
+
+            $scope($order);
+            if ($order->relationLoaded('children')) {
+                foreach ($order->children as $child) {
+                    $scope($child);
+                }
+            }
+        } catch (\Throwable $e) {
+            // Never fail the request over this — but never fall back to showing everything either.
+            if ($order->relationLoaded('products')) {
+                $order->setRelation('products', $order->products->take(0));
+            }
+        }
     }
 
     /** Whether any of the caller's shops is assigned an item of this order (or its parent). */

@@ -56,6 +56,13 @@ class BookCourierShipments implements ShouldQueue
         if (!$courier->enabled()) {
             return; // courier off / shipping service unconfigured — nothing to dispatch
         }
+        // Auto-booking is opt-in (settings.options.courier.auto_book, default OFF). An order used
+        // to be despatched to a partner the instant it became fulfillable, so an operator never
+        // chose the vendor OR the courier. Manual booking is unaffected: it runs through
+        // CourierShipmentController::dispatchShipment, which only needs enabled().
+        if (!$courier->autoBookEnabled()) {
+            return;
+        }
 
         // Only dispatch for an order we can actually fulfil: COD (confirmed at placement) or a
         // prepaid order whose payment has succeeded. A prepaid-PENDING order waits for PaymentSuccess.
