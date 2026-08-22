@@ -350,6 +350,29 @@ class CourierService
             return ['ok' => false, 'code' => 'PICKUP_NOT_REGISTERED', 'error' => $err];
         }
 
+        // The complementary half. Hyperlocal is exempt from the nickname check above, but it is the
+        // ONLY lane that requires a pickup PHONE — the shipping service rejects the request before
+        // it reaches a partner, and the operator saw the raw validator string with no idea what to
+        // fix. Guard exactly that one field here, deliberately NOT by reusing the helpers above:
+        //   - pickupBlocker() would also demand a registered Shiprocket nickname, which a
+        //     hyperlocal leg legitimately never has — it would block EVERY same-city booking;
+        //   - missingPickupFields() would also demand pincode/city/state, which this lane does not
+        //     send and the validator does not check — it would refuse bookings partners accept.
+        if ($this->modeOf($shipment) !== 'courier') {
+            $pickup = $this->shippingClient()->pickupAddressOf($shipment->shop, $this->pickupLocationFor($shipment));
+            if (trim((string) ($pickup['phone'] ?? '')) === '') {
+                $vendor = optional($shipment->shop)->name ?: 'This vendor';
+                return [
+                    'ok'    => false,
+                    'code'  => 'PICKUP_NO_PHONE',
+                    'error' => sprintf(
+                        '%s has no contact phone on its pickup address, and a same-city rider cannot be booked without one. Add a phone number to the vendor, or to its pickup location, and book again.',
+                        $vendor,
+                    ),
+                ];
+            }
+        }
+
         $order = $shipment->order;
         // Checkout stores CASH_ON_DELIVERY, COD or CASH interchangeably. Comparing with === against
         // one of them booked a 'CASH' order as PREPAID, so the rider was never told to collect and

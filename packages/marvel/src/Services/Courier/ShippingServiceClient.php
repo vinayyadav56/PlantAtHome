@@ -66,6 +66,12 @@ class ShippingServiceClient
             'ok'       => !empty($d['quotes']),
             'mode'     => $d['mode'] ?? $mode,
             'cod'      => $cod,
+            // The AMOUNT, not just the boolean. This is the figure the courier is actually told to
+            // collect for THIS leg — shipmentCodAmount() splits the order's payable proportionally
+            // by each leg's goods value, so on a split order it is not the order total. The booking
+            // modal previously had no way to know it and defaulted the field to a literal 0, and
+            // the client could not recompute it without re-deriving that split.
+            'cod_amount' => round($codAmount, 2),
             'quotes'   => $d['quotes'] ?? [],
             'cheapest' => $d['cheapest'] ?? null,
             // Our own malformed request, refused before any partner was asked (see quoteRaw).
@@ -1210,7 +1216,17 @@ class ShippingServiceClient
         $loc = (array) (is_array($shop->settings ?? null) ? ($shop->settings['location'] ?? []) : []);
         return [
             'name'    => (string) ($shop->name ?: 'Vendor'),
-            'phone'   => $this->digits($a['phone'] ?? ($shop->settings['contact'] ?? '')),
+            // `shops.mobile` sits between the two originals ON PURPOSE. The hyperlocal lane rejects
+            // a pickup with no phone outright (Go validate.go), and a vendor onboarded through the
+            // admin form reliably HAS a phone — in `mobile`, which this chain never read. The form
+            // has no `address.phone` field at all and `settings.contact` is optional, so a new
+            // vendor booked or failed purely on whether someone happened to fill that optional box.
+            // VendorResource treats `mobile ?? settings.contact` as the vendor phone of record
+            // everywhere else; this path was reading only the fallback half of that expression.
+            // `?:` not `??` at each step: a present-but-EMPTY value must fall through too. The
+            // original `??` chain stopped at an empty-string address phone and never reached the
+            // fallback at all. `?? ''` first so a missing key doesn't warn.
+            'phone'   => $this->digits(($a['phone'] ?? '') ?: (($shop->mobile ?? '') ?: ($shop->settings['contact'] ?? ''))),
             'address' => $this->pickupLine1($a),
             'city'    => (string) ($a['city'] ?? ''),
             'state'   => (string) ($a['state'] ?? ''),

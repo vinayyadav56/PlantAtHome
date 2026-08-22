@@ -159,6 +159,7 @@ final class BookingRevalidationTest extends TestCase
         Schema::create('shops', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->string('name')->nullable();
+            $t->string('mobile')->nullable();
             $t->text('address')->nullable();
             $t->text('settings')->nullable();
             $t->string('pickup_location_name')->nullable();
@@ -170,6 +171,9 @@ final class BookingRevalidationTest extends TestCase
         foreach ([['A', 11], ['B', 12], ['C', 13]] as [$name, $id]) {
             DB::table('shops')->insert([
                 'id' => $id, 'name' => "Vendor {$name}",
+                // Hyperlocal refuses a pickup with no contact phone; these fixtures are about
+                // re-validation, so give them the number a real vendor would have.
+                'mobile' => '9998887777',
                 'address' => json_encode(['street_address' => '1 Lane', 'city' => 'Delhi', 'zip' => '110001', 'country' => 'IN']),
             ]);
         }

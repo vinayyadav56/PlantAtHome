@@ -161,6 +161,9 @@ final class CodGatewayTest extends TestCase
             'owner_id' => $userId,
             'name'     => 'Pilot Nursery',
             'slug'     => 'pilot-nursery-' . uniqid(),
+            // A real vendor always has a contact number, and the hyperlocal lane refuses a pickup
+            // without one — absent it, the booking is blocked before the COD decision under test.
+            'mobile'   => '9998887777',
             // Real coordinates: addressFromShop() falls through to 0,0 when these are absent, and a
             // 0,0 pickup is a different bug than the one under test.
             'lat'      => 12.9393917,
