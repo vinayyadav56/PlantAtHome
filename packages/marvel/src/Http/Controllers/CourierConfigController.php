@@ -70,6 +70,11 @@ class CourierConfigController extends CoreController
 
         return [
             'enabled'         => (bool) ($courier['enabled'] ?? false),
+            // Automation switches, both default OFF: an order waits for an operator to choose the
+            // vendor and press Book. `enabled` above is the master lane switch and gates the
+            // MANUAL buttons too, which is exactly why auto-booking needed its own flag.
+            'auto_book'       => (bool) ($courier['auto_book'] ?? false),
+            'auto_assign'     => (bool) (((array) ($options['assignment'] ?? []))['auto_assign'] ?? false),
             'default_package' => $this->sanitizePackage((array) ($courier['default_package'] ?? [])),
             'partners'        => $partners,
         ];
@@ -84,10 +89,19 @@ class CourierConfigController extends CoreController
         $settings = Settings::where('language', $language)->first();
         if ($settings) {
             $opts = (array) $settings->options;
-            $opts['courier'] = [
+            // MERGE, never replace: this used to assign a fresh two-key array, so every other key
+            // in the courier bucket was silently dropped on save — which would have wiped
+            // auto_book the first time anyone touched this screen.
+            $opts['courier'] = array_merge((array) ($opts['courier'] ?? []), [
                 'enabled'         => $request->boolean('enabled'),
+                'auto_book'       => $request->boolean('auto_book'),
                 'default_package' => $this->sanitizePackage((array) $request->input('default_package', [])),
-            ];
+            ]);
+            // Assignment lives in its own bucket (ItemAssignmentService reads the scoring weights
+            // from it); merge so those weights survive a courier-settings save.
+            $opts['assignment'] = array_merge((array) ($opts['assignment'] ?? []), [
+                'auto_assign' => $request->boolean('auto_assign'),
+            ]);
             $settings->update(['options' => $opts]);
             Cache::forget('cached_settings_' . $language);
         }
