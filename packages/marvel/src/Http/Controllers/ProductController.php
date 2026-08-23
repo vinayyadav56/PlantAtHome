@@ -966,6 +966,22 @@ class ProductController extends CoreController
             // orWhere also let the id branch escape the language filter. findBySlugOrId has always
             // done this correctly — use it.
             $product = $this->repository->findBySlugOrId($slug);
+
+            // The Master Catalog gate, on the PDP as well as the list. The list was gated but
+            // this endpoint was not, so a product hidden from every listing could still be opened
+            // by URL (or from a stale link/cart) and ADDED TO CART — and checkout's verify then
+            // refused it with a bare "Unavailable", which read as the checkout being broken.
+            // A product the platform will not sell must 404 here for shoppers, exactly as it is
+            // absent from the lists. Admin tooling opts out the same way the list does:
+            // catalog_scope=all plus an authenticated caller (the admin edit screen must open
+            // uncurated products — curating them is what it is for).
+            $gated = \Illuminate\Support\Facades\Schema::hasColumn('products', 'is_available_product')
+                && !($request->input('catalog_scope') === 'all' && !empty($request->bearerToken()))
+                && !($product->is_available_product && $product->listing_enabled);
+            if ($gated) {
+                throw new MarvelNotFoundException();
+            }
+
             if (
                 in_array('variation_options.digital_file', explode(';', $request->with)) || in_array('digital_file', explode(';', $request->with))
             ) {

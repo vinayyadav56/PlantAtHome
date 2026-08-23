@@ -79,6 +79,37 @@ final class CatalogMembershipTest extends TestCase
             $t->date('to')->nullable();
         });
 
+        // fetchSingleProduct eager-loads these; the catch-all inside it converts ANY throw into
+        // a 404, so a missing stub table would masquerade as the gate firing.
+        Schema::create('plant_attributes', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('product_id');
+        });
+        Schema::create('product_images', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('product_id');
+            $t->string('url')->nullable();
+            $t->integer('sort_order')->default(0);
+            $t->boolean('in_gallery')->default(true);
+        });
+        Schema::create('product_inclusions', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('parent_id');
+            $t->unsignedBigInteger('child_id');
+            $t->string('relation')->default('bundle');
+            $t->integer('quantity')->default(1);
+            $t->integer('sort_order')->default(0);
+        });
+        Schema::create('shops', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->string('name')->nullable();
+        });
+        Schema::create('types', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->string('name')->nullable();
+            $t->string('slug')->nullable();
+        });
+
         $stub = \Mockery::mock(ServiceAvailabilityService::class);
         $stub->shouldReceive('availableVerticalsForCity')->andReturn([]);
         $stub->shouldReceive('allVerticals')->andReturn([]);
@@ -141,6 +172,44 @@ final class CatalogMembershipTest extends TestCase
             $this->namesFor($request),
             'catalog_scope=all must reveal the uncurated pool to authenticated tooling',
         );
+    }
+
+    public function test_the_pdp_is_gated_exactly_like_the_lists(): void
+    {
+        // The list was gated but the PDP was not, so a hidden product could be opened by URL or a
+        // stale link, carted, and then refused at checkout with a bare "Unavailable" — which read
+        // as checkout being broken. A product the platform will not sell must 404 for shoppers.
+        DB::table('products')->where('id', 1)->update(['slug' => 'uncurated-palm']);
+
+        $request = \Illuminate\Http\Request::create('/api/products/uncurated-palm', 'GET');
+        $request->merge(['slug' => 'uncurated-palm']);
+
+        $this->expectException(\Marvel\Exceptions\MarvelNotFoundException::class);
+        app(\Marvel\Http\Controllers\ProductController::class)->fetchSingleProduct($request);
+    }
+
+    public function test_the_admin_edit_screen_still_opens_uncurated_products(): void
+    {
+        // catalog_scope=all + Bearer: curating uncurated products is what the edit screen is FOR.
+        DB::table('products')->where('id', 1)->update(['slug' => 'uncurated-palm']);
+
+        $request = \Illuminate\Http\Request::create('/api/products/uncurated-palm', 'GET', ['catalog_scope' => 'all']);
+        $request->merge(['slug' => 'uncurated-palm']);
+        $request->headers->set('Authorization', 'Bearer an-admin-token');
+
+        $product = app(\Marvel\Http\Controllers\ProductController::class)->fetchSingleProduct($request);
+        $this->assertSame('Uncurated Palm', $product->name);
+    }
+
+    public function test_a_listed_product_pdp_still_opens_for_shoppers(): void
+    {
+        DB::table('products')->where('id', 3)->update(['slug' => 'curated-listed']);
+
+        $request = \Illuminate\Http\Request::create('/api/products/curated-listed', 'GET');
+        $request->merge(['slug' => 'curated-listed']);
+
+        $product = app(\Marvel\Http\Controllers\ProductController::class)->fetchSingleProduct($request);
+        $this->assertSame('Curated, Listed', $product->name);
     }
 
     public function test_all_products_can_exclude_drafts(): void
