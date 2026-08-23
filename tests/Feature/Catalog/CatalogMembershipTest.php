@@ -123,6 +123,20 @@ final class CatalogMembershipTest extends TestCase
         ]);
     }
 
+    /** A request whose sanctum user resolves with the given permissions (spatie-style check). */
+    private function authed(Request $request, array $perms): Request
+    {
+        $request->setUserResolver(fn () => new class($perms) {
+            public $id = 1;
+            public function __construct(public array $perms) {}
+            public function hasPermissionTo($p): bool
+            {
+                return in_array((string) $p, $this->perms, true);
+            }
+        });
+        return $request;
+    }
+
     private function namesFor(Request $request): array
     {
         /** @var ProductController $controller */
@@ -164,8 +178,7 @@ final class CatalogMembershipTest extends TestCase
     public function test_admin_tooling_opts_out_explicitly_to_curate(): void
     {
         // All Products has to show what is NOT in the catalogue — it is the screen you curate from.
-        $request = Request::create('/api/products', 'GET', ['catalog_scope' => 'all']);
-        $request->headers->set('Authorization', 'Bearer an-admin-token');
+        $request = $this->authed(Request::create('/api/products', 'GET', ['catalog_scope' => 'all']), ['super_admin']);
 
         $this->assertSame(
             ['Curated, Listed', 'Curated, Off', 'Uncurated Palm'],
@@ -193,9 +206,11 @@ final class CatalogMembershipTest extends TestCase
         // catalog_scope=all + Bearer: curating uncurated products is what the edit screen is FOR.
         DB::table('products')->where('id', 1)->update(['slug' => 'uncurated-palm']);
 
-        $request = \Illuminate\Http\Request::create('/api/products/uncurated-palm', 'GET', ['catalog_scope' => 'all']);
+        $request = $this->authed(
+            \Illuminate\Http\Request::create('/api/products/uncurated-palm', 'GET', ['catalog_scope' => 'all']),
+            ['super_admin'],
+        );
         $request->merge(['slug' => 'uncurated-palm']);
-        $request->headers->set('Authorization', 'Bearer an-admin-token');
 
         $product = app(\Marvel\Http\Controllers\ProductController::class)->fetchSingleProduct($request);
         $this->assertSame('Uncurated Palm', $product->name);
@@ -221,16 +236,33 @@ final class CatalogMembershipTest extends TestCase
             'id' => 4, 'name' => 'Half-written Fern', 'status' => 'draft', 'language' => 'en',
             'is_available_product' => false, 'listing_enabled' => false,
         ]);
-        $request = Request::create('/api/products', 'GET', [
+        $request = $this->authed(Request::create('/api/products', 'GET', [
             'catalog_scope'  => 'all',
             'exclude_status' => 'draft',
-        ]);
-        $request->headers->set('Authorization', 'Bearer an-admin-token');
+        ]), ['super_admin']);
 
         $names = $this->namesFor($request);
 
         $this->assertNotContains('Half-written Fern', $names, 'drafts must not appear in All Products');
         $this->assertContains('Uncurated Palm', $names, 'the uncurated pool is still the point of this screen');
+    }
+
+    public function test_a_customer_cannot_lift_the_gate_with_the_param(): void
+    {
+        // The security-review finding. The first cut checked bearer-token PRESENCE, which any
+        // signed-in shopper satisfies — one query param away from the whole uncurated pool. The
+        // opt-out now demands a resolved user with a staff permission.
+        $request = $this->authed(
+            Request::create('/api/products', 'GET', ['catalog_scope' => 'all']),
+            ['customer'],
+        );
+        $request->headers->set('Authorization', 'Bearer a-real-customer-token');
+
+        $this->assertSame(
+            ['Curated, Listed'],
+            $this->namesFor($request),
+            'a customer with catalog_scope=all must stay gated',
+        );
     }
 
     public function test_the_opt_out_is_refused_without_authentication(): void

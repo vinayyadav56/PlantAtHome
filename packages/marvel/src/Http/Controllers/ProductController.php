@@ -278,11 +278,34 @@ class ProductController extends CoreController
      */
     private function applyCatalogGate($query, Request $request)
     {
-        if ($request->input('catalog_scope') === 'all' && !empty($request->bearerToken())) {
+        if ($request->input('catalog_scope') === 'all' && $this->isCatalogStaff($request)) {
             return $query;
         }
         return $query->where('products.is_available_product', true)
             ->where('products.listing_enabled', true);
+    }
+
+    /**
+     * Whether the caller may see UNCURATED products (catalog_scope=all).
+     *
+     * A real permission check against the resolved sanctum user — not bearer-token PRESENCE,
+     * which was the first cut and is not authorization at all: any signed-in shopper (or anyone
+     * sending `Bearer garbage`, since presence is satisfied by an invalid token) could lift the
+     * gate with one query param. Flagged by security review. These routes are public, so the
+     * user is resolved explicitly through the sanctum guard rather than middleware.
+     */
+    private function isCatalogStaff(Request $request): bool
+    {
+        try {
+            $user = $request->user() ?? $request->user('sanctum');
+            return $user && (
+                $user->hasPermissionTo(Permission::SUPER_ADMIN)
+                || $user->hasPermissionTo(Permission::STORE_OWNER)
+                || $user->hasPermissionTo(Permission::STAFF)
+            );
+        } catch (\Throwable $e) {
+            return false;
+        }
     }
 
     /**
@@ -976,7 +999,7 @@ class ProductController extends CoreController
             // catalog_scope=all plus an authenticated caller (the admin edit screen must open
             // uncurated products — curating them is what it is for).
             $gated = \Illuminate\Support\Facades\Schema::hasColumn('products', 'is_available_product')
-                && !($request->input('catalog_scope') === 'all' && !empty($request->bearerToken()))
+                && !($request->input('catalog_scope') === 'all' && $this->isCatalogStaff($request))
                 && !($product->is_available_product && $product->listing_enabled);
             if ($gated) {
                 throw new MarvelNotFoundException();
