@@ -24,7 +24,7 @@ final class NurseryAdminController extends ApiController
     {
     }
 
-    /** GET /api/v1/nurseries?status=&q=&sort=&dir=&per_page= (admin) */
+    /** GET /api/v1/nurseries?status=&q=&vertical=&sort=&dir=&per_page= (admin) */
     public function index(Request $request): JsonResponse
     {
         $query = Nursery::query()->with('balance');
@@ -38,6 +38,21 @@ final class NurseryAdminController extends ApiController
             $query->where(function ($inner) use ($q) {
                 $inner->where('name', 'like', '%'.$q.'%')
                     ->orWhere('slug', 'like', '%'.$q.'%');
+            });
+        }
+
+        // Business-vertical filter, same semantics as the legacy vendor list
+        // (ShopController): a vendor has no vertical of its own — its verticals
+        // are those of the categories it supplies. Nurseries don't carry that
+        // relation, so resolve it through the legacy tables via legacy_id (the
+        // module already reads legacy tables — see ProjectNurseryToLegacyShop).
+        if ($vertical = $request->query('vertical')) {
+            $query->whereIn('legacy_id', function ($sub) use ($vertical) {
+                $sub->select('category_shop.shop_id')
+                    ->from('category_shop')
+                    ->join('categories', 'categories.id', '=', 'category_shop.category_id')
+                    ->join('types', 'types.id', '=', 'categories.type_id')
+                    ->where('types.slug', $vertical);
             });
         }
 
