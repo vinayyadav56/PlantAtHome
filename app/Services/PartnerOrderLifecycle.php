@@ -121,6 +121,41 @@ class PartnerOrderLifecycle
             $row->reopened_at = $now;
         }
         $row->save();
+        if ($incoming === 'ended' && $source !== 'shipment' && $row->shipment_id) {
+            // The ledger learned "delivered" first (webhook mirror) — push it through the one
+            // shipments.status writer instead of waiting for the Go relay / 30-min reconcile.
+            self::completeLinkedShipment($row);
+        }
         return true;
+    }
+
+    /**
+     * 'ended' is only reachable from delivered-ish inputs (delivered/order_end_job/raw ended;
+     * cancels map to 'cancelled' and terminal-stickiness blocks ended-after-cancel), so routing
+     * it as 'delivered' through CourierService::applyNormalizedStatus is safe. Idempotent on
+     * both sides: shouldApply() fires this at most once per row, and applyNormalizedStatus
+     * absorbs a duplicate from the relay/reconcile as a no-op.
+     */
+    private static function completeLinkedShipment(PartnerConsoleOrder $row): void
+    {
+        try {
+            $shipment = \Marvel\Database\Models\Shipment::find($row->shipment_id);
+            // A rebooked-away CRN is this shipment's history, not its live leg (same guard as
+            // ReconcileConsoleOrdersCommand::ingestShipments).
+            if (!$shipment || (string) $shipment->provider_order_id !== (string) $row->provider_order_id) {
+                return;
+            }
+            $svc = app(\Marvel\Services\Courier\CourierService::class);
+            $svc->applyNormalizedStatus($shipment, $svc->mapServiceStatus('delivered'));
+        } catch (\Throwable $e) {
+            // The ledger transition DID succeed; a cascade failure must not bubble into the
+            // webhook mirror and mark the event 'error' (shouldApply refuses replays, so it
+            // would never retry). The relay + courier:reconcile-shipments stay the backstop.
+            \Illuminate\Support\Facades\Log::warning('ledger ended → shipment cascade failed', [
+                'partner_console_order_id' => $row->id,
+                'shipment_id' => $row->shipment_id,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 }

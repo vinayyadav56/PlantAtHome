@@ -50,6 +50,13 @@ final class PartnerOrderLifecycleTest extends TestCase
             $t->string('vehicle_number', 32)->nullable();
             $t->unsignedTinyInteger('simulation_flow_type')->nullable();
             $t->timestamp('simulation_started_at')->nullable();
+            $t->unsignedBigInteger('shipment_id')->nullable();
+            $t->timestamps();
+        });
+        Schema::create('shipments', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->string('provider_order_id', 191)->nullable();
+            $t->string('status', 32)->nullable();
             $t->timestamps();
         });
     }
@@ -203,6 +210,89 @@ final class PartnerOrderLifecycleTest extends TestCase
 
         $bare->syncDriverFrom(['partner_info' => ['name' => 'Asha R']]);
         $this->assertSame(['name' => 'Asha R'], $bare->fresh()->toBookingPayload()['driver']);
+    }
+
+    /** Spy standing in for CourierService — records cascade calls instead of touching orders. */
+    private function courierSpy(): object
+    {
+        $spy = new class extends \Marvel\Services\Courier\CourierService {
+            public array $applied = [];
+
+            public function __construct()
+            {
+                // parent reads Settings from the DB — irrelevant here
+            }
+
+            public function mapServiceStatus(string $shipmentStatus): array
+            {
+                return ['shipment_status' => 'delivered', 'order_status' => 'order-completed'];
+            }
+
+            public function applyNormalizedStatus(\Marvel\Database\Models\Shipment $shipment, array $map): array
+            {
+                $this->applied[] = ['shipment_id' => $shipment->id, 'map' => $map];
+                return [];
+            }
+        };
+        app()->instance(\Marvel\Services\Courier\CourierService::class, $spy);
+        return $spy;
+    }
+
+    private function shipment(string $crn): int
+    {
+        return (int) DB::table('shipments')->insertGetId([
+            'provider_order_id' => $crn, 'status' => 'out_for_delivery',
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+    }
+
+    /** A delivered-ish webhook that only the ledger heard must still complete the shipment. */
+    public function test_ended_on_a_shipment_linked_row_cascades_to_the_shipment(): void
+    {
+        $spy = $this->courierSpy();
+        $row = $this->row('live');
+        $row->shipment_id = $this->shipment('CRN1');
+        $row->save();
+
+        $this->assertTrue(PartnerOrderLifecycle::apply($row, 'ended', 'webhook'));
+        $this->assertCount(1, $spy->applied);
+        $this->assertSame($row->shipment_id, $spy->applied[0]['shipment_id']);
+        $this->assertSame('delivered', $spy->applied[0]['map']['shipment_status']);
+    }
+
+    public function test_cancelled_never_cascades_a_delivery(): void
+    {
+        $spy = $this->courierSpy();
+        $row = $this->row('live');
+        $row->shipment_id = $this->shipment('CRN1');
+        $row->save();
+
+        $this->assertTrue(PartnerOrderLifecycle::apply($row, 'cancelled', 'webhook'));
+        $this->assertSame([], $spy->applied);
+    }
+
+    /** A rebooked-away CRN is history — its late `ended` must not touch the live shipment. */
+    public function test_a_rebooked_away_crn_does_not_cascade(): void
+    {
+        $spy = $this->courierSpy();
+        $row = $this->row('live'); // row carries CRN1
+        $row->shipment_id = $this->shipment('CRN2-rebooked');
+        $row->save();
+
+        $this->assertTrue(PartnerOrderLifecycle::apply($row, 'ended', 'webhook'));
+        $this->assertSame([], $spy->applied);
+    }
+
+    /** Status that ORIGINATED from the shipment must not round-trip back into it. */
+    public function test_shipment_sourced_ended_does_not_cascade(): void
+    {
+        $spy = $this->courierSpy();
+        $row = $this->row('live');
+        $row->shipment_id = $this->shipment('CRN1');
+        $row->save();
+
+        $this->assertTrue(PartnerOrderLifecycle::apply($row, 'ended', 'shipment'));
+        $this->assertSame([], $spy->applied);
     }
 
     public function test_a_status_outside_the_vocabulary_degrades_instead_of_fataling(): void
