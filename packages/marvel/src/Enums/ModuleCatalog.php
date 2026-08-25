@@ -56,6 +56,12 @@ final class ModuleCatalog
             'bundles' => [
                 'bundles' => self::CRUD,
             ],
+            // Centralized media library. New module (no legacy CRUD to preserve):
+            // upload covers versioning/attach/reorder; approve and publish are the
+            // two review-gate actions and stay admin-only in the roleMatrix.
+            'media' => [
+                'media' => ['view', 'upload', 'approve', 'publish'],
+            ],
             'reports' => [
                 'reports'   => array_merge(self::CRUD, ['export']),
                 'sales'     => ['view', 'export'],

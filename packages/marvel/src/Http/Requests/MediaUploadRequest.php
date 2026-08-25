@@ -1,17 +1,15 @@
 <?php
 
-
 namespace Marvel\Http\Requests;
 
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Http\Exceptions\HttpResponseException;
 
-
-class AttachmentRequest extends FormRequest
+class MediaUploadRequest extends FormRequest
 {
     /**
-     * Determine if the user is authorized to make this request.
+     * Route middleware (permission:media.upload) gates access.
      *
      * @return bool
      */
@@ -28,17 +26,17 @@ class AttachmentRequest extends FormRequest
     public function rules()
     {
         return [
-            // SECURITY: bound the upload (was just 'required' → unlimited files of any type/size:
-            // disk/CPU DoS + SVG/HTML stored-XSS). Cap count, restrict to safe image/pdf mimes
-            // (no SVG/HTML), per-file size capped by the ONE media limit.
-            'attachment'        => ['required', 'array', 'max:10'],
-            'attachment.*'      => ['file', 'mimes:jpg,jpeg,png,webp,gif,pdf', 'max:' . config('media.max_upload_kb')],
+            // No SVG/HTML (stored-XSS) — same safe-image set as AttachmentRequest.
+            'file'        => ['required', 'file', 'mimes:jpg,jpeg,png,webp,gif', 'max:' . config('media.max_upload_kb')],
+            'entity_hint' => ['nullable', 'string', 'max:40'],
+            'alt'         => ['nullable', 'string', 'max:255'],
+            'attribution' => ['nullable', 'string', 'max:500'],
+            'source'      => ['nullable', 'string', 'max:30'],
         ];
     }
 
     public function failedValidation(Validator $validator)
     {
-
         throw new HttpResponseException(response()->json($validator->errors(), 422));
     }
 }

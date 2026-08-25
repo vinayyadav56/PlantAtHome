@@ -112,6 +112,7 @@ final class ModulePermission
                 self::forModule('customers', ['view']),
                 self::forModule('products', ['view']),
                 self::forModule('bundles', ['view']),
+                self::forModule('media', ['view', 'upload']),
                 self::forModule('kanban', ['view', 'edit']),
             ),
             'viewer' => self::allView(),
@@ -122,6 +123,7 @@ final class ModulePermission
                 self::forModule('bundles', ['view', 'create', 'edit']),
                 self::forModule('vendors', ['view']),
                 self::forModule('reports', ['view']),
+                self::forModule('media', ['view', 'upload']),
                 self::forModule('kanban', ['view', 'edit']),
             ),
         ];

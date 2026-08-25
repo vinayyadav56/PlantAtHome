@@ -143,6 +143,10 @@ class ShopServiceProvider extends ServiceProvider
         MarvelInfoCommand::class,
         TestMailSendCommand::class,
         PurgeProductImagesCommand::class,
+        \Marvel\Console\AdoptExistingMediaCommand::class,
+        \Marvel\Console\MediaGcCommand::class,
+        \Marvel\Console\RewriteMediaUrlsCommand::class,
+        \Marvel\Console\AuditMediaRefsCommand::class,
     ];
 
     /**

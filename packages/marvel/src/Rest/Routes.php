@@ -28,6 +28,7 @@ use Marvel\Http\Controllers\FeedbackController;
 use Marvel\Http\Controllers\FlashSaleController;
 use Marvel\Http\Controllers\FlashSaleVendorRequestController;
 use Marvel\Http\Controllers\ManufacturerController;
+use Marvel\Http\Controllers\MediaController;
 use Marvel\Http\Controllers\MessageController;
 use Marvel\Http\Controllers\OrderController;
 use Marvel\Http\Controllers\PaymentIntentController;
@@ -606,6 +607,23 @@ Route::group(
         Route::get('plant-images/coverage-summary', [ProductImageController::class, 'coverageSummary'])->middleware('permission:products.view');
         Route::get('plant-images/coverage-report', [ProductImageController::class, 'coverageReport'])->middleware('permission:products.view');
         Route::get('plant-images/list', [ProductImageController::class, 'list'])->middleware('permission:products.view');
+
+        // PlantAtHome — centralized media library (media_items). Literal paths
+        // MUST precede media/{uuid} or the wildcard swallows them.
+        Route::get('media/pending-approvals', [MediaController::class, 'pendingApprovals'])->middleware('permission:media.view');
+        Route::get('media/for-entity/{type}/{id}', [MediaController::class, 'forEntity'])->middleware('permission:media.view');
+        Route::post('media/attach', [MediaController::class, 'attach'])->middleware('permission:media.upload');
+        Route::post('media/detach', [MediaController::class, 'detach'])->middleware('permission:media.upload');
+        Route::patch('media/reorder', [MediaController::class, 'reorder'])->middleware('permission:media.upload');
+        Route::post('media', [MediaController::class, 'store'])->middleware('permission:media.upload');
+        Route::get('media/{uuid}', [MediaController::class, 'show'])->middleware('permission:media.view');
+        Route::post('media/{uuid}/versions', [MediaController::class, 'storeVersion'])->middleware('permission:media.upload');
+        Route::delete('media/{uuid}/versions/{version}', [MediaController::class, 'destroyVersion'])->middleware('permission:media.upload');
+        Route::post('media/{uuid}/versions/{version}/approve', [MediaController::class, 'approve'])->middleware('permission:media.approve');
+        Route::post('media/{uuid}/versions/{version}/reject', [MediaController::class, 'reject'])->middleware('permission:media.approve');
+        Route::post('media/{uuid}/versions/{version}/publish', [MediaController::class, 'publish'])->middleware('permission:media.publish');
+        Route::post('media/{uuid}/rollback/{version}', [MediaController::class, 'rollbackTo'])->middleware('permission:media.publish');
+        Route::post('media/{uuid}/retire', [MediaController::class, 'retireItem'])->middleware('permission:media.publish');
 
         Route::apiResource('resources', ResourceController::class, [
             'only' => ['store']

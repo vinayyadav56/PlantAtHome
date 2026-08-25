@@ -109,6 +109,11 @@ class Kernel extends ConsoleKernel
         // Liveness is visible at GET /api/v1/platform/status → beats.
         $schedule->command('images:sweep-batches')->everyMinute()->withoutOverlapping(5);
         $schedule->command('images:prune-batches')->dailyAt('04:30')->withoutOverlapping();
+        // Centralized media GC: purge S3 objects of lapsed versions owned by THIS
+        // environment (retired past retention on prod; rejected + media/s/ orphans
+        // on staging). 04:45 slots between the 04:30 and 05:00 jobs; 30-min mutex
+        // expiry per the house rule — never the bare 24h default.
+        $schedule->command('media:gc')->dailyAt('04:45')->withoutOverlapping(30);
         // Safety net for bulk AI content runs (re-drive stalled batches/rows).
         $schedule->command('content:sweep-batches')->everyMinute()->withoutOverlapping(5);
 

@@ -3,6 +3,7 @@
 
 namespace Marvel\Http\Controllers;
 
+use Illuminate\Auth\Access\AuthorizationException;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
@@ -43,26 +44,20 @@ class AttachmentController extends CoreController
     public function store(AttachmentRequest $request)
     {
         $urls = [];
-        foreach ($request->attachment as $media) {
+        foreach ($request->attachment as $file) {
             $attachment = new Attachment;
+            $attachment->user_id = auth()->id();
             $attachment->save();
-            $attachment->addMedia($media)->toMediaCollection();
+            $attachment->addMedia($file)->toMediaCollection();
+            // The inner loop used to shadow the outer $file var AND keep only
+            // the LAST media's URLs — collect every one.
             foreach ($attachment->getMedia() as $media) {
-                if (strpos($media->mime_type, 'image/') !== false) {
-                    $converted_url = [
-                        'thumbnail' => $media->getUrl('thumbnail'),
-                        'original' => $media->getUrl(),
-                        'id' => $attachment->id
-                    ];
-                } else {
-                    $converted_url = [
-                        'thumbnail' => '',
-                        'original' => $media->getUrl(),
-                        'id' => $attachment->id
-                    ];
-                }
+                $urls[] = [
+                    'thumbnail' => strpos($media->mime_type, 'image/') !== false ? $media->getUrl('thumbnail') : '',
+                    'original' => $media->getUrl(),
+                    'id' => $attachment->id
+                ];
             }
-            $urls[] = $converted_url;
         }
         return $urls;
     }
@@ -103,9 +98,18 @@ class AttachmentController extends CoreController
     public function destroy($id)
     {
         try {
-            return $this->repository->findOrFail($id)->delete();
+            $attachment = $this->repository->findOrFail($id);
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
         }
+        // Owner-or-admin: legacy rows (user_id null) stay admin-deletable only.
+        // can() (not hasPermissionTo) so the super-admin Gate::before bypass
+        // applies and a missing permission row reads as false, not a throw.
+        $user = auth()->user();
+        $owns = $user && $attachment->user_id !== null && (int) $attachment->user_id === (int) $user->id;
+        if (!$owns && !($user && $user->can('media.approve'))) {
+            throw new AuthorizationException(NOT_AUTHORIZED);
+        }
+        return $attachment->delete();
     }
 }

@@ -16,11 +16,14 @@ use Symfony\Component\Process\Process;
  */
 class ProductImageController extends CoreController
 {
-    /** GET /products/{id}/images — ordered list. */
+    /** GET /products/{id}/images — ordered list (+ media_uuid for rows adopted into media_items). */
     public function index($id)
     {
         $product = Product::findOrFail($id);
-        return $product->images()->get();
+        return $product->images()
+            ->leftJoin('media_items', 'media_items.id', '=', 'product_images.media_item_id')
+            ->select('product_images.*', 'media_items.uuid as media_uuid')
+            ->get();
     }
 
     /** POST /products/{id}/images — add an image by URL (appended at the end). */
@@ -120,8 +123,25 @@ class ProductImageController extends CoreController
         $image = ProductImage::where('product_id', $product->id)->findOrFail($imageId);
 
         $wasPrimary = $image->is_primary;
-        $this->deleteFromS3IfOwned($image->url);
-        $image->delete();
+        if ($image->media_item_id) {
+            // Media-system-backed row: the object belongs to a MediaItemVersion
+            // (possibly LIVE, possibly shared cross-env). Detach the item —
+            // that removes this row via denormalization; physical deletion is
+            // media:gc's job, never this endpoint's.
+            $item = \Marvel\Database\Models\MediaItem::find($image->media_item_id);
+            if ($item) {
+                app(\Marvel\Services\Media\MediaService::class)->detach($item, $product);
+            }
+            $image = ProductImage::find($imageId); // detach may already have removed it
+            $image?->delete();
+        } else {
+            // Legacy row. Staging's DB is a prod copy pointing at the SAME
+            // shared objects — only production may physically delete them.
+            if (config('media.env') === 'production') {
+                $this->deleteFromS3IfOwned($image->url);
+            }
+            $image->delete();
+        }
 
         // promote a new primary if needed
         if ($wasPrimary) {
@@ -280,17 +300,23 @@ class ProductImageController extends CoreController
         return [$summary, $rows];
     }
 
-    /** Delete the S3 object if the URL points at our bucket. */
+    /** Delete the S3 object if the URL points at our bucket (or its CDN alias). */
     protected function deleteFromS3IfOwned(?string $url): void
     {
         if (!$url) return;
-        $bucketHost = env('AWS_BUCKET', 'plantathome-media-prod');
-        if (!str_contains($url, $bucketHost)) return;
+        // config, not env(): env() is empty once config is cached, which made
+        // every delete a silent no-op in prod.
+        $bucket = (string) config('filesystems.disks.s3.bucket');
+        $cdnHost = parse_url((string) config('filesystems.disks.s3.url'), PHP_URL_HOST);
+        $host = parse_url($url, PHP_URL_HOST);
+        $owned = ($bucket && str_contains($url, $bucket)) || ($cdnHost && $host === $cdnHost);
+        if (!$owned) return;
 
         try {
-            // extract the key after the first single slash following the host
+            // extract the key after the first single slash following the host;
+            // stored URLs are percent-encoded, S3 keys are raw
             $parts = parse_url($url);
-            $key = ltrim($parts['path'] ?? '', '/');
+            $key = urldecode(ltrim($parts['path'] ?? '', '/'));
             if ($key) {
                 Storage::disk('s3')->delete($key);
             }
