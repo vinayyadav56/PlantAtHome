@@ -327,7 +327,7 @@ uploader keeps working only until phase 6 retires it (see Risks).
 ## CloudFront setup
 
 1. **ACM certificate in us-east-1** (CloudFront requirement, regardless of the
-   bucket's ap-south-1) for `media.plantathome.in`.
+   bucket's ap-south-1) for `cdn.plantathome.in`.
 2. Create the distribution: origin = the bucket via **Origin Access Control**
    (not legacy OAI), cache policy CachingOptimized (objects carry `immutable`
    anyway), alternate domain name + the ACM cert.
@@ -336,11 +336,18 @@ uploader keeps working only until phase 6 retires it (see Risks).
    `AWS:SourceArn` condition naming the distribution) **alongside** the existing
    public-read statement — public-read only comes off at phase 6, so nothing
    breaks while both paths serve.
-4. **DNS**: CNAME `media.plantathome.in` → the distribution domain.
-5. Verify: `curl -sI https://media.plantathome.in/<known-key>` → 200 with
+4. **DNS**: CNAME `cdn.plantathome.in` → the distribution domain. In Cloudflare
+   this MUST be DNS-only (grey cloud) — proxying puts Cloudflare's TLS in front
+   of CloudFront and defeats both the ACM cert and OAC.
+5. Verify: `curl -sI https://cdn.plantathome.in/<known-key>` → 200 with
    `x-cache: Miss from cloudfront`, again → `Hit from cloudfront`.
-6. Set `AWS_URL=https://media.plantathome.in` (staging first), `config:cache`,
+6. Set `AWS_URL=https://cdn.plantathome.in` (staging first), `config:cache`,
    `queue:restart`.
+
+The hostname is `cdn.`, not `media.` — it is what the ACM cert, the
+distribution's alternate domain, and the `next.config` image allowlists in BOTH
+frontends already name. Provisioned 2026-08-25: distribution `E2RE9E5166EO46`
+(`d2jm6s9d83m98n.cloudfront.net`), OAC `E334UOH5ROE36E`.
 
 ## Phased rollout
 
