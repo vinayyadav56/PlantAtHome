@@ -146,18 +146,66 @@ class LegalLifecycleTest extends LegalTestCase
         $this->assertStringContainsString('Governed copy', $options['legalPages']['privacy']['body']);
     }
 
-    public function test_html_is_sanitized_on_save(): void
+    /**
+     * Payloads that a regex sanitizer lets through. Governed content is
+     * mirrored onto public storefront pages, so stored XSS here would reach
+     * customers — the sanitizer must PARSE, not pattern-match.
+     *
+     * @dataProvider xssPayloads
+     */
+    public function test_html_is_sanitized_on_save(string $payload, array $mustNotContain): void
     {
         $doc = $this->service()->create([
-            'title' => 'XSS Probe',
+            'title' => 'XSS Probe ' . md5($payload),
             'type_id' => 1,
-            'content_html' => '<p onclick="steal()">ok</p><script>alert(1)</script><a href="javascript:bad()">x</a>',
+            'content_html' => $payload,
         ], $this->fullActor());
 
-        $html = $doc->versions->first()->content_html;
-        $this->assertStringNotContainsString('<script', $html);
-        $this->assertStringNotContainsString('onclick', $html);
-        $this->assertStringNotContainsString('javascript:', $html);
+        $html = strtolower((string) $doc->versions->first()->content_html);
+        foreach ($mustNotContain as $needle) {
+            $this->assertStringNotContainsString(
+                strtolower($needle),
+                $html,
+                "sanitizer let through {$needle} from payload: {$payload}",
+            );
+        }
+    }
+
+    public static function xssPayloads(): array
+    {
+        return [
+            'script tag' => ['<p>ok</p><script>alert(1)</script>', ['<script', 'alert(']],
+            'inline handler' => ['<p onclick="steal()">ok</p>', ['onclick', 'steal(']],
+            'javascript href' => ['<a href="javascript:bad()">x</a>', ['javascript:']],
+            // The classics that defeat regex sanitizers:
+            'svg onload, no space' => ['<svg/onload=alert(1)>', ['onload', '<svg']],
+            'img onerror unquoted' => ['<img src=x onerror=alert(1)>', ['onerror', '<img']],
+            'nested split tag' => ['<scr<script>ipt>alert(1)</script>', ['<script']],
+            'entity-encoded scheme' => ['<a href="jav&#x09;ascript:alert(1)">x</a>', ['javascript:']],
+            'newline in attribute' => ["<a href=\"java\nscript:alert(1)\">x</a>", ['javascript:']],
+            'iframe' => ['<iframe src="https://evil.test"></iframe>', ['<iframe']],
+            'style expression' => ['<p style="background:url(javascript:alert(1))">x</p>', ['javascript:']],
+            'data uri' => ['<a href="data:text/html;base64,PHNjcmlwdD4=">x</a>', ['data:text/html']],
+            'form injection' => ['<form action="https://evil.test"><input name="p"></form>', ['<form', '<input']],
+        ];
+    }
+
+    public function test_sanitizer_preserves_legitimate_document_structure(): void
+    {
+        $doc = $this->service()->create([
+            'title' => 'Structure Probe',
+            'type_id' => 1,
+            'content_html' => '<h2>Purpose</h2><p><strong>Bold</strong> and <em>italic</em>.</p>'
+                . '<ul><li>Point</li></ul>'
+                . '<table><thead><tr><th>Tier</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>'
+                . '<blockquote><p>Notice</p></blockquote><hr>'
+                . '<a href="https://www.plantathome.in/privacy">Privacy</a>',
+        ], $this->fullActor());
+
+        $html = (string) $doc->versions->first()->content_html;
+        foreach (['<h2>', '<strong>', '<em>', '<ul>', '<li>', '<table>', '<th', '<td', '<blockquote>', '<hr', 'href="https://www.plantathome.in/privacy"'] as $keep) {
+            $this->assertStringContainsString($keep, $html, "sanitizer destroyed legitimate markup: {$keep}");
+        }
     }
 
     public function test_audit_trail_covers_the_lifecycle(): void

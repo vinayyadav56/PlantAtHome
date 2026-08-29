@@ -218,17 +218,53 @@ class LegalDocumentService
         return $code;
     }
 
-    /** Server-side HTML sanitation — strip active content; storage is the trust boundary. */
+    /**
+     * Server-side HTML sanitation. Storage is the trust boundary: this content
+     * is rendered in the admin AND, for public policies, mirrored onto the
+     * storefront, so a stored payload would reach customers.
+     *
+     * HTMLPurifier (already a dependency) parses the document rather than
+     * pattern-matching it — regex sanitizers are defeated by malformed nesting,
+     * entity-encoded `javascript:`, and attribute-position tricks like
+     * `<svg/onload=…>`. The allowlist matches exactly what the Tiptap editor
+     * can produce; anything else is dropped rather than escaped.
+     */
     private function sanitize(?string $html): ?string
     {
-        if ($html === null || $html === '') {
+        if ($html === null || trim($html) === '') {
             return $html;
         }
-        $html = preg_replace('#<(script|style|iframe|object|embed|form)\b[^>]*>.*?</\1>#si', '', $html) ?? '';
-        $html = preg_replace('#<(script|style|iframe|object|embed|form)\b[^>]*/?>#si', '', $html) ?? '';
-        $html = preg_replace('/\son\w+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]+)/i', '', $html) ?? '';
-        $html = preg_replace('/(href|src)\s*=\s*(["\']?)\s*javascript:[^"\'>\s]*\2?/i', '$1=$2#$2', $html) ?? '';
 
-        return $html;
+        $cachePath = storage_path('app/htmlpurifier');
+        if (! is_dir($cachePath)) {
+            @mkdir($cachePath, 0775, true);
+        }
+
+        $config = \HTMLPurifier_Config::createDefault();
+        $config->set('HTML.Doctype', 'HTML 4.01 Transitional');
+        $config->set(
+            'HTML.Allowed',
+            'h2,h3,h4,p,br,hr,strong,em,u,s,blockquote,'
+            . 'ul,ol,li,'
+            . 'table,thead,tbody,tr,th[colspan|rowspan],td[colspan|rowspan],'
+            . 'a[href|title|target|rel]'
+        );
+        // Only these schemes may appear in href — javascript:/data: are dropped.
+        $config->set('URI.AllowedSchemes', ['http' => true, 'https' => true, 'mailto' => true]);
+        $config->set('Attr.AllowedFrameTargets', ['_blank']);
+        $config->set('HTML.TargetBlank', true); // adds rel=noopener on target=_blank
+        $config->set('AutoFormat.RemoveEmpty', false); // empty template sections are intentional
+        $config->set('Cache.SerializerPath', $cachePath);
+        // Tiptap checklists carry their state in data-* attributes, which
+        // HTMLPurifier only permits via an explicit definition.
+        $config->set('HTML.DefinitionID', 'plantathome-legal');
+        $config->set('HTML.DefinitionRev', 1);
+        if ($def = $config->maybeGetRawHTMLDefinition()) {
+            $def->addAttribute('li', 'data-checked', 'Enum#true,false');
+            $def->addAttribute('ul', 'data-type', 'Enum#taskList');
+            $def->addAttribute('li', 'data-type', 'Enum#taskItem');
+        }
+
+        return (new \HTMLPurifier($config))->purify($html);
     }
 }
