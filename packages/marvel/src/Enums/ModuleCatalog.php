@@ -62,6 +62,12 @@ final class ModuleCatalog
             'media' => [
                 'media' => ['view', 'upload', 'approve', 'publish'],
             ],
+            'legal' => [
+                // Document governance: create/edit make drafts, review moves the
+                // workflow, approve+publish are the controlled gates, manage
+                // covers categories/types/templates/settings.
+                'legal' => ['view', 'create', 'edit', 'delete', 'review', 'approve', 'publish', 'archive', 'export', 'manage'],
+            ],
             'reports' => [
                 'reports'   => array_merge(self::CRUD, ['export']),
                 'sales'     => ['view', 'export'],

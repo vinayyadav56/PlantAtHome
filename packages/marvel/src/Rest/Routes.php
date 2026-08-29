@@ -28,6 +28,8 @@ use Marvel\Http\Controllers\FeedbackController;
 use Marvel\Http\Controllers\FlashSaleController;
 use Marvel\Http\Controllers\FlashSaleVendorRequestController;
 use Marvel\Http\Controllers\ManufacturerController;
+use Marvel\Http\Controllers\LegalDocumentController;
+use Marvel\Http\Controllers\LegalGovernanceController;
 use Marvel\Http\Controllers\MediaController;
 use Marvel\Http\Controllers\MessageController;
 use Marvel\Http\Controllers\OrderController;
@@ -624,6 +626,37 @@ Route::group(
         Route::post('media/{uuid}/versions/{version}/publish', [MediaController::class, 'publish'])->middleware('permission:media.publish');
         Route::post('media/{uuid}/rollback/{version}', [MediaController::class, 'rollbackTo'])->middleware('permission:media.publish');
         Route::post('media/{uuid}/retire', [MediaController::class, 'retireItem'])->middleware('permission:media.publish');
+
+        // PlantAtHome — Legal & Operations document governance (legal_* tables).
+        // Transitions are named path segments validated by LegalWorkflow, which
+        // ALSO enforces the per-transition permission — the route gate here is
+        // the coarse module gate; the fine gate lives in one place.
+        // Literal paths precede {uuid} wildcards (same rule as media/).
+        Route::get('legal/overview', [LegalGovernanceController::class, 'overview'])->middleware('permission:legal.view');
+        Route::get('legal/library', [LegalGovernanceController::class, 'library'])->middleware('permission:legal.view');
+        Route::get('legal/categories', [LegalGovernanceController::class, 'categories'])->middleware('permission:legal.view');
+        Route::post('legal/categories', [LegalGovernanceController::class, 'storeCategory'])->middleware('permission:legal.manage');
+        Route::patch('legal/categories/{uuid}', [LegalGovernanceController::class, 'updateCategory'])->middleware('permission:legal.manage');
+        Route::delete('legal/categories/{uuid}', [LegalGovernanceController::class, 'destroyCategory'])->middleware('permission:legal.manage');
+        Route::get('legal/types', [LegalGovernanceController::class, 'types'])->middleware('permission:legal.view');
+        Route::get('legal/templates', [LegalGovernanceController::class, 'templates'])->middleware('permission:legal.view');
+        Route::get('legal/templates/{uuid}', [LegalGovernanceController::class, 'template'])->middleware('permission:legal.view');
+        Route::get('legal/settings', [LegalGovernanceController::class, 'settings'])->middleware('permission:legal.manage');
+        Route::patch('legal/settings', [LegalGovernanceController::class, 'updateSettings'])->middleware('permission:legal.manage');
+        Route::get('legal/documents', [LegalDocumentController::class, 'index'])->middleware('permission:legal.view');
+        Route::post('legal/documents', [LegalDocumentController::class, 'store'])->middleware('permission:legal.create');
+        Route::get('legal/documents/{uuid}', [LegalDocumentController::class, 'show'])->middleware('permission:legal.view');
+        Route::patch('legal/documents/{uuid}', [LegalDocumentController::class, 'update'])->middleware('permission:legal.edit');
+        Route::delete('legal/documents/{uuid}', [LegalDocumentController::class, 'destroy'])->middleware('permission:legal.delete');
+        Route::get('legal/documents/{uuid}/versions', [LegalDocumentController::class, 'versions'])->middleware('permission:legal.view');
+        Route::post('legal/documents/{uuid}/versions', [LegalDocumentController::class, 'createVersion'])->middleware('permission:legal.edit');
+        Route::get('legal/documents/{uuid}/audits', [LegalDocumentController::class, 'audits'])->middleware('permission:legal.view');
+        Route::patch('legal/versions/{uuid}', [LegalDocumentController::class, 'updateVersion'])->middleware('permission:legal.edit');
+        Route::post('legal/versions/{uuid}/restore', [LegalDocumentController::class, 'restoreVersion'])->middleware('permission:legal.edit');
+        Route::post('legal/versions/{uuid}/transition/{transition}', [LegalDocumentController::class, 'transition'])->middleware('permission:legal.view');
+        Route::get('legal/versions/{uuid}/comments', [LegalDocumentController::class, 'comments'])->middleware('permission:legal.view');
+        Route::post('legal/versions/{uuid}/comments', [LegalDocumentController::class, 'addComment'])->middleware('permission:legal.view');
+        Route::post('legal/comments/{id}/resolve', [LegalDocumentController::class, 'resolveComment'])->middleware('permission:legal.review');
 
         Route::apiResource('resources', ResourceController::class, [
             'only' => ['store']
