@@ -144,6 +144,7 @@ class ShopServiceProvider extends ServiceProvider
         TestMailSendCommand::class,
         PurgeProductImagesCommand::class,
         \Marvel\Console\AdoptExistingMediaCommand::class,
+        \Marvel\Console\ImportProcessedImagesCommand::class,
         \Marvel\Console\MediaGcCommand::class,
         \Marvel\Console\RewriteMediaUrlsCommand::class,
         \Marvel\Console\AuditMediaRefsCommand::class,
