@@ -10,7 +10,7 @@ return [
                 'subject' => 'Order has been cancelled',
             ],
             'customer'   => [
-                'message' => 'Your order :ORDER_TRACKING_NUMBER has been cancelled. If this was unexpected, please contact our support team.',
+                'message' => 'Your order *:ORDER_TRACKING_NUMBER* has been cancelled. If this was unexpected, please contact our support team.',
                 'subject' => 'Your order has been cancelled',
             ],
             'storeOwner' => [
@@ -24,7 +24,7 @@ return [
                 'subject' => 'New order has been placed',
             ],
             'customer'   => [
-                'message' => 'Thank you for your order! Order :ORDER_TRACKING_NUMBER has been placed successfully. We will notify you as it progresses.',
+                'message' => 'Thank you for your order! Order *:ORDER_TRACKING_NUMBER* has been placed successfully. We will notify you as it progresses.',
                 'subject' => 'Your order has been placed successfully',
             ],
             'storeOwner' => [
@@ -38,7 +38,7 @@ return [
                 'subject' => 'Order has been delivered',
             ],
             'customer'   => [
-                'message' => 'Your order :ORDER_TRACKING_NUMBER has been delivered. We hope your plants thrive — happy growing!',
+                'message' => 'Your order *:ORDER_TRACKING_NUMBER* has been delivered. We hope your plants thrive — happy growing!',
                 'subject' => 'Your order has been delivered successfully',
             ],
             'storeOwner' => [
@@ -53,7 +53,7 @@ return [
                 'subject' => 'Order status has been changed',
             ],
             'customer'   => [
-                'message' => 'Update on your order :ORDER_TRACKING_NUMBER — status: :order_status.',
+                'message' => 'Update on your order *:ORDER_TRACKING_NUMBER* — status: *:order_status*.',
                 'subject' => 'Your order status has been changed',
             ],
             'storeOwner' => [
@@ -67,7 +67,7 @@ return [
                 'subject' => 'Order payment has been successful',
             ],
             'customer'   => [
-                'message' => 'Payment received! Your payment for order :ORDER_TRACKING_NUMBER was successful.',
+                'message' => 'Payment received! Your payment for order *:ORDER_TRACKING_NUMBER* was successful.',
                 'subject' => 'Your order payment has been successful',
             ],
             'storeOwner' => [
@@ -81,7 +81,7 @@ return [
                 'subject' => 'Order payment has failed',
             ],
             'customer'   => [
-                'message' => 'Payment for your order :ORDER_TRACKING_NUMBER could not be processed. Please try again or use a different payment method.',
+                'message' => 'Payment for your order *:ORDER_TRACKING_NUMBER* could not be processed. Please try again or use a different payment method.',
                 'subject' => 'Your order payment has failed',
             ],
             'storeOwner' => [
@@ -95,7 +95,7 @@ return [
                 'subject' => 'Refund requested',
             ],
             'customer' => [
-                'message' => 'Your refund request for order :ORDER_TRACKING_NUMBER has been submitted. We will update you once it is reviewed.',
+                'message' => 'Your refund request for order *:ORDER_TRACKING_NUMBER* has been submitted. We will update you once it is reviewed.',
                 'subject' => 'Your refund request has been submitted successfully',
             ],
         ],
@@ -105,7 +105,7 @@ return [
                 'subject' => 'Refund status has been changed',
             ],
             'customer' => [
-                'message' => 'Update on your refund for order :ORDER_TRACKING_NUMBER — status: :refund_status.',
+                'message' => 'Update on your refund for order *:ORDER_TRACKING_NUMBER* — status: *:refund_status*.',
                 'subject' => 'Your refund status has been changed',
             ],
         ],
