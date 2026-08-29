@@ -75,9 +75,40 @@ class WhatsappGateway implements OtpInterface
         return !empty($this->phoneNumberId) && !empty($this->token);
     }
 
+    /**
+     * Meta rejects template body parameters containing newline/tab characters
+     * or 4+ consecutive spaces (#132000-class errors). Every parameter passes
+     * through here, so callers (order events, marketing bodies, the tracking
+     * suffix) may hand over multi-line text safely. Cap matches Meta's
+     * parameter limit; overflow is truncated with an ellipsis, never rejected.
+     */
+    private function paramText($text): string
+    {
+        $clean = preg_replace('/\s+/u', ' ', trim((string) $text)) ?? '';
+        return mb_strlen($clean) > 1024 ? mb_substr($clean, 0, 1023) . '…' : $clean;
+    }
+
     /** Send an approved template message; returns the WA message id. Throws on error. */
     private function sendTemplate(string $to, string $template, string $lang, array $components): string
     {
+        // Sanitize + validate every text parameter. Both approved templates
+        // (auth OTP, utility update) take exactly one variable per component;
+        // an empty parameter would 400 at Meta with an opaque error, so refuse
+        // it here with a clear message instead.
+        foreach ($components as $ci => $component) {
+            foreach ($component['parameters'] ?? [] as $pi => $param) {
+                if (($param['type'] ?? '') === 'text') {
+                    $clean = $this->paramText($param['text'] ?? '');
+                    if ($clean === '') {
+                        throw new \RuntimeException(
+                            "empty template parameter (component {$ci}, parameter {$pi}) for template {$template}"
+                        );
+                    }
+                    $components[$ci]['parameters'][$pi]['text'] = $clean;
+                }
+            }
+        }
+
         $resp = Http::withToken($this->token)
             ->timeout(8) // fail fast — a hung WhatsApp Cloud API must not pin a php-fpm worker
             ->acceptJson()
@@ -96,7 +127,25 @@ class WhatsappGateway implements OtpInterface
         if ($resp->ok() && isset($data['messages'][0]['id'])) {
             return (string) $data['messages'][0]['id'];
         }
-        throw new \RuntimeException($data['error']['message'] ?? 'WhatsApp send failed');
+        // Surface Meta's full diagnostic, not just the headline message — the
+        // code/subcode/details are what actually identify template mismatches,
+        // recipient restrictions (131030) and parameter format errors (132000).
+        $err = $data['error'] ?? [];
+        Log::warning('whatsapp.send.failed', [
+            'template' => $template,
+            'phone_suffix' => substr($to, -4),
+            'http_status' => $resp->status(),
+            'error_code' => $err['code'] ?? null,
+            'error_subcode' => $err['error_subcode'] ?? null,
+            'error_message' => $err['message'] ?? null,
+            'error_details' => $err['error_data']['details'] ?? null,
+            'fbtrace_id' => $err['fbtrace_id'] ?? null,
+        ]);
+        $detail = $err['error_data']['details'] ?? null;
+        $summary = $err['message'] ?? 'WhatsApp send failed';
+        throw new \RuntimeException(
+            $summary . ($detail ? " — {$detail}" : '') . (isset($err['code']) ? " (code {$err['code']})" : '')
+        );
     }
 
     /** Cache key for the pending code of a normalized number. */
@@ -214,8 +263,21 @@ class WhatsappGateway implements OtpInterface
                 ['type' => 'body', 'parameters' => [['type' => 'text', 'text' => (string) $messageBody]]],
             ];
             $id = $this->sendTemplate($mobile, $this->notifyTemplate, $this->notifyLang, $components);
+            // message_id is what correlates this send with Meta's delivery
+            // webhook (whatsapp.delivery.* log lines) — without it, notify
+            // sends were untraceable.
+            Log::info('notify.whatsapp.dispatched', [
+                'phone_suffix' => substr($mobile, -4),
+                'message_id' => $id,
+                'template' => $this->notifyTemplate,
+            ]);
             return new Result((string) $id);
         } catch (\Throwable $e) {
+            Log::warning('notify.whatsapp.failed', [
+                'phone_suffix' => substr($mobile, -4),
+                'template' => $this->notifyTemplate,
+                'error' => $e->getMessage(),
+            ]);
             return new Result(["WhatsApp notify failed: {$e->getMessage()}"]);
         }
     }

@@ -26,7 +26,7 @@ trait SmsTrait
             }
             $userType = $this->getWhichUserWillGetSms($smsArray['smsEventName'], $smsArray['language']);
             if ($userType['customer'] == true) {
-                $smsGateway->sendSms($order->customer_contact, $smsArray['customerMessage']);
+                $this->deliverSms($smsGateway, $order->customer_contact, $smsArray['customerMessage'], 'refund.customer');
             }
 
             if ($userType['admin'] == true) {
@@ -36,11 +36,30 @@ trait SmsTrait
 
                 foreach ($adminList as $admin) {
                     $adminProfile = $admin->profile;
-                    if ($adminProfile) $smsGateway->sendSms($adminProfile->contact, $smsArray['adminMessage']);
+                    if ($adminProfile) $this->deliverSms($smsGateway, $adminProfile->contact, $smsArray['adminMessage'], 'refund.admin');
                 }
             }
         } catch (Exception $e) {
-            //Log::error($e->getMessage());
+            \Illuminate\Support\Facades\Log::warning('sms.refund_event.failed', ['error' => $e->getMessage()]);
+        }
+    }
+
+    /**
+     * One send + its outcome logged. Gateways return a Result rather than
+     * throwing, so an unchecked call silently dropped every failure — this is
+     * the single seam where notify delivery problems become visible.
+     */
+    protected function deliverSms($gateway, $contact, $message, string $audience): void
+    {
+        if (empty($contact)) {
+            return;
+        }
+        $result = $gateway->sendSms($contact, $message);
+        if ($result && method_exists($result, 'isValid') && !$result->isValid()) {
+            \Illuminate\Support\Facades\Log::warning('sms.order_event.send_failed', [
+                'audience' => $audience,
+                'errors' => $result->getErrors(),
+            ]);
         }
     }
 
@@ -63,11 +82,7 @@ trait SmsTrait
             $userType = $this->getWhichUserWillGetSms($smsArray['smsEventName'], $smsArray['language']);
 
             if ($userType['customer'] && $order->parent_id == null) {
-                $smsGateway->sendSms($order->customer_contact, $smsArray['customerMessage']);
-                /* $customer = $order->customer;
-                 if ($customer && $customer->profile && $customer->profile->contact) {
-                     $smsGateway->sendSms($customer->profile->contact, $smsArray['customerMessage']);
-                 }*/
+                $this->deliverSms($smsGateway, $order->customer_contact, $smsArray['customerMessage'], 'order.customer');
             }
             if ($userType['admin']) {
 
@@ -76,7 +91,7 @@ trait SmsTrait
 
                 foreach ($adminList as $admin) {
                     $adminProfile = $admin->profile;
-                    if ($adminProfile) $smsGateway->sendSms($adminProfile->contact, $smsArray['adminMessage']);
+                    if ($adminProfile) $this->deliverSms($smsGateway, $adminProfile->contact, $smsArray['adminMessage'], 'order.admin');
                 }
             }
             if ($userType['vendor']) {
@@ -90,21 +105,27 @@ trait SmsTrait
 
                     foreach ($childOrders as $childOrder) {
                         $storeOwner = $childOrder->shop->owner;
-                        $shopOwnerProfile = Profile::where('customer_id', $storeOwner->id)->firstOrFail();
+                        // first(), not firstOrFail(): a vendor without a profile
+                        // must not abort the remaining vendors' notifications
+                        // (the throw landed in the catch-all below and silently
+                        // dropped every later child order).
+                        $shopOwnerProfile = Profile::where('customer_id', $storeOwner->id)->first();
 
                         if ($shopOwnerProfile)
-                            $smsGateway->sendSms($shopOwnerProfile->contact, str_replace(':ORDER_TRACKING_NUMBER', $childOrder->tracking_number, $message));
+                            $this->deliverSms($smsGateway, $shopOwnerProfile->contact, str_replace(':ORDER_TRACKING_NUMBER', $childOrder->tracking_number, $message), 'order.vendor');
                     }
                 } else {
                     $storeOwner = $order->shop->owner;
                     $storeOwnerProfile = $storeOwner->profile;
                     if ($storeOwnerProfile && $storeOwnerProfile->contact)
-                        $smsGateway->sendSms($storeOwnerProfile->contact, str_replace(':ORDER_TRACKING_NUMBER', $order->tracking_number, $message));
+                        $this->deliverSms($smsGateway, $storeOwnerProfile->contact, str_replace(':ORDER_TRACKING_NUMBER', $order->tracking_number, $message), 'order.vendor');
                 }
             }
         } catch (Exception $e) {
-            // do nothing
-            info('This exception info is from SmsTrait sendSmsOnOrderEvent method');
+            \Illuminate\Support\Facades\Log::warning('sms.order_event.failed', [
+                'event' => $smsArray['smsEventName'] ?? null,
+                'error' => $e->getMessage(),
+            ]);
         }
     }
 
