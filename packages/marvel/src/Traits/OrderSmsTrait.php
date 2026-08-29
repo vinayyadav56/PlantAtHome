@@ -72,7 +72,7 @@ trait OrderSmsTrait
             'customerMessage'   => __('sms.order.statusChangeOrder.customer.message', [
                 'ORDER_TRACKING_NUMBER' => $order->tracking_number,
                 'order_status'          => $status
-            ]),
+            ]) . $this->courierTrackingSuffix($order),
             'storeOwnerMessage' => __('sms.order.statusChangeOrder.storeOwner.message', ['order_status' => $status]),
         ];
         $this->sendSmsOnOrderEvent($smsArray, false);
@@ -91,6 +91,36 @@ trait OrderSmsTrait
             'storeOwnerMessage' => __('sms.order.deliverOrder.storeOwner.message'),
         ];
         $this->sendSmsOnOrderEvent($smsArray, false);
+    }
+
+    /**
+     * Courier tracking line for customer status messages — " Track: {courier}
+     * {awb} {url}", parts included only when present; empty string when the
+     * order has no live-booked shipment yet. Shipments hang off the PARENT
+     * order, which is exactly what the customer branch sends to.
+     */
+    protected function courierTrackingSuffix($order): string
+    {
+        try {
+            $shipment = $order->shipments()
+                ->where(function ($q) {
+                    $q->whereNotNull('awb_number')->orWhereNotNull('tracking_url');
+                })
+                ->latest('id')
+                ->first();
+        } catch (\Throwable $e) {
+            return '';
+        }
+        if (!$shipment) {
+            return '';
+        }
+        $parts = array_filter([
+            $shipment->courier_name,
+            $shipment->awb_number,
+            $shipment->tracking_url,
+        ]);
+
+        return $parts ? ' Track: ' . implode(' ', $parts) : '';
     }
 
 
