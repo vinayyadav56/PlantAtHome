@@ -77,9 +77,78 @@ class LegalLibrarySeeder extends Seeder
         }
 
         $this->seedTemplates($types, $categories);
+        $this->seedOperations();
 
         $this->command?->info("Legal library: {$created} document(s) created, "
             . LegalDocument::count() . ' total.');
+    }
+
+    /** Risk + compliance registers (Phase 5). Idempotent on title. */
+    private function seedOperations(): void
+    {
+        if (! Schema::hasTable('legal_risk_items')) {
+            return;
+        }
+        $path = __DIR__ . '/../../../data/legal-operations-seed.json';
+        if (! is_file($path)) {
+            return;
+        }
+        $data = json_decode((string) file_get_contents($path), true) ?: [];
+
+        $risks = 0;
+        foreach ($data['risks'] ?? [] as $r) {
+            if (\Marvel\Database\Models\Legal\LegalRiskItem::withTrashed()->where('title', $r['title'])->exists()) {
+                continue;
+            }
+            \Marvel\Database\Models\Legal\LegalRiskItem::create([
+                'risk_code' => $this->nextOpsCode(\Marvel\Database\Models\Legal\LegalRiskItem::class, 'risk_code', 'RSK'),
+                'title' => $r['title'],
+                'category' => $r['category'],
+                'description' => $r['description'] ?? null,
+                'probability' => $r['probability'] ?? 3,
+                'impact' => $r['impact'] ?? 3,
+                'mitigation_plan' => $r['mitigation_plan'] ?? null,
+                'contingency_plan' => $r['contingency_plan'] ?? null,
+                'department' => $r['department'] ?? null,
+                'status' => 'open',
+                'review_date' => now()->addQuarter()->toDateString(),
+            ]);
+            $risks++;
+        }
+
+        $items = 0;
+        foreach ($data['compliance'] ?? [] as $c) {
+            if (\Marvel\Database\Models\Legal\LegalComplianceItem::withTrashed()->where('title', $c['title'])->exists()) {
+                continue;
+            }
+            \Marvel\Database\Models\Legal\LegalComplianceItem::create([
+                'item_code' => $this->nextOpsCode(\Marvel\Database\Models\Legal\LegalComplianceItem::class, 'item_code', 'CMP'),
+                'title' => $c['title'],
+                'compliance_area' => $c['compliance_area'],
+                'requirement' => $c['requirement'] ?? null,
+                'evidence' => $c['evidence'] ?? null,
+                'applicable_department' => $c['applicable_department'] ?? null,
+                'status' => $c['status'] ?? 'under_review',
+                'review_frequency' => $c['review_frequency'] ?? 'annually',
+                'next_review_date' => now()->addMonths(3)->toDateString(),
+            ]);
+            $items++;
+        }
+
+        if ($risks || $items) {
+            $this->command?->info("Operations registers: {$risks} risk(s), {$items} compliance item(s) created.");
+        }
+    }
+
+    private function nextOpsCode(string $model, string $column, string $prefix): string
+    {
+        $n = 1;
+        do {
+            $code = sprintf('%s-%03d', $prefix, $n);
+            $n++;
+        } while ($model::withTrashed()->where($column, $code)->exists());
+
+        return $code;
     }
 
     /** @return bool true when a document was created (false = already present) */

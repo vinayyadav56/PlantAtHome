@@ -1,0 +1,386 @@
+{
+ "risks": [
+  {
+   "title": "Plant mortality on multi-day pan-India courier legs",
+   "category": "product_quality",
+   "description": "Live plants shipped via Shiprocket outside our hyperlocal cities spend 3-7 days boxed in dark, unventilated sorting hubs and line-haul trucks, often stacked under heavier parcels. Foliage plants arrive yellowed or defoliated and succulents arrive rotted from soil moisture sealed in a poly bag, generating DOA refund claims we cannot recover from the courier because live plants are excluded from most carrier liability. Longer routes (NE states, Kerala, J&K) see the worst survival rates.",
+   "probability": 4,
+   "impact": 4,
+   "mitigation_plan": "Restrict the pan-India catalog to hardy SKUs (succulents, cacti, snake plant, ZZ, bare-root, seeds, tools, pots) and hide fragile foliage and flowering stock outside hyperlocal pincodes at the AvailabilityService gate. Standardise a transit-spec pack: root ball bagged and taped to the pot, collar brace, corrugated corner posts, vent holes, 'THIS SIDE UP / LIVE PLANT' printing, and a pre-ship dry-down (no watering 24h before dispatch). Ship long-haul orders only Mon-Wed to keep parcels out of weekend hub dwell, prefer air over surface beyond 800 km, and track DOA rate per SKU x lane x courier so we delist lanes that fail.",
+   "contingency_plan": "Publish a 48-hour unboxing-video claim window; on a valid claim auto-approve replacement or refund from the admin order screen without a reverse pickup (dead plants are not worth returning) and log the SKU/lane/courier on the order for the weekly DOA review. Where a replacement would ride the same failing lane, refund instead and suppress that SKU for that pincode set immediately. If a lane's DOA rate crosses 8% in a rolling 14 days, auto-disable pan-India shipping for the affected SKU group and notify affected in-flight customers proactively over WhatsApp with a pre-emptive refund offer.",
+   "department": "Operations / Fulfilment"
+  },
+  {
+   "title": "Summer heat-wave mortality across North India (April-June)",
+   "category": "operational",
+   "description": "Delhi NCR, Rajasthan and central India run 42-48 C for weeks; plants cook inside Porter/Borzo rider boxes, in unrefrigerated courier vans and on doorsteps when the customer is not home for an afternoon attempt. Nursery-side losses spike at the same time, so vendors ship stressed stock that dies within a week of delivery and shows up as a quality complaint rather than a weather event. This is an annual certainty, not a tail risk.",
+   "probability": 5,
+   "impact": 3,
+   "mitigation_plan": "Move dispatch windows to before 10:00 and after 17:00 during the heat season for hyperlocal riders, and switch heat-sensitive categories (ferns, calathea, anthurium, seedlings, FarmBox) to same-day hyperlocal only across April-June. Require insulated liners and a hydrated moss pad on the root ball for heat-season packs, add a seasonal capacity buffer so orders are not held overnight in a vendor shed, and run a heat-season banner plus WhatsApp pre-delivery message asking the customer to confirm someone will receive the parcel.",
+   "contingency_plan": "When IMD issues a red/orange heat alert for a destination city, pause dispatch of the sensitive categories to that city for the alert window, hold already-picked orders in shade, and message affected customers with a free reschedule or full refund. Honour a 7-day heat-season replacement guarantee on the affected categories on photo evidence, absorb it centrally rather than charging back the vendor (or vendors will hide stress), and reconcile the seasonal loss against the heat-season margin buffer.",
+   "department": "Operations / Category"
+  },
+  {
+   "title": "Monsoon and cyclone shutdown of hyperlocal and courier networks",
+   "category": "logistics",
+   "description": "Peak monsoon waterlogging in Delhi, Mumbai and Bengaluru strands Porter and Borzo riders mid-trip, and cyclones on the east coast close Shiprocket hubs for days. Orders sit booked-but-unpicked with money already captured by Razorpay, plants deteriorate in the vendor's staging area, and customers chase a tracking page that has not moved. Riders also refuse rain trips outright, so booking attempts fail silently and quietly age.",
+   "probability": 4,
+   "impact": 3,
+   "mitigation_plan": "Run both hyperlocal partners live per city so a Porter refusal falls through to Borzo instead of stalling, and alert on any shipment booked with no partner status movement for over 90 minutes rather than waiting for the customer to complain. Cut daily order-intake caps for a city when a heavy-rain warning is in force, keep a rain-pack SKU (poly sleeve plus taped box) as the default during monsoon months, and never let a picked live-plant order overnight in a vendor shed without a moved-to-shelter check.",
+   "contingency_plan": "On a city-level weather event, use the operations kill-switch to stop new same-day slots for that city, convert affected orders to next-available-slot with a proactive WhatsApp message plus delivery-fee waiver, and re-quote unbooked shipments the following morning. For courier hub closures, hold new dispatches to the affected pincodes rather than injecting parcels into a frozen hub, and refund on request without argument once a shipment is stationary for 72 hours.",
+   "department": "Operations / Logistics"
+  },
+  {
+   "title": "Vendor nursery sells the ordered specimen offline before pickup",
+   "category": "vendor",
+   "description": "Partner nurseries run a physical counter alongside our listings and their stock counts on our platform are updated manually, so a large or rare specimen we have already sold and charged for gets walked out by a walk-in customer. The order then fails at pickup, and the vendor either substitutes a smaller or different-cultivar plant without telling us or simply marks it unavailable after the promised slot has passed. Substitutions are worse than cancellations because the customer discovers them at the door.",
+   "probability": 4,
+   "impact": 3,
+   "mitigation_plan": "Require vendor acceptance of each assigned line item within a fixed window before the shipment is booked, and auto-reassign to the next vendor holding the SKU when the window lapses. Keep track_stock enforced with a hard reservation at order placement rather than at pickup, cap listable quantity for one-of-a-kind and large specimens at what the vendor physically photographs, and make substitution an explicit admin-approved action that triggers a customer WhatsApp approval instead of a silent swap. Score vendors on accept-rate and short-supply rate and route volume away from the bad tail.",
+   "contingency_plan": "On a confirmed short supply, immediately attempt reassignment to an alternate vendor at our cost; if none holds the SKU, cancel that line, refund via Razorpay the same day and issue a goodwill credit rather than pushing an unrequested substitute. Debit the short-supplying vendor's payout for the reassignment cost per the supply agreement, and suspend the SKU from that vendor's catalogue after repeated failures until they re-verify physical stock.",
+   "department": "Vendor Management"
+  },
+  {
+   "title": "Concentration on a small number of anchor nurseries",
+   "category": "vendor",
+   "description": "A handful of large nurseries in Pune, Kolkata and the NCR belt supply a disproportionate share of our live-plant GMV and most of the rare or premium SKUs. Any one of them going dark - a KYC or GST hold, a payout dispute, a decision to sell direct on their own channel, or a family business handover - takes a visible slice of the catalogue offline at once and there is no drop-in replacement for cultivar-specific stock. Growing seasons mean a new nursery cannot backfill rare stock for months.",
+   "probability": 3,
+   "impact": 4,
+   "mitigation_plan": "Track vendor concentration as a standing metric and cap any single vendor at a target share of monthly GMV per vertical, actively onboarding a second and third source for every top-100 SKU before the concentration bites. Keep payouts strictly on the agreed cycle (late payment is the number one reason a nursery leaves), sign supply agreements with a notice period on the anchor accounts, and hold vendor-independent buffer stock of the highest-velocity SKUs at our own facility. Complete KYC and GST verification at onboarding rather than at first payout so a compliance hold never surfaces mid-season.",
+   "contingency_plan": "On a vendor exit or suspension, run the availability recompute immediately so their SKUs stop showing as purchasable, reassign live orders to alternate vendors, and delist the orphaned SKUs the same day rather than letting them accumulate failed orders. Activate a pre-scoped backup nursery list per city, place an emergency purchase order for the top revenue SKUs at spot rates and absorb the margin hit, and communicate a realistic restock date on the PDP instead of leaving a phantom listing live.",
+   "department": "Vendor Management / Category"
+  },
+  {
+   "title": "Overselling from bulk inventory imports that bypass stock controls",
+   "category": "operational",
+   "description": "Vendor and catalogue teams update stock in bulk through Excel/CSV imports and direct admin edits, and these paths do not always run the same validation and state-machine hooks as a normal stock write. A stale or wrongly-mapped column silently sets quantity above what the nursery physically holds, so the storefront happily sells plants that do not exist and the failure only surfaces at pickup, after payment capture. The same import path can also resurrect stock for SKUs that were deliberately zeroed.",
+   "probability": 3,
+   "impact": 3,
+   "mitigation_plan": "Route every write path - import, admin edit, API, order reservation - through the single inventory writer so the stock state machine and audit trail cannot be bypassed, and make imports dry-run first with a diff preview requiring approval for any row that raises quantity by more than a set threshold. Reject imports whose SKU keys do not resolve instead of creating rows, and run a nightly reconciliation comparing platform quantity to vendor-confirmed counts on the top-moving SKUs with an alert on drift.",
+   "contingency_plan": "On detecting an oversell cluster, zero the affected SKUs immediately, pull the import batch id from the audit log and roll the batch back rather than hand-patching individual rows. Contact affected customers before they contact us with a same-day refund or a dated restock choice, and hold that import channel to dry-run-only until the mapping defect is fixed and a reconciliation run comes back clean.",
+   "department": "Technology / Catalogue Ops"
+  },
+  {
+   "title": "Stale city-availability gate exposes unfulfillable products",
+   "category": "technology",
+   "description": "What a customer can buy depends on a computed city/pincode availability layer that must be recomputed after vendor, coverage, city-pricing or margin changes. When that recompute is skipped or the cached result goes stale, products appear purchasable in cities where no vendor can actually serve them - or conversely, sellable stock is hidden and we silently lose revenue. Because the gate is applied in more than one place (listing, PDP, checkout), a gap in any one of them lets an order through that the other layers would have blocked.",
+   "probability": 3,
+   "impact": 3,
+   "mitigation_plan": "Make the availability recompute an automatic consequence of vendor coverage, pricing and catalogue changes rather than a manual post-deploy step, and apply the same gate function at listing, PDP and checkout so there is one source of truth and no open side door. Add a canary check per launch city that asserts a known-good and known-bad SKU resolve correctly, alerting when the gate output changes shape unexpectedly, and stamp cache keys with every filter that affects the result so a partial invalidation cannot serve a mixed answer.",
+   "contingency_plan": "On discovering a leaked order for an unserviceable pincode, honour it if any vendor can be made to serve it, otherwise cancel with a same-day refund and an apology credit. Force a full availability recompute and cache flush for the affected cities, then sweep open orders placed since the last known-good recompute for the same defect rather than fixing only the reported one.",
+   "department": "Technology"
+  },
+  {
+   "title": "Courier onboarding and AWB failures stall dispatch",
+   "category": "logistics",
+   "description": "Pan-India dispatch depends on Shiprocket assigning an AWB, which fails when seller KYC lapses, a pickup address is not registered, or a payload field is rejected - and the failure lands as an error string on the shipment rather than as a person being told. Orders then sit in a booked-but-unassigned state for days while the customer sees a paid order with no tracking, and the plants degrade in the meantime. The same class of failure hits when a courier suspends live-plant carriage for a region.",
+   "probability": 3,
+   "impact": 4,
+   "mitigation_plan": "Alert on any shipment with an AWB assignment error or with no AWB after a short SLA, surfaced on an operations dashboard rather than only in the shipment record, so a stuck booking is found in minutes not days. Keep courier KYC documents, GST and every vendor pickup address registered and re-verified on a calendar reminder ahead of expiry, validate payloads against the courier's required fields before submission, and maintain a second courier account so a single account block does not stop all pan-India dispatch.",
+   "contingency_plan": "Re-quote the stuck shipment on the alternate courier or, for in-city orders, downgrade to a hyperlocal rider even at negative margin to protect the plant and the customer. Message the customer with the real status and an option to refund before the plant deteriorates, and where the block is account-level (KYC or compliance) suspend new pan-India orders at checkout instead of accepting money we cannot fulfil until the block clears.",
+   "department": "Logistics / Finance"
+  },
+  {
+   "title": "Pot, planter and soil damage in transit",
+   "category": "product_quality",
+   "description": "Ceramic and terracotta planters crack and heavy potted plants tip over in courier handling, spilling soil through the carton and soaking or staining anything co-packed - tools, seed packets, gifting items. The visible mess makes even an intact plant read as a damaged delivery, and corporate gifting orders are effectively unsalvageable when they arrive dirty. Breakage claims on ceramics are also disputed by couriers as inadequate packing.",
+   "probability": 4,
+   "impact": 2,
+   "mitigation_plan": "Pack pots and plants in separate inner cartons within the same shipment, never loose together, with the potting medium bagged and taped and ceramics double-boxed with at least 5 cm of void fill. Set a weight and fragility threshold above which an order is split into separate shipments or restricted to hyperlocal delivery, and photograph every gifting and high-value pack at dispatch so a claim is evidenced. Review breakage rate by packer and by pot SKU and drop pot designs that keep failing.",
+   "contingency_plan": "Ship a replacement pot or planter immediately on photo evidence without waiting for a return, since returning a broken ceramic costs more than it recovers, and file the carrier claim in parallel with the dispatch photo as evidence. For corporate gifting, escalate to a same-day hyperlocal re-delivery of a rebuilt hamper where the recipient city allows it, because a delayed gift is a lost account rather than a lost order.",
+   "department": "Warehouse / Packaging"
+  },
+  {
+   "title": "Dead-on-arrival complaints and public review damage",
+   "category": "reputation",
+   "description": "Live plants fail visibly and photogenically, so a single bad batch produces unboxing photos of yellowed or snapped plants on Instagram, Google reviews and WhatsApp groups, which weigh far more in a trust-driven category than the order's rupee value. Slow or argumentative claim handling converts an ordinary transit loss into a public accusation of selling dead stock, and clusters of these depress conversion for weeks. Corporate gifting recipients complaining to the buying company compounds it into an account loss.",
+   "probability": 3,
+   "impact": 3,
+   "mitigation_plan": "Set an explicit, published live-plant guarantee with a short claim window and resolve claims within 24 hours on photo evidence, with no requirement to return a dead plant. Send a WhatsApp care message on the delivery day with SKU-specific first-week instructions to prevent customer-caused deaths being reported as our defect, monitor review and social mentions daily for DOA clusters, and feed every claim back to the SKU/lane/vendor dashboard so a systemic cause is caught before it becomes a pattern.",
+   "contingency_plan": "On a cluster of DOA reports sharing a SKU, batch or lane, pause that combination from sale immediately, and proactively contact every customer in the affected batch with a replacement or refund before they post. Respond publicly to negative reviews within a day with the actual resolution offered, route corporate gifting incidents to a named account owner with a full re-send at our cost, and log the root cause and the fix so the same batch defect does not recur next season.",
+   "department": "Customer Experience / Marketing"
+  },
+  {
+   "title": "Razorpay checkout outage during a peak sale window",
+   "category": "financial",
+   "description": "Razorpay or the upstream UPI/NPCI rails go down for 30-180 minutes, so the Next.js checkout can create an order but never receives a successful payment callback. Because prepaid orders only trigger BookCourierShipments on PaymentSuccess, an outage during a weekend or festival campaign silently freezes both revenue and fulfilment, and customers who were charged but got no webhook open support tickets about 'money deducted, no order'.",
+   "probability": 3,
+   "impact": 3,
+   "mitigation_plan": "Subscribe engineering to the Razorpay status page and add a synthetic 5-minute order-create+capture probe that alerts on failure. Make the payment webhook handler idempotent and back it with a scheduled reconciliation job that pulls Razorpay's payments API for the last 24h and repairs any order whose local state disagrees with the gateway. Keep COD enabled as a live fallback method on eligible pincodes rather than a code change away.",
+   "contingency_plan": "Flip the checkout to COD-only (or a UPI-intent/manual-collect banner) via the existing Operations Control Center kill-switch, post a status notice on the cart and checkout pages, and queue affected carts for a WhatsApp recovery message when the gateway returns. For charged-but-unrecorded payments, run the reconciliation command against the outage window, honour the order at the captured amount, and refund duplicates within 48 hours with a written apology.",
+   "department": "Engineering / Finance"
+  },
+  {
+   "title": "Customer PII breach through an unauthenticated or IDOR-exposed API endpoint",
+   "category": "data_security",
+   "description": "The Laravel API exposes customer names, phone numbers, full delivery addresses and captured GPS pins; a route added without auth middleware or an ID-keyed endpoint that does not scope to the authenticated user lets anyone enumerate order and address records. This has already happened once on /api/vendors (zero middleware) and in the customer-web order lookup, so the failure mode is a pattern, not a hypothetical. A scraped dump of home addresses plus phone numbers is directly saleable and triggers CERT-In and DPDP Act obligations.",
+   "probability": 2,
+   "impact": 5,
+   "mitigation_plan": "Enforce auth+ownership scoping by default: route-group middleware audit in CI that fails the build on any /api route without an explicit auth or public annotation, plus policy checks on every order, address and user resource. Run the existing security-review pass on each release, keep request logging on so enumeration bursts are visible, and rate-limit per authenticated user rather than per IP (the proxy collapses IPs).",
+   "contingency_plan": "Execute a breach runbook: rotate Sanctum tokens and force re-login, block the offending route at nginx within the hour, pull LogRequests to scope which records were read, and preserve logs for forensics. Report to CERT-In within the mandated 6 hours, notify the Data Protection Board and affected customers with what was exposed, and stand up a dedicated support line; brief the founder on a single external statement so no one improvises one.",
+   "department": "Engineering"
+  },
+  {
+   "title": "Courier and gateway API credentials leaked from repo, CI or the shared media bucket",
+   "category": "data_security",
+   "description": "Shiprocket, Porter, Borzo, Razorpay and WhatsApp credentials live in env files, App Runner/EC2 environment config and encrypted courier settings, and past cycles have flagged tokens needing rotation and a media bucket shared between staging and production with no versioning. A token committed to a public repo, pasted into a ticket, or readable by a staging process gives an attacker the ability to book real shipments, pull the full order book from the courier dashboards, or initiate refunds. Nothing about this requires breaching our own servers.",
+   "probability": 3,
+   "impact": 4,
+   "mitigation_plan": "Turn on secret scanning and a pre-commit gitleaks hook, move every partner credential into one store (AWS Secrets Manager) read at boot instead of committed env files, and separate staging from production credentials and buckets so a staging leak cannot touch live money. Set a 90-day rotation calendar per partner and record last-rotated dates in the integration module.",
+   "contingency_plan": "On suspicion, rotate the affected partner token immediately from the partner console (the couriers all allow self-service regeneration), redeploy with the new secret and queue:restart the workers so the ConfigOverlay picks it up. Ask each partner for an API access log covering the exposure window, reverse or cancel any bookings we did not originate, and force-expire admin sessions if an admin credential was in the same file.",
+   "department": "Engineering"
+  },
+  {
+   "title": "WhatsApp Business account restricted or template quality rating collapse",
+   "category": "technology",
+   "description": "Login OTP and every order notification ride on the WhatsApp Business API; Meta can throttle messaging, reject templates or restrict the WABA outright after user blocks push the quality rating to red, or after a business-verification lapse. Because ACTIVE_OTP_GATEWAY points at WhatsApp, a restriction is not a notification problem, it is a full customer-login outage. Meta's appeal loop routinely runs days, not hours.",
+   "probability": 3,
+   "impact": 4,
+   "mitigation_plan": "Keep the auth.notify_gateway split so OTP and marketing/order updates use separate senders and a marketing suspension cannot take down login. Maintain live MSG91 SMS and email OTP credentials as a hot standby, cap promotional sends and honour opt-outs to protect the quality rating, keep two approved template variants per critical message, and monitor the WABA quality rating and messaging limit daily via the Graph API.",
+   "contingency_plan": "Flip ACTIVE_OTP_GATEWAY to SMS and order notifications to SMS+email from the integration module (config overlay + queue:restart, no deploy), then file the Meta appeal the same day with a business-verification pack ready. If the restriction runs past 72 hours, route order updates through the transactional email engine and add an on-site order-status banner so customers stop depending on WhatsApp entirely.",
+   "department": "Engineering / Customer Experience"
+  },
+  {
+   "title": "Courier partner API failure blocks AWB assignment and hyperlocal booking",
+   "category": "technology",
+   "description": "Fulfilment depends on three external APIs: Shiprocket for pan-India AWBs (already blocked once by an account KYC hold surfacing only as awb_assign_error), Porter and Borzo for same-day riders. A partner outage, an expired token, a silently changed contract field or an unregistered pickup location leaves shipments stuck in BOOKED-pending with no label, and because Porter sends no token on webhooks, we can also miss status transitions without any error being raised.",
+   "probability": 4,
+   "impact": 3,
+   "mitigation_plan": "Keep both lanes quotable for every serviceable order so one partner failure is a routing decision, not a stop. Alert on the queue of shipments older than 30 minutes without an AWB, surface awb_assign_error text in the admin shipment row instead of a generic failure, keep the 10-minute authenticated reconcile job as the source of truth rather than trusting callbacks, and hold partner KYC/pickup registration in a compliance checklist with expiry dates.",
+   "contingency_plan": "Switch the affected lane off in the Operations Control Center so checkout stops promising that delivery mode, and re-route open shipments to the surviving partner with a bulk rebook. For a total courier-API outage, fall back to manual booking through the partner web dashboard against the exported pick list and backfill AWBs via the admin, and message affected customers a revised ETA before they chase us.",
+   "department": "Operations / Engineering"
+  },
+  {
+   "title": "Single-box production dependency with no failover",
+   "category": "technology",
+   "description": "Production runs on one 2-core EC2 instance in a single AZ with Redis co-located on the same box, fronted by CloudFront and a shared media bucket. An instance failure, an EBS-filling log, a bad deploy or an AZ event takes down the API, the admin and every storefront read path at once, with no warm standby and recovery gated on someone being awake with SSM access. Known slow endpoints (the 75s /api/products tail) mean a traffic spike alone can exhaust PHP-FPM workers and look identical to an outage.",
+   "probability": 3,
+   "impact": 5,
+   "mitigation_plan": "Put the API behind an ALB with a second instance in another AZ and move Redis to ElastiCache so state is not on the app box. Take automated nightly AMI/EBS snapshots plus verified MySQL backups with a rehearsed restore, alert on disk >80%, CPU sustained >70% and p95 latency, and keep an infrastructure-as-code or documented rebuild path so a replacement host is minutes, not an afternoon of memory.",
+   "contingency_plan": "Launch a replacement instance from the latest AMI and repoint the Cloudflare/CloudFront origin, or fail over to the Railway staging stack pointed at a restored production database for read-mostly browsing. Put the storefront into a cached, browse-only mode with checkout disabled rather than taking orders we cannot fulfil, and publish an ETA on the status banner and WhatsApp broadcast.",
+   "department": "Engineering"
+  },
+  {
+   "title": "GST misclassification across mixed plant, pot and fertilizer carts",
+   "category": "regulatory",
+   "description": "Live plants, seeds, pots, fertilizers, tools and FarmBox produce sit in different GST slabs (nil/5% for several agri and horticultural goods, 12-18% for planters and tools), and one cart can mix them alongside a delivery charge whose rate follows the principal supply. Wrong HSN mapping on a catalogue of thousands of imported draft SKUs, or vendor-fulfilled lines invoiced under the wrong entity, produces months of understated or overstated output tax before GSTR-1 vs GSTR-3B mismatch notices arrive. Reversed ITC, interest at 18% and penalties compound quietly.",
+   "probability": 3,
+   "impact": 3,
+   "mitigation_plan": "Make HSN and tax rate mandatory, validated fields on every product with no default fallback, and block publishing a SKU without them. Have the CA review the HSN-to-rate map quarterly and after every GST Council rate change, reconcile portal GSTR-1/2B against system invoices monthly rather than at year end, and lock invoice line tax at order time so later catalogue edits cannot rewrite issued invoices.",
+   "contingency_plan": "On discovering a misclassification, quantify exposure by SKU and period, file the correction through the amendment window or the next return with voluntary interest via DRC-03 before a notice issues, and issue credit/debit notes to affected B2B customers who claimed ITC. Engage the GST practitioner to handle any scrutiny notice, and freeze publishing on the affected category until the map is corrected.",
+   "department": "Finance / Legal & Compliance"
+  },
+  {
+   "title": "Change in Indian e-commerce or consumer protection rules forcing platform rework",
+   "category": "regulatory",
+   "description": "The Consumer Protection (E-Commerce) Rules and the CCPA's dark-pattern guidelines keep tightening: mandatory seller identity and country-of-origin disclosure, named grievance officer with response SLAs, ODR integration, bans on drip pricing, false urgency and pre-ticked consent, plus DPDP Act consent and data-deletion duties now coming into force. Our multi-vendor listings, countdown and 'only N left' merchandising, bundled delivery pricing and WhatsApp marketing opt-ins all sit directly in scope. Compliance deadlines are typically short and enforcement is complaint-driven, so the first signal can be a notice rather than a plan.",
+   "probability": 3,
+   "impact": 3,
+   "mitigation_plan": "Retain counsel for a twice-yearly e-commerce compliance review and subscribe to CCPA/MeitY notifications so changes are seen before deadlines. Keep the compliance surface configurable rather than hard-coded: grievance officer details, seller identity block, cancellation and refund policy and consent text all editable from admin settings. Audit the storefront against the dark-pattern list before each major merchandising change and log marketing consent with timestamp and source.",
+   "contingency_plan": "On a new rule, run a gap assessment within two weeks, ship the disclosure and consent changes as content and settings updates first (no deploy), and disable any non-compliant UI pattern immediately even at a conversion cost. If a notice arrives, respond within the stated window with a remediation plan and evidence of the changes already shipped, and keep the grievance register exportable to support the reply.",
+   "department": "Legal & Compliance / Engineering"
+  },
+  {
+   "title": "Selling seeds, fertilizers and packaged goods without the required licences and declarations",
+   "category": "legal",
+   "description": "Beyond live plants, the catalogue carries seeds (Seeds Act / Seeds Control Order dealer licence), fertilizers and soil amendments (Fertilizer Control Order O-Form registration per state of sale), and pre-packaged pots, potting mix and FarmBox produce that must carry Legal Metrology declarations of net quantity, MRP, importer/packer identity and consumer-care contact. Vendor-supplied SKUs are onboarded on the vendor's word, so an unlicensed or undeclared product can reach the storefront without anyone checking. Enforcement typically arrives as a state agriculture or legal-metrology inspection with stop-sale, seizure and prosecution of the LLP's designated partners.",
+   "probability": 2,
+   "impact": 3,
+   "mitigation_plan": "Gate the vendor onboarding KYC step on category-specific licence uploads with expiry dates, and block publishing seed or fertilizer SKUs for any vendor whose licence is missing or expired. Add mandatory Legal Metrology declaration fields to the product form for every pre-packaged SKU, obtain the LLP's own dealer registrations for the states we ship from, and hold vendor indemnity for product legality in the supplier agreement.",
+   "contingency_plan": "On an inspection or notice, immediately unpublish the affected SKUs platform-wide using the catalogue gate, stop dispatch of stock in hand, and produce the vendor licence trail and purchase invoices to the inspector. Engage counsel for the reply and any compounding, recall or refund open orders of the affected product, and suspend the supplying vendor until the paperwork is rectified.",
+   "department": "Legal & Compliance / Operations"
+  },
+  {
+   "title": "Viral negative review over dead-on-arrival plants or a delivery failure",
+   "category": "reputation",
+   "description": "Live plants are perishable and travel badly: a summer heatwave or a monsoon week in courier transit, a rider leaving a box in the sun, or one vendor shipping root-rotted stock produces a batch of DOA deliveries. One customer posting an unboxing reel of dead plants alongside a slow refund response can pick up tens of thousands of views in a day, drag Google and app-store ratings down, and get amplified by competitors. The damage is not the single order, it is the multi-month drop in new-customer conversion that follows.",
+   "probability": 3,
+   "impact": 3,
+   "mitigation_plan": "Publish and honour a plain 7-day plant replacement guarantee with photo proof and no argument, so the reasonable path is a refund rather than a post. Track DOA rate per vendor and per courier lane and suspend suppliers past threshold, restrict long-haul courier for fragile SKUs during peak heat and monsoon, prompt for a review only after a delivered-and-healthy check-in message, and monitor brand mentions on Instagram, X and Google daily.",
+   "contingency_plan": "Respond publicly within a few hours from the founder or a named person, not a template: acknowledge, refund or replace immediately, and take the detail to DM. Pull every order from the same vendor batch or courier lane, proactively message those customers with a replacement before they complain, and publish a short what-we-changed note. Pause paid acquisition and scheduled promotional sends for 48 hours so ad spend is not amplifying the thread.",
+   "department": "Customer Experience / Marketing"
+  }
+ ],
+ "compliance": [
+  {
+   "title": "E-Commerce Entity and Seller Identity Disclosure",
+   "compliance_area": "Consumer Protection (E-Commerce) Rules 2020 - Rule 4(2) & 5(2)",
+   "requirement": "Every page/checkout flow must display the legal name of the e-commerce entity (Silvestrix Green LLP), its registered and principal geographic address, website and customer-care contact details, plus the identity and address of the actual seller of record for each listed item.",
+   "evidence": "Storefront legal pages exist at /Users/vinayyadav/PlantAtHome/plantathome-shop-v2/src/framework/rest/static/legal-content.ts (Terms, Privacy, Data Deletion, updated 29-Aug-2026) and the LLP name appears in draft policy copy in /Users/vinayyadav/PlantAtHome/PlantAtHome-Laravel/plantathome-ecommerce/plantathome/api/packages/marvel/data/legal-blueprints.json. Missing evidence: a published footer/About block carrying LLP registered address + LLPIN, and a PDP-level 'sold by' disclosure - the single master-catalog model (see product/shop master-shop design) currently hides the fulfilling nursery vendor from the customer, so seller-of-record classification (inventory vs marketplace) is still undecided.",
+   "applicable_department": "Compliance",
+   "review_frequency": "quarterly",
+   "status": "partially_compliant"
+  },
+  {
+   "title": "Grievance Officer Appointment and Redressal Timelines",
+   "compliance_area": "Consumer Protection (E-Commerce) Rules 2020 - Rule 4(5) & IT Intermediary Guidelines 2021 - Rule 3(2)",
+   "requirement": "Appoint a named Grievance Officer, publish their name, designation and contact details on the website and app, acknowledge every consumer complaint within 48 hours and dispose of it within one month of receipt (24-hour acknowledgement / 15-day resolution under the IT Rules).",
+   "evidence": "No grievance officer name or contact exists anywhere in the shipped product: a repo-wide grep for 'grievance' matches only unapproved draft policy text inside packages/marvel/data/legal-blueprints.json - nothing in src/framework/rest/static/legal-content.ts, no footer block, no app screen. There is also no ticket store that timestamps complaint receipt vs. closure, so the 48-hour and one-month clocks cannot be measured. Compliance requires: board resolution appointing the officer, published contact block, and a complaint register with received/acknowledged/resolved timestamps.",
+   "applicable_department": "Customer Experience",
+   "review_frequency": "monthly",
+   "status": "non_compliant"
+  },
+  {
+   "title": "Cancellation, Return, Refund and Replacement Terms Disclosure",
+   "compliance_area": "Consumer Protection (E-Commerce) Rules 2020 - Rule 5(3)(f),(g) & Rule 6(5)",
+   "requirement": "Publish, before the customer places an order, the exact cancellation, return, refund, exchange, warranty and delivery/shipment terms for live plants and every other category, and effect refunds through the original payment instrument within the timeline stated in those terms without imposing a cancellation charge that the platform would not bear itself.",
+   "evidence": "Refund Policy, Return Policy, Cancellation Policy, Replacement Policy, Warranty Policy and Shipping Policy all exist but only as DRAFT entries in packages/marvel/data/legal-blueprints.json, each carrying an explicit 'DRAFT - LEGAL REVIEW REQUIRED' blockquote and awaiting management/counsel approval; page bodies exist in the storefront (src/page-bodies/customer-refund-policies.tsx, vendor-refund-policies.tsx). Compliance needs the approved versions published pre-checkout plus a Razorpay refund report showing refunds returned to the original instrument within the stated window - live-plant perishability carve-outs must be stated, not assumed.",
+   "applicable_department": "Customer Experience",
+   "review_frequency": "quarterly",
+   "status": "partially_compliant"
+  },
+  {
+   "title": "Dark Pattern Prohibition in Storefront and Checkout",
+   "compliance_area": "CCPA Guidelines for Prevention and Regulation of Dark Patterns 2023 / CP (E-Commerce) Rules Rule 5(3)(b)",
+   "requirement": "The storefront, app and checkout must not use any of the 13 listed dark patterns - false urgency or fake countdown timers, basket sneaking of add-ons or donations, confirm-shaming, pre-ticked consent or marketing opt-in boxes, drip pricing where delivery or handling fees appear only at the final step, subscription traps, or a cancellation path harder than the purchase path.",
+   "evidence": "No UI audit has been performed. Candidate surfaces to review and screenshot: the checkout wizard and delivery-charge injection point, the buy-with-pot picker (add-on pre-selection), homepage promotional/countdown sections in src/components/storefront, the register form's marketing/WhatsApp consent checkboxes (src/components/auth/register-form.tsx), and the subscription/loyalty flows. Evidence when done: a signed screenshot walkthrough per surface mapped to each of the 13 patterns, plus a rule in the design/PR checklist blocking pre-ticked consent and fake scarcity.",
+   "applicable_department": "Technology",
+   "review_frequency": "quarterly",
+   "status": "under_review"
+  },
+  {
+   "title": "Legal Metrology Declarations on Pre-Packed Goods",
+   "compliance_area": "Legal Metrology (Packaged Commodities) Rules 2011 - Rule 6 & Rule 6(10) e-commerce declarations",
+   "requirement": "Every pre-packed SKU (seeds, fertilisers, potting mix, pesticides, packaged tools, pots sold by weight/volume) must declare on the pack and on the product display page the name and address of the manufacturer/packer/importer, common name of the commodity, net quantity in standard units, month and year of manufacture/pre-packing, retail sale price as 'MRP Rs. ___ inclusive of all taxes', consumer-care contact, and country of origin.",
+   "evidence": "Plant/product attributes are stored via the plant_attributes wide table and product model, but there is no enforced, mandatory field set for net quantity, MRP-inclusive-of-taxes, packer name/address, manufacture month-year or country of origin, and no validation blocking publication of a pre-packed SKU that lacks them. Live plants sold loose are outside the Rules; the seed, fertiliser and accessory catalogue is not. Evidence target: required-field validation on the product publish path, a catalogue export showing 100% completion for pre-packed SKUs, and packaging artwork samples from vendors.",
+   "applicable_department": "Vendor Operations",
+   "review_frequency": "quarterly",
+   "status": "partially_compliant"
+  },
+  {
+   "title": "GST Tax Invoice Content and Serial Numbering",
+   "compliance_area": "CGST Act 2017 s.31 & CGST Rules Rule 46 (tax invoice particulars)",
+   "requirement": "Every taxable supply must be accompanied by a tax invoice bearing the supplier's GSTIN and registered address, a consecutive serial number unique for the financial year, recipient name/address (and GSTIN for B2B), HSN code per line item, taxable value, applicable CGST+SGST or IGST rate and amount shown separately, place of supply, and signature or digital signature.",
+   "evidence": "The shipped invoice template at /Users/vinayyadav/PlantAtHome/PlantAtHome-Laravel/plantathome-ecommerce/plantathome/api/resources/views/pdf/order-invoice.blade.php (399 lines) contains no GSTIN, no HSN column, no CGST/SGST/IGST split, no place of supply and no signature block - and it prints the order tracking_number as 'Invoice No', which is not a GST-compliant financial-year serial series. Shop-level GSTIN capture and format validation do exist (packages/marvel/src/Http/Requests/ShopUpdateRequest.php, regex-validated and unique on shops.gst_number) and a GST Invoicing SOP exists but only as an unapproved draft. Evidence target: reworked invoice template, an invoice-number sequence table, and a sample B2B and B2C invoice reviewed by the CA.",
+   "applicable_department": "Finance",
+   "review_frequency": "monthly",
+   "status": "non_compliant"
+  },
+  {
+   "title": "E-Invoice (IRN/QR) and E-Way Bill Threshold Monitoring",
+   "compliance_area": "GST - Rule 48(4) e-invoicing threshold and Rule 138 e-way bill",
+   "requirement": "Track aggregate annual turnover each month and register on the Invoice Registration Portal to generate IRN and signed QR codes for B2B invoices before turnover crosses the Rs. 5 crore threshold in any financial year since 2017-18, and generate an e-way bill for every consignment whose value exceeds Rs. 50,000 including inter-state courier movements booked through Shiprocket.",
+   "evidence": "No turnover-threshold monitor and no IRP integration exist in the codebase; courier booking flows (Shiprocket/Porter/Borzo adapters and CourierShipmentController) generate labels, manifests and a partner invoice but no e-way bill number is stored against a shipment. Current turnover is understood to be below the e-invoice threshold, which makes this presently not-yet-triggered rather than satisfied. Evidence target: a monthly turnover figure signed off by the accountant against the threshold, and a documented decision on whether courier partners or PlantAtHome raises the e-way bill for each lane.",
+   "applicable_department": "Finance",
+   "review_frequency": "quarterly",
+   "status": "under_review"
+  },
+  {
+   "title": "Seed Sale Dealer Licence and Labelling",
+   "compliance_area": "Seeds Act 1966, Seeds Rules 1968 and Seeds (Control) Order 1983",
+   "requirement": "Hold a valid seed dealer licence issued by the State Department of Agriculture for every state from which seeds are stocked or sold, sell only seeds whose containers carry the prescribed label (kind/variety, lot number, germination and purity percentage, date of test, validity period, treatment declaration), and retain purchase/sale records and source-of-supply documents for inspection.",
+   "evidence": "Seeds are an advertised product vertical on the storefront, but no seed dealer licence number, issuing state or expiry date is captured anywhere - vendor KYC storage exists (app/Modules/Nursery/Infrastructure/Models/NurseryDocument.php with GSTIN and document fields) and can hold it, but no licence document type is defined or required, and germination/purity/lot/test-date fields are not part of the seed product schema. Evidence target: scanned licence with expiry tracked in the nursery document store, a sample compliant seed label, and a stock/sale register.",
+   "applicable_department": "Compliance",
+   "review_frequency": "annually",
+   "status": "under_review"
+  },
+  {
+   "title": "Plant Quarantine, Nursery Registration and Inter-State Plant Movement",
+   "compliance_area": "Destructive Insects and Pests Act 1914, Plant Quarantine (Regulation of Import into India) Order 2003, state nursery registration and Insecticides Act 1968 / FCO 1985 for treated inputs",
+   "requirement": "Source live plant material only from nurseries registered with the relevant State Department of Horticulture/Agriculture, obtain a Plant Quarantine / phytosanitary certificate where a consignment crosses a notified state domestic-quarantine boundary (e.g. movement into notified pest-free or restricted states), never import planting material without a PQ import permit, and hold the applicable licence for any pesticide or fertiliser SKU listed alongside plants.",
+   "evidence": "A vendor KYC pipeline exists (NurseryDocument model plus vendor verification/KYC gates that block payouts and courier booking until documents are approved), which gives a place to hold nursery registration certificates, but the document taxonomy does not currently include a nursery registration or phytosanitary certificate type, and pan-India Shiprocket lanes ship live plants inter-state with no quarantine check in the booking path. Evidence target: registration certificate on file per nursery vendor, a documented list of restricted destination states, and a pre-booking check on live-plant inter-state consignments.",
+   "applicable_department": "Vendor Operations",
+   "review_frequency": "half_yearly",
+   "status": "partially_compliant"
+  },
+  {
+   "title": "Reasonable Security Practices for Personal and Sensitive Data",
+   "compliance_area": "IT Act 2000 s.43A & s.72A, SPDI Rules 2011, IT Intermediary Guidelines 2021 Rule 3(1), with DPDP Act 2023 readiness",
+   "requirement": "Publish a privacy policy describing the personal and sensitive personal data collected (phone numbers, delivery addresses and geolocation, payment identifiers, plant-photo uploads), obtain consent before collection, restrict access on a need-to-know basis, implement documented reasonable security practices such as an ISO 27001-equivalent control set, and provide a working data-deletion and grievance route.",
+   "evidence": "A published privacy policy, terms and a data-deletion instructions page exist (src/framework/rest/static/legal-content.ts, updated 29-Aug-2026); technical controls in place include encrypted partner credentials, HMAC verification of inbound webhooks, RBAC with 96 permissions and least-privilege vendor scoping, and a request log. Gaps: the Information Security, Password, Incident Response and Backup policies remain unapproved drafts in packages/marvel/data/legal-blueprints.json; there is no named Data Protection Officer or consent-record store for DPDP; and no evidence of a completed access review or penetration test. Evidence target: approved security policy set, access-review log, breach/incident register and a DPDP consent-notice gap assessment.",
+   "applicable_department": "Technology",
+   "review_frequency": "half_yearly",
+   "status": "partially_compliant"
+  },
+  {
+   "title": "DPDP Notice and Consent at Collection",
+   "compliance_area": "Data Protection — DPDP Act 2023 (s.5, s.6)",
+   "requirement": "Every point where PlantAtHome collects personal data (signup OTP, checkout, address capture, Plant Doctor photo upload, voice search, garden-service leads) must present an itemised DPDP notice and record the specific, informed consent obtained, with withdrawal made as easy as giving it.",
+   "evidence": "Governed privacy notice exists and is version-controlled: packages/marvel/src/Services/Legal/LegalDocumentService.php mirrors the published 'privacy-policy' document into settings.options.legalPages.privacy for the storefront /privacy page, with LegalDocumentVersion + LegalAudit history. GAP: a repo-wide grep for consent/opt_out/withdrawal columns across app/, packages/ and database/ returns only legal-document seeders — there is no consent ledger, no per-purpose consent capture at the OTP/checkout/photo-upload boundaries, and no withdrawal mechanism.",
+   "applicable_department": "Legal & Compliance (owner) with Engineering",
+   "review_frequency": "quarterly",
+   "status": "partially_compliant"
+  },
+  {
+   "title": "Data Principal Rights and Grievance Redressal",
+   "compliance_area": "Data Protection — DPDP Act 2023 (s.11–13)",
+   "requirement": "Customers must be able to request access to, correction of, and erasure of their personal data, and reach a named Grievance Officer, with each request logged and answered inside a defined SLA.",
+   "evidence": "Storefront /privacy, /terms and /data-deletion-instructions pages are served from governed legal documents (STOREFRONT_SYNC map in packages/marvel/src/Services/Legal/LegalDocumentService.php), so a data-deletion instruction page is published. GAP: no self-service intake — a grep for deleteAccount / data-export / anonymise routes across app/ and packages/marvel/src finds only admin-side forceDelete in UserController; no rights-request register, no SLA clock, and no Grievance Officer named in the published notice or in code.",
+   "applicable_department": "Customer Support (intake) with Legal & Compliance",
+   "review_frequency": "quarterly",
+   "status": "partially_compliant"
+  },
+  {
+   "title": "Personal Data Breach Notification Procedure",
+   "compliance_area": "Data Protection — DPDP Act 2023 (s.8(6)) and DPDP Rules",
+   "requirement": "Any personal data breach must be detected, assessed and reported to the Data Protection Board and to every affected data principal without delay, following a written, rehearsed playbook with named decision-makers.",
+   "evidence": "SECURITY_AUDIT_2026-08.md compliance posture table records NIST CSF status as 'Detect and Respond remain weak — no alerting on auth anomalies', and the C1 finding (supplier banking data exposed to anonymous callers) was found by audit rather than by monitoring. OPERATOR_RUNBOOK_2026-08.md covers infrastructure hardening only. No breach-notification playbook, notification templates, severity matrix or tabletop exercise record exists in the repository or the ops docs.",
+   "applicable_department": "Information Security with Legal & Compliance",
+   "review_frequency": "quarterly",
+   "status": "non_compliant"
+  },
+  {
+   "title": "Storage Limitation and Scheduled Erasure",
+   "compliance_area": "Data Protection — DPDP Act 2023 (s.8(7)) storage limitation",
+   "requirement": "Personal data must be erased once its collection purpose is served and no legal retention obligation applies, on a documented per-dataset retention clock rather than growing indefinitely.",
+   "evidence": "Log/telemetry retention is enforced and scheduled: app/Console/Commands/PruneLogTablesCommand.php holds the single TABLES retention map (request_logs on the admin-set retention_days, email_logs 90d, analytics_events / voice_search_logs / plant_doctor_logs / notify_logs 30d, coverage_audit_logs 90d, outbox 14d) and app/Console/Kernel.php runs `logs:prune` daily at 03:45. GAP: the clock covers only log-ish tables — customer accounts, addresses, order/PII history, KYC documents and S3 media have no retention rule, and Indian tax/GST retention periods have not been mapped against them.",
+   "applicable_department": "Engineering (Platform) with Legal & Compliance",
+   "review_frequency": "half_yearly",
+   "status": "partially_compliant"
+  },
+  {
+   "title": "WhatsApp Business Platform Policy Compliance",
+   "compliance_area": "Messaging Governance — WhatsApp Business Platform / Meta Commerce Policy",
+   "requirement": "All business-initiated WhatsApp messages must use a currently Meta-approved template matched to its correct category, be sent only to recipients with valid opt-in, and honour opt-out requests immediately and permanently.",
+   "evidence": "Sends are template-bound by design: app/Modules/Marketing/Infrastructure/Channels/WhatsappChannel.php routes every marketing message through the Meta-approved WHATSAPP_NOTIFY_TEMPLATE single-variable body via Marvel\\Otp\\Gateways\\WhatsappGateway, and per-send outcomes are captured in MarketingNotification / DeliveryLog. GAP: Template.status (app/Modules/Marketing/Application/TemplateService.php) is free text defaulting to 'draft' and is never reconciled with Meta's actual approval state; and no opt_out / unsubscribe / subscription column exists in the marketing or notifications schema, so STOP requests cannot be recorded or enforced before dispatch.",
+   "applicable_department": "Marketing / Growth with Engineering",
+   "review_frequency": "monthly",
+   "status": "partially_compliant"
+  },
+  {
+   "title": "Payment Data Handling and PCI DSS Scope",
+   "compliance_area": "Payment Security — PCI DSS (SAQ-A, Razorpay-hosted)",
+   "requirement": "No cardholder data may be stored, processed or transmitted by PlantAtHome systems — all card capture stays inside Razorpay's hosted flow — and the resulting SAQ-A scope must be validated annually with gateway credentials held only as environment secrets.",
+   "evidence": "packages/marvel/src/Payment/Razorpay.php instantiates the Razorpay API from config('shop.razorpay.key_id'/'key_secret') and verifies inbound webhooks against config('shop.razorpay.webhook_secret'); no PAN, CVV or expiry field appears in any migration. SECURITY_AUDIT_2026-08.md records 'PCI DSS — card data never touches our servers (Razorpay-hosted), Req 6.5 issues addressed'. GAPS from the same documents: OPERATOR_RUNBOOK_2026-08.md item 1 flags production still running a TEST Razorpay key, audit item A2 flags a shared secret committed to git history awaiting rotation, and no signed SAQ-A is on file.",
+   "applicable_department": "Finance with Engineering",
+   "review_frequency": "half_yearly",
+   "status": "partially_compliant"
+  },
+  {
+   "title": "Employee and Contractor Personal Data",
+   "compliance_area": "HR Data Protection — DPDP Act 2023 (employment exemption, s.7(i))",
+   "requirement": "Employee, intern and contractor personal data must be held under a stated employment purpose with a documented retention period after exit, separated from customer records and accessible only to People Ops.",
+   "evidence": "No HR module exists in the codebase: staff identities sit in the same users table as customers, with HR-only fields (users.city / users.state) carried alongside customer data, and role separation handled only by app/Modules/Identity (IdentityRole / IdentityPermission / AccessMatrix). No employee privacy notice, no post-exit retention rule, no offer-letter or background-check document store, and no record of where payroll or bank details are held. Whether HR records live outside this system (spreadsheets, payroll vendor) has not been established.",
+   "applicable_department": "People Ops / HR with Legal & Compliance",
+   "review_frequency": "half_yearly",
+   "status": "under_review"
+  },
+  {
+   "title": "Vendor KYC Document Governance",
+   "compliance_area": "Third-Party Due Diligence — Vendor KYC and GST verification",
+   "requirement": "Every nursery vendor transacting on the platform must have verified GST certificate, PAN and bank proof on file, reviewed by a named approver, re-verified periodically, and stored with access restricted to Vendor Operations.",
+   "evidence": "The KYC clock is codified and scheduled: packages/marvel/src/Services/VendorKycService.php defines REQUIRED_DOCUMENTS (GST certificate, PAN card, cancelled cheque) and a config('shop.kyc.window_days', 15) onboarding window, enforced by `marvel:sweep-kyc-deadlines` daily at 04:15 in app/Console/Kernel.php; app/Modules/Nursery/Infrastructure/Models/NurseryDocument.php records kind, status, reviewed_by_uuid and reviewed_at for a reviewer trail. GAPS: vendors are onboarded before documents by design; SECURITY_AUDIT_2026-08.md finding C1 shows supplier banking data was reachable by anonymous callers until remediated; documents live in a shop settings JSON blob on the shared plantathome-media-prod bucket; and there is no expiry-driven re-collection or periodic GST-status re-verification.",
+   "applicable_department": "Vendor Operations with Finance",
+   "review_frequency": "quarterly",
+   "status": "partially_compliant"
+  },
+  {
+   "title": "Backup and Disaster Recovery Testing",
+   "compliance_area": "Business Continuity — backup, restore and DR testing",
+   "requirement": "Production data must be backed up on a defined schedule with encrypted off-box copies, and a full restore must be test-executed at least twice a year against agreed RTO and RPO targets, with the result recorded.",
+   "evidence": "No backup, mysqldump or snapshot task appears in the scheduler (app/Console/Kernel.php lists only availability, KYC, log-prune, settlement, courier, inventory, outbox, marketing, media and integration jobs). Production runs MySQL on a single 2-core EC2 instance; OPERATOR_RUNBOOK_2026-08.md section 5 lists managed infrastructure with automated snapshots as the 'real best-in-class target' rather than the current state. No RTO/RPO is defined and no restore drill has been recorded. Whether AWS-level EBS/RDS snapshots are running outside the repository is unconfirmed and is the open question for this entry.",
+   "applicable_department": "Platform Engineering / DevOps",
+   "review_frequency": "quarterly",
+   "status": "under_review"
+  },
+  {
+   "title": "Audit Logging and Periodic Access Review",
+   "compliance_area": "Access Control & Audit Logging — DPDP reasonable security safeguards",
+   "requirement": "Privileged and personal-data-touching actions must be written to a tamper-evident audit trail retained long enough to support an investigation, and every admin, staff and vendor account's access rights must be recertified on a fixed cycle with the review evidenced.",
+   "evidence": "Audit trails exist across several planes: app/Modules/Identity/Application/Subscribers/RecordLoginAudit.php records login events (user_uuid, role, ip, occurred_at) off the durable outbox; request_logs / request_log_exceptions capture API traffic; coverage_audit_logs, order_events and LegalAudit cover serviceability, fulfilment and legal-document changes. Access is enforced by app/Modules/Identity/Domain/AccessMatrix.php with EnsurePermission / EnsureRole middleware. GAPS: all logs are application-writable rather than append-only or WORM; the default 30-day request-log retention (PruneLogTablesCommand) is shorter than a realistic investigation window; admin reads of customer PII are not logged distinctly from other traffic; and no recertification of admin, staff or vendor accounts has been performed or recorded.",
+   "applicable_department": "Information Security with Engineering",
+   "review_frequency": "quarterly",
+   "status": "partially_compliant"
+  }
+ ]
+}

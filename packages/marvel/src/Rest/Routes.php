@@ -30,6 +30,8 @@ use Marvel\Http\Controllers\FlashSaleVendorRequestController;
 use Marvel\Http\Controllers\ManufacturerController;
 use Marvel\Http\Controllers\LegalDocumentController;
 use Marvel\Http\Controllers\LegalGovernanceController;
+use Marvel\Http\Controllers\LegalOperationsController;
+use Marvel\Http\Controllers\LegalPublicationController;
 use Marvel\Http\Controllers\MediaController;
 use Marvel\Http\Controllers\MessageController;
 use Marvel\Http\Controllers\OrderController;
@@ -199,6 +201,12 @@ Route::post('shipping/callback', [WebHookController::class, 'shippingCallback'])
 // Voice Search — public: storefront reads the feature flag; the shop's server
 // side posts query usage for cost tracking (guarded by an optional shared secret).
 // The ingest endpoint is rate-limited to blunt cost-data poisoning at scale.
+// PlantAtHome — public legal policies. Serves ONLY the live version of a
+// PUBLISHED, visibility=public document; drafts and internal documents are
+// unreachable here whatever slug is supplied (see LegalPublicationController).
+Route::get('legal/public/policies', [LegalPublicationController::class, 'index']);
+Route::get('legal/public/policies/{slug}', [LegalPublicationController::class, 'show']);
+
 Route::get('voice-search/settings', [VoiceSearchController::class, 'getSettings']);
 Route::post('voice-search/log', [VoiceSearchController::class, 'storeLog'])
     ->middleware('throttle:60,1');
@@ -657,6 +665,21 @@ Route::group(
         Route::get('legal/versions/{uuid}/comments', [LegalDocumentController::class, 'comments'])->middleware('permission:legal.view');
         Route::post('legal/versions/{uuid}/comments', [LegalDocumentController::class, 'addComment'])->middleware('permission:legal.view');
         Route::post('legal/comments/{id}/resolve', [LegalDocumentController::class, 'resolveComment'])->middleware('permission:legal.review');
+        Route::get('legal/documents/{uuid}/export', [LegalPublicationController::class, 'export'])->middleware('permission:legal.export');
+
+        // Operations registers (Phase 5). Literal paths before {uuid}.
+        Route::get('legal/operations/overview', [LegalOperationsController::class, 'operationsOverview'])->middleware('permission:legal.view');
+        Route::get('legal/risks', [LegalOperationsController::class, 'risks'])->middleware('permission:legal.view');
+        Route::post('legal/risks', [LegalOperationsController::class, 'storeRisk'])->middleware('permission:legal.manage');
+        Route::patch('legal/risks/{uuid}', [LegalOperationsController::class, 'updateRisk'])->middleware('permission:legal.manage');
+        Route::delete('legal/risks/{uuid}', [LegalOperationsController::class, 'destroyRisk'])->middleware('permission:legal.manage');
+        Route::get('legal/compliance', [LegalOperationsController::class, 'complianceItems'])->middleware('permission:legal.view');
+        Route::post('legal/compliance', [LegalOperationsController::class, 'storeCompliance'])->middleware('permission:legal.manage');
+        Route::patch('legal/compliance/{uuid}', [LegalOperationsController::class, 'updateCompliance'])->middleware('permission:legal.manage');
+        Route::delete('legal/compliance/{uuid}', [LegalOperationsController::class, 'destroyCompliance'])->middleware('permission:legal.manage');
+        Route::get('legal/actions', [LegalOperationsController::class, 'actions'])->middleware('permission:legal.view');
+        Route::post('legal/actions', [LegalOperationsController::class, 'storeAction'])->middleware('permission:legal.manage');
+        Route::patch('legal/actions/{uuid}', [LegalOperationsController::class, 'updateAction'])->middleware('permission:legal.manage');
 
         Route::apiResource('resources', ResourceController::class, [
             'only' => ['store']
