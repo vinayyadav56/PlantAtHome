@@ -59,6 +59,7 @@ class ProductRepository extends BaseRepository
         'metas.value',
         'product_type',
         'visibility',
+        'noindex',   // sitemap excludes noindexed products via search=noindex:0
         // PlantAtHome — botanical facets, filtered through the plantAttribute
         // HasOne (Prettus turns `plantAttribute.<col>` into whereHas). Multi-
         // select facets use 'in' (comma-separated values). 'in'/'between'
@@ -135,6 +136,9 @@ class ProductRepository extends BaseRepository
         'sold_quantity',
         'visibility',
         'delivery_charge',
+        'seo_title',
+        'seo_description',
+        'noindex',
     ];
     public function getProductDataArray(): array
     {

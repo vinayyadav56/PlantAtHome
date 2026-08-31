@@ -61,6 +61,7 @@ class ProductResource extends Resource
             'barcode'              => $this->barcode ?? null,
             'seo_title'            => $this->seo_title ?? null,
             'seo_description'      => $this->seo_description ?? null,
+            'noindex'              => (bool) ($this->noindex ?? false),
             'sold_quantity'        => $this->sold_quantity,
             'in_flash_sale'        => $this->in_flash_sale,
             'visibility'           => $this->visibility,

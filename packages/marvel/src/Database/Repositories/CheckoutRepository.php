@@ -664,8 +664,14 @@ class CheckoutRepository
         try {
             $settings = Settings::getData();
 
-            // Get tax settings from settings
-            $tax_class = $settings['options']['taxClass'];
+            // Get tax settings from settings. Null-safe: with no settings row (a fresh box) or
+            // no taxClass configured, `$settings['options']` is null and indexing it emitted
+            // "Trying to access array offset on value of type null" on EVERY checkout verify —
+            // noise in exactly the log an operator reads to find out why a verify failed.
+            $tax_class = data_get($settings, 'options.taxClass');
+            if (!$tax_class) {
+                return 0;
+            }
             return Tax::findOrFail($tax_class);
         } catch (\Throwable $th) {
             return 0;

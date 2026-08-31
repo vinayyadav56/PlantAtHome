@@ -41,6 +41,9 @@ class CategoryRepository extends BaseRepository
         'show_on_homepage',
         'homepage_sort_order',
         'is_active',
+        'seo_title',
+        'seo_description',
+        'noindex',
     ];
 
     public function boot()

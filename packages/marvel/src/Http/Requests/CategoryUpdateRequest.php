@@ -35,6 +35,9 @@ class CategoryUpdateRequest extends FormRequest
             'image'       => ['array'],
             'details'     => ['nullable', 'string'],
             'language'     => ['nullable', 'string'],
+            'seo_title'       => ['nullable', 'string', 'max:191'],
+            'seo_description' => ['nullable', 'string', 'max:500'],
+            'noindex'         => ['nullable', 'boolean'],
             'parent'      => ['nullable', 'integer'],
         ];
     }

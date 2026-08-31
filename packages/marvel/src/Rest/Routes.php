@@ -12,6 +12,7 @@ use Marvel\Http\Controllers\CommandCenterController;
 use Marvel\Http\Controllers\EmailAdminController;
 use Marvel\Http\Controllers\MarketIntelligenceController;
 use Marvel\Http\Controllers\LocationController;
+use Marvel\Http\Controllers\LocationPageController;
 use Marvel\Http\Controllers\TrackingController;
 use Marvel\Http\Controllers\AttachmentController;
 use Marvel\Http\Controllers\AttributeController;
@@ -291,6 +292,10 @@ Route::get('locations/cities', [LocationController::class, 'cities'])->middlewar
 // Delivery Coverage geo master — districts + postal-code lookups (coverage pickers).
 Route::get('locations/districts', [LocationController::class, 'districts'])->middleware('throttle:120,1');
 Route::get('locations/postal-codes', [LocationController::class, 'postalCodes'])->middleware('throttle:120,1');
+// City landing pages (/plants-in/{slug}) — active rows only; the storefront and
+// sitemap read these. show() resolves alias slugs to the canonical page.
+Route::get('locations/pages', [LocationPageController::class, 'index'])->middleware('throttle:120,1');
+Route::get('locations/pages/{slug}', [LocationPageController::class, 'show'])->middleware('throttle:120,1');
 
 // Visitor / Live Activity NOC (Phase 3) — public, fire-and-forget storefront
 // event ingest. Fail-safe (always 204); generous throttle for active browsing.
@@ -909,6 +914,19 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
         ->middleware(['permission:settings.integrations.test', 'throttle:20,1']);
     Route::post('integrations/{slug}/sync', [IntegrationController::class, 'sync'])
         ->middleware(['permission:settings.integrations.edit', 'throttle:20,1']);
+
+    // City landing pages — admin CRUD. Distinct URI from the public
+    // locations/pages reads so the two never collide.
+    Route::get('location-pages', [LocationPageController::class, 'adminIndex'])
+        ->middleware('permission:settings.location_pages.view');
+    Route::post('location-pages', [LocationPageController::class, 'store'])
+        ->middleware('permission:settings.location_pages.create');
+    Route::get('location-pages/{id}', [LocationPageController::class, 'adminShow'])
+        ->whereNumber('id')->middleware('permission:settings.location_pages.view');
+    Route::put('location-pages/{id}', [LocationPageController::class, 'update'])
+        ->whereNumber('id')->middleware('permission:settings.location_pages.edit');
+    Route::delete('location-pages/{id}', [LocationPageController::class, 'destroy'])
+        ->whereNumber('id')->middleware('permission:settings.location_pages.delete');
 });
 
 Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sanctum']], function () {

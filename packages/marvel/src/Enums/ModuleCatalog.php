@@ -81,6 +81,8 @@ final class ModuleCatalog
                 'testdata'      => ['view', 'cleanup'],
                 'cities'        => self::CRUD,
                 'states'        => self::CRUD,
+                // City landing pages (/plants-in/{slug}) — SEO content per city.
+                'location_pages' => self::CRUD,
                 'delivery'      => ['view', 'edit'],
                 'notifications' => ['view', 'create', 'send'],
                 // Third-party Integration Management. Split finer than CRUD because the actions
