@@ -7,6 +7,7 @@ use Marvel\Database\Models\Legal\LegalAudit;
 use Marvel\Database\Models\Legal\LegalDocument;
 use Marvel\Database\Models\Legal\LegalSettings;
 use Marvel\Enums\LegalDocumentStatus as Status;
+use Marvel\Services\Legal\VariableResolver;
 
 /**
  * Phase 6 — publication and export.
@@ -136,6 +137,18 @@ class LegalPublicationController extends CoreController
             ? '<div class="banner">DRAFT — NOT APPROVED FOR CIRCULATION</div>'
             : '';
 
+        // An export is what a reviewer or counsel actually reads, so show the
+        // working values rather than raw {{placeholders}} — but mark the ones
+        // still awaiting a management decision, and list them up front, so no
+        // one signs off on a number nobody has approved.
+        $body = VariableResolver::resolve($version->content_html, VariableResolver::ADMIN) ?? '';
+        $outstanding = VariableResolver::outstanding($version->content_html);
+        $pending = array_merge($outstanding['unapproved'], $outstanding['unknown']);
+        $pendingBanner = $pending === [] ? '' :
+            '<div class="pending"><strong>' . count($pending) . ' operational value(s) in this document are not '
+            . 'approved yet</strong> and are shown highlighted below: ' . e(implode(', ', $pending))
+            . '. They are drafting defaults, not decisions.</div>';
+
         return '<!DOCTYPE html><html><head><meta charset="utf-8"><style>'
             . 'body{font-family:DejaVu Sans,sans-serif;font-size:11px;color:#1a1a1a;line-height:1.55}'
             . 'h1{font-size:20px;margin:0 0 4px}h2{font-size:14px;margin:18px 0 6px;border-bottom:1px solid #ddd;padding-bottom:3px}'
@@ -147,6 +160,9 @@ class LegalPublicationController extends CoreController
             . '.banner{background:#fdecea;border:1px solid #f5c6cb;color:#a4262c;padding:6px 10px;font-weight:bold;margin:0 0 12px;font-size:11px}'
             . '.classification{float:right;font-size:9px;letter-spacing:.08em;color:#666}'
             . '.footer{margin-top:22px;padding-top:8px;border-top:1px solid #ddd;font-size:9px;color:#666}'
+            . '.pending{background:#fff8e1;border:1px solid #f0b429;padding:6px 10px;margin:0 0 12px;font-size:10px}'
+            . '.legal-var--pending{background:#fff3cd;border-bottom:1px dotted #b8860b}'
+            . '.legal-var--missing{background:#fdecea;color:#a4262c}'
             . '</style></head><body>'
             . '<div class="classification">' . $classification . '</div>'
             . '<h1>' . e($document->title) . '</h1>'
@@ -157,7 +173,8 @@ class LegalPublicationController extends CoreController
             . '<td><strong>Effective</strong></td><td>' . e($document->effective_date?->toDateString() ?? '—') . '</td></tr>'
             . '<tr><td><strong>Category</strong></td><td>' . e($document->category?->name ?? '—') . '</td>'
             . '<td><strong>Next review</strong></td><td>' . e($document->next_review_date?->toDateString() ?? '—') . '</td></tr></table>'
-            . ($version->content_html ?? '')
+            . $pendingBanner
+            . $body
             . ($disclaimer ? '<div class="footer">' . e($disclaimer) . '</div>' : '')
             . '<div class="footer">' . $footer . ' · Version ' . e($version->versionLabel())
             . ' · Generated ' . now()->format('d M Y') . '</div>'

@@ -154,4 +154,26 @@ class LegalVariablesTest extends LegalTestCase
         }
         $this->assertSame('1.0', $v->fresh()->versionLabel(), 'first issue promotes to 1.0');
     }
+
+    /**
+     * An export is the copy a reviewer or counsel signs off on. It must show
+     * working values rather than raw placeholders, and must say plainly which
+     * of those values nobody has approved yet.
+     */
+    public function test_export_resolves_variables_and_names_the_unapproved_ones(): void
+    {
+        $html = '<p>Refunds are issued within {{refund_processing_time}} via {{support_channels}}.</p>';
+
+        $rendered = VariableResolver::resolve($html, VariableResolver::ADMIN);
+        $this->assertStringNotContainsString('{{', $rendered, 'an export must not leak raw placeholders');
+        $this->assertStringContainsString('5-7 business days', $rendered);
+        $this->assertStringContainsString('legal-var--pending', $rendered, 'the unapproved value must be marked');
+        // The approved one is plain text, not marked.
+        $this->assertStringContainsString('email and WhatsApp', $rendered);
+        $this->assertSame(1, substr_count($rendered, 'legal-var--pending'));
+
+        $outstanding = VariableResolver::outstanding($html);
+        $this->assertSame(['refund_processing_time'], $outstanding['unapproved']);
+        $this->assertSame([], $outstanding['unknown']);
+    }
 }
