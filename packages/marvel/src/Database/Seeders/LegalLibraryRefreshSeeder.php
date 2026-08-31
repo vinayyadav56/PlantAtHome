@@ -159,9 +159,16 @@ class LegalLibraryRefreshSeeder extends Seeder
                 continue;
             }
             foreach ($bp['related_titles'] ?? [] as $relatedTitle) {
-                $toId = $titleToId[trim($relatedTitle)] ?? null;
+                $relatedTitle = trim($relatedTitle);
+                // A batch may reference a document another batch owns, or one
+                // that already exists (the live Privacy Policy). Anything that
+                // resolves to nothing is skipped rather than linked blindly.
+                $toId = $titleToId[$relatedTitle]
+                    ?? LegalDocument::where('title', $relatedTitle)
+                        ->orWhere('slug', Str::slug($relatedTitle))
+                        ->value('id');
                 if (! $toId || $toId === $fromId) {
-                    continue; // only link documents that actually exist
+                    continue;
                 }
                 $exists = LegalDocumentRelation::where('document_id', $fromId)
                     ->where('related_document_id', $toId)->exists();
