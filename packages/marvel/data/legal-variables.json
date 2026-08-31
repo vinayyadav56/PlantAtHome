@@ -287,14 +287,6 @@
   "description": "Published contact for grievances. Business must supply — no default."
  },
  {
-  "key": "support_email",
-  "label": "Customer support email",
-  "value": null,
-  "unit": null,
-  "category": "support",
-  "description": "Business must supply — no default."
- },
- {
   "key": "data_protection_email",
   "label": "Data protection contact email",
   "value": null,
@@ -327,14 +319,6 @@
   "description": "Time to resolve a grievance."
  },
  {
-  "key": "data_request_response_time",
-  "label": "Data request response time",
-  "value": "30 days",
-  "unit": "days",
-  "category": "compliance",
-  "description": "Time to respond to an access or correction request."
- },
- {
   "key": "data_deletion_completion_time",
   "label": "Data deletion completion time",
   "value": "30 days",
@@ -365,14 +349,6 @@
   "unit": "days",
   "category": "technology",
   "description": "Retention of application and access logs."
- },
- {
-  "key": "backup_retention_period",
-  "label": "Backup retention",
-  "value": "35 days",
-  "unit": "days",
-  "category": "technology",
-  "description": "Retention of database backups."
  },
  {
   "key": "replacement_window",
