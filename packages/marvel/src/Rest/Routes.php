@@ -649,6 +649,11 @@ Route::group(
         Route::get('legal/types', [LegalGovernanceController::class, 'types'])->middleware('permission:legal.view');
         Route::get('legal/templates', [LegalGovernanceController::class, 'templates'])->middleware('permission:legal.view');
         Route::get('legal/templates/{uuid}', [LegalGovernanceController::class, 'template'])->middleware('permission:legal.view');
+        Route::get('legal/variables', [LegalGovernanceController::class, 'variables'])->middleware('permission:legal.view');
+        Route::patch('legal/variables/{id}', [LegalGovernanceController::class, 'updateVariable'])->middleware('permission:legal.manage');
+        Route::get('legal/documents/{uuid}/relations', [LegalGovernanceController::class, 'relations'])->middleware('permission:legal.view');
+        Route::post('legal/documents/{uuid}/relations', [LegalGovernanceController::class, 'addRelation'])->middleware('permission:legal.edit');
+        Route::delete('legal/relations/{id}', [LegalGovernanceController::class, 'removeRelation'])->middleware('permission:legal.edit');
         Route::get('legal/settings', [LegalGovernanceController::class, 'settings'])->middleware('permission:legal.manage');
         Route::patch('legal/settings', [LegalGovernanceController::class, 'updateSettings'])->middleware('permission:legal.manage');
         Route::get('legal/documents', [LegalDocumentController::class, 'index'])->middleware('permission:legal.view');

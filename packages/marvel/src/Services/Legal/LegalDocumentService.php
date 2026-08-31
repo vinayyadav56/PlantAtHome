@@ -53,10 +53,12 @@ class LegalDocumentService
             'updated_by' => $user->id,
         ]);
 
+        // Drafts start at 0.1; the first publish promotes to 1.0 (document-
+        // control convention — a 1.x number means "approved and issued").
         $document->versions()->create([
             'title' => $attrs['title'],
-            'version_major' => 1,
-            'version_minor' => 0,
+            'version_major' => 0,
+            'version_minor' => 1,
             'content_json' => $attrs['content_json'] ?? null,
             'content_html' => $this->sanitize($attrs['content_html'] ?? null),
             'created_by' => $user->id,
@@ -118,6 +120,17 @@ class LegalDocumentService
 
     public function applyTransition(string $transition, LegalDocumentVersion $version, $user, ?string $comment = null): LegalDocumentVersion
     {
+        if ($transition === 'publish') {
+            $this->guardPublication($version);
+            // A 0.x draft becomes 1.0 on its first issue.
+            if ((int) $version->version_major === 0) {
+                $version->forceFill([
+                    'version_major' => 1,
+                    'version_minor' => 0,
+                ])->save();
+            }
+        }
+
         $version = $this->workflow->apply($transition, $version, $user, $comment);
 
         if ($transition === 'publish') {
@@ -126,6 +139,28 @@ class LegalDocumentService
         }
 
         return $version;
+    }
+
+    /**
+     * A public document must not carry operational numbers that management has
+     * not signed off. Seeded variable values are drafting conveniences; this is
+     * what stops one becoming a customer-facing promise by accident.
+     */
+    private function guardPublication(LegalDocumentVersion $version): void
+    {
+        $document = $version->document;
+        if (! $document || $document->visibility !== 'public') {
+            return; // internal documents may publish with draft values
+        }
+        $outstanding = VariableResolver::outstanding($version->content_html);
+        $blocking = array_merge($outstanding['unapproved'], $outstanding['unknown']);
+        if ($blocking !== []) {
+            throw new MarvelException(
+                'This public document uses operational values that are not approved yet: '
+                . implode(', ', $blocking)
+                . '. Approve them under Legal → Variables before publishing.'
+            );
+        }
     }
 
     /** Restore an old version's content as a fresh draft (never mutates it). */
@@ -177,7 +212,8 @@ class LegalDocumentService
                 $key => [
                     'title' => $document->title,
                     'updatedAt' => now()->format('F j, Y'),
-                    'body' => $version->content_html,
+                    // Public context: only approved values are substituted.
+                    'body' => VariableResolver::resolve($version->content_html, VariableResolver::PUBLIC_CONTEXT),
                 ],
             ]);
             $settings->options = $options;

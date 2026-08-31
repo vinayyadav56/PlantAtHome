@@ -28,7 +28,7 @@ class LegalLifecycleTest extends LegalTestCase
         ], $user);
     }
 
-    public function test_create_generates_slug_code_and_v1_draft(): void
+    public function test_create_generates_slug_code_and_v0_1_draft(): void
     {
         $doc = $this->makeDocument($this->fullActor());
 
@@ -36,7 +36,9 @@ class LegalLifecycleTest extends LegalTestCase
         $this->assertMatchesRegularExpression('/^PAH-POL-CUST-\d{3}$/', $doc->document_code);
         $this->assertSame(Status::DRAFT, $doc->status);
         $version = $doc->versions->first();
-        $this->assertSame('1.0', $version->versionLabel());
+        // Document-control convention: unissued drafts are 0.x, the first
+        // publication promotes to 1.0.
+        $this->assertSame('0.1', $version->versionLabel());
         $this->assertSame(Status::DRAFT, $version->status);
     }
 

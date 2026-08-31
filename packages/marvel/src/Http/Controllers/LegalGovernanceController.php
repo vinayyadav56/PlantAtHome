@@ -159,4 +159,68 @@ class LegalGovernanceController extends CoreController
                 ];
             });
     }
+
+    /* ── variables (Part 2) ───────────────────────────────────────── */
+
+    public function variables()
+    {
+        return \Marvel\Database\Models\Legal\LegalVariable::orderBy('category')->orderBy('label')->get();
+    }
+
+    public function updateVariable(\Illuminate\Http\Request $request, int $id)
+    {
+        $variable = \Marvel\Database\Models\Legal\LegalVariable::findOrFail($id);
+        $request->validate([
+            'value' => 'nullable|string|max:255',
+            'label' => 'sometimes|string|max:120',
+            'description' => 'nullable|string|max:1000',
+            'is_approved' => 'nullable|boolean',
+        ]);
+        $data = $request->only(['value', 'label', 'description']);
+        if ($request->has('is_approved')) {
+            $data['is_approved'] = $request->boolean('is_approved');
+            $data['approved_by'] = $data['is_approved'] ? $request->user()->id : null;
+            $data['approved_at'] = $data['is_approved'] ? now() : null;
+        }
+        $variable->update($data);
+        \Marvel\Services\Legal\VariableResolver::flushCache();
+
+        return $variable->fresh();
+    }
+
+    /* ── related documents ────────────────────────────────────────── */
+
+    public function relations(string $uuid)
+    {
+        $document = \Marvel\Database\Models\Legal\LegalDocument::where('uuid', $uuid)->firstOrFail();
+
+        return \Marvel\Database\Models\Legal\LegalDocumentRelation::where('document_id', $document->id)
+            ->join('legal_documents', 'legal_documents.id', '=', 'legal_document_relations.related_document_id')
+            ->select('legal_document_relations.id', 'legal_document_relations.relation_type',
+                'legal_documents.uuid', 'legal_documents.title', 'legal_documents.document_code',
+                'legal_documents.status')
+            ->orderBy('legal_documents.title')->get();
+    }
+
+    public function addRelation(\Illuminate\Http\Request $request, string $uuid)
+    {
+        $document = \Marvel\Database\Models\Legal\LegalDocument::where('uuid', $uuid)->firstOrFail();
+        $request->validate(['related_uuid' => 'required|string']);
+        $related = \Marvel\Database\Models\Legal\LegalDocument::where('uuid', $request->input('related_uuid'))->firstOrFail();
+        if ($related->id === $document->id) {
+            throw new \Marvel\Exceptions\MarvelException('A document cannot reference itself.');
+        }
+
+        return \Marvel\Database\Models\Legal\LegalDocumentRelation::firstOrCreate([
+            'document_id' => $document->id,
+            'related_document_id' => $related->id,
+        ], ['relation_type' => $request->input('relation_type', 'related')]);
+    }
+
+    public function removeRelation(int $id)
+    {
+        \Marvel\Database\Models\Legal\LegalDocumentRelation::whereKey($id)->delete();
+
+        return ['success' => true];
+    }
 }
