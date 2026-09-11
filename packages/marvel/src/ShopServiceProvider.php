@@ -98,6 +98,7 @@ class ShopServiceProvider extends ServiceProvider
     ];
 
     protected $commandList = [
+        \Marvel\Console\EnableCuratedListingsCommand::class,
         \Marvel\Console\SeedLocationPagesCommand::class,
         \Marvel\Console\SweepImageBatchesCommand::class,
         \Marvel\Console\PruneImageBatchesCommand::class,

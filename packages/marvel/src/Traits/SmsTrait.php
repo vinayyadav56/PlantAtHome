@@ -26,7 +26,13 @@ trait SmsTrait
             }
             $userType = $this->getWhichUserWillGetSms($smsArray['smsEventName'], $smsArray['language']);
             if ($userType['customer'] == true) {
-                $this->deliverSms($smsGateway, $order->customer_contact, $smsArray['customerMessage'], 'refund.customer');
+                // Same replace-with-fallback seam as the order branch above.
+                $dltSent = ! empty($smsArray['dlt']['code'])
+                    && app(\Marvel\Services\SmsTemplateService::class)
+                        ->sendByCode($smsArray['dlt']['code'], $order->customer_contact, $smsArray['dlt']['vars'] ?? []);
+                if (! $dltSent) {
+                    $this->deliverSms($smsGateway, $order->customer_contact, $smsArray['customerMessage'], 'refund.customer');
+                }
             }
 
             if ($userType['admin'] == true) {
@@ -82,7 +88,16 @@ trait SmsTrait
             $userType = $this->getWhichUserWillGetSms($smsArray['smsEventName'], $smsArray['language']);
 
             if ($userType['customer'] && $order->parent_id == null) {
-                $this->deliverSms($smsGateway, $order->customer_contact, $smsArray['customerMessage'], 'order.customer');
+                // Airtel DLT path: an active registry template for this event
+                // sends structured variables through its own MSG91 flow — the
+                // legacy blob below is skipped only when that send SUCCEEDS,
+                // so an unconfigured/failed template never drops the message.
+                $dltSent = ! empty($smsArray['dlt']['code'])
+                    && app(\Marvel\Services\SmsTemplateService::class)
+                        ->sendByCode($smsArray['dlt']['code'], $order->customer_contact, $smsArray['dlt']['vars'] ?? []);
+                if (! $dltSent) {
+                    $this->deliverSms($smsGateway, $order->customer_contact, $smsArray['customerMessage'], 'order.customer');
+                }
             }
             if ($userType['admin']) {
 

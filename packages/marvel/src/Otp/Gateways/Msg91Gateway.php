@@ -47,12 +47,17 @@ class Msg91Gateway implements OtpInterface
             return new Result(['MSG91 is not configured (auth_key / template_id missing).']);
         }
         $mobile = $this->normalize($phone_number);
+        // The DLT registry row for the login OTP wins when configured (admin
+        // enters its MSG91 Flow/Template ID post-approval); the Integrations
+        // 'OTP Template ID' stays as the fallback.
+        $otpTemplateId = \Marvel\Services\SmsTemplateService::providerTemplateId('PlantAtHome_Login_OTP')
+            ?: $this->templateId;
         try {
             $resp = Http::withHeaders(['authkey' => $this->authKey])
                 ->timeout(8) // fail fast — a hung MSG91 must not pin a php-fpm worker on the auth path
                 ->asForm()
                 ->post(self::BASE . '/otp', array_filter([
-                    'template_id' => $this->templateId,
+                    'template_id' => $otpTemplateId,
                     'mobile' => $mobile,
                     'sender' => $this->sender,
                     'otp_expiry' => 5,
@@ -113,6 +118,39 @@ class Msg91Gateway implements OtpInterface
             return new Result([$data['message'] ?? 'Failed to send SMS.']);
         } catch (\Throwable $e) {
             return new Result(["MSG91 SMS failed: {$e->getMessage()}"]);
+        }
+    }
+
+    /**
+     * DLT-templated send: one MSG91 Flow per approved Airtel template. The
+     * flow's DLT template is bound on MSG91's side; here we pass THAT flow's
+     * id plus the variables as var1..varN in the template's declared order
+     * (the flow body must use ##var1##..##varN##). The single-flow sendSms
+     * blob path above is untouched — it remains the fallback channel.
+     *
+     * @param array<string, string> $orderedVars already keyed var1..varN
+     */
+    public function sendTemplateSms($phone_number, string $flowTemplateId, array $orderedVars)
+    {
+        if (empty($this->authKey) || $flowTemplateId === '') {
+            return new Result(['MSG91 template SMS is not configured.']);
+        }
+        $mobile = $this->normalize($phone_number);
+        try {
+            $resp = Http::withHeaders(['authkey' => $this->authKey])
+                ->timeout(8)
+                ->post(self::BASE . '/flow/', array_filter([
+                    'template_id' => $flowTemplateId,
+                    'sender' => $this->sender,
+                    'recipients' => [array_merge(['mobiles' => $mobile], $orderedVars)],
+                ]));
+            $data = $resp->json();
+            if ($resp->ok() && (($data['type'] ?? '') === 'success')) {
+                return new Result((string) ($data['request_id'] ?? $mobile));
+            }
+            return new Result([$data['message'] ?? 'Failed to send template SMS.']);
+        } catch (\Throwable $e) {
+            return new Result(["MSG91 template SMS failed: {$e->getMessage()}"]);
         }
     }
 }

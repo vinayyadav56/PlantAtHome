@@ -28,6 +28,9 @@ class EmailAdminController extends CoreController
         if ($request->filled('category')) {
             $q->where('category', $request->get('category'));
         }
+        if ($request->filled('channel')) {
+            $q->where('channel', $request->get('channel'));
+        }
         if ($request->filled('q')) {
             $term = '%' . $request->get('q') . '%';
             $q->where(fn ($w) => $w->where('name', 'like', $term)->orWhere('slug', 'like', $term)->orWhere('subject', 'like', $term));
@@ -87,6 +90,9 @@ class EmailAdminController extends CoreController
             return response()->json(['message' => 'Not found'], 404);
         }
         unset($row['id']);
+        // template_code is unique and a DLT id belongs to ONE approved template.
+        $row['template_code'] = null;
+        $row['dlt_template_id'] = null;
         $row['slug'] = $row['slug'] . '-copy-' . Str::lower(Str::random(4));
         $row['name'] = $row['name'] . ' (copy)';
         $row['status'] = 'draft';
@@ -129,6 +135,9 @@ class EmailAdminController extends CoreController
         if ($row === null) {
             return response()->json(['message' => 'Not found'], 404);
         }
+        if (($row->channel ?? 'email') === 'sms') {
+            return response()->json(['message' => 'Preview/test-send renders email HTML — not available for SMS templates.'], 422);
+        }
         $sample = (array) $request->get('sample_data', []);
         $rendered = $this->email->renderPreview($row->slug, $sample);
         return ['data' => $rendered];
@@ -140,6 +149,9 @@ class EmailAdminController extends CoreController
         $row = DB::table('email_templates')->where('id', (int) $id)->first();
         if ($row === null) {
             return response()->json(['message' => 'Not found'], 404);
+        }
+        if (($row->channel ?? 'email') === 'sms') {
+            return response()->json(['message' => 'Test-send is email-only — SMS templates go live via MSG91 after DLT approval.'], 422);
         }
         return ['data' => $this->email->sendTest($row->slug, $data['to'], (array) ($data['sample_data'] ?? []))];
     }
@@ -253,6 +265,19 @@ class EmailAdminController extends CoreController
 
     private function validateTemplate(Request $request, ?int $ignoreId = null): array
     {
+        // Channel comes from the EXISTING row on update (a save can never flip
+        // a template's channel); 'email' for new rows unless explicitly sms.
+        $channel = 'email';
+        if ($ignoreId !== null) {
+            $channel = (string) (DB::table('email_templates')->where('id', $ignoreId)->value('channel') ?: 'email');
+        } elseif ($request->input('channel') === 'sms') {
+            $channel = 'sms';
+        }
+
+        if ($channel === 'sms') {
+            return $this->validateSmsTemplate($request, $ignoreId);
+        }
+
         $data = $request->validate([
             'name' => 'required|string|max:191',
             'slug' => 'nullable|string|max:96',
@@ -267,6 +292,64 @@ class EmailAdminController extends CoreController
         $data['variables'] = json_encode(VariableMapper::extract(
             (string) $data['subject'], (string) $data['html_body'], (string) ($data['text_body'] ?? '')
         ));
+        return $data;
+    }
+
+    /**
+     * SMS (Airtel DLT) templates: the body lives in text_body with {{var}}
+     * placeholders; variables are the client's ORDERED declarations (name /
+     * type / sample / description — order IS the DLT variable order, never
+     * auto-detected or reordered here). URLs are refused outright: Airtel DLT
+     * rejects templates whose sample/variable domains can't be validated.
+     */
+    private function validateSmsTemplate(Request $request, ?int $ignoreId): array
+    {
+        $data = $request->validate([
+            'name' => 'required|string|max:191',
+            'slug' => 'nullable|string|max:96',
+            'category' => 'required|string|max:32',
+            'text_body' => 'required|string|max:1000',
+            'template_code' => 'nullable|string|max:96',
+            'dlt_template_id' => 'nullable|string|max:64',
+            'provider_template_id' => 'nullable|string|max:64',
+            'status' => 'sometimes|in:draft,submitted,approved,rejected,active,disabled',
+            'variables' => 'nullable|array|max:10',
+            'variables.*.name' => 'required|string|max:64|regex:/^[a-zA-Z][a-zA-Z0-9_]*$/',
+            'variables.*.type' => 'required|in:numeric,alphanumeric',
+            'variables.*.sample' => 'required|string|max:120',
+            'variables.*.description' => 'nullable|string|max:500',
+        ]);
+
+        if (! empty($data['template_code'])) {
+            $dupe = DB::table('email_templates')->where('template_code', $data['template_code'])
+                ->when($ignoreId, fn ($q) => $q->where('id', '!=', $ignoreId))->exists();
+            if ($dupe) {
+                abort(response()->json(['message' => 'A template with this code already exists.'], 422));
+            }
+        }
+
+        $urlGuard = '~(https?://|www\.|\S+@\S+\.\S+)~i';
+        $offenders = [];
+        if (preg_match($urlGuard, (string) $data['text_body'])) {
+            $offenders[] = 'content';
+        }
+        foreach ($data['variables'] ?? [] as $v) {
+            if (preg_match($urlGuard, (string) $v['sample'])) {
+                $offenders[] = "sample value of {$v['name']}";
+            }
+        }
+        if (str_contains((string) $data['text_body'], '{#')) {
+            $offenders[] = 'content uses {#var#} — store semantic {{name}} placeholders instead';
+        }
+        if ($offenders !== []) {
+            abort(response()->json(['message' => 'DLT rules: no URLs or {#var#} allowed (' . implode('; ', $offenders) . ').'], 422));
+        }
+
+        $data['variables'] = json_encode(array_values($data['variables'] ?? []));
+        // NOT NULL columns unused by the SMS channel.
+        $data['subject'] = $data['name'];
+        $data['html_body'] = '';
+        $data['channel'] = 'sms';
         return $data;
     }
 

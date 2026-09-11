@@ -32,7 +32,7 @@
   <div class="brand">
     <div class="brand-mark">&#127807;</div>
     <div>
-      <div class="brand-name">Plant At Home</div>
+      <div class="brand-name">PlantAtHome</div>
       <div class="brand-sub">BRINGING NATURE TO YOU</div>
     </div>
   </div>
@@ -181,6 +181,6 @@
   </div>
 @endif
 
-  <div class="footer">&copy; {{ date('Y') }} Plant At Home &middot; plantathome.in</div>
+  <div class="footer">&copy; {{ date('Y') }} PlantAtHome &middot; plantathome.in</div>
 </body>
 </html>

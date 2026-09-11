@@ -140,7 +140,8 @@ class EventServiceProvider extends ServiceProvider
             SendQuestionAnsweredNotification::class
         ],
         RefundApproved::class => [
-            RatingRemoved::class
+            RatingRemoved::class,
+            \Marvel\Listeners\Refund\SendRefundApprovedSms::class,
         ],
         ReviewCreated::class => [
             SendReviewNotification::class

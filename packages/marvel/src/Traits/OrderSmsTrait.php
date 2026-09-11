@@ -22,6 +22,12 @@ trait OrderSmsTrait
             'adminMessage'      => __('sms.order.cancelOrder.admin.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number, 'customer_name' => $customerName]),
             'customerMessage'   => __('sms.order.cancelOrder.customer.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number, 'customer_name' => $customerName]),
             'storeOwnerMessage' => __('sms.order.cancelOrder.storeOwner.message'),
+            // Airtel DLT template (used when active + configured; blob is the fallback)
+            'dlt' => ['code' => 'PlantAtHome_Order_Cancelled', 'vars' => [
+                'orderId' => (string) $order->tracking_number,
+                // Refundable only when money was actually captured (mirrors RefundController's rule)
+                'refundAmount' => (string) ($order->payment_status === \Marvel\Enums\PaymentStatus::SUCCESS ? round((float) $order->paid_total) : 0),
+            ]],
         ];
         $this->sendSmsOnOrderEvent($smsArray);
     }
@@ -37,6 +43,10 @@ trait OrderSmsTrait
             'adminMessage'      => __('sms.order.orderCreated.admin.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number]),
             'customerMessage'   => __('sms.order.orderCreated.customer.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number]),
             'storeOwnerMessage' => __('sms.order.orderCreated.storeOwner.message'),
+            'dlt' => ['code' => 'PlantAtHome_Order_Confirmed', 'vars' => [
+                'orderId' => (string) $order->tracking_number,
+                'orderAmount' => (string) round((float) $order->total),
+            ]],
         ];
         $this->sendSmsOnOrderEvent($smsArray);
     }
@@ -52,6 +62,10 @@ trait OrderSmsTrait
             'adminMessage'      => __('sms.order.paymentSuccessOrder.admin.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number]),
             'customerMessage'   => __('sms.order.paymentSuccessOrder.customer.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number]),
             'storeOwnerMessage' => __('sms.order.paymentSuccessOrder.storeOwner.message'),
+            'dlt' => ['code' => 'PlantAtHome_Payment_Success', 'vars' => [
+                'paymentAmount' => (string) round((float) $order->paid_total),
+                'orderId' => (string) $order->tracking_number,
+            ]],
         ];
         $this->sendSmsOnOrderEvent($smsArray);
     }
@@ -75,6 +89,22 @@ trait OrderSmsTrait
             ]) . $this->courierTrackingSuffix($order),
             'storeOwnerMessage' => __('sms.order.statusChangeOrder.storeOwner.message', ['order_status' => $status]),
         ];
+        // DLT templates for the courier milestones (all other statuses keep the
+        // generic blob). 'delivered' arrives as order-completed via this same
+        // event — the Marvel OrderDelivered event is never dispatched.
+        $dltByStatus = [
+            'order-at-local-facility' => 'PlantAtHome_Order_Dispatched',
+            'order-out-for-delivery'  => 'PlantAtHome_Out_For_Delivery',
+            'order-completed'         => 'PlantAtHome_Order_Delivered',
+        ];
+        if (isset($dltByStatus[$order->order_status])) {
+            $vars = ['orderId' => (string) $order->tracking_number];
+            if ($order->order_status === 'order-at-local-facility') {
+                $eta = $order->delivery_time ?: null;
+                $vars['expectedDeliveryDate'] = $eta ? (string) $eta : 'soon';
+            }
+            $smsArray['dlt'] = ['code' => $dltByStatus[$order->order_status], 'vars' => $vars];
+        }
         $this->sendSmsOnOrderEvent($smsArray, false);
     }
 
@@ -89,6 +119,9 @@ trait OrderSmsTrait
             'adminMessage'      => __('sms.order.deliverOrder.admin.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number]),
             'customerMessage'   => __('sms.order.deliverOrder.customer.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number]),
             'storeOwnerMessage' => __('sms.order.deliverOrder.storeOwner.message'),
+            'dlt' => ['code' => 'PlantAtHome_Order_Delivered', 'vars' => [
+                'orderId' => (string) $order->tracking_number,
+            ]],
         ];
         $this->sendSmsOnOrderEvent($smsArray, false);
     }
@@ -135,6 +168,9 @@ trait OrderSmsTrait
             'adminMessage'      => __('sms.order.paymentFailedOrder.admin.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number]),
             'customerMessage'   => __('sms.order.paymentFailedOrder.customer.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number]),
             'storeOwnerMessage' => __('sms.order.paymentFailedOrder.storeOwner.message'),
+            'dlt' => ['code' => 'PlantAtHome_Payment_Failed', 'vars' => [
+                'orderId' => (string) $order->tracking_number,
+            ]],
         ];
         $this->sendSmsOnOrderEvent($smsArray, false);
     }
@@ -159,6 +195,10 @@ trait OrderSmsTrait
             'smsEventName'      => EventType::ORDER_REFUND,
             'adminMessage'      => __('sms.order.refundRequested.admin.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number]),
             'customerMessage'   => __('sms.order.refundRequested.customer.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number]),
+            // A refund request IS the customer's return request here (no separate RMA flow).
+            'dlt' => ['code' => 'PlantAtHome_Return_Requested', 'vars' => [
+                'orderId' => (string) $order->tracking_number,
+            ]],
         ];
         $this->sendSmsOnRefund($smsArray);
     }
@@ -171,9 +211,17 @@ trait OrderSmsTrait
             'order'             => $order,
             'language'          => $order->language ?? DEFAULT_LANGUAGE,
             'smsEventName'      => EventType::ORDER_REFUND,
-            'adminMessage'      => __('sms.order.refundUpdated.admin.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number, ':refund_status' => $refund->status]),
-            'customerMessage'   => __('sms.order.refundUpdated.customer.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number, ':refund_status' => $refund->status]),
+            // Replacement keys are bare names — a ':' prefix here made the
+            // :refund_status token never substitute.
+            'adminMessage'      => __('sms.order.refundUpdated.admin.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number, 'refund_status' => $refund->status]),
+            'customerMessage'   => __('sms.order.refundUpdated.customer.message', ['ORDER_TRACKING_NUMBER' => $order->tracking_number, 'refund_status' => $refund->status]),
         ];
+        if ($refund->status === 'approved') {
+            $smsArray['dlt'] = ['code' => 'PlantAtHome_Refund_Initiated', 'vars' => [
+                'refundAmount' => (string) round((float) $refund->amount),
+                'orderId' => (string) $order->tracking_number,
+            ]];
+        }
         $this->sendSmsOnRefund($smsArray);
     }
 }

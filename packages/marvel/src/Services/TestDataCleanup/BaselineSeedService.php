@@ -29,6 +29,7 @@ class BaselineSeedService
         ]],
         'content' => ['Email templates, refund reasons/policies, FAQs, terms', [
             \Marvel\Database\Seeders\EmailEngineSeeder::class,
+            \Marvel\Database\Seeders\SmsTemplateSeeder::class,
             \Marvel\Database\Seeders\RefundReasonSeeder::class,
             \Marvel\Database\Seeders\RefundPolicySeeder::class,
         ]],
