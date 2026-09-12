@@ -487,10 +487,15 @@ class OrderAssignmentController extends CoreController
      */
     private function canViewTracking(Request $request, Order $order): bool
     {
+        // A valid per-order token admits the holder regardless of customer_id —
+        // tracking links carry it for registered orders too.
+        $provided = (string) ($request->query('token') ?? $request->input('token') ?? '');
+        if ($order->tokenGrantsAccess($provided)) {
+            return true;
+        }
         if (!$order->customer_id) {
             if (!empty($order->tracking_token)) {
-                $provided = (string) ($request->query('token') ?? $request->input('token') ?? '');
-                return $provided !== '' && hash_equals((string) $order->tracking_token, $provided);
+                return false; // tokened guest order, wrong/missing token
             }
             return true; // legacy tokenless guest order
         }

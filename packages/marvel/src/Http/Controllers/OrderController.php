@@ -352,6 +352,16 @@ class OrderController extends CoreController
             $this->scopeOrderToVendorLines($order, $user);
         }
 
+        // A valid per-order token is a first-class credential, independent of
+        // customer_id: payment/tracking links carry it for REGISTERED orders
+        // too (OrderEmailVars appends it unconditionally, and the create
+        // response exposes it), and the buyer may be signed out on the device
+        // that opens the link. Token holders get the guest PII treatment.
+        if ($order->tokenGrantsAccess($providedToken)) {
+            $order->unsetRelation('customer');
+            return $order;
+        }
+
         if (!$order->customer_id) {
             // GUEST order (no owner to authorise against). Staff who could see it
             // in the admin panel anyway view it WITHOUT the per-order token — the
@@ -484,19 +494,23 @@ class OrderController extends CoreController
             throw new MarvelException(NOT_FOUND);
         }
 
+        // A valid per-order token admits the holder regardless of customer_id
+        // (payment/tracking links carry it for registered orders too).
+        if ($order->tokenGrantsAccess($providedToken)) {
+            $order->unsetRelation('customer');
+            return $order;
+        }
         if ($order->customer_id === null) {
             // GUEST order — staff view it without the per-order token (the token
             // gate stops anonymous tracking-number enumeration, not the admin).
             if ($user && $user->can('super_admin')) {
                 return $order;
             }
-            // Everyone else: require the per-order token (new orders); fall back to
-            // the PII-stripped public view only for legacy token-less orders.
+            // Everyone else: a tokened guest order without the matching token is
+            // treated as missing; only legacy token-less orders keep the
+            // PII-stripped public fallback.
             if (!empty($order->tracking_token)) {
-                if ($providedToken === '' || !hash_equals((string) $order->tracking_token, $providedToken)) {
-                    throw new MarvelException(NOT_FOUND);
-                }
-                return $order;
+                throw new MarvelException(NOT_FOUND);
             }
             $order->makeHidden(['billing_address', 'customer_contact']);
             $order->unsetRelation('customer');

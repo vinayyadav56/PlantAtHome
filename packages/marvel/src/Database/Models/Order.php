@@ -182,6 +182,23 @@ class Order extends Model
     }
 
     /**
+     * Does this token grant read access to the order?
+     *
+     * The per-order tracking_token is minted for EVERY order at creation and
+     * emitted in payment/tracking links — including registered-customer orders
+     * (the buyer may be signed out on the device that opens the link). It is a
+     * first-class credential: a constant-time match admits the holder
+     * regardless of customer_id. Callers still apply the guest PII treatment.
+     */
+    public function tokenGrantsAccess(?string $token): bool
+    {
+        return !empty($this->tracking_token)
+            && is_string($token)
+            && $token !== ''
+            && hash_equals((string) $this->tracking_token, $token);
+    }
+
+    /**
      * @return HasOne
      */
     public function refund()
