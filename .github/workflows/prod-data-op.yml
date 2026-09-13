@@ -66,6 +66,10 @@ on:
           - market-sync
           - market-publish-dry
           - market-publish
+          - state-sync-dry
+          - state-sync-limit10
+          - state-sync
+          - state-sync-rollback
         default: dry-run
 
 jobs:
@@ -116,6 +120,13 @@ jobs:
             shipment-items-check|partner-caps-check|vendor-state|vendor-wipe|vpp-review-check|cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
+            # Product STATE parity with staging (availability/listing/stock/prices/
+            # size variants) from packages/marvel/database/data/product-state-staging.json.
+            # Reversible: snapshots to pah_product_state_backup + pah_variation_state_backup.
+            state-sync-dry)      ARGS="plantathome:sync-product-state --dry-run" ;;
+            state-sync-limit10)  ARGS="plantathome:sync-product-state --limit=10" ;;
+            state-sync)          ARGS="plantathome:sync-product-state" ;;
+            state-sync-rollback) ARGS="plantathome:sync-product-state --rollback" ;;
             *) echo "Unknown mode"; exit 1 ;;
           esac
           echo "ARTISAN_ARGS=$ARGS" >> $GITHUB_ENV
