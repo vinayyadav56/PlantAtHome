@@ -36,11 +36,15 @@ class VendorLedgerService
         $options = (array) (Settings::getData()->options ?? []);
         $settlement = (array) ($options['settlement'] ?? []);
         $this->fees = (array) ($options['fees'] ?? []);
-        // Env override wins; else the admin settings flag; default OFF.
+        // Env override wins; else the admin settings flag; default OFF. An EMPTY env value is
+        // treated as unset (the Railway .env heredoc used to emit MARKETPLACE_LEDGER= which
+        // hard-forced the ledger off). Double-entry accounting being ON also turns the vendor
+        // sub-ledger on — they are one system of record (D4 cutover).
         $envFlag = env('MARKETPLACE_LEDGER');
-        $this->enabled = $envFlag !== null
+        $legacyFlag = ($envFlag !== null && $envFlag !== '')
             ? filter_var($envFlag, FILTER_VALIDATE_BOOLEAN)
             : (bool) ($settlement['enabled'] ?? false);
+        $this->enabled = $legacyFlag || (new \Marvel\Services\Accounting\AccountingConfig($options))->enabled();
         $this->holdDays = max(0, (int) ($settlement['hold_days'] ?? 7));
     }
 
@@ -49,11 +53,129 @@ class VendorLedgerService
         return $this->enabled;
     }
 
+    /** Is automated settlement the system of record (legacy ledger flag OR accounting)? Never throws. */
+    public static function settlementActive(): bool
+    {
+        try {
+            return (new self())->enabled();
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /**
+     * P4 — write the per-LINE vendor sub-ledger rows for a recognised order, in the caller's
+     * transaction, linked to the recognition journal. One 'sale' row per assigned line with
+     * amount = the frozen vendor payable (VendorPayableCalculator), idempotent per line.
+     * @param array<int, array{payable:string, mode:string, rate:string, commission:string, gross:string, unit_rate:string, vendor_discount:string}> $lines keyed by order_item_id
+     */
+    public function recordRecognition(Order $order, iterable $items, array $lines, \Marvel\Database\Models\Accounting\JournalEntry $journal, ?Carbon $recognizedAt = null): int
+    {
+        if (!$this->enabled) {
+            return 0;
+        }
+        $now = $recognizedAt ?: Carbon::now();
+        $written = 0;
+        foreach ($items as $item) {
+            $calc = $lines[$item->id] ?? null;
+            if (!$calc || !$item->assigned_shop_id) {
+                continue;
+            }
+            $key = $order->id . ':' . $item->id . ':sale:1';
+            if (VendorLedgerEntry::where('idempotency_key', $key)->exists()) {
+                continue;
+            }
+            try {
+                VendorLedgerEntry::create([
+                    'shop_id'                  => (int) $item->assigned_shop_id,
+                    'order_id'                 => $order->id,
+                    'order_item_id'            => $item->id,
+                    'shipment_id'              => $item->shipment_id,
+                    'entry_type'               => 'sale',
+                    'amount'                   => $calc['payable'],
+                    'product_value'            => $calc['gross'],
+                    'commission_amount'        => $calc['commission'],
+                    'platform_fee'             => 0,
+                    'pg_fee'                   => 0,
+                    'shipping_revenue'         => 0,
+                    'cost_value'               => $item->vendor_cost_snapshot !== null ? round((float) $item->vendor_cost_snapshot * max(1, (int) $item->order_quantity), 2) : null,
+                    'vendor_profit'            => null,
+                    'tax_amount'               => $item->tax_amount,
+                    'quantity'                 => (int) $item->order_quantity,
+                    'unit_rate'                => $calc['unit_rate'],
+                    'commission_rule_snapshot' => ['mode' => $calc['mode'], 'rate' => $calc['rate']],
+                    'discount_vendor_funded'   => $calc['vendor_discount'],
+                    'journal_entry_id'         => $journal->id,
+                    'idempotency_key'          => $key,
+                    'source'                   => 'delivery',
+                    'status'                   => 'pending',
+                    'available_at'             => $now->copy()->addDays($this->holdDays),
+                    'earned_at'                => $now,
+                ]);
+                $written++;
+            } catch (QueryException $e) {
+                if (!$this->isUniqueViolation($e)) {
+                    throw $e;
+                }
+            }
+        }
+        return $written;
+    }
+
+    /**
+     * P4 — reverse the per-line rows of a recognised order (de-recognition / full refund),
+     * keeping today's semantics per line: a still-pending sale is CANCELLED (both rows
+     * reversed, never settle); an already-settled one becomes a settle-eligible clawback.
+     */
+    public function reverseRecognition(Order $order, string $reason, ?\Marvel\Database\Models\Accounting\JournalEntry $journal = null): int
+    {
+        if (!$this->enabled) {
+            return 0;
+        }
+        $now = Carbon::now();
+        $written = 0;
+        $sales = VendorLedgerEntry::where('order_id', $order->id)->where('entry_type', 'sale')->whereNotNull('order_item_id')->get();
+        foreach ($sales as $sale) {
+            $key = $order->id . ':' . $sale->order_item_id . ':refund_reversal:1';
+            if (VendorLedgerEntry::where('idempotency_key', $key)->exists()) {
+                continue;
+            }
+            $alreadySettled = $sale->status !== 'pending';
+            $entry = [
+                'shop_id' => $sale->shop_id, 'order_id' => $order->id, 'order_item_id' => $sale->order_item_id, 'shipment_id' => $sale->shipment_id,
+                'entry_type' => 'refund_reversal', 'amount' => -1 * (float) $sale->amount,
+                'product_value' => -1 * (float) $sale->product_value, 'commission_amount' => -1 * (float) $sale->commission_amount,
+                'platform_fee' => -1 * (float) $sale->platform_fee, 'pg_fee' => -1 * (float) $sale->pg_fee, 'shipping_revenue' => 0,
+                'cost_value' => $sale->cost_value === null ? null : -1 * (float) $sale->cost_value, 'vendor_profit' => null,
+                'tax_amount' => $sale->tax_amount === null ? null : -1 * (float) $sale->tax_amount,
+                'quantity' => $sale->quantity, 'unit_rate' => $sale->unit_rate, 'commission_rule_snapshot' => $sale->commission_rule_snapshot,
+                'journal_entry_id' => $journal?->id, 'idempotency_key' => $key, 'source' => 'refund', 'earned_at' => $now,
+                'note' => 'Reversal of ledger entry #' . $sale->id . ': ' . $reason,
+                'status' => $alreadySettled ? 'pending' : 'reversed', 'available_at' => $alreadySettled ? $now : null,
+            ];
+            try {
+                VendorLedgerEntry::create($entry);
+                if (!$alreadySettled) {
+                    $sale->update(['status' => 'reversed']);
+                }
+                $written++;
+            } catch (QueryException $e) {
+                if (!$this->isUniqueViolation($e)) {
+                    throw $e;
+                }
+            }
+        }
+        return $written;
+    }
+
     /** Record a vendor sale for a completed child order (idempotent per order). */
     public function recordSale(Order $order): void
     {
         if (!$this->enabled || !$order->shop_id) {
             return;
+        }
+        if (\Marvel\Services\Accounting\AccountingPostingService::enabled()) {
+            return; // per-line rows are written by AccountingPostingService::recognizeOrder
         }
         if (VendorLedgerEntry::where('order_id', $order->id)->where('entry_type', 'sale')->exists()) {
             return; // already recorded
@@ -132,6 +254,9 @@ class VendorLedgerService
     {
         if (!$this->enabled) {
             return;
+        }
+        if (\Marvel\Services\Accounting\AccountingPostingService::enabled()) {
+            return; // per-line reversal is driven by AccountingPostingService::derecognizeOrder
         }
         $sale = VendorLedgerEntry::where('order_id', $order->id)->where('entry_type', 'sale')->first();
         if (!$sale) {

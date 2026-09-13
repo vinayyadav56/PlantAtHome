@@ -25,6 +25,13 @@ class VendorLedgerEntry extends Model
         'shipping_revenue'  => 'float',
         'available_at'      => 'datetime',
         'earned_at'         => 'datetime',
+        // P4 per-line sub-ledger columns — decimal strings (never float)
+        'unit_rate'                => 'decimal:2',
+        'discount_vendor_funded'   => 'decimal:2',
+        'delivery_deduction'       => 'decimal:2',
+        'packaging_deduction'      => 'decimal:2',
+        'penalty'                  => 'decimal:2',
+        'commission_rule_snapshot' => 'array',
     ];
 
     public function shop(): BelongsTo
@@ -35,6 +42,16 @@ class VendorLedgerEntry extends Model
     public function order(): BelongsTo
     {
         return $this->belongsTo(Order::class, 'order_id');
+    }
+
+    public function journalEntry(): BelongsTo
+    {
+        return $this->belongsTo(\Marvel\Database\Models\Accounting\JournalEntry::class, 'journal_entry_id');
+    }
+
+    public function item(): BelongsTo
+    {
+        return $this->belongsTo(OrderItem::class, 'order_item_id');
     }
 
     public function settlement(): BelongsTo

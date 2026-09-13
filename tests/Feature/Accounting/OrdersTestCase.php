@@ -43,8 +43,19 @@ abstract class OrdersTestCase extends AccountingTestCase
         Schema::create('order_events', function ($t) { $t->id(); $t->unsignedBigInteger('order_id'); $t->string('type'); $t->string('label')->nullable(); $t->string('actor_type')->nullable(); $t->unsignedBigInteger('actor_id')->nullable(); $t->json('meta')->nullable(); $t->timestamp('created_at')->nullable(); });
         Schema::create('payment_intents', function ($t) { $t->id(); $t->unsignedBigInteger('order_id')->nullable(); $t->string('tracking_number')->nullable(); $t->string('payment_gateway')->nullable(); $t->json('payment_intent_info')->nullable(); $t->softDeletes(); $t->timestamps(); });
 
-        $m = require base_path('packages/marvel/database/migrations/2026_09_14_000100_accounting_p3_orders_payments.php');
-        $m->up();
+        foreach ([
+            'packages/marvel/database/migrations/2026_09_14_000100_accounting_p3_orders_payments.php',
+            // the REAL dormant vendor-ledger/settlement schema, then P4 on top of it
+            'packages/marvel/database/migrations/2026_06_18_100000_create_vendor_ledger_entries_table.php',
+            'packages/marvel/database/migrations/2026_06_18_100010_create_settlement_runs_table.php',
+            'packages/marvel/database/migrations/2026_06_18_100020_create_vendor_settlements_table.php',
+            'packages/marvel/database/migrations/2026_06_22_100000_add_cost_profit_tax_to_vendor_ledger_entries.php',
+            'packages/marvel/database/migrations/2026_06_26_100000_unique_order_entry_on_vendor_ledger.php',
+            'packages/marvel/database/migrations/2026_09_14_000200_accounting_p4_vendor_ledger.php',
+        ] as $file) {
+            $m = require base_path($file);
+            $m->up();
+        }
 
         DB::table('shops')->insert([
             ['id' => 1, 'slug' => 'plantathome', 'name' => 'PlantAtHome (master)'],

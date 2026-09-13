@@ -41,6 +41,13 @@ class WithdrawalService
         ?string $idempotencyKey,
         string $actorUuid,
     ): NurseryWithdrawal {
+        // When automated settlement (vendor ledger / double-entry accounting) is the system of
+        // record, vendors are paid via settlement runs — the legacy WithdrawController blocks
+        // self-serve withdrawals for exactly this reason, and this path must not bypass it.
+        if (\Marvel\Services\VendorLedgerService::settlementActive()) {
+            throw DomainActionException::unprocessable('Manual withdrawals are disabled while automated settlement is active.', 'SETTLEMENT_ACTIVE', 'amount');
+        }
+
         return $this->db->transaction(function () use ($nursery, $amount, $paymentMethod, $details, $idempotencyKey) {
             if ($idempotencyKey !== null) {
                 $existing = NurseryWithdrawal::where('idempotency_key', $idempotencyKey)->first();
@@ -97,6 +104,9 @@ class WithdrawalService
             }
 
             if ($status === WithdrawalStatus::APPROVED) {
+                if (\Marvel\Services\VendorLedgerService::settlementActive()) {
+                    throw DomainActionException::unprocessable('Manual withdrawals are disabled while automated settlement is active.', 'SETTLEMENT_ACTIVE', 'action');
+                }
                 $this->debitBalance($fresh);
             }
 

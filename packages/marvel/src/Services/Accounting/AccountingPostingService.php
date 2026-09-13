@@ -178,6 +178,7 @@ class AccountingPostingService
             // vendor payables per assigned VENDOR_SUPPLIED line (cost-sheet or commission, snapshotted)
             $shopModes = $this->shopModes($items->pluck('assigned_shop_id')->filter()->unique()->values()->all());
             $itemSnapshots = [];
+            $ledgerLines = [];
             foreach ($items as $it) {
                 $owner = $it->ownership_model ?: 'VENDOR_SUPPLIED';
                 if ($owner === 'PLATFORM_OWNED') {
@@ -194,6 +195,11 @@ class AccountingPostingService
                 }
                 $calc = $this->calculator->forItem($it, $mode);
                 $itemSnapshots[$it->id] = VendorPayableCalculator::snapshot($calc);
+                $ledgerLines[$it->id] = [
+                    'payable' => $calc['payable']->toDecimal(), 'mode' => $calc['mode'], 'rate' => $calc['commission_rate'],
+                    'commission' => $calc['commission']->toDecimal(), 'gross' => $calc['gross']->toDecimal(),
+                    'unit_rate' => MoneyBridge::toMoney($it->vendor_price_snapshot ?? 0)->toDecimal(), 'vendor_discount' => $calc['vendor_discount']->toDecimal(),
+                ];
                 if ($calc['payable']->isZero()) {
                     continue;
                 }
@@ -216,7 +222,7 @@ class AccountingPostingService
                 'requires_reconciliation' => $beyondTolerance || $unassigned > 0,
             ];
 
-            return DB::transaction(function () use ($order, $items, $itemSnapshots, $lines, $meta, $beyondTolerance, $unassigned, $notes) {
+            return DB::transaction(function () use ($order, $items, $itemSnapshots, $ledgerLines, $lines, $meta, $beyondTolerance, $unassigned, $notes) {
                 if ($beyondTolerance) {
                     // Never post a figure the snapshot cannot explain: keep it as a balanced DRAFT
                     // for an accountant to review, and flag the order.
@@ -227,6 +233,8 @@ class AccountingPostingService
                     $entry = $this->journal->postLines($lines, $meta);
                     $status = $unassigned > 0 ? self::REQUIRES_RECONCILIATION : self::RECOGNIZED;
                     $this->markOrder($order, $status, $entry->id, $notes);
+                    // Vendor sub-ledger (settlement projection) — same transaction, linked to the journal.
+                    (new \Marvel\Services\VendorLedgerService())->recordRecognition($order, $items, $ledgerLines, $entry);
                 }
                 $now = Carbon::now();
                 foreach ($items as $it) {
@@ -254,6 +262,7 @@ class AccountingPostingService
             return DB::transaction(function () use ($order, $orig, $reason, $actor) {
                 $rev = $this->journal->reverse($orig, $reason, $actor);
                 $this->markOrder($order, self::DERECOGNIZED, $orig->id);
+                (new \Marvel\Services\VendorLedgerService())->reverseRecognition($order, $reason, $rev);
                 OrderEvent::record($order->id, 'accounting.derecognized', ['journal' => $rev->entry_number, 'reason' => $reason], 'Revenue reversed');
                 return $rev;
             });

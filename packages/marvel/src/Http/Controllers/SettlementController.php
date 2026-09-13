@@ -71,7 +71,22 @@ class SettlementController extends CoreController
         $cost = (float) VendorLedgerEntry::where('shop_id', $shopId)->whereNotNull('cost_value')->sum('cost_value');
         $profit = (float) VendorLedgerEntry::where('shop_id', $shopId)->whereNotNull('vendor_profit')->sum('vendor_profit');
 
+        // Double-entry view of the same vendor (GL 2010 per shop) — must reconcile with the ledger.
+        $glPayable = null;
+        try {
+            if (\Marvel\Services\Accounting\AccountingPostingService::enabled()) {
+                $glPayable = (new \Marvel\Services\Accounting\FinancialReports())->accountBalance('2010', null, $shopId);
+            }
+        } catch (\Throwable $e) {
+            $glPayable = null;
+        }
+        $lastPayment = VendorSettlement::where('shop_id', $shopId)->where('status', 'paid')->orderByDesc('paid_at')->first(['net_payable', 'paid_at']);
+
         return [
+            'current_payable' => round($pending + $eligible + $settledUnpaid, 2), // everything earned and not yet paid
+            'pending_settlement' => round($pending + $eligible, 2),
+            'gl_payable'     => $glPayable,
+            'last_payment'   => $lastPayment ? ['amount' => round((float) $lastPayment->net_payable, 2), 'paid_at' => $lastPayment->paid_at] : null,
             'on_hold'        => round(max(0, $pending), 2), // earned, inside the T+N window
             'eligible'       => round($eligible, 2),        // past hold, next sweep
             'awaiting_payout' => round($settledUnpaid, 2),  // settled, not yet paid
