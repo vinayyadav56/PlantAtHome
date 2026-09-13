@@ -12,6 +12,8 @@ use Marvel\Events\OrderDelivered;
 use Marvel\Events\OrderStatusChanged;
 use Marvel\Events\PaymentFailed;
 use Marvel\Events\PaymentSuccess;
+use Marvel\Services\Tax\GstService;
+use Marvel\Services\Tax\BusinessTaxConfig;
 
 trait OrderStatusManagerWithPaymentTrait
 {
@@ -276,18 +278,39 @@ trait OrderStatusManagerWithPaymentTrait
             $tax_rate = $tax_rate * 1000000;
         }
 
+        // GST orders reverse tax from the IMMUTABLE per-line snapshot instead of a
+        // blended rate — precise for mixed-GST carts. For tax-inclusive pricing the
+        // tax is embedded in `amount`, so reducing `amount` already removes it (the
+        // money reversal is 0); we still record the embedded GST in cancelled_tax for
+        // the invoice + reports. For tax-exclusive pricing the snapshot tax is the
+        // real on-top money to reverse.
+        // ponytail: a partial cancel leaves the order-level cgst/sgst/igst snapshot at
+        //   its original (invoiced) figures; net-of-cancellation lives in cancelled_tax.
+        $isGst = !is_null($parent_order->total_tax);
+        $inclusive = $isGst ? (new BusinessTaxConfig())->pricesIncludeTax() : false;
+
         // if order is child order
         if ($order->parent_id) {
+            if ($isGst) {
+                $snap = GstService::sumSnapshotTax(
+                    $parent_order->items()->whereIn('product_id', $order->products->pluck('id'))->get()
+                );
+                $recordedCancelledTax = $snap['tax'];                 // embedded/charged GST of the cancelled line(s)
+                $cancelledTaxAmount = $inclusive ? 0.0 : $snap['tax']; // money reversal (0 when embedded in amount)
+            } else {
+                $recordedCancelledTax = ($order->amount * $tax_rate) / 1000000;
+                $cancelledTaxAmount = $recordedCancelledTax;
+            }
+
             $reducedRevenueAmount = $amount - $order->amount;
-            $cancelledTaxAmount = ($order->amount * $tax_rate) / 1000000;
             $reducedTaxAmount = $parent_order->sales_tax - $cancelledTaxAmount; //for precision
 
             $parent_order->sales_tax = $reducedTaxAmount;
-            $parent_order->cancelled_tax += $cancelledTaxAmount;
+            $parent_order->cancelled_tax += $recordedCancelledTax;
 
             $parent_order->paid_total = $reducedRevenueAmount + $reducedTaxAmount + $delivery_fee;
             $parent_order->total = $reducedRevenueAmount + $reducedTaxAmount + $delivery_fee;
-            $parent_order->cancelled_amount = $parent_order->cancelled_amount + $order->amount + ($order->amount * $tax_rate) / 1000000;
+            $parent_order->cancelled_amount = $parent_order->cancelled_amount + $order->amount + $cancelledTaxAmount;
             $parent_order->save();
             //TODO: give refund to customer if order is pre paid
             if ($parent_order->paid_total == 0) {
@@ -312,7 +335,11 @@ trait OrderStatusManagerWithPaymentTrait
                 $childOrder->save();
             }
             $parent_order->cancelled_amount += $parent_order->paid_total;
-            $parent_order->cancelled_tax += $parent_order->sales_tax;
+            // Whole-order cancel reverses all GST. For inclusive pricing sales_tax is 0
+            // (tax embedded in amount) so record the embedded total_tax snapshot instead.
+            $parent_order->cancelled_tax += ($isGst && $inclusive)
+                ? (float) $parent_order->total_tax
+                : $parent_order->sales_tax;
             $parent_order->cancelled_delivery_fee = $parent_order->delivery_fee;
             $parent_order->sales_tax = 0;
             $parent_order->delivery_fee = 0;

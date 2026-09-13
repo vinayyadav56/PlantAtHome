@@ -174,6 +174,7 @@ Route::get('export-urls/{shop_id}', [ProductController::class, 'exportUrls'])
     ->middleware(['auth:sanctum', 'throttle:30,1']);
 Route::get('download_url/token/{token}', [DownloadController::class, 'downloadFile'])->middleware('throttle:30,1')->name('download_url.token');
 Route::get('export-order/token/{token}', [OrderController::class, 'exportOrder'])->middleware('throttle:30,1')->name('export_order.token');
+Route::get('export-tax-report/token/{token}', [OrderController::class, 'exportTaxReport'])->middleware('throttle:30,1')->name('export_tax_report.token');
 Route::post('subscribe-to-newsletter', [UserController::class, 'subscribeToNewsletter'])->name('subscribeToNewsletter');
 Route::get('download-invoice/token/{token}', [OrderController::class, 'downloadInvoice'])->middleware('throttle:30,1')->name('download_invoice.token');
 Route::post('webhooks/razorpay', [WebHookController::class, 'razorpay'])->middleware('throttle:120,1');
@@ -729,6 +730,7 @@ Route::group(
         ]);
 
         Route::get('export-order-url/{shop_id?}', 'Marvel\Http\Controllers\OrderController@exportOrderUrl')->middleware('permission:orders.view');
+        Route::get('export-tax-report-url', 'Marvel\Http\Controllers\OrderController@exportTaxReportUrl')->middleware('permission:orders.view');
         Route::post('download-invoice-url', 'Marvel\Http\Controllers\OrderController@downloadInvoiceUrl')->middleware('permission:orders.view');
         Route::apiResource('faqs', FaqsController::class, [
             'only' => ['store', 'update', 'destroy'],

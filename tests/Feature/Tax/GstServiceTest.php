@@ -189,4 +189,35 @@ class GstServiceTest extends TaxTestCase
         $r = $this->gst()->compute([$this->line($p, 1180)], 0, $this->shipTo('Haryana'));
         $this->assertSame(0.0, $r['total_tax']);
     }
+
+    // Test 12 — cancellation/refund tax reversal sums the IMMUTABLE line snapshot,
+    // never a re-derived blended rate. Two lines (₹180 + ₹10 GST) → reverse both.
+    public function test_reversal_sums_snapshot_tax(): void
+    {
+        $items = [
+            ['tax_amount' => 180, 'cgst_amount' => 90, 'sgst_amount' => 90, 'igst_amount' => 0, 'taxable_value' => 1000],
+            ['tax_amount' => 10,  'cgst_amount' => 5,  'sgst_amount' => 5,  'igst_amount' => 0, 'taxable_value' => 200],
+        ];
+        $r = GstService::sumSnapshotTax($items);
+        $this->assertSame(190.0, $r['tax']);
+        $this->assertSame(95.0, $r['cgst']);
+        $this->assertSame(95.0, $r['sgst']);
+        $this->assertSame(0.0, $r['igst']);
+        $this->assertSame(1200.0, $r['taxable']);
+
+        // Reversing a single cancelled line reverses only that line's snapshot.
+        $one = GstService::sumSnapshotTax([$items[1]]);
+        $this->assertSame(10.0, $one['tax']);
+    }
+
+    // Inter-state reversal keeps IGST (never splits it into CGST/SGST).
+    public function test_reversal_inter_state_igst(): void
+    {
+        $r = GstService::sumSnapshotTax([
+            ['tax_amount' => 90, 'cgst_amount' => 0, 'sgst_amount' => 0, 'igst_amount' => 90, 'taxable_value' => 500],
+        ]);
+        $this->assertSame(90.0, $r['igst']);
+        $this->assertSame(0.0, $r['cgst']);
+        $this->assertSame(0.0, $r['sgst']);
+    }
 }

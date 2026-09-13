@@ -168,6 +168,37 @@ class GstService
         }
     }
 
+    /**
+     * Sum the immutable per-line tax snapshot across a set of order_items — the basis
+     * for cancellation / refund tax reversal. Reads the stored figures verbatim; never
+     * recomputes (historical tax must not move). Accepts models or plain arrays.
+     *
+     * @param  iterable $items rows carrying tax_amount/cgst_amount/sgst_amount/igst_amount/taxable_value
+     * @return array{tax:float,cgst:float,sgst:float,igst:float,taxable:float}
+     */
+    public static function sumSnapshotTax(iterable $items): array
+    {
+        $get = function ($row, string $key): float {
+            $v = is_array($row) ? ($row[$key] ?? 0) : ($row->{$key} ?? 0);
+            return (float) $v;
+        };
+        $t = $c = $s = $i = $tv = 0.0;
+        foreach ($items as $it) {
+            $t  += $get($it, 'tax_amount');
+            $c  += $get($it, 'cgst_amount');
+            $s  += $get($it, 'sgst_amount');
+            $i  += $get($it, 'igst_amount');
+            $tv += $get($it, 'taxable_value');
+        }
+        return [
+            'tax'     => round($t, 2),
+            'cgst'    => round($c, 2),
+            'sgst'    => round($s, 2),
+            'igst'    => round($i, 2),
+            'taxable' => round($tv, 2),
+        ];
+    }
+
     // ── internals ────────────────────────────────────────────────────────────
 
     /** intra: cgst=sgst=tax/2 ; inter: igst=tax. Never both. */

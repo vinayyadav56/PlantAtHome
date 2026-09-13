@@ -22,6 +22,7 @@ use Marvel\Enums\PaymentGatewayType;
 use Marvel\Enums\Permission;
 use Marvel\Exceptions\MarvelException;
 use Marvel\Exports\OrderExport;
+use Marvel\Exports\TaxReportExport;
 use Marvel\Http\Requests\OrderCreateRequest;
 use Marvel\Http\Requests\OrderUpdateRequest;
 use Marvel\Traits\OrderManagementTrait;
@@ -655,6 +656,65 @@ class OrderController extends CoreController
 
         try {
             return Excel::download(new OrderExport($this->repository, $shop_id), 'orders.xlsx');
+        } catch (MarvelException $e) {
+            throw new MarvelException(NOT_FOUND);
+        }
+    }
+
+    /**
+     * Mint a tokenised URL for the GST tax report export. Optional date-range and
+     * place-of-supply filters are carried in the token payload (same token flow as
+     * exportOrderUrl — the download route sends no bearer).
+     *
+     * @param Request $request
+     * @return string
+     */
+    public function exportTaxReportUrl(Request $request)
+    {
+        try {
+            $user = $request->user();
+            if ($user && !$this->repository->hasPermission($user, $request->shop_id)) {
+                throw new AuthorizationException(NOT_AUTHORIZED);
+            }
+
+            $filters = [
+                'from'  => $request->input('from'),
+                'to'    => $request->input('to'),
+                'state' => $request->input('state'),
+            ];
+
+            $newToken = DownloadToken::create([
+                'user_id' => $user->id,
+                'token'   => Str::random(16),
+                'payload' => json_encode($filters),
+            ]);
+
+            return route('export_tax_report.token', ['token' => $newToken->token]);
+        } catch (MarvelException $e) {
+            throw new MarvelException(SOMETHING_WENT_WRONG, $e->getMessage());
+        }
+    }
+
+    /**
+     * Download the GST tax report xlsx for a minted token.
+     *
+     * @param string $token
+     * @return void
+     */
+    public function exportTaxReport($token)
+    {
+        $filters = [];
+        try {
+            $downloadToken = DownloadToken::where('token', $token)->firstOrFail();
+            $decoded = json_decode($downloadToken->payload ?? '[]', true);
+            $filters = is_array($decoded) ? $decoded : [];
+            $downloadToken->delete();
+        } catch (\Throwable $e) {
+            throw new MarvelException(TOKEN_NOT_FOUND);
+        }
+
+        try {
+            return Excel::download(new TaxReportExport($filters), 'gst-tax-report.xlsx');
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
         }
