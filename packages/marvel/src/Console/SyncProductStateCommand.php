@@ -83,6 +83,13 @@ class SyncProductStateCommand extends Command
         $dry   = (bool) $this->option('dry-run');
         $limit = (int) $this->option('limit');
 
+        // Backup tables are DDL: on MySQL a CREATE TABLE implicitly COMMITs, so it
+        // must never run inside the per-product transaction below (the first
+        // rollout attempt died at commit with "no active transaction").
+        if (! $dry) {
+            $this->ensureBackupTables();
+        }
+
         $stats = ['matched' => 0, 'unchanged' => 0, 'changed' => 0, 'converted' => 0,
                   'variants_created' => 0, 'variants_updated' => 0, 'missing' => []];
         $samples = [];
@@ -189,11 +196,9 @@ class SyncProductStateCommand extends Command
         return ['product' => $product, 'create' => $create, 'update' => $update];
     }
 
-    /** Snapshot once, then write the planned product/variant changes. */
+    /** Snapshot once, then write the planned product/variant changes (DML only — runs in a transaction). */
     private function apply(Product $p, array $want, array $plan): void
     {
-        $this->ensureBackupTables();
-
         if (! DB::table('pah_product_state_backup')->where('product_id', $p->id)->exists()) {
             $row = ['product_id' => $p->id, 'backed_up_at' => now()];
             foreach (self::PRODUCT_COLS as $col) {

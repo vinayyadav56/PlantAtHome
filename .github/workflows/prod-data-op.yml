@@ -68,6 +68,7 @@ on:
           - market-publish
           - state-sync-dry
           - state-sync-limit10
+          - state-sync-limit100
           - state-sync
           - state-sync-rollback
         default: dry-run
@@ -125,6 +126,7 @@ jobs:
             # Reversible: snapshots to pah_product_state_backup + pah_variation_state_backup.
             state-sync-dry)      ARGS="plantathome:sync-product-state --dry-run" ;;
             state-sync-limit10)  ARGS="plantathome:sync-product-state --limit=10" ;;
+            state-sync-limit100) ARGS="plantathome:sync-product-state --limit=100" ;;
             state-sync)          ARGS="plantathome:sync-product-state" ;;
             state-sync-rollback) ARGS="plantathome:sync-product-state --rollback" ;;
             *) echo "Unknown mode"; exit 1 ;;
@@ -157,6 +159,10 @@ jobs:
             set -e
             cd /var/www/plantathome/api
             sudo chown -R ubuntu:ubuntu storage bootstrap/cache 2>/dev/null || true
+            # ALWAYS hand storage/ back to php-fpm, even when an op fails mid-way:
+            # with `set -e` the trailing chown below never ran on failure and the
+            # live API answered 500 (storage unwritable) until the next op completed.
+            trap 'sudo chown -R www-data:www-data storage bootstrap/cache 2>/dev/null || true' EXIT
 
             # read a value from .env, stripping surrounding quotes
             getenv() { grep -E "^$1=" .env | head -1 | cut -d '=' -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//"; }
