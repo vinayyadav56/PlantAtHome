@@ -90,6 +90,15 @@ final class ModuleCatalog
                 // credential is not, and testing a connection makes an outbound call.
                 'integrations'  => ['view', 'edit', 'test'],
             ],
+            // Double-entry accounting. `accounting` (default) = GL/COA/journals/reports;
+            // settlements + adjustments carry their own approve/pay gates because they
+            // move real money; periods.close locks a month against normal posting.
+            'accounting' => [
+                'accounting'  => ['view', 'create', 'edit', 'approve', 'export'],
+                'settlements' => ['view', 'approve', 'pay'],
+                'adjustments' => ['view', 'create', 'approve'],
+                'periods'     => ['view', 'close'],
+            ],
             'employees' => [
                 'employees'    => self::CRUD,
                 'designations' => self::CRUD,

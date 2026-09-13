@@ -290,6 +290,8 @@ try {
   echo "==> [bg] Seeding designations (Phase B)..."
   php artisan db:seed --class="Marvel\\Database\\Seeders\\DesignationSeeder" --force \
     || echo "[bg] WARNING: DesignationSeeder failed"
+  php artisan db:seed --class="Marvel\\Database\\Seeders\\AccountingSeeder" --force \
+    || echo "WARN: AccountingSeeder failed (non-fatal)"
 
   # Operations Control Center — one active global row per vertical (+ platform).
   # Idempotent firstOrCreate, never resets admin toggles; all-active = no-op.
