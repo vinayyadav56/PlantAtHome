@@ -63,6 +63,10 @@ class SyncProductStateCommand extends Command
     /** shop_id => [size => attribute_value id] */
     private array $sizeValueIds = [];
 
+    /** products.sku is UNIQUE and each environment generated its own PLT-IND series in
+     *  its own order — when another product here already owns the manifest sku, ours is kept. */
+    private int $skuConflicts = 0;
+
     public function handle(): int
     {
         if ($this->option('rollback')) {
@@ -136,9 +140,9 @@ class SyncProductStateCommand extends Command
         }
 
         $this->info(sprintf(
-            '%smatched %d · changed %d (simple→variable %d) · unchanged %d · variants +%d ~%d · missing on this DB %d',
+            '%smatched %d · changed %d (simple→variable %d) · unchanged %d · variants +%d ~%d · missing on this DB %d · sku kept (unique conflict) %d',
             $dry ? '[DRY-RUN] ' : '', $stats['matched'], $stats['changed'], $stats['converted'],
-            $stats['unchanged'], $stats['variants_created'], $stats['variants_updated'], count($stats['missing'])
+            $stats['unchanged'], $stats['variants_created'], $stats['variants_updated'], count($stats['missing']), $this->skuConflicts
         ));
         foreach ($samples as $s) {
             $this->line('   ' . $s);
@@ -164,9 +168,15 @@ class SyncProductStateCommand extends Command
     {
         $product = [];
         foreach (self::PRODUCT_COLS as $col) {
-            if (array_key_exists($col, $want) && ! $this->same($p->{$col}, $want[$col], $col)) {
-                $product[$col] = $want[$col];
+            if (! array_key_exists($col, $want) || $this->same($p->{$col}, $want[$col], $col)) {
+                continue;
             }
+            if ($col === 'sku' && $want[$col] !== null && $want[$col] !== ''
+                && DB::table('products')->where('sku', $want[$col])->where('id', '!=', $p->id)->exists()) {
+                $this->skuConflicts++;
+                continue;
+            }
+            $product[$col] = $want[$col];
         }
 
         $existing = $p->variation_options()->get()->keyBy(fn ($v) => (string) $v->title);
