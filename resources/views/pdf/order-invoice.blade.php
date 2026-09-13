@@ -76,7 +76,8 @@
                 <p style="font-size: 20px; font-weight: bold; margin: 0 0 8px 0;">TAX INVOICE</p>
             @endif
             @if (isset($translated_text['invoice_no']) || isset($order->tracking_number))
-                <p>{{ $translated_text['invoice_no'] }}: {{ $order->tracking_number }}</p>
+                <p>{{ $translated_text['invoice_no'] }}:
+                    {{ $hasGst && !empty($taxConfig['invoice_prefix']) ? $taxConfig['invoice_prefix'] . '-' : '' }}{{ $order->tracking_number }}</p>
             @endif
             @if (isset($translated_text['delivery_time']) || isset($order->delivery_time))
                 <p>{{ isset($translated_text['payment_method']) ? $translated_text['payment_method'] : 'Payment Method' }}:
