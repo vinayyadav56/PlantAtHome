@@ -3,7 +3,6 @@
 namespace Marvel\Services\Accounting;
 
 use App\Shared\Domain\ValueObject\Money;
-use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\OrderItem;
 
 /**
@@ -12,51 +11,87 @@ use Marvel\Database\Models\OrderItem;
  * onto the line at recognition (spec §11, §13) so later rule changes never move history.
  *
  *  cost_sheet (D1 default): payable = vendor_price_snapshot × qty − vendor-funded discount − deductions
- *  commission:              payable = taxable_value − commission(rate) − vendor-funded discount − deductions
+ *  percentage:              payable = taxable_value − taxable_value × rate% − vendor-funded discount − deductions
+ *  fixed_per_item:          commission = value × qty
+ *  fixed_per_order:         commission = value once per (order, vendor), allocated across that vendor's lines by base
  *
- * Commission rate today = balances.admin_commission_rate for the shop (the one existing
- * store); the rules table (vendor/category/product, % / fixed) plugs into rateFor() in P5.
+ * The rule comes from VendorCommissionRuleResolver (product > category > vendor > shop mode).
  */
 class VendorPayableCalculator
 {
     public const COST_SHEET = 'cost_sheet';
     public const COMMISSION = 'commission';
 
-    /** @return array{mode:string, gross:Money, base:Money, commission_rate:string, commission:Money, vendor_discount:Money, deductions:Money, payable:Money} */
-    public function forItem(OrderItem $item, ?string $shopMode = null, array $deductions = []): array
+    public function __construct(private readonly VendorCommissionRuleResolver $resolver = new VendorCommissionRuleResolver())
     {
-        $qty = max(1, (int) $item->order_quantity);
-        $mode = $shopMode ?: self::COST_SHEET;
-        $vendorDiscount = ($item->discount_funded_by ?? null) === 'vendor'
-            ? MoneyBridge::toMoney($item->discount_amount ?? 0) : MoneyBridge::zero();
-        $ded = MoneyBridge::sum(array_values($deductions));
-
-        if ($mode === self::COMMISSION) {
-            $base = MoneyBridge::toMoney($item->taxable_value ?? $item->subtotal ?? 0);
-            $rate = $this->rateFor((int) $item->assigned_shop_id);
-            $commission = MoneyBridge::percent($base, $rate);
-            $payable = $base->subtract($commission)->subtract($vendorDiscount)->subtract($ded);
-            return ['mode' => $mode, 'gross' => $base, 'base' => $base, 'commission_rate' => $rate,
-                'commission' => $commission, 'vendor_discount' => $vendorDiscount, 'deductions' => $ded,
-                'payable' => $payable->isNegative() ? MoneyBridge::zero() : $payable];
-        }
-
-        $gross = MoneyBridge::toMoney($item->vendor_price_snapshot ?? 0)->multiply($qty);
-        $payable = $gross->subtract($vendorDiscount)->subtract($ded);
-        return ['mode' => self::COST_SHEET, 'gross' => $gross, 'base' => $gross, 'commission_rate' => '0.0000',
-            'commission' => MoneyBridge::zero(), 'vendor_discount' => $vendorDiscount, 'deductions' => $ded,
-            'payable' => $payable->isNegative() ? MoneyBridge::zero() : $payable];
     }
 
-    /** Commission % for a shop: legacy balances.admin_commission_rate (P5: vendor_commission_rules). */
-    public function rateFor(int $shopId): string
+    /**
+     * Calculate every line of an order at once (fixed_per_order needs the vendor's lines together).
+     * @param iterable<OrderItem> $items
+     * @param array<int, array{recognition_mode?:string, commission_mode?:string}> $shopModes keyed by shop id
+     * @param array<int, array<string, Money|string>> $deductions per order_item_id
+     * @return array<int, array> calc per order_item_id (see forItem)
+     */
+    public function forLines(iterable $items, array $shopModes = [], array $deductions = []): array
     {
-        try {
-            $r = DB::table('balances')->where('shop_id', $shopId)->value('admin_commission_rate');
-            return number_format((float) ($r ?? 0), 4, '.', '');
-        } catch (\Throwable $e) {
-            return '0.0000';
+        $out = [];
+        $perOrderShare = []; // shop_id => [item_id => Money] for fixed_per_order rules
+        $rules = [];
+        foreach ($items as $it) {
+            if (!$it->assigned_shop_id) {
+                continue;
+            }
+            $rule = $this->resolver->resolve((int) $it->assigned_shop_id, $it->product_id ? (int) $it->product_id : null, $this->resolver->categoryIdsFor($it->product_id ? (int) $it->product_id : null), $shopModes[$it->assigned_shop_id]['commission_mode'] ?? null);
+            $rules[$it->id] = $rule;
         }
+        // allocate each vendor's fixed-per-order commission across their lines by base (largest remainder)
+        $byShopRule = [];
+        foreach ($items as $it) {
+            $r = $rules[$it->id] ?? null;
+            if ($r && $r['mode'] === VendorCommissionRuleResolver::FIXED_PER_ORDER) {
+                $byShopRule[$it->assigned_shop_id . ':' . ($r['rule_id'] ?? 0)][$it->id] = MoneyBridge::toMoney($it->taxable_value ?? $it->subtotal ?? 0)->amountMinor();
+            }
+        }
+        foreach ($byShopRule as $k => $weights) {
+            $firstItem = array_key_first($weights);
+            $value = MoneyBridge::toMoney($rules[$firstItem]['value']);
+            foreach (MoneyBridge::allocate($value, $weights) as $itemId => $share) {
+                $perOrderShare[$itemId] = $share;
+            }
+        }
+        foreach ($items as $it) {
+            if (!isset($rules[$it->id])) {
+                continue;
+            }
+            $out[$it->id] = $this->forItem($it, $shopModes[$it->assigned_shop_id]['commission_mode'] ?? null, $deductions[$it->id] ?? [], $rules[$it->id], $perOrderShare[$it->id] ?? null);
+        }
+        return $out;
+    }
+
+    /** @return array{mode:string, gross:Money, base:Money, commission_rate:string, commission:Money, vendor_discount:Money, deductions:Money, payable:Money, rule_id:?int, scope:string} */
+    public function forItem(OrderItem $item, ?string $shopMode = null, array $deductions = [], ?array $rule = null, ?Money $fixedShare = null): array
+    {
+        $qty = max(1, (int) $item->order_quantity);
+        $rule = $rule ?: $this->resolver->resolve((int) $item->assigned_shop_id, $item->product_id ? (int) $item->product_id : null, $this->resolver->categoryIdsFor($item->product_id ? (int) $item->product_id : null), $shopMode);
+        $vendorDiscount = ($item->discount_funded_by ?? null) === 'vendor' ? MoneyBridge::toMoney($item->discount_amount ?? 0) : MoneyBridge::zero();
+        $ded = MoneyBridge::sum(array_values($deductions));
+        $meta = ['rule_id' => $rule['rule_id'], 'scope' => $rule['scope'], 'vendor_discount' => $vendorDiscount, 'deductions' => $ded];
+
+        if ($rule['mode'] === VendorCommissionRuleResolver::COST_SHEET) {
+            $gross = MoneyBridge::toMoney($item->vendor_price_snapshot ?? 0)->multiply($qty);
+            $payable = $gross->subtract($vendorDiscount)->subtract($ded);
+            return ['mode' => self::COST_SHEET, 'gross' => $gross, 'base' => $gross, 'commission_rate' => '0.0000', 'commission' => MoneyBridge::zero(), 'payable' => $this->floor($payable)] + $meta;
+        }
+        $base = MoneyBridge::toMoney($item->taxable_value ?? $item->subtotal ?? 0);
+        $commission = match ($rule['mode']) {
+            VendorCommissionRuleResolver::PERCENTAGE      => MoneyBridge::percent($base, $rule['value']),
+            VendorCommissionRuleResolver::FIXED_PER_ITEM  => MoneyBridge::toMoney($rule['value'])->multiply($qty),
+            VendorCommissionRuleResolver::FIXED_PER_ORDER => $fixedShare ?? MoneyBridge::toMoney($rule['value']),
+            default                                       => MoneyBridge::zero(),
+        };
+        $payable = $base->subtract($commission)->subtract($vendorDiscount)->subtract($ded);
+        return ['mode' => $rule['mode'], 'gross' => $base, 'base' => $base, 'commission_rate' => $rule['value'], 'commission' => $commission, 'payable' => $this->floor($payable)] + $meta;
     }
 
     /** The snapshot written onto order_items at recognition. */
@@ -68,5 +103,10 @@ class VendorPayableCalculator
             'commission_amount_snapshot' => $calc['commission']->toDecimal(),
             'vendor_payable_snapshot'    => $calc['payable']->toDecimal(),
         ];
+    }
+
+    private function floor(Money $m): Money
+    {
+        return $m->isNegative() ? MoneyBridge::zero() : $m;
     }
 }

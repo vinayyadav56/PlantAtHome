@@ -41,6 +41,7 @@ abstract class OrdersTestCase extends AccountingTestCase
         Schema::create('order_product', function ($t) { $t->id(); $t->unsignedBigInteger('order_id'); $t->unsignedBigInteger('product_id'); $t->unsignedBigInteger('variation_option_id')->nullable(); $t->integer('order_quantity')->default(1); $t->double('unit_price')->default(0); $t->double('subtotal')->default(0); $t->timestamps(); });
         Schema::create('withdraws', function ($t) { $t->id(); $t->unsignedBigInteger('shop_id'); $t->double('amount'); $t->string('payment_method')->nullable(); $t->string('status')->default('pending'); $t->text('details')->nullable(); $t->text('note')->nullable(); $t->softDeletes(); $t->timestamps(); });
         Schema::create('refunds', function ($t) { $t->id(); $t->double('amount')->default(0); $t->string('status')->default('pending'); $t->string('title')->nullable(); $t->text('description')->nullable(); $t->json('images')->nullable(); $t->unsignedBigInteger('order_id')->nullable(); $t->unsignedBigInteger('customer_id')->nullable(); $t->unsignedBigInteger('shop_id')->nullable(); $t->unsignedBigInteger('refund_policy_id')->nullable(); $t->unsignedBigInteger('refund_reason_id')->nullable(); $t->timestamps(); });
+        Schema::create('category_product', function ($t) { $t->unsignedBigInteger('category_id'); $t->unsignedBigInteger('product_id'); });
         Schema::create('order_wallet_points', function ($t) { $t->id(); $t->unsignedBigInteger('order_id'); $t->double('amount')->default(0); $t->timestamps(); });
         Schema::create('order_events', function ($t) { $t->id(); $t->unsignedBigInteger('order_id'); $t->string('type'); $t->string('label')->nullable(); $t->string('actor_type')->nullable(); $t->unsignedBigInteger('actor_id')->nullable(); $t->json('meta')->nullable(); $t->timestamp('created_at')->nullable(); });
         Schema::create('payment_intents', function ($t) { $t->id(); $t->unsignedBigInteger('order_id')->nullable(); $t->string('tracking_number')->nullable(); $t->string('payment_gateway')->nullable(); $t->json('payment_intent_info')->nullable(); $t->softDeletes(); $t->timestamps(); });
@@ -57,6 +58,7 @@ abstract class OrdersTestCase extends AccountingTestCase
             'packages/marvel/database/migrations/2026_09_14_000300_accounting_p8_settlements_payments.php',
             'packages/marvel/database/migrations/2026_09_14_000400_accounting_p10_refunds_returns.php',
             'packages/marvel/database/migrations/2026_09_14_000500_accounting_p12_reconciliation.php',
+            'packages/marvel/database/migrations/2026_09_14_000600_accounting_p5_commission_rules.php',
         ] as $file) {
             $m = require base_path($file);
             $m->up();

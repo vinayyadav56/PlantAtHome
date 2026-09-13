@@ -103,7 +103,7 @@ class VendorLedgerService
                     'tax_amount'               => $item->tax_amount,
                     'quantity'                 => (int) $item->order_quantity,
                     'unit_rate'                => $calc['unit_rate'],
-                    'commission_rule_snapshot' => ['mode' => $calc['mode'], 'rate' => $calc['rate']],
+                    'commission_rule_snapshot' => ['mode' => $calc['mode'], 'rate' => $calc['rate'], 'rule_id' => $calc['rule_id'] ?? null, 'scope' => $calc['scope'] ?? null],
                     'discount_vendor_funded'   => $calc['vendor_discount'],
                     'journal_entry_id'         => $journal->id,
                     'idempotency_key'          => $key,

@@ -179,6 +179,7 @@ class AccountingPostingService
             $shopModes = $this->shopModes($items->pluck('assigned_shop_id')->filter()->unique()->values()->all());
             $itemSnapshots = [];
             $ledgerLines = [];
+            $calcs = $this->calculator->forLines($items->filter(fn ($i) => ($i->ownership_model ?: 'VENDOR_SUPPLIED') !== 'PLATFORM_OWNED'), $shopModes);
             foreach ($items as $it) {
                 $owner = $it->ownership_model ?: 'VENDOR_SUPPLIED';
                 if ($owner === 'PLATFORM_OWNED') {
@@ -193,10 +194,10 @@ class AccountingPostingService
                 if (($shopModes[$it->assigned_shop_id]['recognition_mode'] ?? 'principal') === 'agent') {
                     $notes[] = 'shop ' . $it->assigned_shop_id . ' is AGENT mode (agent variant pending) — posted as principal';
                 }
-                $calc = $this->calculator->forItem($it, $mode);
+                $calc = $calcs[$it->id] ?? $this->calculator->forItem($it, $mode);
                 $itemSnapshots[$it->id] = VendorPayableCalculator::snapshot($calc);
                 $ledgerLines[$it->id] = [
-                    'payable' => $calc['payable']->toDecimal(), 'mode' => $calc['mode'], 'rate' => $calc['commission_rate'],
+                    'payable' => $calc['payable']->toDecimal(), 'mode' => $calc['mode'], 'rate' => $calc['commission_rate'], 'rule_id' => $calc['rule_id'] ?? null, 'scope' => $calc['scope'] ?? null,
                     'commission' => $calc['commission']->toDecimal(), 'gross' => $calc['gross']->toDecimal(),
                     'unit_rate' => MoneyBridge::toMoney($it->vendor_price_snapshot ?? 0)->toDecimal(), 'vendor_discount' => $calc['vendor_discount']->toDecimal(),
                 ];
