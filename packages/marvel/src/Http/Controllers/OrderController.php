@@ -677,10 +677,17 @@ class OrderController extends CoreController
                 throw new AuthorizationException(NOT_AUTHORIZED);
             }
 
+            // Scope is set here, under the permission check, and frozen into the token —
+            // hasPermission() above already rejects a non-super-admin who did not pass a
+            // shop they own, so a super-admin gets the company-wide report (shop_id null)
+            // and every other caller is constrained to their own shop. The download route
+            // reads this stored shop_id, never a client-supplied one, so it can't be
+            // widened at redemption.
             $filters = [
-                'from'  => $request->input('from'),
-                'to'    => $request->input('to'),
-                'state' => $request->input('state'),
+                'from'    => $request->input('from'),
+                'to'      => $request->input('to'),
+                'state'   => $request->input('state'),
+                'shop_id' => $request->shop_id,
             ];
 
             $newToken = DownloadToken::create([

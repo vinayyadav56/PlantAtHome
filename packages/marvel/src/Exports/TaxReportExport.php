@@ -36,6 +36,14 @@ class TaxReportExport implements FromCollection, WithHeadings
             ->with(['items', 'customer'])
             ->orderBy('created_at');
 
+        // Shop scope is authoritative — set at mint time under the permission check
+        // (see OrderController::exportTaxReportUrl). Null only for a super-admin, who
+        // legitimately gets the company-wide GST report; every other caller is pinned
+        // to the single shop they were authorized against, so this is not an IDOR.
+        if (!empty($this->filters['shop_id'])) {
+            $query->where('shop_id', $this->filters['shop_id']);
+        }
+
         if (!empty($this->filters['from'])) {
             $query->whereDate('created_at', '>=', $this->filters['from']);
         }
