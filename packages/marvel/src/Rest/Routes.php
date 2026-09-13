@@ -80,6 +80,7 @@ use Marvel\Http\Controllers\PlantTaxonomyController;
 use Marvel\Http\Controllers\TestDataCleanupController;
 use Marvel\Http\Controllers\VendorInventoryController;
 use Marvel\Http\Controllers\SettlementController;
+use Marvel\Http\Controllers\AccountingSettlementController;
 use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
@@ -818,6 +819,7 @@ Route::group(
         Route::get('vendor/balance', [SettlementController::class, 'myBalance']);
         Route::get('vendor/ledger.csv', [ReportController::class, 'myLedgerCsv']);
         Route::get('vendor/settlements.csv', [ReportController::class, 'mySettlementsCsv']);
+        Route::get('vendor/payments', [AccountingSettlementController::class, 'myPayments']);
 
         // Vendor dashboard widget (D2): low-stock alerts (own shop). Rejected/courier
         // orders reuse the standard `orders` endpoint (order_status / delivery_mode filter);
@@ -929,6 +931,17 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
         ->whereNumber('id')->middleware('permission:settings.location_pages.edit');
     Route::delete('location-pages/{id}', [LocationPageController::class, 'destroy'])
         ->whereNumber('id')->middleware('permission:settings.location_pages.delete');
+
+    // Double-entry accounting — settlement approval, vendor payments (partial), adjustments.
+    // Permission-gated per action (spec §55): accounting.settlements.* / accounting.adjustments.*.
+    Route::post('accounting/settlements/{id}/approve', [AccountingSettlementController::class, 'approve'])->whereNumber('id')->middleware('permission:accounting.settlements.approve');
+    Route::post('accounting/settlements/{id}/cancel', [AccountingSettlementController::class, 'cancel'])->whereNumber('id')->middleware('permission:accounting.settlements.approve');
+    Route::get('accounting/settlements/{id}/payments', [AccountingSettlementController::class, 'payments'])->whereNumber('id')->middleware('permission:accounting.settlements.view');
+    Route::post('accounting/settlements/{id}/payments', [AccountingSettlementController::class, 'recordPayment'])->whereNumber('id')->middleware('permission:accounting.settlements.pay');
+    Route::get('accounting/vendor-adjustments', [AccountingSettlementController::class, 'adjustments'])->middleware('permission:accounting.adjustments.view');
+    Route::post('accounting/vendor-adjustments', [AccountingSettlementController::class, 'createAdjustment'])->middleware('permission:accounting.adjustments.create');
+    Route::post('accounting/vendor-adjustments/{id}/approve', [AccountingSettlementController::class, 'approveAdjustment'])->whereNumber('id')->middleware('permission:accounting.adjustments.approve');
+    Route::post('accounting/vendor-adjustments/{id}/reject', [AccountingSettlementController::class, 'rejectAdjustment'])->whereNumber('id')->middleware('permission:accounting.adjustments.approve');
 });
 
 Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sanctum']], function () {

@@ -39,6 +39,7 @@ abstract class OrdersTestCase extends AccountingTestCase
         // Order default-eager-loads customer + products (pivot) — stub their tables.
         Schema::create('users', function ($t) { $t->id(); $t->string('name')->nullable(); $t->string('email')->nullable(); $t->timestamps(); });
         Schema::create('order_product', function ($t) { $t->id(); $t->unsignedBigInteger('order_id'); $t->unsignedBigInteger('product_id'); $t->unsignedBigInteger('variation_option_id')->nullable(); $t->integer('order_quantity')->default(1); $t->double('unit_price')->default(0); $t->double('subtotal')->default(0); $t->timestamps(); });
+        Schema::create('withdraws', function ($t) { $t->id(); $t->unsignedBigInteger('shop_id'); $t->double('amount'); $t->string('payment_method')->nullable(); $t->string('status')->default('pending'); $t->text('details')->nullable(); $t->text('note')->nullable(); $t->softDeletes(); $t->timestamps(); });
         Schema::create('order_wallet_points', function ($t) { $t->id(); $t->unsignedBigInteger('order_id'); $t->double('amount')->default(0); $t->timestamps(); });
         Schema::create('order_events', function ($t) { $t->id(); $t->unsignedBigInteger('order_id'); $t->string('type'); $t->string('label')->nullable(); $t->string('actor_type')->nullable(); $t->unsignedBigInteger('actor_id')->nullable(); $t->json('meta')->nullable(); $t->timestamp('created_at')->nullable(); });
         Schema::create('payment_intents', function ($t) { $t->id(); $t->unsignedBigInteger('order_id')->nullable(); $t->string('tracking_number')->nullable(); $t->string('payment_gateway')->nullable(); $t->json('payment_intent_info')->nullable(); $t->softDeletes(); $t->timestamps(); });
@@ -52,6 +53,7 @@ abstract class OrdersTestCase extends AccountingTestCase
             'packages/marvel/database/migrations/2026_06_22_100000_add_cost_profit_tax_to_vendor_ledger_entries.php',
             'packages/marvel/database/migrations/2026_06_26_100000_unique_order_entry_on_vendor_ledger.php',
             'packages/marvel/database/migrations/2026_09_14_000200_accounting_p4_vendor_ledger.php',
+            'packages/marvel/database/migrations/2026_09_14_000300_accounting_p8_settlements_payments.php',
         ] as $file) {
             $m = require base_path($file);
             $m->up();

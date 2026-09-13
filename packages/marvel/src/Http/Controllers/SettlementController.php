@@ -65,12 +65,14 @@ class SettlementController extends CoreController
             ->where(fn ($q) => $q->whereNull('available_at')->orWhere('available_at', '>', $now))->sum('amount');
         $eligible = (float) VendorLedgerEntry::where('shop_id', $shopId)->where('status', 'pending')
             ->whereNotNull('available_at')->where('available_at', '<=', $now)->sum('amount');
-        $settledUnpaid = (float) VendorSettlement::where('shop_id', $shopId)->where('status', 'pending')->sum('net_payable');
-        $paid = (float) VendorSettlement::where('shop_id', $shopId)->where('status', 'paid')->sum('net_payable');
+        $open = VendorSettlement::where('shop_id', $shopId)->whereIn('status', \Marvel\Services\SettlementService::OPEN)->get(['net_payable', 'remaining_payable', 'amount_paid']);
+        $settledUnpaid = (float) $open->sum(fn ($s) => (float) $s->amount_paid > 0 || (float) $s->remaining_payable > 0 ? (float) $s->remaining_payable : (float) $s->net_payable);
+        $paid = (float) VendorLedgerEntry::where('shop_id', $shopId)->where('entry_type', 'vendor_payment')->sum('amount') * -1;
+        // THE answer to "how much do we owe this vendor": the sub-ledger, sales − reversals ± adjustments − payments (spec §8).
+        $currentPayable = (float) VendorLedgerEntry::where('shop_id', $shopId)->where('status', '!=', 'reversed')->sum('amount');
         // Lifetime cost of goods + resulting profit (only over sales whose cost is known).
         $cost = (float) VendorLedgerEntry::where('shop_id', $shopId)->whereNotNull('cost_value')->sum('cost_value');
         $profit = (float) VendorLedgerEntry::where('shop_id', $shopId)->whereNotNull('vendor_profit')->sum('vendor_profit');
-
         // Double-entry view of the same vendor (GL 2010 per shop) — must reconcile with the ledger.
         $glPayable = null;
         try {
@@ -80,20 +82,26 @@ class SettlementController extends CoreController
         } catch (\Throwable $e) {
             $glPayable = null;
         }
-        $lastPayment = VendorSettlement::where('shop_id', $shopId)->where('status', 'paid')->orderByDesc('paid_at')->first(['net_payable', 'paid_at']);
+        $lastPayment = null;
+        try {
+            $lp = \Marvel\Database\Models\VendorPayment::where('shop_id', $shopId)->where('status', 'completed')->orderByDesc('payment_date')->orderByDesc('id')->first();
+            $lastPayment = $lp ? ['amount' => round((float) $lp->amount, 2), 'paid_at' => $lp->payment_date, 'method' => $lp->payment_method] : null;
+        } catch (\Throwable $e) {
+            $lastPayment = null;
+        }
 
         return [
-            'current_payable' => round($pending + $eligible + $settledUnpaid, 2), // everything earned and not yet paid
+            'current_payable'    => round($currentPayable, 2),
             'pending_settlement' => round($pending + $eligible, 2),
-            'gl_payable'     => $glPayable,
-            'last_payment'   => $lastPayment ? ['amount' => round((float) $lastPayment->net_payable, 2), 'paid_at' => $lastPayment->paid_at] : null,
-            'on_hold'        => round(max(0, $pending), 2), // earned, inside the T+N window
-            'eligible'       => round($eligible, 2),        // past hold, next sweep
-            'awaiting_payout' => round($settledUnpaid, 2),  // settled, not yet paid
-            'paid'           => round($paid, 2),
-            'lifetime'       => round($pending + $eligible + $settledUnpaid + $paid, 2),
-            'cost'           => round($cost, 2),            // lifetime cost of goods (known-cost sales)
-            'profit'         => round($profit, 2),          // lifetime profit (net earning − cost)
+            'gl_payable'         => $glPayable,
+            'last_payment'       => $lastPayment,
+            'on_hold'            => round(max(0, $pending), 2), // earned, inside the T+N window
+            'eligible'           => round($eligible, 2),        // past hold, next sweep
+            'awaiting_payout'    => round($settledUnpaid, 2),   // settled, not yet (fully) paid
+            'paid'               => round($paid, 2),
+            'lifetime'           => round($currentPayable + $paid, 2),
+            'cost'               => round($cost, 2),            // lifetime cost of goods (known-cost sales)
+            'profit'             => round($profit, 2),          // lifetime profit (net earning − cost)
         ];
     }
 

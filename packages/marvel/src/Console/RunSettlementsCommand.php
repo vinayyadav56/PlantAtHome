@@ -38,7 +38,10 @@ class RunSettlementsCommand extends Command
     private function cadenceDue(): bool
     {
         $options = (array) (Settings::getData()->options ?? []);
-        $cadence = strtolower((string) (($options['settlement']['cadence'] ?? 'daily') ?: 'daily'));
+        // D3: weekly by default once double-entry accounting is the system of record; the
+        // legacy ledger keeps its daily default. settings.options.settlement.cadence overrides both.
+        $default = \Marvel\Services\Accounting\AccountingPostingService::enabled() ? 'weekly' : 'daily';
+        $cadence = strtolower((string) (($options['settlement']['cadence'] ?? $default) ?: $default));
 
         $last = SettlementRun::max('run_date');
         if (!$last) {
