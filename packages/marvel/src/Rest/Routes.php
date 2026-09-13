@@ -81,6 +81,7 @@ use Marvel\Http\Controllers\TestDataCleanupController;
 use Marvel\Http\Controllers\VendorInventoryController;
 use Marvel\Http\Controllers\SettlementController;
 use Marvel\Http\Controllers\AccountingSettlementController;
+use Marvel\Http\Controllers\ReturnRequestController;
 use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
@@ -942,6 +943,10 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     Route::post('accounting/vendor-adjustments', [AccountingSettlementController::class, 'createAdjustment'])->middleware('permission:accounting.adjustments.create');
     Route::post('accounting/vendor-adjustments/{id}/approve', [AccountingSettlementController::class, 'approveAdjustment'])->whereNumber('id')->middleware('permission:accounting.adjustments.approve');
     Route::post('accounting/vendor-adjustments/{id}/reject', [AccountingSettlementController::class, 'rejectAdjustment'])->whereNumber('id')->middleware('permission:accounting.adjustments.approve');
+    // Returns lifecycle (spec §27): customers open against their own lines; admins decide.
+    Route::get('return-requests', [ReturnRequestController::class, 'index'])->middleware('permission:orders.view');
+    Route::post('return-requests', [ReturnRequestController::class, 'store']);
+    Route::post('return-requests/{id}/{action}', [ReturnRequestController::class, 'transition'])->whereNumber('id')->whereIn('action', ['approve', 'reject', 'receive', 'refund'])->middleware('permission:orders.edit');
 });
 
 Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sanctum']], function () {

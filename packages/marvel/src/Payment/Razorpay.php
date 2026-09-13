@@ -88,6 +88,21 @@ class Razorpay extends Base implements PaymentInterface
         return null;
     }
 
+    /**
+     * Refund (full or partial) against a captured payment. Idempotent at Razorpay via the
+     * receipt (our refund id). Returns ['id', 'amount' (paise), 'status'].
+     */
+    public function refund(string $paymentId, int $amountPaise, string $receipt, array $notes = []): array
+    {
+        try {
+            $r = $this->api->payment->fetch($paymentId)->refund(['amount' => $amountPaise, 'receipt' => $receipt, 'notes' => $notes ?: ['receipt' => $receipt]]);
+            return ['id' => $r->id, 'amount' => (int) $r->amount, 'status' => $r->status ?? 'processed'];
+        } catch (Exception $e) {
+            \Illuminate\Support\Facades\Log::error('Razorpay::refund failed', ['payment_id' => $paymentId, 'receipt' => $receipt, 'error' => $e->getMessage()]);
+            throw new HttpException(400, 'Gateway refund failed: ' . $e->getMessage());
+        }
+    }
+
     public function verify($id): mixed
     {
         try {

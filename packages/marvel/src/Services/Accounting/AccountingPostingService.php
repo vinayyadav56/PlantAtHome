@@ -256,6 +256,11 @@ class AccountingPostingService
             if (!$orig) {
                 return null; // never recognised — nothing to reverse
             }
+            // A FULL refund already reversed revenue/tax/payables through RefundService (and leaves
+            // the refund payable, not the customer advance, on the books) — never reverse twice.
+            if ($order->financial_status === self::DERECOGNIZED && JournalEntry::where('source_type', 'REFUND_POSTED')->where('reference_type', 'order')->where('reference_id', $order->id)->exists()) {
+                return null;
+            }
             if ($orig->status !== JournalEntry::POSTED) {
                 return $orig->reversedBy; // already reversed (or still a draft)
             }

@@ -53,8 +53,15 @@ class RefundRepository extends BaseRepository
     public function storeRefund($request)
     {
         $user = $request->user();
-        $refunds = $this->where('order_id', $request->order_id)->get();
-        if (count($refunds)) {
+        $scope = (string) ($request->input('scope') ?: 'full');
+        $accounting = \Marvel\Services\Accounting\AccountingPostingService::enabled();
+        if ($scope !== 'full' && !$accounting) {
+            throw new MarvelException(SOMETHING_WENT_WRONG, 'Partial and item refunds require the accounting module.');
+        }
+        // One open refund at a time; and with accounting on, several settled refunds may exist
+        // as long as they never exceed what the customer paid (checked in slices()).
+        $open = $this->where('order_id', $request->order_id)->whereNull('shop_id')->whereIn('status', [RefundStatus::PENDING, RefundStatus::PROCESSING])->exists();
+        if ($open || (!$accounting && $this->where('order_id', $request->order_id)->exists())) {
             throw new MarvelException(ORDER_ALREADY_HAS_REFUND_REQUEST);
         }
         try {
@@ -73,11 +80,43 @@ class RefundRepository extends BaseRepository
         }
         $data = $request->only($this->dataArray);
         $data['customer_id'] = $order->customer_id;
+        return $this->createSliced($order, $data, $scope, (array) $request->input('items', []), $request->input('requested_amount'), $request->input('method'));
+    }
+
+    /**
+     * Create a refund whose money is computed SERVER-SIDE from the order's immutable snapshot
+     * (spec §26): full = what the customer paid; items = the chosen lines × qty; partial = an
+     * amount allocated across lines. Writes refund_items for item refunds. Never trusts a
+     * client amount. Also used by the returns flow.
+     */
+    public function createSliced(Order $order, array $data, string $scope = 'full', array $items = [], $requestedAmount = null, ?string $method = null)
+    {
+        $accounting = \Marvel\Services\Accounting\AccountingPostingService::enabled();
         // Snapshot what the customer actually PAID (paid_total = subtotal + tax + delivery −
         // discount), not the bare product subtotal — otherwise refunds under-pay by tax+delivery.
         $data['amount'] = $order->paid_total;
+        $slices = null;
+        if ($accounting) {
+            $slices = \Marvel\Services\Accounting\RefundService::make()->slices($order, $scope, $items, $requestedAmount !== null ? number_format((float) $requestedAmount, 2, '.', '') : null);
+            $data['amount'] = (float) $slices['amount']->toDecimal();
+            $data['scope'] = $scope;
+            $data['requested_amount'] = $slices['amount']->toDecimal();
+            $data['method'] = $method;
+        }
         $refund = $this->create($data);
-        $this->createChildOrderRefund($order->children, $data);
+        if ($slices && $scope === 'items') {
+            foreach ($slices['lines'] as $itemId => $l) {
+                \Illuminate\Support\Facades\DB::table('refund_items')->insert([
+                    'refund_id' => $refund->id, 'order_item_id' => $itemId, 'quantity' => $l['quantity'], 'amount' => $l['amount']->toDecimal(),
+                    'taxable_value' => $l['taxable']->toDecimal(), 'tax_amount' => $l['tax']->toDecimal(), 'cgst_amount' => $l['cgst']->toDecimal(),
+                    'sgst_amount' => $l['sgst']->toDecimal(), 'igst_amount' => $l['igst']->toDecimal(), 'discount_amount' => $l['discount']->toDecimal(),
+                    'vendor_share' => $l['vendor_share']->toDecimal(), 'shop_id' => $l['shop_id'], 'created_at' => now(), 'updated_at' => now(),
+                ]);
+            }
+        }
+        if ($scope === 'full') {
+            $this->createChildOrderRefund($order->children, $data);
+        }
         return $this->find($refund->id);
     }
 
@@ -127,7 +166,12 @@ class RefundRepository extends BaseRepository
     private function changeOrderStatus($parentOrderId, array $data)
     {
         $parentOrder = Order::findOrFail($parentOrderId);
+        $prev = $parentOrder->order_status;
         $parentOrder->update($data);
         Order::where('parent_id', $parentOrder->id)->update($data);
+        // This raw flip bypasses OrderManagementTrait::changeOrderStatus, so the accounting seam is
+        // invoked here explicitly. A full refund already reversed everything via RefundService;
+        // derecognizeOrder detects that and is a no-op (idempotent).
+        \Marvel\Services\Accounting\AccountingPostingService::onOrderStatusChanged($parentOrder, $prev, $data['order_status'] ?? $parentOrder->order_status, 'system:refund');
     }
 }

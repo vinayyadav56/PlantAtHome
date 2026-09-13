@@ -27,7 +27,7 @@ abstract class OrdersTestCase extends AccountingTestCase
             $t->string('order_status')->nullable(); $t->string('payment_status')->nullable(); $t->string('payment_gateway')->nullable(); $t->unsignedBigInteger('coupon_id')->nullable();
             $t->double('amount')->nullable(); $t->double('sales_tax')->nullable(); $t->double('delivery_fee')->nullable(); $t->double('discount')->nullable(); $t->double('total')->nullable(); $t->double('paid_total')->nullable();
             $t->boolean('is_inter_state')->nullable(); $t->decimal('taxable_amount', 14, 2)->nullable(); $t->decimal('cgst_amount', 14, 2)->nullable(); $t->decimal('sgst_amount', 14, 2)->nullable(); $t->decimal('igst_amount', 14, 2)->nullable(); $t->decimal('total_tax', 14, 2)->nullable();
-            $t->decimal('delivery_taxable', 14, 2)->nullable(); $t->decimal('delivery_tax_amount', 14, 2)->nullable(); $t->json('shipping_address')->nullable(); $t->timestamps();
+            $t->decimal('delivery_taxable', 14, 2)->nullable(); $t->decimal('delivery_tax_amount', 14, 2)->nullable(); $t->json('shipping_address')->nullable(); $t->softDeletes(); $t->timestamps(); // Order soft-deletes: findOrFail filters deleted_at
         });
         Schema::create('order_items', function ($t) {
             $t->id(); $t->unsignedBigInteger('order_id'); $t->unsignedBigInteger('product_id'); $t->unsignedBigInteger('variation_option_id')->nullable(); $t->integer('order_quantity')->default(1);
@@ -40,6 +40,7 @@ abstract class OrdersTestCase extends AccountingTestCase
         Schema::create('users', function ($t) { $t->id(); $t->string('name')->nullable(); $t->string('email')->nullable(); $t->timestamps(); });
         Schema::create('order_product', function ($t) { $t->id(); $t->unsignedBigInteger('order_id'); $t->unsignedBigInteger('product_id'); $t->unsignedBigInteger('variation_option_id')->nullable(); $t->integer('order_quantity')->default(1); $t->double('unit_price')->default(0); $t->double('subtotal')->default(0); $t->timestamps(); });
         Schema::create('withdraws', function ($t) { $t->id(); $t->unsignedBigInteger('shop_id'); $t->double('amount'); $t->string('payment_method')->nullable(); $t->string('status')->default('pending'); $t->text('details')->nullable(); $t->text('note')->nullable(); $t->softDeletes(); $t->timestamps(); });
+        Schema::create('refunds', function ($t) { $t->id(); $t->double('amount')->default(0); $t->string('status')->default('pending'); $t->string('title')->nullable(); $t->text('description')->nullable(); $t->json('images')->nullable(); $t->unsignedBigInteger('order_id')->nullable(); $t->unsignedBigInteger('customer_id')->nullable(); $t->unsignedBigInteger('shop_id')->nullable(); $t->unsignedBigInteger('refund_policy_id')->nullable(); $t->unsignedBigInteger('refund_reason_id')->nullable(); $t->timestamps(); });
         Schema::create('order_wallet_points', function ($t) { $t->id(); $t->unsignedBigInteger('order_id'); $t->double('amount')->default(0); $t->timestamps(); });
         Schema::create('order_events', function ($t) { $t->id(); $t->unsignedBigInteger('order_id'); $t->string('type'); $t->string('label')->nullable(); $t->string('actor_type')->nullable(); $t->unsignedBigInteger('actor_id')->nullable(); $t->json('meta')->nullable(); $t->timestamp('created_at')->nullable(); });
         Schema::create('payment_intents', function ($t) { $t->id(); $t->unsignedBigInteger('order_id')->nullable(); $t->string('tracking_number')->nullable(); $t->string('payment_gateway')->nullable(); $t->json('payment_intent_info')->nullable(); $t->softDeletes(); $t->timestamps(); });
@@ -54,6 +55,7 @@ abstract class OrdersTestCase extends AccountingTestCase
             'packages/marvel/database/migrations/2026_06_26_100000_unique_order_entry_on_vendor_ledger.php',
             'packages/marvel/database/migrations/2026_09_14_000200_accounting_p4_vendor_ledger.php',
             'packages/marvel/database/migrations/2026_09_14_000300_accounting_p8_settlements_payments.php',
+            'packages/marvel/database/migrations/2026_09_14_000400_accounting_p10_refunds_returns.php',
         ] as $file) {
             $m = require base_path($file);
             $m->up();

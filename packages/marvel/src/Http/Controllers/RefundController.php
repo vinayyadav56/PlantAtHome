@@ -207,7 +207,20 @@ class RefundController extends CoreController
                 $prevChildStatus[$child->id] = $child->order_status;
             }
             $wasPaidOnline = $order->payment_status === PaymentStatus::SUCCESS;
-            $refundable    = (float) $order->paid_total; // live paid_total already nets prior cancellations
+            // The refund's own amount (server-computed from the snapshot at request time for
+            // partial/item refunds), never more than what the customer paid.
+            $refundable    = min((float) $order->paid_total, (float) ($locked->requested_amount ?? $locked->amount ?? $order->paid_total));
+            $method        = (string) ($request->input('method') ?: ($locked->method ?: ($wasPaidOnline ? 'wallet' : 'manual')));
+            $accounting    = \Marvel\Services\Accounting\AccountingPostingService::enabled();
+            if ($accounting) {
+                // Double-entry FIRST, inside this same transaction: reverse revenue/tax/vendor payable
+                // from the order snapshot (or the customer advance pre-delivery), issue the credit
+                // note, and record the payout. Strict mode makes a posting failure roll back the approval.
+                $refundSvc = \Marvel\Services\Accounting\RefundService::make();
+                $refundSvc->post($locked, (string) ($request->user()?->id ?? 'system'));
+                $refundSvc->payout($locked, $wasPaidOnline ? $method : 'manual', (string) ($request->user()?->id ?? 'system'));
+                \Marvel\Services\Accounting\ReturnService::markRefunded((int) $locked->id);
+            }
 
             // Flip refund (+ child refund rows) and order/children to REFUNDED.
             $this->repository->updateRefund($request, $locked);
@@ -259,7 +272,7 @@ class RefundController extends CoreController
             // Refund the customer to wallet — ONLY what they actually paid online, and only
             // when the order was prepaid+captured. COD/unpaid refunds are settled off-platform;
             // crediting wallet points there would mint value the customer never paid.
-            if ($wasPaidOnline && $refundable > 0) {
+            if ($wasPaidOnline && $refundable > 0 && $method === 'wallet') {
                 $walletPoints = $this->currencyToWalletPoints($refundable);
                 $wallet = Wallet::firstOrCreate(['customer_id' => $locked->customer_id]);
                 $wallet->total_points     = (float) $wallet->total_points + $walletPoints;

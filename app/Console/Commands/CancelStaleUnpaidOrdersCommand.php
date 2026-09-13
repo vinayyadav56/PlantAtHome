@@ -76,9 +76,13 @@ class CancelStaleUnpaidOrdersCommand extends Command
             }
             try {
                 DB::transaction(function () use ($order) {
+                    $prev = $order->order_status;
                     $order->order_status = OrderStatus::CANCELLED;
                     $order->payment_status = PaymentStatus::FAILED;
                     $order->save();
+                    // Direct save bypasses the guarded seam — invoke the accounting hook explicitly
+                    // (an unpaid order has no capture, so this is a no-op; kept for one consistent path).
+                    \Marvel\Services\Accounting\AccountingPostingService::onOrderStatusChanged($order, $prev, OrderStatus::CANCELLED, 'system:stale-cancel');
                     // Children mirror the parent so vendor views stay consistent.
                     Order::where('parent_id', $order->id)
                         ->whereNotIn('order_status', [OrderStatus::CANCELLED, OrderStatus::REFUNDED])

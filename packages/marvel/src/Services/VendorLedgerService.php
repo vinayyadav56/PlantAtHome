@@ -123,6 +123,50 @@ class VendorLedgerService
     }
 
     /**
+     * P10 — reverse PART of the vendor payable on specific lines (item / partial refunds), one
+     * 'refund' row per line, idempotent per (line, refund). A still-pending sale that is fully
+     * refunded is cancelled (both rows reversed); otherwise the refund row is settle-eligible
+     * now, so it nets against that vendor's next settlement (a clawback if already paid).
+     * @param array<int, array{shop_id:int, amount:string}> $byItem positive amounts keyed by order_item_id
+     */
+    public function reverseLinesPartial(Order $order, array $byItem, string $reason, ?\Marvel\Database\Models\Accounting\JournalEntry $journal, int $seq): int
+    {
+        if (!$this->enabled || !$byItem) {
+            return 0;
+        }
+        $now = Carbon::now();
+        $written = 0;
+        foreach ($byItem as $itemId => $x) {
+            $key = $order->id . ':' . $itemId . ':refund:' . $seq;
+            if (VendorLedgerEntry::where('idempotency_key', $key)->exists()) {
+                continue;
+            }
+            $sale = VendorLedgerEntry::where('order_id', $order->id)->where('order_item_id', $itemId)->where('entry_type', 'sale')->first();
+            $amount = \Marvel\Services\Accounting\MoneyBridge::toMoney($x['amount']);
+            $fullLine = $sale && $sale->status === 'pending' && \Marvel\Services\Accounting\MoneyBridge::toMoney($sale->amount)->equals($amount)
+                && !VendorLedgerEntry::where('order_id', $order->id)->where('order_item_id', $itemId)->where('entry_type', 'refund')->exists();
+            try {
+                VendorLedgerEntry::create([
+                    'shop_id' => (int) $x['shop_id'], 'order_id' => $order->id, 'order_item_id' => $itemId, 'shipment_id' => $sale?->shipment_id,
+                    'entry_type' => 'refund', 'amount' => '-' . $amount->toDecimal(), 'product_value' => $sale ? -1 * (float) $sale->product_value : null,
+                    'journal_entry_id' => $journal?->id, 'idempotency_key' => $key, 'source' => 'refund', 'earned_at' => $now,
+                    'note' => 'Refund on ledger entry #' . ($sale?->id ?? '-') . ': ' . $reason,
+                    'status' => $fullLine ? 'reversed' : 'pending', 'available_at' => $fullLine ? null : $now,
+                ]);
+                if ($fullLine) {
+                    $sale->update(['status' => 'reversed']);
+                }
+                $written++;
+            } catch (QueryException $e) {
+                if (!$this->isUniqueViolation($e)) {
+                    throw $e;
+                }
+            }
+        }
+        return $written;
+    }
+
+    /**
      * P4 — reverse the per-line rows of a recognised order (de-recognition / full refund),
      * keeping today's semantics per line: a still-pending sale is CANCELLED (both rows
      * reversed, never settle); an already-settled one becomes a settle-eligible clawback.
