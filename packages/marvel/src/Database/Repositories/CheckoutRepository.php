@@ -165,6 +165,9 @@ class CheckoutRepository
         }
         $tax = $this->calculateTax($request, $shipping_charge, $amount);
         $total = $amount + $tax + $shipping_charge;
+        // Full GST breakdown (superset — the storefront renders CGST/SGST/IGST
+        // from these; older clients ignore them and keep using total_tax).
+        $gst = $this->gstBreakdown($request, (float) $shipping_charge);
         // Only enforce the minimum-order-amount on a fully-available cart. When
         // some lines are unavailable (out of stock, or a vertical the Operations
         // Control Center has disabled) they're excluded from $amount, which can
@@ -177,6 +180,14 @@ class CheckoutRepository
         }
         $response = [
             'total_tax'            => $tax,
+            'taxable_amount'       => $gst['taxable_amount'],
+            'cgst_amount'          => $gst['cgst_amount'],
+            'sgst_amount'          => $gst['sgst_amount'],
+            'igst_amount'          => $gst['igst_amount'],
+            'is_inter_state'       => $gst['is_inter_state'],
+            'place_of_supply'      => $gst['place_of_supply'],
+            'gst_total_tax'        => $gst['total_tax'],
+            'delivery_tax_amount'  => $gst['delivery_tax_amount'],
             'shipping_charge'      => $shipping_charge,
             // Delivery Optimizer (additive, flag-gated): FIRM consolidated shipments at
             // checkout. Metadata only for now — `shipping_charge` above is unchanged until
@@ -528,13 +539,39 @@ class CheckoutRepository
         return  $request['amount'];
     }
 
+    /**
+     * The on-top tax to ADD to the payable total. Delegates to the one GST engine
+     * so the verify preview and the order charge use identical math. Returns 0
+     * when prices are tax-inclusive (the default) — GST is embedded in the price
+     * the customer already sees, so the total is unchanged; the CGST/SGST/IGST
+     * split is persisted separately as the order tax snapshot (see gstBreakdown).
+     *
+     * Legacy fallback: if no product-level GST is configured anywhere but a flat
+     * settings.options.taxClass exists, honour it (backward compatibility).
+     */
     public function calculateTax($request, $shipping_charge, $amount)
     {
+        $products = (array) ($request['products'] ?? []);
+        $shippingAddress = $request['shipping_address'] ?? ($request['billing_address'] ?? null);
+        $addon = (new \Marvel\Services\Tax\GstService())->taxAddon($products, (float) $shipping_charge, is_array($shippingAddress) ? $shippingAddress : null);
+        if ($addon > 0) {
+            return $addon;
+        }
+        // No product-level tax produced an add-on. Preserve the legacy flat tax
+        // class if one is configured (so existing exclusive setups keep charging).
         $tax_class = $this->getTaxClass($request);
         if ($tax_class) {
             return $this->getTotalTax($amount, $tax_class);
         }
-        return $tax_class;
+        return 0;
+    }
+
+    /** Full GST breakdown for snapshot/preview. Single source: the GST engine. */
+    public function gstBreakdown($request, $shipping_charge): array
+    {
+        $products = (array) ($request['products'] ?? []);
+        $shippingAddress = $request['shipping_address'] ?? ($request['billing_address'] ?? null);
+        return (new \Marvel\Services\Tax\GstService())->compute($products, (float) $shipping_charge, is_array($shippingAddress) ? $shippingAddress : null);
     }
 
     public function calculateAmountWithAvailable($products, $unavailable_products)

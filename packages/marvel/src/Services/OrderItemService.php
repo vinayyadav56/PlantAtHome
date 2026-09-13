@@ -144,9 +144,22 @@ class OrderItemService
         }
 
         $now = Carbon::now();
+        // Persist the per-line GST snapshot only when the columns exist (migrations
+        // run in the background after deploy). The tax fields are carried on each
+        // line by OrderRepository::mergeLineTax.
+        static $taxCols = null;
+        if ($taxCols === null) {
+            $taxCols = [];
+            foreach (['hsn_code', 'tax_category', 'tax_rate', 'tax_inclusive', 'taxable_value',
+                'cgst_rate', 'sgst_rate', 'igst_rate', 'cgst_amount', 'sgst_amount', 'igst_amount', 'tax_amount'] as $c) {
+                if (\Illuminate\Support\Facades\Schema::hasColumn('order_items', $c)) {
+                    $taxCols[] = $c;
+                }
+            }
+        }
         $rows = [];
         foreach ($products as $p) {
-            $rows[] = [
+            $row = [
                 'order_id'            => $order->id,
                 'product_id'          => (int) ($p['product_id'] ?? 0),
                 'variation_option_id' => isset($p['variation_option_id']) ? ($p['variation_option_id'] ?: null) : null,
@@ -159,6 +172,12 @@ class OrderItemService
                 'created_at'          => $now,
                 'updated_at'          => $now,
             ];
+            foreach ($taxCols as $c) {
+                if (array_key_exists($c, $p)) {
+                    $row[$c] = $p[$c];
+                }
+            }
+            $rows[] = $row;
         }
 
         DB::transaction(function () use ($order, $existing, $rows) {

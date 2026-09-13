@@ -102,6 +102,22 @@ class OrderRepository extends BaseRepository
         // Delivery Coverage snapshot ({pincode, shop_id, source, geo names,
         // coverage_ver, checked_at}) — computed server-side in storeOrder().
         'delivery_coverage',
+        // GST tax snapshot (server-computed in storeOrder from the GST engine;
+        // immutable once persisted — never recomputed from current product config).
+        'place_of_supply',
+        'place_of_supply_code',
+        'is_inter_state',
+        'taxable_amount',
+        'cgst_amount',
+        'sgst_amount',
+        'igst_amount',
+        'total_tax',
+        'delivery_tax_treatment',
+        'delivery_taxable',
+        'delivery_tax_amount',
+        'seller_gstin',
+        'seller_state',
+        'seller_state_code',
     ];
 
     public function boot()
@@ -384,6 +400,31 @@ class OrderRepository extends BaseRepository
         // Floor at 0 — a payable total must never be negative (C3 defense-in-depth).
         $request['paid_total'] = max(0, $request['amount'] + $request['sales_tax'] + $request['delivery_fee'] - $request['discount']);
         $request['total'] = $request['paid_total'];
+
+        // ── GST snapshot ──────────────────────────────────────────────────────
+        // One authoritative breakdown from the GST engine (the SAME engine that
+        // produced sales_tax above). Persisted immutably on the order + each line
+        // so a later product rate change never re-prices this order. Never fatal.
+        try {
+            $gst = $checkout->gstBreakdown($request, (float) $request['delivery_fee']);
+            $request['place_of_supply']        = $gst['place_of_supply'];
+            $request['place_of_supply_code']   = $gst['place_of_supply_code'];
+            $request['is_inter_state']         = $gst['is_inter_state'];
+            $request['taxable_amount']         = $gst['taxable_amount'];
+            $request['cgst_amount']            = $gst['cgst_amount'];
+            $request['sgst_amount']            = $gst['sgst_amount'];
+            $request['igst_amount']            = $gst['igst_amount'];
+            $request['total_tax']              = $gst['total_tax'];
+            $request['delivery_tax_treatment'] = $gst['delivery_tax_treatment'];
+            $request['delivery_taxable']       = $gst['delivery_taxable'];
+            $request['delivery_tax_amount']    = $gst['delivery_tax_amount'];
+            $request['seller_gstin']           = $gst['seller_gstin'];
+            $request['seller_state']           = $gst['seller_state'];
+            $request['seller_state_code']      = $gst['seller_state_code'];
+            $request['products']               = $this->mergeLineTax((array) $request['products'], $gst['lines']);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('GST snapshot failed (order kept without tax breakdown)', ['error' => $e->getMessage()]);
+        }
         if (($useWalletPoints || $request->isFullWalletPayment) && $user) {
             $wallet = $user->wallet;
             $amount = null;
@@ -560,12 +601,29 @@ class OrderRepository extends BaseRepository
                     && !\Illuminate\Support\Facades\Schema::hasColumn('orders', 'customer_email')) {
                     unset($orderInput['customer_email']);
                 }
+                // Same guard for the GST snapshot columns until their migration lands.
+                foreach ([
+                    'place_of_supply', 'place_of_supply_code', 'is_inter_state', 'taxable_amount',
+                    'cgst_amount', 'sgst_amount', 'igst_amount', 'total_tax', 'delivery_tax_treatment',
+                    'delivery_taxable', 'delivery_tax_amount', 'seller_gstin', 'seller_state', 'seller_state_code',
+                ] as $gstCol) {
+                    if (array_key_exists($gstCol, $orderInput) && !\Illuminate\Support\Facades\Schema::hasColumn('orders', $gstCol)) {
+                        unset($orderInput[$gstCol]);
+                    }
+                }
             } catch (\Throwable $e) {
                 unset($orderInput['customer_email']);
             }
             $order = $this->create($orderInput);
             $products = $this->processProducts($request['products'], $request['customer_id'], $order);
-            $order->products()->attach($products);
+            // The GST line snapshot rides on each line for order_items, but the
+            // order_product pivot has no tax columns — attach() writes EVERY key as
+            // a pivot column, so strip the tax keys for the pivot only. order_items
+            // (writeForOrder below) keeps the full snapshot.
+            $taxKeys = ['hsn_code', 'tax_category', 'tax_rate', 'tax_inclusive', 'taxable_value',
+                'cgst_rate', 'sgst_rate', 'igst_rate', 'cgst_amount', 'sgst_amount', 'igst_amount', 'tax_amount'];
+            $pivotProducts = array_map(fn ($p) => array_diff_key($p, array_flip($taxKeys)), $products);
+            $order->products()->attach($pivotProducts);
             // P4 dual-write: mirror the cart lines into order_items (the single-customer-order
             // model) alongside the legacy per-vertical child orders. Wrapped so a failure here
             // can never break order creation — order_items is additive shadow data for now.
@@ -684,6 +742,32 @@ class OrderRepository extends BaseRepository
      * @param  mixed $order
      * @return void
      */
+    /**
+     * Attach each GST line's tax snapshot onto the matching cart line (by product +
+     * variation) so processProducts/writeForOrder persist it verbatim. Pure merge —
+     * it changes no price, only carries the computed tax fields through.
+     */
+    protected function mergeLineTax(array $products, array $taxLines): array
+    {
+        $key = fn ($pid, $vid) => ((int) $pid) . ':' . ($vid ? (int) $vid : 0);
+        $byKey = [];
+        foreach ($taxLines as $t) {
+            $byKey[$key($t['product_id'] ?? 0, $t['variation_option_id'] ?? null)] = $t;
+        }
+        foreach ($products as &$p) {
+            $t = $byKey[$key($p['product_id'] ?? 0, $p['variation_option_id'] ?? null)] ?? null;
+            if (!$t) {
+                continue;
+            }
+            foreach (['hsn_code', 'tax_category', 'tax_rate', 'tax_inclusive', 'taxable_value',
+                'cgst_rate', 'sgst_rate', 'igst_rate', 'cgst_amount', 'sgst_amount', 'igst_amount', 'tax_amount'] as $f) {
+                $p[$f] = $t[$f] ?? null;
+            }
+        }
+        unset($p);
+        return $products;
+    }
+
     protected function processProducts($products, $customer_id, $order)
     {
         // City context for the vendor-price resolution — same city the charged total used.

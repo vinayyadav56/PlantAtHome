@@ -49,6 +49,11 @@ class Product extends Model
         'listing_enabled' => 'boolean',
         'track_stock' => 'boolean',
         'available_at' => 'datetime',
+        // GST: real booleans for the admin switches. tax_inclusive is nullable
+        // (NULL = inherit the store-wide prices_include_tax preference).
+        'is_taxable' => 'boolean',
+        'tax_inclusive' => 'boolean',
+        'tax_verified' => 'boolean',
     ];
 
     protected $appends = [
@@ -503,6 +508,12 @@ class Product extends Model
     public function shipping(): BelongsTo
     {
         return $this->belongsTo(Shipping::class, 'shipping_class_id');
+    }
+
+    /** The GST rate configuration (tax_classes row) assigned to this product. */
+    public function taxRate(): BelongsTo
+    {
+        return $this->belongsTo(Tax::class, 'tax_rate_id');
     }
 
     /**
