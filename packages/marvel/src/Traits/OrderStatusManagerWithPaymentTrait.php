@@ -113,10 +113,15 @@ trait OrderStatusManagerWithPaymentTrait
         // number_format → a plain fixed-decimal literal (never scientific notation for tiny
         // values), locale-independent with a '.' separator.
         $inc = number_format($shop_earnings, 4, '.', '');
-        Balance::where('shop_id', '=', $order->shop_id)->update([
-            'total_earnings'  => DB::raw('total_earnings + (' . $inc . ')'),
-            'current_balance' => DB::raw('current_balance + (' . $inc . ')'),
-        ]);
+        // Once double-entry accounting is the system of record the legacy running balance is
+        // RETIRED: vendor payables live on the journal (2010 per shop) + vendor ledger, and
+        // crediting here too would pay the same earnings twice (D4 cutover).
+        if (!\Marvel\Services\Accounting\AccountingPostingService::enabled()) {
+            Balance::where('shop_id', '=', $order->shop_id)->update([
+                'total_earnings'  => DB::raw('total_earnings + (' . $inc . ')'),
+                'current_balance' => DB::raw('current_balance + (' . $inc . ')'),
+            ]);
+        }
 
         // P2 vendor ledger (parallel-run, flag-gated, never mutates $balance). Records the
         // per-order money breakdown for the T+N settlement layer; wrapped so a ledger

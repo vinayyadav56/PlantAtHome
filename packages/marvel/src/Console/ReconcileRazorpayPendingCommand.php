@@ -99,6 +99,13 @@ class ReconcileRazorpayPendingCommand extends Command
                 $this->info(sprintf('  %-20s  Razorpay=paid  → %s', $order->tracking_number, $dry ? 'WOULD confirm' : 'confirming'));
                 if (! $dry) {
                     try {
+                        // Record the capture for accounting with the gateway's own figures
+                        // (idempotent — a webhook that already landed makes this a no-op).
+                        if ($captured = (new \Marvel\Payment\Razorpay())->fetchCapturedPayment($paymentId)) {
+                            \Marvel\Services\Accounting\AccountingPostingService::make()->recordPaymentCaptured(
+                                $order, 'razorpay', (string) $captured['id'], (int) $captured['amount'], (int) $captured['fee'], (int) $captured['tax'], $captured, 'system:razorpay-reconcile'
+                            );
+                        }
                         $this->paymentSuccess($order);
                     } catch (\Throwable $e) {
                         $stats['errors']++;

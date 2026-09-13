@@ -425,6 +425,14 @@ class OrderRepository extends BaseRepository
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning('GST snapshot failed (order kept without tax breakdown)', ['error' => $e->getMessage()]);
         }
+        // Per-line financial snapshot for accounting: ownership model, the order discount
+        // allocated to lines (largest-remainder, so Σ == discount to the paisa) with WHO funds
+        // it, and the delivery fee allocated the same way. Never fatal.
+        try {
+            $request['products'] = $this->mergeLineFinancials((array) $request['products'], (float) $request['discount'], (float) $request['delivery_fee'], $coupon ?? null);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('line financial snapshot failed', ['error' => $e->getMessage()]);
+        }
         if (($useWalletPoints || $request->isFullWalletPayment) && $user) {
             $wallet = $user->wallet;
             $amount = null;
@@ -747,6 +755,37 @@ class OrderRepository extends BaseRepository
      * variation) so processProducts/writeForOrder persist it verbatim. Pure merge —
      * it changes no price, only carries the computed tax fields through.
      */
+    /**
+     * Allocate the order-level discount + delivery fee across lines (largest remainder — the
+     * parts always sum to the whole) and stamp each line's ownership model + discount funder.
+     * A coupon owned by a vendor shop (not the master shop) is vendor-funded; everything
+     * else is platform-funded (spec §50).
+     */
+    protected function mergeLineFinancials(array $products, float $discount, float $deliveryFee, $coupon = null): array
+    {
+        if (!$products) {
+            return $products;
+        }
+        $ids = array_values(array_unique(array_map(fn ($p) => (int) ($p['product_id'] ?? 0), $products)));
+        $ownership = [];
+        if (\Illuminate\Support\Facades\Schema::hasColumn('products', 'ownership_model')) {
+            $ownership = \Illuminate\Support\Facades\DB::table('products')->whereIn('id', $ids)->pluck('ownership_model', 'id')->all();
+        }
+        $masterShopId = (int) (\Illuminate\Support\Facades\DB::table('shops')->where('slug', 'plantathome')->value('id') ?? 0);
+        $fundedBy = ($coupon && !empty($coupon->shop_id) && (int) $coupon->shop_id !== $masterShopId) ? 'vendor' : 'platform';
+        $weights = array_map(fn ($p) => max(0.0, (float) ($p['subtotal'] ?? 0)), $products);
+        $discountParts = \Marvel\Services\Accounting\MoneyBridge::allocate(\Marvel\Services\Accounting\MoneyBridge::toMoney($discount), $weights);
+        $deliveryParts = \Marvel\Services\Accounting\MoneyBridge::allocate(\Marvel\Services\Accounting\MoneyBridge::toMoney($deliveryFee), $weights);
+        foreach ($products as $i => &$p) {
+            $p['ownership_model']     = $ownership[(int) ($p['product_id'] ?? 0)] ?? 'VENDOR_SUPPLIED';
+            $p['discount_amount']     = $discountParts[$i]->toDecimal();
+            $p['discount_funded_by']  = $fundedBy;
+            $p['delivery_allocation'] = $deliveryParts[$i]->toDecimal();
+        }
+        unset($p);
+        return $products;
+    }
+
     protected function mergeLineTax(array $products, array $taxLines): array
     {
         $key = fn ($pid, $vid) => ((int) $pid) . ':' . ($vid ? (int) $vid : 0);

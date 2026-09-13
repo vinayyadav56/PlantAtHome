@@ -45,6 +45,10 @@ class Kernel extends ConsoleKernel
         $schedule->command('logs:enrich-ips')->everyTenMinutes()->withoutOverlapping(5);
 
         $schedule->command('marvel:run-settlements')->dailyAt('04:00')->withoutOverlapping();
+        // Double-entry accounting: recognise any completed order that still has no journal
+        // (recoverable backstop, spec §45) and confirm Razorpay captures our webhook missed.
+        $schedule->command('accounting:post-pending')->hourly()->withoutOverlapping(30);
+        $schedule->command('plantathome:reconcile-razorpay-pending --limit=50')->everyTenMinutes()->withoutOverlapping(10);
 
         // Courier fulfilment safety net: alarm on shipments that auto-booking never dispatched
         // (payable, non-cancelled orders left unbooked past the SLA). Alarm only — it never

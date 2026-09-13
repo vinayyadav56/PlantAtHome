@@ -68,6 +68,26 @@ class Razorpay extends Base implements PaymentInterface
      * @return false|mixed
      * @throws Exception
      */
+    /**
+     * The captured payment behind a Razorpay ORDER id (what payment_intent_info.payment_id
+     * holds): id, amount, fee, tax, status — so the reconcile path can record the capture
+     * with the same facts the webhook gets. Returns null when nothing is captured.
+     */
+    public function fetchCapturedPayment(string $razorpayOrderId): ?array
+    {
+        try {
+            $payments = $this->api->order->fetch($razorpayOrderId)->payments();
+            foreach ($payments->items ?? [] as $p) {
+                if (($p->status ?? '') === 'captured' || !empty($p->captured)) {
+                    return ['id' => $p->id, 'order_id' => $razorpayOrderId, 'amount' => (int) $p->amount, 'fee' => (int) ($p->fee ?? 0), 'tax' => (int) ($p->tax ?? 0), 'status' => $p->status ?? 'captured', 'method' => $p->method ?? null];
+                }
+            }
+        } catch (Exception $e) {
+            \Illuminate\Support\Facades\Log::warning('Razorpay::fetchCapturedPayment failed', ['rzp_order_id' => $razorpayOrderId, 'error' => $e->getMessage()]);
+        }
+        return null;
+    }
+
     public function verify($id): mixed
     {
         try {
@@ -163,6 +183,15 @@ class Razorpay extends Base implements PaymentInterface
         $order = Order::where('tracking_number', '=', $trackingId)->first();
         if (!$order) {
             return;
+        }
+        if ($paymentStatus === PaymentStatus::SUCCESS) {
+            // Double-entry: record the capture ONCE (payment_events is UNIQUE on the gateway
+            // payment id) and post DR gateway receivable / CR customer advances. This is the
+            // replay-safe seam; the status compare in webhookSuccessResponse is not.
+            \Marvel\Services\Accounting\AccountingPostingService::make()->recordPaymentCaptured(
+                $order, 'razorpay', (string) ($payload['id'] ?? ''), (int) ($payload['amount'] ?? 0),
+                (int) ($payload['fee'] ?? 0), (int) ($payload['tax'] ?? 0), (array) $payload, 'system:razorpay-webhook'
+            );
         }
         $this->webhookSuccessResponse($order, $orderStatus, $paymentStatus);
     }

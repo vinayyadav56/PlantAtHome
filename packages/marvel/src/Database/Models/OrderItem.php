@@ -25,6 +25,13 @@ class OrderItem extends Model
         'eta_days'             => 'integer',
         'vendor_price_snapshot' => 'float',
         'vendor_cost_snapshot' => 'float',
+        // accounting snapshot (P3): decimal strings so paise are never lost in a float
+        'discount_amount'            => 'decimal:2',
+        'delivery_allocation'        => 'decimal:2',
+        'vendor_payable_snapshot'    => 'decimal:2',
+        'commission_amount_snapshot' => 'decimal:2',
+        'commission_rate_snapshot'   => 'decimal:4',
+        'recognized_at'              => 'datetime',
     ];
 
     public function order(): BelongsTo

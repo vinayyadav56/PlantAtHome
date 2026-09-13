@@ -29,6 +29,10 @@ class Order extends Model
         'pinned_at'           => 'datetime',
         // Delivery Coverage snapshot at order time (see OrderRepository).
         'delivery_coverage'   => 'json',
+        // accounting (P3)
+        'captured_amount'     => 'decimal:2',
+        'captured_at'         => 'datetime',
+        'recognized_at'       => 'datetime',
     ];
 
     /**

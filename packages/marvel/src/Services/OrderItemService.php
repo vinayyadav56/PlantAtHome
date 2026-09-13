@@ -151,7 +151,9 @@ class OrderItemService
         if ($taxCols === null) {
             $taxCols = [];
             foreach (['hsn_code', 'tax_category', 'tax_rate', 'tax_inclusive', 'taxable_value',
-                'cgst_rate', 'sgst_rate', 'igst_rate', 'cgst_amount', 'sgst_amount', 'igst_amount', 'tax_amount'] as $c) {
+                'cgst_rate', 'sgst_rate', 'igst_rate', 'cgst_amount', 'sgst_amount', 'igst_amount', 'tax_amount',
+                // accounting line snapshot (OrderRepository::mergeLineFinancials)
+                'ownership_model', 'discount_amount', 'discount_funded_by', 'delivery_allocation'] as $c) {
                 if (\Illuminate\Support\Facades\Schema::hasColumn('order_items', $c)) {
                     $taxCols[] = $c;
                 }
@@ -1421,6 +1423,39 @@ class OrderItemService
         }
     }
 
+    /**
+     * The vendor's cost for the chosen vendor_product_prices row, to freeze on the line. Never
+     * throws and never blocks an assignment: a harness or a mid-migration schema without
+     * cost_price simply snapshots null (the accounting layer treats null as unknown).
+     */
+    private static function supportsVendorCostSnapshot(): bool
+    {
+        static $has = null;
+        try {
+            return $has ??= \Illuminate\Support\Facades\Schema::hasColumn('order_items', 'vendor_cost_snapshot');
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    private static function vendorCostFor($vppId): ?string
+    {
+        static $has = null;
+        if (!$vppId) {
+            return null;
+        }
+        try {
+            $has ??= \Illuminate\Support\Facades\Schema::hasColumn('vendor_product_prices', 'cost_price');
+            if (!$has) {
+                return null;
+            }
+            $cost = VendorProductPrice::where('id', (int) $vppId)->value('cost_price');
+            return $cost === null ? null : (string) $cost;
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
     /** Set an item's assignment + attach it to the matching shipment (create if needed). */
     private function applyAssignment(Order $order, OrderItem $item, array $pick, array &$shipments, string $status): void
     {
@@ -1499,6 +1534,13 @@ class OrderItemService
         if (self::supportsMarginSnapshot()) {
             $update['margin_amount'] = $marginAmount;
             $update['margin_percent_snapshot'] = isset($pick['margin_percent']) ? (float) $pick['margin_percent'] : null;
+        }
+        // The vendor's own cost at assignment — frozen so COGS/profit never re-read today's
+        // cost sheet for a historical line (the column existed since P4 but was never written).
+        // Column-guarded like the margin snapshot: a harness or a mid-migration schema
+        // without it must not break assignment.
+        if (self::supportsVendorCostSnapshot()) {
+            $update['vendor_cost_snapshot'] = self::vendorCostFor($vppId);
         }
         $item->update($update);
 

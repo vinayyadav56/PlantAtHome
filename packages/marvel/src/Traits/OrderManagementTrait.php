@@ -5,6 +5,8 @@ namespace Marvel\Traits;
 use Marvel\Enums\PaymentStatus;
 use Marvel\Enums\PaymentGatewayType;
 use Marvel\Enums\OrderStatus as OrderStatusEnum;
+use Illuminate\Support\Facades\DB;
+use Marvel\Services\Accounting\AccountingPostingService;
 
 trait OrderManagementTrait
 {
@@ -82,7 +84,14 @@ trait OrderManagementTrait
             // Credit the assigned delivery partner on completion (reverse on rollback).
             $this->manageDeliveryPartnerBalance($order, $new_order_status, $prev_order_status);
         }
-        $order->save();
+        // Double-entry accounting: revenue/tax/vendor-payable recognition hangs off THIS seam —
+        // the one guarded transition point — and runs in the SAME transaction as the status
+        // save, so an order can never be completed with its accounting missing (spec §45).
+        // Idempotent by journal source_key; a no-op while accounting is disabled.
+        DB::transaction(function () use ($order, $prev_order_status, $new_order_status) {
+            $order->save();
+            AccountingPostingService::onOrderStatusChanged($order, $prev_order_status, $new_order_status);
+        });
 
         try {
             $children = json_decode($order->children);
@@ -167,7 +176,12 @@ trait OrderManagementTrait
         if ($parent->order_status !== $new) {
             $old = $parent->order_status;
             $parent->order_status = $new;
-            $parent->saveQuietly();
+            // saveQuietly bypasses changeOrderStatus — so the accounting hook is called here
+            // explicitly (same transaction), otherwise a rolled-up completion would never post.
+            DB::transaction(function () use ($parent, $old, $new) {
+                $parent->saveQuietly();
+                AccountingPostingService::onOrderStatusChanged($parent, $old, $new);
+            });
             // saveQuietly bypasses the Order model's activity-log observer — record explicitly
             // so parent orders don't lose their completion/cancellation events.
             \Marvel\Database\Models\OrderEvent::record($parent->id, 'order.status', [
