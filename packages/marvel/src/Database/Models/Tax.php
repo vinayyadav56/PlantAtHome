@@ -16,6 +16,15 @@ class Tax extends Model
 
     public $guarded = [];
 
+    protected $casts = [
+        'rate' => 'float',
+        'is_active' => 'boolean',
+        'is_global' => 'boolean',
+        'on_shipping' => 'boolean',
+        'effective_from' => 'date:Y-m-d',
+        'effective_to' => 'date:Y-m-d',
+    ];
+
     protected static function boot()
     {
         parent::boot();

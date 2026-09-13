@@ -132,6 +132,10 @@ class ProductRepository extends BaseRepository
         'width',
         'in_stock',
         'is_taxable',
+        'hsn_code',
+        'tax_rate_id',
+        'tax_inclusive',
+        'tax_verified',
         'shop_id',
         'sold_quantity',
         'visibility',
@@ -317,7 +321,7 @@ class ProductRepository extends BaseRepository
     private function normalizeNumericFields(array $data): array
     {
         // Nullable numeric columns: a blank string becomes null.
-        foreach (['price', 'sale_price', 'min_price', 'max_price', 'quantity', 'sold_quantity'] as $col) {
+        foreach (['price', 'sale_price', 'min_price', 'max_price', 'quantity', 'sold_quantity', 'tax_rate_id'] as $col) {
             if (array_key_exists($col, $data) && is_string($data[$col]) && trim($data[$col]) === '') {
                 $data[$col] = null;
             }

@@ -724,7 +724,7 @@ class OrderController extends CoreController
 
         try {
             $settings = Settings::getData($payloads['language']);
-            $order = $this->repository->with(['products', 'children.shop', 'wallet_point', 'parent_order'])->where('id', $payloads['order_id'])->orWhere('tracking_number', $payloads['order_id'])->firstOrFail();
+            $order = $this->repository->with(['products', 'items', 'children.shop', 'wallet_point', 'parent_order'])->where('id', $payloads['order_id'])->orWhere('tracking_number', $payloads['order_id'])->firstOrFail();
 
             $invoiceData = [
                 'order' => $order,

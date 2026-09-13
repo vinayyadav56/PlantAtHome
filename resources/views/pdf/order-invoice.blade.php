@@ -36,6 +36,18 @@
         $currencyOptions = isset($settings['currencyOptions']) ? $settings['currencyOptions'] : ['formation' => 'en-US', 'fractions' => 2];
         $locale = $currencyOptions['formation'] ?? 'en-US';
 
+        // GST tax invoice: render the compliant layout only when the order carries a tax
+        // snapshot (new orders). Legacy orders keep total_tax null and fall back to the
+        // simple layout below.
+        $taxConfig = $settings['tax'] ?? [];
+        $hasGst = !is_null($order->total_tax);
+        $isInter = (bool) ($order->is_inter_state ?? false);
+        $sellerGstin = $order->seller_gstin ?? ($taxConfig['gstin'] ?? null);
+        $sellerLegalName = $taxConfig['legal_name'] ?? ($settings['siteTitle'] ?? null);
+        $sellerState = $order->seller_state ?? ($taxConfig['registration_state'] ?? null);
+        $placeOfSupply = $order->place_of_supply ?? ($shippingAddress['state'] ?? null);
+        $gstItems = $hasGst ? $order->items : collect();
+
         $amountDue = $order->payment_status !== 'payment-success' ? $order->paid_total - intval($order?->wallet_point?->amount) : 0;
 
         if ($order->order_status === 'order-completed') {
@@ -60,12 +72,18 @@
 
     <div style="display: block;">
         <div style="width: 50%; {{ $is_rtl ? ' direction: ltr;' : 'float: left;' }} float: left;">
+            @if ($hasGst)
+                <p style="font-size: 20px; font-weight: bold; margin: 0 0 8px 0;">TAX INVOICE</p>
+            @endif
             @if (isset($translated_text['invoice_no']) || isset($order->tracking_number))
                 <p>{{ $translated_text['invoice_no'] }}: {{ $order->tracking_number }}</p>
             @endif
             @if (isset($translated_text['delivery_time']) || isset($order->delivery_time))
                 <p>{{ isset($translated_text['payment_method']) ? $translated_text['payment_method'] : 'Payment Method' }}:
                     {{ $order->payment_gateway }}</p>
+            @endif
+            @if ($hasGst && $placeOfSupply)
+                <p style="margin: 2px 0;">Place of supply: {{ $placeOfSupply }}{{ $order->place_of_supply_code ? ' (' . $order->place_of_supply_code . ')' : '' }}</p>
             @endif
         </div>
         <div
@@ -159,13 +177,75 @@
                     <div>{{ $authorLocation['formattedAddress'] }}</div>
                 </li>
             @endif
+
+            @if ($hasGst && $sellerState)
+                <li style="display: block; color: #6f6f6f; font-size:14px;">
+                    <div>State: {{ $sellerState }}{{ $order->seller_state_code ? ' (' . $order->seller_state_code . ')' : '' }}</div>
+                </li>
+            @endif
+
+            @if ($hasGst && $sellerGstin)
+                <li style="display: block; color: #000000; font-size:14px; font-weight: bold;">
+                    <div>GSTIN: {{ $sellerGstin }}</div>
+                </li>
+            @endif
         </ul>
         <div style="clear: both;"></div>
     </div>
 
     <div style="height: 30px;"></div>
 
-    @if (isset($translated_text['products']) || isset($translated_text['quantity']) || isset($translated_text['total']))
+    @if ($hasGst)
+        <table style="width: 100%; border-collapse: collapse; font-size: 12px;" cellspacing="0" cellpadding="0">
+            <thead>
+                <tr style="background-color:#019376; color:#FFF;">
+                    <th style="text-align: left; padding: 6px 8px;">{{ $translated_text['products'] ?? 'Item' }}</th>
+                    <th style="text-align: center; padding: 6px 4px;">HSN</th>
+                    <th style="text-align: center; padding: 6px 4px;">{{ $translated_text['quantity'] ?? 'Qty' }}</th>
+                    <th style="text-align: right; padding: 6px 4px;">GST %</th>
+                    <th style="text-align: right; padding: 6px 4px;">Taxable</th>
+                    <th style="text-align: right; padding: 6px 4px;">Tax</th>
+                    <th style="text-align: right; padding: 6px 8px;">Amount</th>
+                </tr>
+            </thead>
+            <tbody>
+                @foreach ($gstItems as $item)
+                    @php
+                        $lineTaxable = (float) ($item->taxable_value ?? 0);
+                        $lineTax = (float) ($item->tax_amount ?? 0);
+                        $lineAmount = $lineTaxable + $lineTax;
+                        $rate = (float) ($item->tax_rate ?? 0);
+                        $rateLabel = rtrim(rtrim(number_format($rate, 2, '.', ''), '0'), '.');
+                    @endphp
+                    <tr style="border-bottom: 1px solid #d4d4d4;">
+                        <td style="text-align: left; padding: 6px 8px;">
+                            {{ $item->product?->name ?? ('Item #' . $item->product_id) }}
+                            @if (in_array($item->product_id, $cancelled_products))
+                                <small style="color: red;">{{ $translated_text['cancelled'] ?? 'Cancelled' }}</small>
+                            @endif
+                        </td>
+                        <td style="text-align: center; padding: 6px 4px;">{{ $item->hsn_code ?: '-' }}</td>
+                        <td style="text-align: center; padding: 6px 4px;">{{ $item->order_quantity }}</td>
+                        <td style="text-align: right; padding: 6px 4px;">{{ $rateLabel }}%</td>
+                        <td style="text-align: right; padding: 6px 4px;">{{ formatCurrency($lineTaxable, $currency, $locale) }}</td>
+                        <td style="text-align: right; padding: 6px 4px;">{{ formatCurrency($lineTax, $currency, $locale) }}</td>
+                        <td style="text-align: right; padding: 6px 8px;">{{ formatCurrency($lineAmount, $currency, $locale) }}</td>
+                    </tr>
+                @endforeach
+                @if (isset($order->delivery_fee) && $order->delivery_fee > 0)
+                    <tr style="border-bottom: 1px solid #d4d4d4;">
+                        <td style="text-align: left; padding: 6px 8px;">{{ $translated_text['delivery_fee'] ?? 'Delivery' }}</td>
+                        <td style="text-align: center; padding: 6px 4px;">-</td>
+                        <td style="text-align: center; padding: 6px 4px;">1</td>
+                        <td style="text-align: right; padding: 6px 4px;">-</td>
+                        <td style="text-align: right; padding: 6px 4px;">{{ formatCurrency((float) ($order->delivery_taxable ?? 0), $currency, $locale) }}</td>
+                        <td style="text-align: right; padding: 6px 4px;">{{ formatCurrency((float) ($order->delivery_tax_amount ?? 0), $currency, $locale) }}</td>
+                        <td style="text-align: right; padding: 6px 8px;">{{ formatCurrency((float) $order->delivery_fee, $currency, $locale) }}</td>
+                    </tr>
+                @endif
+            </tbody>
+        </table>
+    @elseif (isset($translated_text['products']) || isset($translated_text['quantity']) || isset($translated_text['total']))
         <ul style="list-style: none; margin: 0; padding: 0;">
             @if (isset($translated_text['products']))
                 <li
@@ -201,7 +281,7 @@
         </ul>
     @endif
 
-    @if (!empty($products))
+    @if (!$hasGst && !empty($products))
         @foreach ($products as $product)
             <ul style="list-style: none; margin: 0; padding: 0;">
                 <li
@@ -269,18 +349,71 @@
                 </div>
                 <br>
             @endif
-            @if (isset($order->sales_tax))
+            @if ($hasGst)
+                @php
+                    $pricesIncludeTax = $taxConfig['prices_include_tax'] ?? true;
+                    $cgst = (float) ($order->cgst_amount ?? 0);
+                    $sgst = (float) ($order->sgst_amount ?? 0);
+                    $igst = (float) ($order->igst_amount ?? 0);
+                @endphp
+                @if ($cgst > 0 || $sgst > 0 || $igst > 0)
+                    <div style="padding: 3px 0px; box-sizing: border-box;">
+                        <div
+                            style="display: block; width: 100%; {{ $is_rtl ? ' direction: rtl; float: right; text-align: right;' : 'float: left;' }} color: #6b7280; font-size:12px; font-style: italic;">
+                            {{ $pricesIncludeTax ? 'GST included in the above' : 'Add: GST' }} :</div>
+                        <div style="clear: both;"></div>
+                    </div>
+                @endif
+                @if ($isInter)
+                    @if ($igst > 0)
+                        <div style="padding: 3px 0px; box-sizing: border-box;">
+                            <div
+                                style="display: block; width: 48%; {{ $is_rtl ? ' direction: rtl; float: right; text-align: right;' : 'float: left;' }} color: #6b7280; font-size:14px;">
+                                IGST : </div>
+                            <div
+                                style="display: block; width: 50%; {{ $is_rtl ? ' direction: rtl; float: left; text-align: left;' : 'float: right; text-align: right;' }} color: #6b7280; font-size:14px;">
+                                {{ formatCurrency($igst, $currency, $locale) }}</div>
+                            <div style="clear: both;"></div>
+                        </div>
+                        <br>
+                    @endif
+                @else
+                    @if ($cgst > 0)
+                        <div style="padding: 3px 0px; box-sizing: border-box;">
+                            <div
+                                style="display: block; width: 48%; {{ $is_rtl ? ' direction: rtl; float: right; text-align: right;' : 'float: left;' }} color: #6b7280; font-size:14px;">
+                                CGST : </div>
+                            <div
+                                style="display: block; width: 50%; {{ $is_rtl ? ' direction: rtl; float: left; text-align: left;' : 'float: right; text-align: right;' }} color: #6b7280; font-size:14px;">
+                                {{ formatCurrency($cgst, $currency, $locale) }}</div>
+                            <div style="clear: both;"></div>
+                        </div>
+                        <br>
+                    @endif
+                    @if ($sgst > 0)
+                        <div style="padding: 3px 0px; box-sizing: border-box;">
+                            <div
+                                style="display: block; width: 48%; {{ $is_rtl ? ' direction: rtl; float: right; text-align: right;' : 'float: left;' }} color: #6b7280; font-size:14px;">
+                                SGST : </div>
+                            <div
+                                style="display: block; width: 50%; {{ $is_rtl ? ' direction: rtl; float: left; text-align: left;' : 'float: right; text-align: right;' }} color: #6b7280; font-size:14px;">
+                                {{ formatCurrency($sgst, $currency, $locale) }}</div>
+                            <div style="clear: both;"></div>
+                        </div>
+                        <br>
+                    @endif
+                @endif
+            @elseif (isset($order->sales_tax))
                 <div style="padding: 3px 0px; box-sizing: border-box;">
                     <div
                         style="display: block; width: 48%; {{ $is_rtl ? ' direction: rtl; float: right; text-align: right;' : 'float: left;' }} color: #6b7280; font-size:14px;">
                         {{ $translated_text['tax'] }} : </div>
-
                     <div
                         style="display: block; width: 50%; {{ $is_rtl ? ' direction: rtl; float: left; text-align: left;' : 'float: right; text-align: right;' }} color: #6b7280; font-size:14px;">
-                        {{ formatCurrency($order->sales_tax + $order->cancelled_tax, $currency, $locale) }}
-                        <div style="clear: both;"></div>
-                    </div>
-                    <br>
+                        {{ formatCurrency($order->sales_tax + $order->cancelled_tax, $currency, $locale) }}</div>
+                    <div style="clear: both;"></div>
+                </div>
+                <br>
             @endif
             @if (isset($order->delivery_fee))
                 <div style="padding: 3px 0px; box-sizing: border-box;">
@@ -290,7 +423,7 @@
 
                     <div
                         style="display: block; width: 50%; {{ $is_rtl ? ' direction: rtl; float: left; text-align: left;' : 'float: right; text-align: right;' }} color: #6b7280; font-size:14px;">
-                        {{ formatCurrency($order->sales_tax + $order->cancelled_tax, $currency, $locale) }}
+                        {{ formatCurrency($order->delivery_fee, $currency, $locale) }}
                     </div>
 
                     <div style="clear: both;"></div>

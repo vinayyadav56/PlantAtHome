@@ -37,6 +37,12 @@ class CreateTaxRequest extends FormRequest
             'is_global' => ['boolean'],
             'priority' => ['integer'],
             'on_shipping' => ['boolean'],
+            'hsn_code' => ['nullable', 'string', 'max:16'],
+            'tax_category' => ['nullable', 'string', 'in:taxable,nil_rated,exempt,non_taxable,zero_rated'],
+            'is_active' => ['boolean'],
+            'effective_from' => ['nullable', 'date'],
+            'effective_to' => ['nullable', 'date', 'after_or_equal:effective_from'],
+            'description' => ['nullable', 'string'],
         ];
     }
 
