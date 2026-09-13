@@ -44,7 +44,11 @@ class CancelStaleUnpaidOrdersCommand extends Command
 
         $stale = Order::whereNull('parent_id')
             ->where('created_at', '<', now()->subHours($hours))
-            ->where('payment_status', '!=', PaymentStatus::SUCCESS)
+            // Only cancel orders still strictly PENDING. PROCESSING ('attempted' at
+            // Razorpay) may still settle and is reconciled by
+            // plantathome:reconcile-razorpay-pending — cancelling it could void a
+            // payment that captures moments later.
+            ->where('payment_status', PaymentStatus::PENDING)
             ->whereIn('order_status', [OrderStatus::PENDING, OrderStatus::PROCESSING])
             // COD is stored as any of CASH_ON_DELIVERY/COD/CASH depending on the
             // client (see PaymentGatewayType::isCashOnDelivery) — exclude all

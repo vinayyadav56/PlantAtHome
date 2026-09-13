@@ -71,6 +71,8 @@ on:
           - state-sync-limit100
           - state-sync
           - state-sync-rollback
+          - reconcile-razorpay-dry
+          - reconcile-razorpay
         default: dry-run
 
 jobs:
@@ -129,6 +131,9 @@ jobs:
             state-sync-limit100) ARGS="plantathome:sync-product-state --limit=100" ;;
             state-sync)          ARGS="plantathome:sync-product-state" ;;
             state-sync-rollback) ARGS="plantathome:sync-product-state --rollback" ;;
+            # Confirm Razorpay orders paid at the gateway but stuck payment-pending.
+            reconcile-razorpay-dry) ARGS="plantathome:reconcile-razorpay-pending --dry-run" ;;
+            reconcile-razorpay)     ARGS="plantathome:reconcile-razorpay-pending" ;;
             *) echo "Unknown mode"; exit 1 ;;
           esac
           echo "ARTISAN_ARGS=$ARGS" >> $GITHUB_ENV
