@@ -82,6 +82,7 @@ use Marvel\Http\Controllers\VendorInventoryController;
 use Marvel\Http\Controllers\SettlementController;
 use Marvel\Http\Controllers\AccountingSettlementController;
 use Marvel\Http\Controllers\ReturnRequestController;
+use Marvel\Http\Controllers\AccountingReconciliationController;
 use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
@@ -943,6 +944,19 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     Route::post('accounting/vendor-adjustments', [AccountingSettlementController::class, 'createAdjustment'])->middleware('permission:accounting.adjustments.create');
     Route::post('accounting/vendor-adjustments/{id}/approve', [AccountingSettlementController::class, 'approveAdjustment'])->whereNumber('id')->middleware('permission:accounting.adjustments.approve');
     Route::post('accounting/vendor-adjustments/{id}/reject', [AccountingSettlementController::class, 'rejectAdjustment'])->whereNumber('id')->middleware('permission:accounting.adjustments.approve');
+    // Reconciliation / periods / opening balances / audit (spec §37-40, §46, §32).
+    Route::get('accounting/reconciliation/runs', [AccountingReconciliationController::class, 'runs'])->middleware('permission:accounting.view');
+    Route::post('accounting/reconciliation/run', [AccountingReconciliationController::class, 'run'])->middleware('permission:accounting.edit');
+    Route::get('accounting/reconciliation/gate', [AccountingReconciliationController::class, 'gate'])->middleware('permission:accounting.view');
+    Route::get('accounting/reconciliation/findings', [AccountingReconciliationController::class, 'findings'])->middleware('permission:accounting.view');
+    Route::post('accounting/reconciliation/findings/{id}/resolve', [AccountingReconciliationController::class, 'resolveFinding'])->whereNumber('id')->middleware('permission:accounting.approve');
+    Route::get('accounting/periods', [AccountingReconciliationController::class, 'periods'])->middleware('permission:accounting.periods.view');
+    Route::post('accounting/periods/{id}/close', [AccountingReconciliationController::class, 'closePeriod'])->whereNumber('id')->middleware('permission:accounting.periods.close');
+    Route::post('accounting/periods/{id}/reopen', [AccountingReconciliationController::class, 'reopenPeriod'])->whereNumber('id')->middleware('permission:accounting.periods.close');
+    Route::get('accounting/opening-balances', [AccountingReconciliationController::class, 'openingBalances'])->middleware('permission:accounting.view');
+    Route::post('accounting/opening-balances', [AccountingReconciliationController::class, 'postOpeningBalance'])->middleware('permission:accounting.approve');
+    Route::post('accounting/opening-balances/{shopId}/confirm', [AccountingReconciliationController::class, 'confirmOpeningBalance'])->whereNumber('shopId')->middleware('permission:accounting.approve');
+    Route::get('accounting/audit-log', [AccountingReconciliationController::class, 'auditLog'])->middleware('permission:accounting.view');
     // Returns lifecycle (spec §27): customers open against their own lines; admins decide.
     Route::get('return-requests', [ReturnRequestController::class, 'index'])->middleware('permission:orders.view');
     Route::post('return-requests', [ReturnRequestController::class, 'store']);

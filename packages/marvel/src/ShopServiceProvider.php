@@ -126,6 +126,7 @@ class ShopServiceProvider extends ServiceProvider
         \Marvel\Console\RecomputeCityAvailabilityCommand::class,
         \Marvel\Console\RunSettlementsCommand::class,
         \Marvel\Console\AccountingPostPendingCommand::class,
+        \Marvel\Console\AccountingReconcileCommand::class,
         \Marvel\Console\BackfillOrderItemsCommand::class,
         \Marvel\Console\ReconcileSettlementsCommand::class,
         CheckIntegrationHealth::class,

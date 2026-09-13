@@ -191,7 +191,7 @@ class JournalServiceTest extends AccountingTestCase
         $this->svc()->postLines([
             ['account' => '1020', 'debit' => '10.00'],
             ['account' => '2070', 'credit' => '10.00'],
-        ], ['source_type' => 'TEST', 'source_key' => 'TEST:closed', 'entry_date' => '2026-08-15']);
+        ], ['source_type' => 'MANUAL', 'source_key' => 'MANUAL:closed', 'entry_date' => '2026-08-15']); // a hand entry: refused (system events are redirected + flagged)
     }
 
     // numbering is sequential per year and survives across entries.

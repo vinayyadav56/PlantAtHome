@@ -48,6 +48,8 @@ class Kernel extends ConsoleKernel
         // Double-entry accounting: recognise any completed order that still has no journal
         // (recoverable backstop, spec §45) and confirm Razorpay captures our webhook missed.
         $schedule->command('accounting:post-pending')->hourly()->withoutOverlapping(30);
+        // Nightly reconciliation: journals vs sub-ledgers vs source records → findings (never auto-fixed).
+        $schedule->command('accounting:reconcile')->dailyAt('03:30')->withoutOverlapping(60);
         $schedule->command('plantathome:reconcile-razorpay-pending --limit=50')->everyTenMinutes()->withoutOverlapping(10);
 
         // Courier fulfilment safety net: alarm on shipments that auto-booking never dispatched

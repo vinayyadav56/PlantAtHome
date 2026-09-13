@@ -87,7 +87,20 @@ class JournalService
 
             $period = AccountingPeriod::forDate(Carbon::parse($e->entry_date));
             if ($period->isClosed()) {
-                throw new ClosedPeriodException('Accounting period ' . $period->period_start->toDateString() . ' is closed; post a reversal/adjustment into an open period instead.');
+                $redirect = (bool) ($e->metadata['redirect_closed_period'] ?? ($e->source_type !== 'MANUAL'));
+                $open = $redirect ? AccountingPeriod::where('status', 'open')->where('period_start', '>', $period->period_start)->orderBy('period_start')->first() : null;
+                if (!$open) {
+                    throw new ClosedPeriodException('Accounting period ' . $period->period_start->toDateString() . ' is closed; post a reversal/adjustment into an open period instead.');
+                }
+                // Late event into a closed month (spec §46): keep the books closed, post into the next open
+                // period, remember the original date and flag it for the reconciliation screen.
+                $original = $e->entry_date->toDateString();
+                $newDate = max($open->period_start->toDateString(), min(Carbon::today()->toDateString(), $open->period_end->toDateString()));
+                $e->entry_date = $newDate;
+                $e->metadata = array_merge((array) $e->metadata, ['original_date' => $original, 'redirected_from_period' => $period->period_start->toDateString()]);
+                $e->requires_reconciliation = true;
+                $e->lines()->update(['entry_date' => $newDate]);
+                $period = $open;
             }
             $year = Carbon::parse($e->entry_date)->format('Y');
             $e->entry_number = sprintf('JE-%s-%06d', $year, AccountingSequence::next('journal:' . $year));
