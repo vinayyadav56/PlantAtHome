@@ -337,7 +337,7 @@ class FinancialReports
         $pending = $has('vendor_settlements') ? DB::table('vendor_settlements')->whereIn('status', \Marvel\Services\SettlementService::OPEN)->selectRaw('COUNT(*) as n, COALESCE(SUM(remaining_payable),0) as amt')->first() : null;
         $findings = $has('acc_reconciliation_findings') ? (int) DB::table('acc_reconciliation_findings')->where('status', 'open')->count() : 0;
         $unposted = \Illuminate\Support\Facades\Schema::hasColumn('orders', 'financial_status') ? (int) DB::table('orders')->whereNull('parent_id')->whereNull('deleted_at')->where('order_status', 'order-completed')
-            ->where(fn ($w) => $w->whereNull('financial_status')->orWhere('financial_status', 'unrecognized'))->when($c->cutoverDate(), fn ($q, $d) => $q->where('updated_at', '>=', $d))->count() : 0;
+            ->where(fn ($w) => $w->whereNull('financial_status')->orWhere('financial_status', 'unrecognized'))->when($c->cutoverDate(), fn ($q, $d) => $q->where('created_at', '>=', $d))->count() : 0;
         $flagged = \Illuminate\Support\Facades\Schema::hasColumn('orders', 'financial_status') ? (int) DB::table('orders')->where('financial_status', 'requires_reconciliation')->count() : 0;
         $period = \Marvel\Database\Models\Accounting\AccountingPeriod::forDate(Carbon::today());
         return [

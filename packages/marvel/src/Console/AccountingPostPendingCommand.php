@@ -19,7 +19,7 @@ class AccountingPostPendingCommand extends Command
     protected $signature = 'accounting:post-pending
         {--dry-run : List what would be posted; write nothing}
         {--limit=200 : Max orders per run}
-        {--since= : Only orders completed on/after this date (default: accounting cutover date)}';
+        {--since= : Only orders PLACED on/after this date (default: accounting cutover date — D4: earlier orders are never posted)}';
 
     protected $description = 'Post recognition journals for completed orders that have none (idempotent sweep)';
 
@@ -36,7 +36,7 @@ class AccountingPostPendingCommand extends Command
             ->where(fn ($w) => $w->whereNull('financial_status')->orWhere('financial_status', 'unrecognized'))
             ->orderBy('id');
         if ($since) {
-            $q->where('updated_at', '>=', $since);
+            $q->where('created_at', '>=', $since); // placed after cutover (updated_at moves on any later edit)
         }
         $orders = $q->limit(max(1, (int) $this->option('limit')))->get();
         $dry = (bool) $this->option('dry-run');

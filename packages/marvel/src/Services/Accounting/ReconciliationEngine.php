@@ -154,7 +154,7 @@ class ReconciliationEngine
             $since = $from ?: $this->config->cutoverDate();
             if ($since) { // pre-cutover history is never posted (D4) — only sweep from the cutover / window start
                 $q = DB::table('orders')->whereNull('parent_id')->whereNull('deleted_at')->where('order_status', 'order-completed')
-                    ->where(fn ($w) => $w->whereNull('financial_status')->orWhere('financial_status', 'unrecognized'))->where('updated_at', '>=', $since);
+                    ->where(fn ($w) => $w->whereNull('financial_status')->orWhere('financial_status', 'unrecognized'))->where('created_at', '>=', $since);
                 foreach ($q->limit(200)->get(['id', 'tracking_number']) as $o) {
                     $f[] = ['subject_type' => 'order', 'subject_id' => $o->id, 'difference' => null, 'message' => 'Completed order ' . $o->tracking_number . ' has no recognition journal (run accounting:post-pending)'];
                 }

@@ -44,7 +44,8 @@ class SettlementService
 
         return DB::transaction(function () use ($asOf, $generatedBy, $cadence) {
             $lastTo = SettlementRun::where('status', 'locked')->max('period_to');
-            $periodFrom = $lastTo ? Carbon::parse($lastTo)->addDay()->toDateString() : null;
+            // a second run on the same day must not invert the window
+            $periodFrom = $lastTo ? min(Carbon::parse($lastTo)->addDay()->toDateString(), $asOf->toDateString()) : null;
 
             $run = SettlementRun::create([
                 'run_date'     => $asOf->toDateString(),
