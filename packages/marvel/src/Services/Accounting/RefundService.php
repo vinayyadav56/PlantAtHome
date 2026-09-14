@@ -282,6 +282,24 @@ class RefundService
             $debits = $taxableT->add($cgT)->add($sgT)->add($igT);
             $credits = $amount->add($s['platform_discount']);
             $diff = $debits->subtract($credits);
+            // a FULL refund gives back the legacy flat tax-class add-on too (recognition booked it as output tax)
+            $salesTax = MoneyBridge::toMoney($order->sales_tax ?? 0);
+            if ($scope === 'full' && $diff->isNegative() && !$salesTax->isZero() && !$salesTax->isNegative()) {
+                $short = Money::fromMinor(-$diff->amountMinor());
+                $legacy = $short->amountMinor() < $salesTax->amountMinor() ? $short : $salesTax;
+                $desc = 'Refund: legacy tax-class add-on reversed';
+                if ($inter) {
+                    $lines[] = ['account' => $c->accountCode('igst_payable'), 'debit' => $legacy, 'order_id' => $order->id, 'refund_id' => $refund->id, 'tax_kind' => 'igst', 'description' => $desc];
+                    $igT = $igT->add($legacy);
+                } else {
+                    [$lCg, $lSg] = array_values(MoneyBridge::allocate($legacy, ['cgst' => 1, 'sgst' => 1]));
+                    $lines[] = ['account' => $c->accountCode('cgst_payable'), 'debit' => $lCg, 'order_id' => $order->id, 'refund_id' => $refund->id, 'tax_kind' => 'cgst', 'description' => $desc];
+                    $lines[] = ['account' => $c->accountCode('sgst_payable'), 'debit' => $lSg, 'order_id' => $order->id, 'refund_id' => $refund->id, 'tax_kind' => 'sgst', 'description' => $desc];
+                    $cgT = $cgT->add($lCg); $sgT = $sgT->add($lSg);
+                }
+                $debits = $debits->add($legacy);
+                $diff = $debits->subtract($credits);
+            }
             if (!$diff->isZero()) {
                 $lines[] = $diff->isNegative()
                     ? ['account' => $c->accountCode('rounding_differences'), 'debit' => Money::fromMinor(-$diff->amountMinor()), 'order_id' => $order->id, 'description' => 'Refund rounding']

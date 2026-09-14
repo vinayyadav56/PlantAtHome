@@ -146,4 +146,26 @@ class OrderRecognitionTest extends OrdersTestCase
         $this->assertSame(0, JournalEntry::count());
         $this->assertNull($order->fresh()->financial_status);
     }
+
+    // staging finding: a legacy flat tax class (settings.taxClass) charges an add-on the GST snapshot never sees —
+    // it is still output tax the customer paid, so it posts (split by place of supply) instead of stranding as a draft.
+    public function test_legacy_tax_class_addon_posts_as_output_tax(): void
+    {
+        \Illuminate\Support\Facades\Event::fake([\Marvel\Events\RefundRequested::class, \Marvel\Events\RefundUpdate::class]);
+        $order = $this->s68Order(['sales_tax' => 12.19, 'paid_total' => 1072.19, 'total' => 1072.19]);
+        AccountingPostingService::make()->recordPaymentCaptured($order, 'razorpay', 'pay_L', 107219, 0, 0, ['status' => 'captured']);
+        $je = AccountingPostingService::make()->recognizeOrder($order->fresh(), 'test');
+        $this->assertSame('posted', $je->status);
+        $by = $this->byAccount($je);
+        $this->assertSame(['1072.19', '51.58', '51.55'], [$by['2070']['debit'], $by['2020']['credit'], $by['2030']['credit']]); // 45.48+6.10, 45.46+6.09
+        $this->assertArrayNotHasKey('6070', $by);
+        $this->assertSame('recognized', $order->fresh()->financial_status);
+        $this->assertStringContainsString('legacy tax-class add-on', json_encode($je->metadata));
+        // a full refund takes it back out
+        $refund = app(\Marvel\Database\Repositories\RefundRepository::class)->createSliced($order->fresh(), ['order_id' => $order->id, 'customer_id' => 5, 'title' => 'all'], 'full');
+        $refund->forceFill(['status' => 'approved'])->saveQuietly();
+        $rb = $this->byAccount(\Marvel\Services\Accounting\RefundService::make()->post($refund->fresh(), 'admin:1'));
+        $this->assertSame(['1072.19', '51.58', '51.55'], [$rb['2050']['credit'], $rb['2020']['debit'], $rb['2030']['debit']]);
+        $this->assertArrayNotHasKey('6070', $rb);
+    }
 }

@@ -74,6 +74,28 @@ class AccountingJournalController extends CoreController
         return response()->json(['journal' => $je->load('lines')], 201);
     }
 
+    /** Post a flagged DRAFT (e.g. a recognition whose residual exceeded the tolerance) after a person reviewed it. */
+    public function postDraft(Request $request, $id)
+    {
+        $data = $request->validate(['note' => ['required', 'string', 'max:500']]);
+        $e = JournalEntry::findOrFail($id);
+        if ($e->status !== JournalEntry::DRAFT) {
+            return response()->json(['message' => 'Only a draft can be posted.'], 422);
+        }
+        try {
+            $posted = (new JournalService())->post($e, $this->actor($request));
+        } catch (AccountingException $e2) {
+            return response()->json(['message' => $e2->getMessage()], 422);
+        }
+        $posted->metadata = array_merge((array) $posted->metadata, ['reviewed_by' => $this->actor($request), 'review_note' => $data['note']]);
+        $posted->save();
+        AccountingAuditLog::record('journal_entry', $posted->id, 'draft_posted', ['status' => 'draft'], ['status' => 'posted'], $data['note'], $posted->source_key, $this->actor($request));
+        if ($posted->source_type === 'ORDER_RECOGNIZED' && $posted->reference_type === 'order' && \Illuminate\Support\Facades\Schema::hasColumn('orders', 'financial_status')) {
+            \Marvel\Database\Models\Order::whereKey($posted->reference_id)->update(['financial_status' => 'recognized', 'recognition_journal_id' => $posted->id]);
+        }
+        return response()->json(['journal' => $posted->fresh()->load('lines')]);
+    }
+
     public function reverse(Request $request, $id)
     {
         $data = $request->validate(['reason' => ['required', 'string', 'max:500'], 'entry_date' => ['nullable', 'date']]);

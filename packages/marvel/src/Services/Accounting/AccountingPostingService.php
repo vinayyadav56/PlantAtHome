@@ -167,6 +167,25 @@ class AccountingPostingService
             $credits = $sumTaxable->add($lineCgst)->add($lineSgst)->add($lineIgst)->add($deliveryTaxable)->add($dCg)->add($dSg)->add($dIg);
             $debits = $paid->add($platformDiscount);
             $diff = $debits->subtract($credits); // >0: customer paid more than the snapshot explains
+            // …and the ONE thing that legitimately explains a positive residual: a legacy flat tax class
+            // (CheckoutRepository::calculateTax falls back to settings.taxClass when the GST engine
+            // produced no add-on). The customer paid it, so it is output tax — split by place of supply,
+            // noted, and surfaced by the GST reconciliation check (snapshot ≠ GL) for the CA.
+            $salesTax = MoneyBridge::toMoney($order->sales_tax ?? 0);
+            if (!$diff->isNegative() && !$diff->isZero() && !$salesTax->isZero() && !$salesTax->isNegative()) {
+                $legacyTax = $diff->amountMinor() < $salesTax->amountMinor() ? $diff : $salesTax;
+                $desc = 'Legacy tax-class add-on (not in GST snapshot)';
+                if ($inter) {
+                    $lines[] = ['account' => $c->accountCode('igst_payable'), 'credit' => $legacyTax, 'order_id' => $order->id, 'tax_kind' => 'igst', 'description' => $desc];
+                } else {
+                    [$lCg, $lSg] = array_values(MoneyBridge::allocate($legacyTax, ['cgst' => 1, 'sgst' => 1]));
+                    $lines[] = ['account' => $c->accountCode('cgst_payable'), 'credit' => $lCg, 'order_id' => $order->id, 'tax_kind' => 'cgst', 'description' => $desc];
+                    $lines[] = ['account' => $c->accountCode('sgst_payable'), 'credit' => $lSg, 'order_id' => $order->id, 'tax_kind' => 'sgst', 'description' => $desc];
+                }
+                $credits = $credits->add($legacyTax);
+                $diff = $debits->subtract($credits);
+                $notes[] = 'legacy tax-class add-on ' . $legacyTax->toDecimal() . ' booked as output tax — migrate this product/tax config to the GST engine';
+            }
             $beyondTolerance = abs($diff->amountMinor()) > $c->roundingToleranceMinor();
             if (!$diff->isZero()) {
                 $lines[] = $diff->isNegative()

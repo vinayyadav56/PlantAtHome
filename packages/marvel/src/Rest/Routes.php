@@ -969,6 +969,7 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     Route::get('accounting/journal-entries/{id}', [AccountingJournalController::class, 'entry'])->whereNumber('id')->middleware('permission:accounting.view');
     Route::post('accounting/journal-entries', [AccountingJournalController::class, 'postManual'])->middleware('permission:accounting.create');
     Route::post('accounting/journal-entries/{id}/reverse', [AccountingJournalController::class, 'reverse'])->whereNumber('id')->middleware('permission:accounting.approve');
+    Route::post('accounting/journal-entries/{id}/post', [AccountingJournalController::class, 'postDraft'])->whereNumber('id')->middleware('permission:accounting.approve');
     Route::get('accounting/accounts', [AccountingJournalController::class, 'accounts'])->middleware('permission:accounting.view');
     Route::post('accounting/accounts', [AccountingJournalController::class, 'storeAccount'])->middleware('permission:accounting.edit');
     Route::put('accounting/accounts/{id}', [AccountingJournalController::class, 'updateAccount'])->whereNumber('id')->middleware('permission:accounting.edit');
