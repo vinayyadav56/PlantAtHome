@@ -320,6 +320,13 @@ class ProductRepository extends BaseRepository
      */
     private function normalizeNumericFields(array $data): array
     {
+        // Accounting (spec §20): who owns the stock — VENDOR_SUPPLIED (default) or PLATFORM_OWNED.
+        if (array_key_exists('ownership_model', $data)) {
+            $ok = in_array($data['ownership_model'], ['VENDOR_SUPPLIED', 'PLATFORM_OWNED'], true) && \Illuminate\Support\Facades\Schema::hasColumn('products', 'ownership_model');
+            if (!$ok) {
+                unset($data['ownership_model']);
+            }
+        }
         // Nullable numeric columns: a blank string becomes null.
         foreach (['price', 'sale_price', 'min_price', 'max_price', 'quantity', 'sold_quantity', 'tax_rate_id'] as $col) {
             if (array_key_exists($col, $data) && is_string($data[$col]) && trim($data[$col]) === '') {

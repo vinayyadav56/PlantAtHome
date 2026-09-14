@@ -61,9 +61,11 @@ class ReturnService
             }
             if ($status === 'received') {
                 $upd['received_at'] = now();
-                // P11: PLATFORM_OWNED restock (DR Inventory / CR COGS) hooks here via InventoryLedgerService.
             }
             DB::table('return_requests')->where('id', $returnId)->update($upd);
+            if ($status === 'received' && \Marvel\Services\Accounting\AccountingPostingService::enabled()) {
+                (new InventoryLedgerService())->restockReturn($returnId, $actor); // platform-owned only; no-op otherwise
+            }
             AccountingAuditLog::record('return_request', $returnId, $status, ['status' => $r->status], ['status' => $status], $note, null, $actor);
             OrderEvent::record($r->order_id, 'return.' . $status, ['return_id' => $returnId], 'Return ' . $status);
             return $this->find($returnId);

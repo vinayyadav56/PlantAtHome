@@ -286,7 +286,7 @@ class ReconciliationEngine
         }
         $code = $this->config->accountCode('inventory');
         $gl = MoneyBridge::toMoney($this->reports->accountBalance($code));
-        $val = MoneyBridge::toMoney((string) DB::table('inventory_valuations')->selectRaw('COALESCE(SUM(qty_on_hand * avg_unit_cost),0) as v')->value('v'));
+        $val = MoneyBridge::toMoney((string) DB::table('inventory_valuations')->selectRaw('COALESCE(SUM(total_value),0) as v')->value('v'));
         $f = [];
         if (!$gl->equals($val)) {
             $f[] = ['subject_type' => 'account', 'subject_id' => $code, 'expected' => $val->toDecimal(), 'actual' => $gl->toDecimal(), 'difference' => $gl->subtract($val)->toDecimal(), 'message' => 'Inventory valuation ' . $val->toDecimal() . ' ≠ GL ' . $code . ' ' . $gl->toDecimal()];

@@ -177,13 +177,22 @@ class AccountingPostingService
 
             // vendor payables per assigned VENDOR_SUPPLIED line (cost-sheet or commission, snapshotted)
             $shopModes = $this->shopModes($items->pluck('assigned_shop_id')->filter()->unique()->values()->all());
+            $cogsMoves = [];
             $itemSnapshots = [];
             $ledgerLines = [];
             $calcs = $this->calculator->forLines($items->filter(fn ($i) => ($i->ownership_model ?: 'VENDOR_SUPPLIED') !== 'PLATFORM_OWNED'), $shopModes);
             foreach ($items as $it) {
                 $owner = $it->ownership_model ?: 'VENDOR_SUPPLIED';
                 if ($owner === 'PLATFORM_OWNED') {
-                    $notes[] = 'line ' . $it->id . ' PLATFORM_OWNED (COGS posts via inventory ledger)';
+                    // Our own stock: cost of goods at the weighted-average cost, no vendor payable (spec §20)
+                    if (InventoryLedgerService::available()) {
+                        $cogs = (new InventoryLedgerService($c, $this->journal))->cogsLinesFor($it, ['order_id' => $order->id, 'order_item_id' => $it->id]);
+                        foreach ($cogs['lines'] as $l) { $lines[] = $l; }
+                        $cogsMoves[$it->id] = $cogs;
+                        if ($cogs['short']) { $notes[] = 'line ' . $it->id . ' PLATFORM_OWNED sold beyond valued stock (COGS at ' . $cogs['unit_cost'] . ')'; }
+                    } else {
+                        $notes[] = 'line ' . $it->id . ' PLATFORM_OWNED but the inventory ledger is not migrated';
+                    }
                     continue;
                 }
                 if (!$it->assigned_shop_id) {
@@ -223,7 +232,7 @@ class AccountingPostingService
                 'requires_reconciliation' => $beyondTolerance || $unassigned > 0,
             ];
 
-            return DB::transaction(function () use ($order, $items, $itemSnapshots, $ledgerLines, $lines, $meta, $beyondTolerance, $unassigned, $notes) {
+            return DB::transaction(function () use ($order, $items, $itemSnapshots, $ledgerLines, $lines, $meta, $beyondTolerance, $unassigned, $notes, $cogsMoves, $c) {
                 if ($beyondTolerance) {
                     // Never post a figure the snapshot cannot explain: keep it as a balanced DRAFT
                     // for an accountant to review, and flag the order.
@@ -236,6 +245,10 @@ class AccountingPostingService
                     $this->markOrder($order, $status, $entry->id, $notes);
                     // Vendor sub-ledger (settlement projection) — same transaction, linked to the journal.
                     (new \Marvel\Services\VendorLedgerService())->recordRecognition($order, $items, $ledgerLines, $entry);
+                    // Inventory ledger (platform-owned lines) — same transaction, linked to the journal.
+                    foreach ($cogsMoves as $itemId => $m) {
+                        (new InventoryLedgerService($c, $this->journal))->recordSale($items->firstWhere('id', $itemId), $m['unit_cost'], $m['cost'], $entry, $meta['actor'] ?? null);
+                    }
                 }
                 $now = Carbon::now();
                 foreach ($items as $it) {

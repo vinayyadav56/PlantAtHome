@@ -85,6 +85,7 @@ use Marvel\Http\Controllers\ReturnRequestController;
 use Marvel\Http\Controllers\AccountingReconciliationController;
 use Marvel\Http\Controllers\CommissionRuleController;
 use Marvel\Http\Controllers\AccountingReportController;
+use Marvel\Http\Controllers\InventoryLedgerController;
 use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
@@ -946,6 +947,10 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     Route::post('accounting/vendor-adjustments', [AccountingSettlementController::class, 'createAdjustment'])->middleware('permission:accounting.adjustments.create');
     Route::post('accounting/vendor-adjustments/{id}/approve', [AccountingSettlementController::class, 'approveAdjustment'])->whereNumber('id')->middleware('permission:accounting.adjustments.approve');
     Route::post('accounting/vendor-adjustments/{id}/reject', [AccountingSettlementController::class, 'rejectAdjustment'])->whereNumber('id')->middleware('permission:accounting.adjustments.approve');
+    // Inventory ledger (spec §20): platform-owned stock movements + weighted-average valuation.
+    Route::get('accounting/inventory-ledger', [InventoryLedgerController::class, 'transactions'])->middleware('permission:accounting.view');
+    Route::get('accounting/inventory-valuation', [InventoryLedgerController::class, 'valuation'])->middleware('permission:accounting.view');
+    Route::post('accounting/inventory-transactions', [InventoryLedgerController::class, 'store'])->middleware('permission:accounting.edit');
     // Reports (spec §59): GST ledger from journal tax dims (P13 adds GL/P&L/balance sheet/AP/statements).
     Route::get('accounting/tax-ledger', [AccountingReportController::class, 'taxLedger'])->middleware('permission:accounting.view');
     // Vendor commission rules (spec §12): product > category > vendor; frozen per line at recognition.
