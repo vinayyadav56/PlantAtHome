@@ -978,6 +978,7 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     Route::post('accounting/commission-rules', [CommissionRuleController::class, 'store'])->middleware('permission:accounting.edit');
     Route::put('accounting/commission-rules/{id}', [CommissionRuleController::class, 'update'])->whereNumber('id')->middleware('permission:accounting.edit');
     Route::delete('accounting/commission-rules/{id}', [CommissionRuleController::class, 'destroy'])->whereNumber('id')->middleware('permission:accounting.edit');
+    Route::put('accounting/shops/{id}/modes', [CommissionRuleController::class, 'updateShopModes'])->whereNumber('id')->middleware('permission:accounting.edit');
     Route::post('accounting/refunds/{id}/payout', [\Marvel\Http\Controllers\RefundController::class, 'payout'])->whereNumber('id')->middleware('permission:accounting.approve');
     // Reconciliation / periods / opening balances / audit (spec §37-40, §46, §32).
     Route::get('accounting/reconciliation/runs', [AccountingReconciliationController::class, 'runs'])->middleware('permission:accounting.view');

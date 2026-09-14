@@ -69,6 +69,23 @@ class CommissionRuleController extends CoreController
         return response()->json(['message' => 'Rule deactivated.']);
     }
 
+    /** Per-vendor accounting modes (D1 commission_mode, D2 recognition_mode). */
+    public function updateShopModes(Request $request, $id)
+    {
+        $data = $request->validate(['recognition_mode' => ['nullable', 'in:principal,agent'], 'commission_mode' => ['nullable', 'in:cost_sheet,commission']]);
+        $shop = \Marvel\Database\Models\Shop::findOrFail($id);
+        $upd = [];
+        foreach (['recognition_mode', 'commission_mode'] as $c) {
+            if (isset($data[$c]) && \Illuminate\Support\Facades\Schema::hasColumn('shops', $c)) { $upd[$c] = $data[$c]; }
+        }
+        if ($upd) {
+            $before = ['recognition_mode' => $shop->recognition_mode ?? null, 'commission_mode' => $shop->commission_mode ?? null];
+            $shop->forceFill($upd)->saveQuietly();
+            AccountingAuditLog::record('shop', $shop->id, 'modes_updated', $before, $upd, null, null, (string) ($request->user()?->id ?? 'system'));
+        }
+        return response()->json(['data' => ['id' => $shop->id, 'recognition_mode' => $shop->recognition_mode ?? 'principal', 'commission_mode' => $shop->commission_mode ?? 'cost_sheet'], 'message' => 'Vendor accounting modes updated.']);
+    }
+
     private function validated(Request $request): array
     {
         $data = $request->validate(self::RULES);
