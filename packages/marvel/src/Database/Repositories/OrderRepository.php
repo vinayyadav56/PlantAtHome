@@ -628,10 +628,9 @@ class OrderRepository extends BaseRepository
             // order_product pivot has no tax columns — attach() writes EVERY key as
             // a pivot column, so strip the tax keys for the pivot only. order_items
             // (writeForOrder below) keeps the full snapshot.
-            $taxKeys = ['hsn_code', 'tax_category', 'tax_rate', 'tax_inclusive', 'taxable_value',
-                'cgst_rate', 'sgst_rate', 'igst_rate', 'cgst_amount', 'sgst_amount', 'igst_amount', 'tax_amount'];
-            $pivotProducts = array_map(fn ($p) => array_diff_key($p, array_flip($taxKeys)), $products);
-            $order->products()->attach($pivotProducts);
+            // (Accounting P3 adds ownership/discount/delivery keys the same way — so the pivot
+            // rows are built from the pivot's OWN column list, never from a deny-list.)
+            $order->products()->attach(self::pivotRows($products));
             // P4 dual-write: mirror the cart lines into order_items (the single-customer-order
             // model) alongside the legacy per-vertical child orders. Wrapped so a failure here
             // can never break order creation — order_items is additive shadow data for now.
@@ -805,6 +804,19 @@ class OrderRepository extends BaseRepository
         }
         unset($p);
         return $products;
+    }
+
+    /**
+     * order_product pivot rows: only the pivot's real columns. Every enrichment that rides on the
+     * cart lines for order_items (GST snapshot, ownership, discount split, delivery allocation)
+     * would otherwise be written by attach() as a pivot column and fail the INSERT on MySQL.
+     * Column list is read once per process (deploys migrate in the background).
+     */
+    public static function pivotRows(array $products): array
+    {
+        static $cols = null;
+        $cols ??= array_flip(array_diff(\Illuminate\Support\Facades\Schema::getColumnListing('order_product'), ['id', 'order_id', 'created_at', 'updated_at', 'deleted_at']));
+        return array_map(fn ($p) => array_intersect_key((array) $p, $cols), $products);
     }
 
     protected function processProducts($products, $customer_id, $order)
@@ -1025,7 +1037,7 @@ class OrderRepository extends BaseRepository
             ];
 
             $order = $this->create($orderInput);
-            $order->products()->attach($this->processProducts($cartProduct,  $request['customer_id'],  $order));
+            $order->products()->attach(self::pivotRows($this->processProducts($cartProduct,  $request['customer_id'],  $order)));
             event(new OrderReceived($order));
         }
     }
