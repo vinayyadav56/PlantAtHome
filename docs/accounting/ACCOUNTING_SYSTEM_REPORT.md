@@ -68,13 +68,30 @@ Cart: Plant ₹300 @0% · Pot ₹500 @18% incl. (taxable 423.73, CGST 38.14, SGS
 
 ## 6. Tests
 
-`tests/Feature/Accounting` — 87 tests / 673 assertions (sqlite `:memory:` running the REAL migrations + seeded chart of accounts): JournalService (11), OrderRecognition (8), PaymentEvents (6), VendorLedger (7), SettlementPayment (9), RefundReturn (15), VendorPayable (3), GstLedger (3), DeliveryAccounting (4), Inventory (4), Reconciliation (9), Reports (4), Security (3), OrderPivotRegression (1); plus `tests/Feature/Tax/GstConfigResolutionTest` (2). Full API Feature suite: **1060 tests / 5470 assertions green**. Admin `tsc --noEmit`: clean. `CodGatewayTest` (real MySQL) exercises every migration.
+`tests/Feature/Accounting` — 88 tests / 683 assertions (sqlite `:memory:` running the REAL migrations + seeded chart of accounts): JournalService (11), OrderRecognition (9), PaymentEvents (6), VendorLedger (7), SettlementPayment (9), RefundReturn (15), VendorPayable (3), GstLedger (3), DeliveryAccounting (4), Inventory (4), Reconciliation (9), Reports (4), Security (3), OrderPivotRegression (1); plus `tests/Feature/Tax/GstConfigResolutionTest` (2). Full API Feature suite: **1061 tests / 5480 assertions green**. Admin `tsc --noEmit`: clean. `CodGatewayTest` (real MySQL) exercises every migration.
 
 Coverage of the 50-case list: 1-21, 22-29 (GST), 30-34 (delivery), 35-39 (inventory), 40-44 (payments/reconciliation), 45-47 (security), 48-50 (reconciliation) — all present; 42 (refund paid), 43 (duplicate webhook), 44 (payment reconciliation) live in `PaymentEventsTest` / `RefundReturnTest` / `ReconciliationTest`.
 
-## 7. Staging verification (P16)
+## 7. Staging verification (P16) — live run, 2026-09-14
 
-_See §7 addendum below — filled from the live run._
+Environment: staging API (Railway, MySQL 8), accounting switch **ON** (`cutover_date 2026-09-14`, weekly settlements, 7-day hold), admin `https://plantathome-admin-staging.vercel.app`, a dedicated super-admin `accounting-e2e@plantathome.in` (rotate/remove after review). All nine accounting migrations ran on MySQL; `accounting:reconcile --gate` and `accounting:post-pending` run there.
+
+Real order **#257 / 2026091421636096** — COD, Delhi, two lines (Scented rose ₹274.80 → Delhi Nursery 2 @ ₹229; Saxifraga ₹334.80 → Delhi Nursery 1 @ ₹279), delivery ₹49, `sales_tax` ₹12.19, paid ₹670.79 — placed through `POST /orders`, lines assigned through `POST /orders/257/assign-items`, child order walked processing → local facility → out for delivery → completed through `PUT /orders/{id}` (the real seam).
+
+| Step | Result on staging |
+|---|---|
+| Recognition | **JE-2026-000002** posted: DR 1030 COD Receivable 670.79 · CR 4010 274.80 + 334.80 · CR 4030 49.00 · CR 2040 12.19 (legacy tax-class add-on, see below) · DR 5020 / CR 2010[35] 229.00 · DR 5020 / CR 2010[34] 279.00 — balanced 1178.79 / 1178.79 |
+| Vendor sub-ledger | one `sale` row per line (229 / 279), linked to the journal, rule snapshot `cost_sheet / shop_default` |
+| Settlement | run #60 → settlement #1 (shop 35, ₹229) and #2 (shop 34, ₹279) `pending_approval` → both approved via `POST accounting/settlements/{id}/approve` |
+| Partial payment | `POST accounting/settlements/2/payments` ₹150 NEFT UTR-E2E-2 → JE VENDOR_PAYMENT, settlement `partially_paid`, remaining ₹129; AP report: shop 34 payable 728.00 (incl. an earlier order), shop 35 229.00 |
+| Item refund | `POST /refunds` scope=items (line 61) → `PUT /refunds/3` approved, method manual → **JE-2026-000004** REFUND_POSTED (DR 4010 274.80 · DR 2010[35] 229.00 / CR 5020 229.00 · CR 2050 274.80), **JE-2026-000005** REFUND_PAID (DR 2050 / CR 1010 274.80), credit note **CN-2026-27-000001** |
+| Reports | trial balance balanced (3488.57 / 3488.57); balance sheet balanced (assets 1028.17 = liabilities 754.57 + equity 273.60); P&L revenue 1151.60, direct costs 878.00, net 273.60; tax ledger = GL (7.19 / 7.19 / 12.19); vendor statement shop 34 CSV (361 B) and PDF (880 KB) served; dashboard tiles live |
+| Reconciliation | 3 findings, all GST: snapshot 0.00 ≠ GL — explained by the reviewer with a note (audited); trial balance + balance sheet identities pass; gate passes once the explained differences are accepted (fix `9bee24e`+) |
+
+**Findings the live run produced (both fixed the same day):**
+1. `mergeLineFinancials` keys leaked into the `order_product` pivot → **every order create 500'd on staging since P3** (no customer orders had been placed in that window). Fixed in `f434d22` (`OrderRepository::pivotRows`, schema-driven).
+2. `CheckoutRepository::calculateTax` falls back to the **legacy flat tax class** (`settings.taxClass = "Global 2%"`) when the GST engine yields no add-on, so customers on staging pay a 2% `sales_tax` the GST snapshot never sees. The first recognition of #257 correctly refused to post an unexplained 12.19 (flagged draft); accounting now books that residual as output tax (`86966c0`) and the GST reconciliation check keeps surfacing the gap. **Owner/CA action:** configure GST tax classes (HSN) per product and clear the legacy tax class — production very likely has the same setting. Also set the business registration state (Settings → GST & Tax) — without it every order is treated as inter-state (IGST).
+3. `accounting:post-pending` keyed on `updated_at` and recognised a pre-cutover order (#236) that had been touched after the cutover; now keys on the order's creation date (`9bee24e`).
 
 ## 8. Cutover plan (owner action)
 
