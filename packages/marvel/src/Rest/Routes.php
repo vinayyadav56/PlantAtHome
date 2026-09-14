@@ -86,6 +86,7 @@ use Marvel\Http\Controllers\AccountingReconciliationController;
 use Marvel\Http\Controllers\CommissionRuleController;
 use Marvel\Http\Controllers\AccountingReportController;
 use Marvel\Http\Controllers\InventoryLedgerController;
+use Marvel\Http\Controllers\AccountingJournalController;
 use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
@@ -824,6 +825,7 @@ Route::group(
         Route::get('vendor/balance', [SettlementController::class, 'myBalance']);
         Route::get('vendor/ledger.csv', [ReportController::class, 'myLedgerCsv']);
         Route::get('vendor/settlements.csv', [ReportController::class, 'mySettlementsCsv']);
+        Route::get('vendor/statement', [AccountingReportController::class, 'myStatement']); // ?format=json|csv|pdf
         Route::get('vendor/payments', [AccountingSettlementController::class, 'myPayments']);
 
         // Vendor dashboard widget (D2): low-stock alerts (own shop). Rejected/courier
@@ -953,6 +955,24 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     Route::post('accounting/inventory-transactions', [InventoryLedgerController::class, 'store'])->middleware('permission:accounting.edit');
     // Reports (spec §59): GST ledger from journal tax dims (P13 adds GL/P&L/balance sheet/AP/statements).
     Route::get('accounting/tax-ledger', [AccountingReportController::class, 'taxLedger'])->middleware('permission:accounting.view');
+    Route::get('accounting/dashboard', [AccountingReportController::class, 'dashboard'])->middleware('permission:accounting.view');
+    Route::get('accounting/general-ledger', [AccountingReportController::class, 'generalLedger'])->middleware('permission:accounting.view');
+    Route::get('accounting/trial-balance', [AccountingReportController::class, 'trialBalance'])->middleware('permission:accounting.view');
+    Route::get('accounting/profit-and-loss', [AccountingReportController::class, 'profitAndLoss'])->middleware('permission:accounting.view');
+    Route::get('accounting/balance-sheet', [AccountingReportController::class, 'balanceSheet'])->middleware('permission:accounting.view');
+    Route::get('accounting/accounts-payable', [AccountingReportController::class, 'accountsPayable'])->middleware('permission:accounting.view');
+    Route::get('accounting/cash-bank', [AccountingReportController::class, 'cashBank'])->middleware('permission:accounting.view');
+    Route::get('accounting/customer-ledger/{customerId}', [AccountingReportController::class, 'customerLedger'])->whereNumber('customerId')->middleware('permission:accounting.view');
+    Route::get('accounting/vendor-statement/{shopId}', [AccountingReportController::class, 'vendorStatement'])->whereNumber('shopId')->middleware('permission:accounting.export');
+    // Journals + chart of accounts
+    Route::get('accounting/journal-entries', [AccountingJournalController::class, 'entries'])->middleware('permission:accounting.view');
+    Route::get('accounting/journal-entries/{id}', [AccountingJournalController::class, 'entry'])->whereNumber('id')->middleware('permission:accounting.view');
+    Route::post('accounting/journal-entries', [AccountingJournalController::class, 'postManual'])->middleware('permission:accounting.create');
+    Route::post('accounting/journal-entries/{id}/reverse', [AccountingJournalController::class, 'reverse'])->whereNumber('id')->middleware('permission:accounting.approve');
+    Route::get('accounting/accounts', [AccountingJournalController::class, 'accounts'])->middleware('permission:accounting.view');
+    Route::post('accounting/accounts', [AccountingJournalController::class, 'storeAccount'])->middleware('permission:accounting.edit');
+    Route::put('accounting/accounts/{id}', [AccountingJournalController::class, 'updateAccount'])->whereNumber('id')->middleware('permission:accounting.edit');
+    Route::post('accounting/accounts/{id}/deactivate', [AccountingJournalController::class, 'deactivateAccount'])->whereNumber('id')->middleware('permission:accounting.edit');
     // Vendor commission rules (spec §12): product > category > vendor; frozen per line at recognition.
     Route::get('accounting/commission-rules', [CommissionRuleController::class, 'index'])->middleware('permission:accounting.view');
     Route::post('accounting/commission-rules', [CommissionRuleController::class, 'store'])->middleware('permission:accounting.edit');
