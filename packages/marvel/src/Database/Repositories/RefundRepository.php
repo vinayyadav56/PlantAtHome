@@ -80,7 +80,9 @@ class RefundRepository extends BaseRepository
         }
         $data = $request->only($this->dataArray);
         $data['customer_id'] = $order->customer_id;
-        return $this->createSliced($order, $data, $scope, (array) $request->input('items', []), $request->input('requested_amount'), $request->input('method'));
+        // The payout method is an admin decision at approval; a customer's hint is ignored.
+        $staff = $user->hasPermissionTo(Permission::SUPER_ADMIN) || $user->hasPermissionTo(Permission::STAFF);
+        return $this->createSliced($order, $data, $scope, (array) $request->input('items', []), $request->input('requested_amount'), $staff ? $request->input('method') : null);
     }
 
     /**
@@ -104,7 +106,7 @@ class RefundRepository extends BaseRepository
             $data['method'] = $method;
         }
         $refund = $this->create($data);
-        if ($slices && $scope === 'items') {
+        if ($slices) {
             foreach ($slices['lines'] as $itemId => $l) {
                 \Illuminate\Support\Facades\DB::table('refund_items')->insert([
                     'refund_id' => $refund->id, 'order_item_id' => $itemId, 'quantity' => $l['quantity'], 'amount' => $l['amount']->toDecimal(),
@@ -144,7 +146,9 @@ class RefundRepository extends BaseRepository
         $refund->update($data);
         $this->changeShopSpecificRefundStatus($refund->order_id, $data);
 
-        if ($refund['status'] == RefundStatus::APPROVED) {
+        // Only a FULL refund makes the order "refunded"; a partial/item refund leaves the order and its
+        // recognised revenue standing (the sliced reversal is the whole accounting effect).
+        if ($refund['status'] == RefundStatus::APPROVED && (($refund->scope ?? 'full') === 'full')) {
             $orderData['order_status'] = OrderStatus::REFUNDED;
             $orderData['payment_status'] = PaymentStatus::REFUNDED;
             $this->changeOrderStatus($refund->order_id, $orderData);

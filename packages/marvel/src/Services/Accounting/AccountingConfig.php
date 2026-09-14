@@ -78,6 +78,14 @@ final class AccountingConfig
         return (string) ($this->cfg['adjustment_approval_threshold'] ?? '5000.00');
     }
 
+    /** Share of a shipment's courier/DP cost recovered from the vendor (spec §19): global %, per-shop override. */
+    public function deliveryVendorSharePercent(?int $shopId = null): string
+    {
+        $d = (array) ($this->cfg['delivery'] ?? []);
+        $v = $shopId !== null && isset($d['per_shop'][$shopId]) ? $d['per_shop'][$shopId] : ($d['vendor_share_percent'] ?? 0);
+        return number_format(min(100, max(0, (float) $v)), 4, '.', '');
+    }
+
     public function cutoverDate(): ?string
     {
         return $this->cfg['cutover_date'] ?? null;

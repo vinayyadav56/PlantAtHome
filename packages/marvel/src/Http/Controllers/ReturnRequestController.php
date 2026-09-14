@@ -46,6 +46,10 @@ class ReturnRequestController extends CoreController
 
     public function transition(Request $request, $id, string $action)
     {
+        $u = $request->user();
+        if (!$u || !($u->hasPermissionTo(\Marvel\Enums\Permission::SUPER_ADMIN) || $u->hasPermissionTo(\Marvel\Enums\Permission::STAFF))) {
+            abort(403, 'Return decisions are for platform staff.');
+        }
         try {
             if ($action === 'refund') {
                 $request->validate(['method' => ['nullable', 'in:wallet,gateway,manual']]);

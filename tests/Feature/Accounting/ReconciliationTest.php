@@ -148,6 +148,8 @@ class ReconciliationTest extends OrdersTestCase
             $this->assertStringContainsString('open reconciliation finding', $e->getMessage());
         }
         $this->assertSame('open', $period->fresh()->status);
+        $this->assertSame(1, DB::table('acc_reconciliation_findings')->where('status', 'open')->count()); // the refused close keeps its findings
+        $this->assertSame(1, DB::table('acc_reconciliation_runs')->count());
         $rogue->delete();
         foreach (DB::table('acc_reconciliation_findings')->where('status', 'open')->get() as $f) {
             (new ReconciliationEngine())->resolve($f->id, 'resolved', 'test row removed', 'admin:1');
@@ -221,9 +223,48 @@ class ReconciliationTest extends OrdersTestCase
     {
         $o1 = $this->s68Order(['tracking_number' => 'FLAG-1', 'financial_status' => 'requires_reconciliation']);
         $o2 = $this->s68Order(['tracking_number' => 'UNPOSTED-1']);
-        $f = (new ReconciliationEngine())->run(null, null, ['journal'])['all_findings'];
+        $engine = new ReconciliationEngine(new \Marvel\Services\Accounting\AccountingConfig(['accounting' => ['enabled' => true, 'cutover_date' => '2026-01-01']]));
+        $f = $engine->run(null, null, ['journal'])['all_findings'];
         $ids = array_map(fn ($x) => (int) $x['subject_id'], array_filter($f, fn ($x) => $x['subject_type'] === 'order'));
+        // without a cutover date (pre-cutover history is never posted) the sweep stays silent
+        $this->assertSame([], array_filter((new ReconciliationEngine())->run(null, null, ['journal'])['all_findings'], fn ($x) => $x['subject_type'] === 'order' && (int) $x['subject_id'] === $o2->id));
         sort($ids);
         $this->assertSame([$o1->id, $o2->id], $ids);
+    }
+
+    // review: an explained finding stays quiet on later runs; a resolved one that recurs is raised again.
+    public function test_explained_findings_are_not_re_raised(): void
+    {
+        $this->s68Books();
+        VendorLedgerEntry::create(['shop_id' => 11, 'order_id' => null, 'entry_type' => 'adjustment_credit', 'amount' => '10.00', 'status' => 'pending', 'journal_entry_id' => JournalEntry::first()->id, 'idempotency_key' => 'rogue:3', 'source' => 'test', 'earned_at' => Carbon::now()]);
+        $engine = new ReconciliationEngine();
+        $f = $engine->run(null, null, ['vendor'])['findings'];
+        $engine->resolve($f[0]['id'], 'explained', 'accepted legacy drift', 'admin:1');
+        $this->assertCount(0, $engine->run(null, null, ['vendor'])['findings']);
+        $this->assertSame(1, DB::table('acc_reconciliation_findings')->count());
+        $engine->resolve($f[0]['id'], 'resolved', 'thought it was fixed', 'admin:1');
+        $this->assertCount(1, $engine->run(null, null, ['vendor'])['findings']); // recurred → a new open finding
+    }
+
+    // review: the running month cannot be closed; a late event still posts when the current period row does not exist yet.
+    public function test_running_month_cannot_close_and_late_events_create_the_current_period(): void
+    {
+        $ps = new PeriodService();
+        $current = AccountingPeriod::forDate(Carbon::today());
+        try {
+            $ps->close($current->id, 'admin:1');
+            $this->fail('the running month must not close');
+        } catch (\RuntimeException $e) {
+            $this->assertStringContainsString('not ended', $e->getMessage());
+        }
+        $lastMonth = Carbon::today()->subMonthNoOverflow()->startOfMonth();
+        $closed = AccountingPeriod::forDate($lastMonth);
+        $closed->update(['status' => 'closed', 'closed_at' => now()]);
+        AccountingPeriod::where('id', $current->id)->delete();
+        $je = (new JournalService())->postLines([['account' => '6060', 'debit' => '2.00'], ['account' => '1010', 'credit' => '2.00']],
+            ['source_type' => 'SHIPMENT_COST', 'source_key' => 'SYSTEM:late2', 'entry_date' => $lastMonth->copy()->addDays(2)->toDateString()]);
+        $this->assertSame('posted', $je->status);
+        $this->assertSame(Carbon::today()->format('Y-m'), $je->entry_date->format('Y-m'));
+        $this->assertTrue($je->requires_reconciliation);
     }
 }

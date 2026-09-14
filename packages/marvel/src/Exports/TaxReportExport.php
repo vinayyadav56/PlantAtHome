@@ -117,6 +117,29 @@ class TaxReportExport implements FromCollection, WithHeadings
             }
         }
 
+        // Credit notes (refunds) as NEGATIVE rows — GSTR-1 needs them netted against the invoices.
+        if (\Illuminate\Support\Facades\Schema::hasTable('credit_notes')) {
+            $cn = \Illuminate\Support\Facades\DB::table('credit_notes as cn')->join('orders as o', 'o.id', '=', 'cn.order_id')->whereNotNull('cn.journal_entry_id');
+            if (!empty($this->filters['shop_id'])) { $cn->where('o.shop_id', $this->filters['shop_id']); }
+            if (!empty($this->filters['from'])) { $cn->whereDate('cn.issue_date', '>=', $this->filters['from']); }
+            if (!empty($this->filters['to'])) { $cn->whereDate('cn.issue_date', '<=', $this->filters['to']); }
+            if (!empty($this->filters['state'])) { $cn->where('o.place_of_supply', $this->filters['state']); }
+            foreach ($cn->orderBy('cn.issue_date')->get(['cn.*', 'o.tracking_number', 'o.place_of_supply', 'o.place_of_supply_code', 'o.is_inter_state', 'o.customer_id']) as $note) {
+                $lines = json_decode((string) $note->lines, true) ?: [];
+                $neg = fn ($v) => (float) $v == 0.0 ? '0.00' : number_format(-1 * (float) $v, 2, '.', '');
+                foreach ($lines as $l) {
+                    $results[] = [
+                        'invoice_no' => $note->number, 'date' => substr((string) $note->issue_date, 0, 10), 'customer' => 'Credit note against ' . ($prefix ? $prefix . '-' : '') . $note->tracking_number,
+                        'place' => $note->place_of_supply ?? '', 'state_code' => $note->place_of_supply_code ?? '', 'supply_type' => $note->is_inter_state ? 'Inter-state' : 'Intra-state',
+                        'item' => $l['label'] ?? ('Refund line #' . ($l['order_item_id'] ?? '')), 'hsn' => $l['hsn'] ?? '',
+                        'gst_rate' => isset($l['rate']) ? rtrim(rtrim(number_format((float) $l['rate'], 2, '.', ''), '0'), '.') . '%' : '', 'qty' => -1 * (int) ($l['qty'] ?? 1),
+                        'taxable' => $neg($l['taxable'] ?? 0), 'cgst' => $neg($l['cgst'] ?? 0), 'sgst' => $neg($l['sgst'] ?? 0), 'igst' => $neg($l['igst'] ?? 0),
+                        'line_tax' => $neg((float) ($l['cgst'] ?? 0) + (float) ($l['sgst'] ?? 0) + (float) ($l['igst'] ?? 0)),
+                    ];
+                }
+            }
+        }
+
         return collect($results);
     }
 

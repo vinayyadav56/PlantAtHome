@@ -58,8 +58,9 @@ class ReconciliationEngine
         // Do not duplicate a finding that is still open from an earlier run (same kind/subject/difference).
         $persisted = [];
         foreach ($findings as $i => $f) {
+            // still open → same finding; explained with the same difference → a person accepted it, stay quiet
             $dup = DB::table('acc_reconciliation_findings')->where('kind', $f['kind'])->where('subject_type', $f['subject_type'])
-                ->where('subject_id', (string) $f['subject_id'])->where('status', 'open')->where('difference', $f['difference'] ?? null)->value('id');
+                ->where('subject_id', (string) $f['subject_id'])->whereIn('status', ['open', 'explained'])->where('difference', $f['difference'] ?? null)->orderByRaw("CASE status WHEN 'open' THEN 0 ELSE 1 END")->value('id');
             if ($dup) {
                 $findings[$i]['id'] = (int) $dup;
                 continue;
@@ -151,13 +152,12 @@ class ReconciliationEngine
                 $f[] = ['subject_type' => 'order', 'subject_id' => $o->id, 'difference' => null, 'message' => 'Order ' . $o->tracking_number . ' is flagged requires_reconciliation'];
             }
             $since = $from ?: $this->config->cutoverDate();
-            $q = DB::table('orders')->whereNull('parent_id')->whereNull('deleted_at')->where('order_status', 'order-completed')
-                ->where(fn ($w) => $w->whereNull('financial_status')->orWhere('financial_status', 'unrecognized'));
-            if ($since) {
-                $q->where('updated_at', '>=', $since);
-            }
-            foreach ($q->limit(200)->get(['id', 'tracking_number']) as $o) {
-                $f[] = ['subject_type' => 'order', 'subject_id' => $o->id, 'difference' => null, 'message' => 'Completed order ' . $o->tracking_number . ' has no recognition journal (run accounting:post-pending)'];
+            if ($since) { // pre-cutover history is never posted (D4) — only sweep from the cutover / window start
+                $q = DB::table('orders')->whereNull('parent_id')->whereNull('deleted_at')->where('order_status', 'order-completed')
+                    ->where(fn ($w) => $w->whereNull('financial_status')->orWhere('financial_status', 'unrecognized'))->where('updated_at', '>=', $since);
+                foreach ($q->limit(200)->get(['id', 'tracking_number']) as $o) {
+                    $f[] = ['subject_type' => 'order', 'subject_id' => $o->id, 'difference' => null, 'message' => 'Completed order ' . $o->tracking_number . ' has no recognition journal (run accounting:post-pending)'];
+                }
             }
         }
         return ['findings' => $f, 'summary' => ['unbalanced_entries' => $unbalanced->count(), 'trial_balance' => $tb['balanced'], 'balance_sheet' => $bs['balanced'], 'findings' => count($f)]];
@@ -176,6 +176,12 @@ class ReconciliationEngine
         // sub-ledger: only rows written by the accounting engine (linked to a journal); pre-cutover legacy rows are not in the GL
         $sl = DB::table('vendor_ledger_entries')->whereNotNull('journal_entry_id')->where('status', '!=', 'reversed')
             ->groupBy('shop_id')->selectRaw('shop_id, COALESCE(SUM(amount),0) as bal')->pluck('bal', 'shop_id');
+        // 2010 lines with no shop dimension belong to nobody's sub-ledger — they must net to zero
+        $orphan = MoneyBridge::toMoney((string) DB::table('acc_journal_lines as l')->join('acc_journal_entries as e', 'e.id', '=', 'l.journal_entry_id')->join('acc_accounts as a', 'a.id', '=', 'l.account_id')
+            ->whereIn('e.status', ['posted', 'reversed'])->where('a.code', $code)->whereNull('l.shop_id')->selectRaw('COALESCE(SUM(l.credit),0) - COALESCE(SUM(l.debit),0) as bal')->value('bal'));
+        if (!$orphan->isZero()) {
+            $f[] = ['subject_type' => 'account', 'subject_id' => $code, 'expected' => '0.00', 'actual' => $orphan->toDecimal(), 'difference' => $orphan->toDecimal(), 'message' => 'GL ' . $code . ' carries ' . $orphan->toDecimal() . ' with no vendor dimension'];
+        }
         $shops = array_unique(array_merge(array_keys($gl->all()), array_keys($sl->all())));
         foreach ($shops as $shopId) {
             $g = MoneyBridge::toMoney((string) ($gl[$shopId] ?? 0));

@@ -25,6 +25,9 @@ class ReturnService
         if ($quantity < 1 || $quantity > (int) $item->order_quantity) {
             throw new \InvalidArgumentException('Return quantity must be between 1 and ' . $item->order_quantity . '.');
         }
+        if (!in_array((string) $order->order_status, ['order-completed', 'order-refunded'], true) && (string) $item->item_status !== 'delivered') {
+            throw new \InvalidArgumentException('Only delivered items can be returned.');
+        }
         $openQty = (int) DB::table('return_requests')->where('order_item_id', $item->id)->whereIn('status', ['requested', 'approved', 'received'])->sum('quantity');
         if ($openQty + $quantity > (int) $item->order_quantity) {
             throw new \InvalidArgumentException('A return is already open for these units.');
@@ -70,20 +73,22 @@ class ReturnService
     /** Received → refunded: creates an ITEM refund through the normal refund path (approval posts it). */
     public function refund(int $returnId, ?string $method, ?string $actor = null): object
     {
-        $r = DB::table('return_requests')->where('id', $returnId)->first();
-        if ($r && $r->refund_id) {
-            return $r; // idempotent (also after it closed as 'refunded')
-        }
-        if (!$r || $r->status !== 'received') {
-            throw new \RuntimeException('Only a received return can be refunded.');
-        }
-        $order = Order::findOrFail($r->order_id);
-        $refund = app(RefundRepository::class)->createSliced($order, [
-            'order_id' => $order->id, 'customer_id' => $order->customer_id, 'title' => 'Return #' . $returnId, 'description' => $r->reason,
-        ], 'items', [['order_item_id' => $r->order_item_id, 'quantity' => $r->quantity]], null, $method);
-        DB::table('return_requests')->where('id', $returnId)->update(['refund_id' => $refund->id, 'updated_at' => now()]);
-        OrderEvent::record($order->id, 'return.refund_requested', ['return_id' => $returnId, 'refund_id' => $refund->id], 'Return refund requested');
-        return $this->find($returnId);
+        return DB::transaction(function () use ($returnId, $method) {
+            $r = DB::table('return_requests')->where('id', $returnId)->lockForUpdate()->first();
+            if ($r && $r->refund_id) {
+                return $r; // idempotent (also after it closed as 'refunded')
+            }
+            if (!$r || $r->status !== 'received') {
+                throw new \RuntimeException('Only a received return can be refunded.');
+            }
+            $order = Order::findOrFail($r->order_id);
+            $refund = app(RefundRepository::class)->createSliced($order, [
+                'order_id' => $order->id, 'customer_id' => $order->customer_id, 'title' => 'Return #' . $returnId, 'description' => $r->reason,
+            ], 'items', [['order_item_id' => $r->order_item_id, 'quantity' => $r->quantity]], null, $method);
+            DB::table('return_requests')->where('id', $returnId)->update(['refund_id' => $refund->id, 'updated_at' => now()]);
+            OrderEvent::record($order->id, 'return.refund_requested', ['return_id' => $returnId, 'refund_id' => $refund->id], 'Return refund requested');
+            return $this->find($returnId);
+        });
     }
 
     /** Called by the refund approval path so the return closes when its refund is approved. */

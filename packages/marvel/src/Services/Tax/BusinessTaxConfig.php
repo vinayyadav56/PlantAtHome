@@ -26,6 +26,16 @@ class BusinessTaxConfig
         $this->contact = (array) ($options['contactDetails'] ?? []);
     }
 
+    /**
+     * CA flag (spec §17): when ON, a product whose HSN/GST the CA has not verified is treated as
+     * 0% / non-taxable instead of its configured rate. Default OFF — existing products are all
+     * unverified, so ON would silently drop recorded GST until the CA review completes.
+     */
+    public function enforceTaxVerified(): bool
+    {
+        return (bool) ($this->tax['enforce_tax_verified'] ?? false);
+    }
+
     /** Store-wide default: are configured product prices inclusive of GST? Default TRUE. */
     public function pricesIncludeTax(): bool
     {

@@ -37,7 +37,7 @@ class RefundRequest extends FormRequest
             'scope'                 => ['nullable', 'in:full,partial,items'],
             'requested_amount'      => ['nullable', 'numeric', 'gt:0'],
             'items'                 => ['nullable', 'array', 'min:1'],
-            'items.*.order_item_id' => ['required_with:items', 'integer'],
+            'items.*.order_item_id' => ['required_with:items', 'integer', 'distinct'],
             'items.*.quantity'      => ['required_with:items', 'integer', 'min:1'],
             'method'                => ['nullable', 'in:wallet,gateway,manual'],
         ];

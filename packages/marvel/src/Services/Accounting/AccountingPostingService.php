@@ -135,16 +135,16 @@ class AccountingPostingService
                 $sumTaxable = $sumTaxable->add($taxable); $lineCgst = $lineCgst->add($cg); $lineSgst = $lineSgst->add($sg); $lineIgst = $lineIgst->add($ig);
                 if ($it->discount_amount !== null) {
                     $hasLineDiscount = true;
-                    if (($it->discount_funded_by ?? 'platform') !== 'vendor') {
-                        $platformDiscount = $platformDiscount->add(MoneyBridge::toMoney($it->discount_amount));
-                    }
+                    // Contra-revenue for EVERY discount (the customer paid less than gross); a vendor-funded
+                    // discount is recovered from the vendor through the lower payable, not through revenue.
+                    $platformDiscount = $platformDiscount->add(MoneyBridge::toMoney($it->discount_amount));
                 }
             }
             if (!$hasLineDiscount) { // legacy line set: the whole order discount is platform-funded
                 $platformDiscount = MoneyBridge::toMoney($order->discount ?? 0);
             }
             if (!$platformDiscount->isZero()) {
-                $lines[] = ['account' => $c->accountCode('discounts_given'), 'debit' => $platformDiscount, 'order_id' => $order->id, 'description' => 'Platform-funded discount'];
+                $lines[] = ['account' => $c->accountCode('discounts_given'), 'debit' => $platformDiscount, 'order_id' => $order->id, 'description' => 'Discounts given'];
             }
 
             // delivery: revenue + its tax share (order-level tax − Σ line tax, from the same snapshot)
@@ -259,7 +259,13 @@ class AccountingPostingService
             }
             // A FULL refund already reversed revenue/tax/payables through RefundService (and leaves
             // the refund payable, not the customer advance, on the books) — never reverse twice.
-            if ($order->financial_status === self::DERECOGNIZED && JournalEntry::where('source_type', 'REFUND_POSTED')->where('reference_type', 'order')->where('reference_id', $order->id)->exists()) {
+            $refunded = JournalEntry::where('source_type', 'REFUND_POSTED')->where('reference_type', 'order')->where('reference_id', $order->id)->where('status', JournalEntry::POSTED)->exists();
+            if ($refunded) {
+                if ($order->financial_status !== self::DERECOGNIZED) {
+                    // Partial/item refunds already reversed PART of this recognition. Reversing the whole
+                    // entry now would double-reverse those lines — leave it to a person (spec §45).
+                    $this->flag($order, 'derecognition requested (' . $reason . ') after partial refunds — reverse the remainder manually');
+                }
                 return null;
             }
             if ($orig->status !== JournalEntry::POSTED) {
@@ -286,6 +292,9 @@ class AccountingPostingService
             if (!$captured) {
                 return null; // nothing was collected
             }
+            if (JournalEntry::where('source_type', 'REFUND_POSTED')->where('reference_type', 'order')->where('reference_id', $order->id)->where('status', JournalEntry::POSTED)->exists()) {
+                return null; // a refund already moved the advance to Refund Payable
+            }
             $paid = MoneyBridge::toMoney($order->paid_total);
             if ($paid->isZero()) {
                 return null;
@@ -308,6 +317,72 @@ class AccountingPostingService
      *   DR Payment Gateway Receivable (captured) · DR Wallet Liability (wallet part) / CR Customer Advances (paid_total).
      * Fee (when the gateway reports it) posts separately: DR Gateway Charges / CR Gateway Receivable.
      */
+    /** Seam: a shipment reached `delivered` (CourierService::applyNormalizedStatus). Guarded, idempotent. */
+    public static function onShipmentDelivered(\Marvel\Database\Models\Shipment $shipment, ?string $actor = null): ?JournalEntry
+    {
+        if (!self::enabled()) {
+            return null;
+        }
+        return self::make()->recordShipmentCost($shipment, $actor ?? 'system:courier');
+    }
+
+    /**
+     * SHIPMENT_COST (spec §19): DR Delivery Cost / CR Courier Payable (2060) or DP Payables (2090)
+     * for the shipment's shipping_cost; the configured vendor share is recovered from the vendor
+     * (DR Vendor Payables[shop] / CR Delivery Cost) with a `delivery_deduction` sub-ledger row.
+     * Customer delivery REVENUE was already recognised with the order (4030).
+     */
+    public function recordShipmentCost(\Marvel\Database\Models\Shipment $shipment, ?string $actor = null): ?JournalEntry
+    {
+        if (!$this->config->enabled()) {
+            return null;
+        }
+        $key = 'SHIPMENT_COST:' . $shipment->id;
+        if ($existing = JournalEntry::where('source_key', $key)->first()) {
+            return $existing;
+        }
+        $cost = MoneyBridge::toMoney($shipment->shipping_cost ?? 0);
+        if ($cost->isZero() || $cost->isNegative()) {
+            return null;
+        }
+        $c = $this->config;
+        $shopId = $shipment->shop_id ? (int) $shipment->shop_id : null;
+        $dims = ['order_id' => $shipment->order_id, 'shipment_id' => $shipment->id, 'shop_id' => $shopId];
+        $payableRole = $shipment->delivery_partner_id ? 'dp_payables' : 'other_current_liabilities';
+        $lines = [
+            ['account' => $c->accountCode('delivery_cost'), 'debit' => $cost, 'description' => 'Courier/DP cost'] + $dims,
+            ['account' => $c->accountCode($payableRole), 'credit' => $cost, 'description' => $shipment->delivery_partner_id ? 'Payable to delivery partner' : 'Payable to courier'] + $dims,
+        ];
+        $share = $shopId ? MoneyBridge::percent($cost, $c->deliveryVendorSharePercent($shopId)) : MoneyBridge::zero();
+        if (!$share->isZero()) {
+            $lines[] = ['account' => $c->accountCode('vendor_payables'), 'debit' => $share, 'description' => 'Delivery cost recovered from vendor'] + $dims;
+            $lines[] = ['account' => $c->accountCode('delivery_cost'), 'credit' => $share, 'description' => 'Vendor share of delivery cost'] + $dims;
+        }
+        $run = function () use ($lines, $key, $shipment, $cost, $share, $shopId, $actor) {
+            $je = $this->journal->postLines($lines, [
+                'source_type' => 'SHIPMENT_COST', 'source_id' => $shipment->id, 'source_key' => $key, 'reference_type' => 'shipment', 'reference_id' => $shipment->id,
+                'description' => 'Shipment #' . $shipment->id . ' delivered — cost ' . $cost->toDecimal() . ($share->isZero() ? '' : ', vendor share ' . $share->toDecimal()),
+                'metadata' => ['cost' => $cost->toDecimal(), 'vendor_share' => $share->toDecimal(), 'delivery_partner_id' => $shipment->delivery_partner_id], 'actor' => $actor,
+            ]);
+            if (!$share->isZero() && $shopId) {
+                (new \Marvel\Services\VendorLedgerService())->recordDeduction($shopId, $shipment->order_id ? (int) $shipment->order_id : null, (int) $shipment->id, 'delivery_deduction', $share->toDecimal(), ($shipment->order_id ?? 0) . ':0:delivery_deduction:' . $shipment->id, $je, 'Delivery cost share for shipment #' . $shipment->id);
+            }
+            if ($shipment->order_id) {
+                OrderEvent::record($shipment->order_id, 'accounting.shipment_cost', ['shipment_id' => $shipment->id, 'journal' => $je->entry_number, 'cost' => $cost->toDecimal(), 'vendor_share' => $share->toDecimal()], 'Delivery cost posted');
+            }
+            return $je;
+        };
+        try {
+            return DB::transaction($run);
+        } catch (\Throwable $e) {
+            if ($this->config->strict()) {
+                throw $e;
+            }
+            Log::error('accounting: shipment cost posting failed', ['shipment_id' => $shipment->id, 'error' => $e->getMessage()]);
+            return null;
+        }
+    }
+
     public function recordPaymentCaptured(Order $order, string $gateway, string $gatewayPaymentId, int $amountPaise, int $feePaise = 0, int $taxOnFeePaise = 0, array $payload = [], ?string $actor = null): ?JournalEntry
     {
         return $this->guarded('recordPaymentCaptured', $order, function () use ($order, $gateway, $gatewayPaymentId, $amountPaise, $feePaise, $taxOnFeePaise, $payload, $actor) {

@@ -28,21 +28,26 @@ class PeriodService
 
     public function close(int $periodId, ?string $actor = null, ?string $note = null, bool $force = false): AccountingPeriod
     {
-        return DB::transaction(function () use ($periodId, $actor, $note, $force) {
+        $pre = AccountingPeriod::findOrFail($periodId);
+        if ($pre->isClosed()) {
+            return $pre;
+        }
+        if (!$pre->period_end->copy()->endOfDay()->isPast()) {
+            throw new \RuntimeException('Period ' . $pre->period_start->toDateString() . ' has not ended yet.');
+        }
+        // Reconcile OUTSIDE the closing transaction so a refused close keeps its run + findings on record.
+        $r = $this->engine->run($pre->period_start->toDateString(), $pre->period_end->toDateString(), ['journal', 'vendor', 'payment', 'gst'], $actor);
+        $open = (int) DB::table('acc_reconciliation_findings')->where('status', 'open')->whereIn('kind', ['journal', 'vendor', 'payment', 'gst'])->count();
+        if (($open > 0 || $r['run']->status !== 'clean') && !$force) {
+            throw new \RuntimeException('Period cannot be closed: ' . $open . ' open reconciliation finding(s). Explain/resolve them first (or force with a reason).');
+        }
+        if ($force && !$note) {
+            throw new \RuntimeException('Forcing a period close requires a reason.');
+        }
+        return DB::transaction(function () use ($periodId, $actor, $note, $force, $open) {
             $p = AccountingPeriod::whereKey($periodId)->lockForUpdate()->firstOrFail();
             if ($p->isClosed()) {
                 return $p;
-            }
-            if ($p->period_end->isFuture()) {
-                throw new \RuntimeException('Period ' . $p->period_start->toDateString() . ' has not ended yet.');
-            }
-            $r = $this->engine->run($p->period_start->toDateString(), $p->period_end->toDateString(), ['journal', 'vendor', 'payment', 'gst'], $actor);
-            $open = (int) DB::table('acc_reconciliation_findings')->where('status', 'open')->whereIn('kind', ['journal', 'vendor', 'payment', 'gst'])->count();
-            if (($open > 0 || $r['run']->status !== 'clean') && !$force) {
-                throw new \RuntimeException('Period cannot be closed: ' . $open . ' open reconciliation finding(s). Explain/resolve them first (or force with a reason).');
-            }
-            if ($force && !$note) {
-                throw new \RuntimeException('Forcing a period close requires a reason.');
             }
             $p->status = 'closed';
             $p->closed_by = is_numeric($actor) ? (int) $actor : null;

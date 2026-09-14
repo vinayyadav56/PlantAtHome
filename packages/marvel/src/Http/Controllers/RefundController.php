@@ -188,7 +188,8 @@ class RefundController extends CoreController
         // restore, wallet credit) happens in ONE transaction; a row-locked compare-and-swap
         // on the refund status makes a concurrent/retried approval a no-op instead of a
         // double credit/debit. Reversals mirror EXACTLY what completion credited.
-        return DB::transaction(function () use ($request, $refund) {
+        $deferredGatewayPayout = null;
+        $approved = DB::transaction(function () use ($request, $refund, &$deferredGatewayPayout) {
             $locked = Refund::whereKey($refund->id)
                 ->where('status', '!=', RefundStatus::APPROVED)
                 ->lockForUpdate()
@@ -218,7 +219,14 @@ class RefundController extends CoreController
                 // note, and record the payout. Strict mode makes a posting failure roll back the approval.
                 $refundSvc = \Marvel\Services\Accounting\RefundService::make();
                 $refundSvc->post($locked, (string) ($request->user()?->id ?? 'system'));
-                $refundSvc->payout($locked, $wasPaidOnline ? $method : 'manual', (string) ($request->user()?->id ?? 'system'));
+                $locked->refresh();
+                $refundable = (float) $refundSvc->postedAmount($locked)->toDecimal(); // pay what was posted
+                $method = $wasPaidOnline ? $method : 'manual';
+                if ($method === 'gateway') {
+                    $deferredGatewayPayout = [$locked->id, (string) ($request->user()?->id ?? 'system')]; // after commit: the PSP call is not rollback-able
+                } else {
+                    $refundSvc->payout($locked, $method, (string) ($request->user()?->id ?? 'system'));
+                }
                 \Marvel\Services\Accounting\ReturnService::markRefunded((int) $locked->id);
             }
 
@@ -284,6 +292,37 @@ class RefundController extends CoreController
 
             return $locked;
         });
+        if ($deferredGatewayPayout) {
+            // Approval is committed; now move the money. A failure here leaves the refund approved with
+            // refunded_at NULL — retried via POST accounting/refunds/{id}/payout (audited), never re-approved.
+            [$id, $actor] = $deferredGatewayPayout;
+            try {
+                \Marvel\Services\Accounting\RefundService::make()->payout(Refund::findOrFail($id), 'gateway', $actor);
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::error('refund gateway payout failed after approval', ['refund_id' => $id, 'error' => $e->getMessage()]);
+            }
+        }
+        return $approved;
+    }
+
+    /** Retry / execute the payout of an APPROVED refund whose money has not moved yet (spec §26). */
+    public function payout(Request $request, $id)
+    {
+        $request->validate(['method' => ['required', 'in:wallet,gateway,manual']]);
+        $refund = Refund::findOrFail($id);
+        if ($refund->status !== RefundStatus::APPROVED) {
+            return response()->json(['message' => 'Only an approved refund can be paid out.'], 422);
+        }
+        $svc = \Marvel\Services\Accounting\RefundService::make();
+        $je = $svc->payout($refund, $request->input('method'), (string) ($request->user()?->id ?? 'system'));
+        if ($je && $request->input('method') === 'wallet' && !$refund->refunded_at) {
+            $points = $this->currencyToWalletPoints((float) $svc->postedAmount($refund)->toDecimal());
+            $wallet = Wallet::firstOrCreate(['customer_id' => $refund->customer_id]);
+            $wallet->total_points = (float) $wallet->total_points + $points;
+            $wallet->available_points = (float) $wallet->available_points + $points;
+            $wallet->save();
+        }
+        return response()->json(['refund' => $refund->fresh(), 'journal' => $je?->entry_number]);
     }
 
     /**

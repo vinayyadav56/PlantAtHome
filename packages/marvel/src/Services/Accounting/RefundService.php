@@ -52,9 +52,12 @@ class RefundService
 
     /**
      * Compute what a refund is made of. Returns
-     *  ['amount' => Money, 'lines' => [item_id => [quantity, taxable, tax, cgst, sgst, igst, discount, vendor_share, shop_id, amount]],
-     *   'delivery' => ['taxable' => Money, 'cgst','sgst','igst'], 'platform_discount' => Money]
-     * Refuses to exceed what the customer paid minus refunds already approved.
+     *  ['amount' => Money, 'lines' => [item_id => [quantity, taxable, tax, cgst, sgst, igst, discount, vendor_share, shop_id, amount, hsn, rate]],
+     *   'delivery' => ['taxable' => Money, 'cgst','sgst','igst'] | null, 'platform_discount' => Money]
+     * Every slice is taken from the line's frozen snapshot, NET of what earlier approved refunds
+     * already took from that line (quantity- and amount-aware): the last units of a line and a
+     * full refund are exact remainders, so repeated slices can never drift a paisa. Refuses to
+     * exceed what the customer paid minus refunds already approved.
      */
     public function slices(Order $order, string $scope, array $items = [], ?string $requestedAmount = null, ?int $excludeRefundId = null): array
     {
@@ -62,87 +65,104 @@ class RefundService
         $paid = MoneyBridge::toMoney($order->paid_total);
         $alreadyRefunded = MoneyBridge::toMoney((string) Refund::where('order_id', $order->id)->whereNull('shop_id')->where('status', 'approved')->when($excludeRefundId, fn ($q) => $q->where('id', '!=', $excludeRefundId))->sum('amount'));
         $refundable = $paid->subtract($alreadyRefunded);
-        $refundedQty = $this->refundedQuantities($order, $excludeRefundId);
+        $prior = $this->priorSlices($order, $excludeRefundId);
+        $keys = ['taxable', 'cgst', 'sgst', 'igst', 'discount', 'vendor_share', 'amount'];
 
+        // the whole line as the customer paid it: taxable + tax − discount (any funder), vendor share = frozen payable
+        $total = function (OrderItem $it) {
+            $taxable = MoneyBridge::toMoney($it->taxable_value ?? $it->subtotal ?? 0);
+            $cg = MoneyBridge::toMoney($it->cgst_amount ?? 0); $sg = MoneyBridge::toMoney($it->sgst_amount ?? 0); $ig = MoneyBridge::toMoney($it->igst_amount ?? 0);
+            $disc = MoneyBridge::toMoney($it->discount_amount ?? 0);
+            return ['taxable' => $taxable, 'cgst' => $cg, 'sgst' => $sg, 'igst' => $ig, 'discount' => $disc,
+                'vendor_share' => MoneyBridge::toMoney($it->vendor_payable_snapshot ?? 0), 'amount' => $taxable->add($cg)->add($sg)->add($ig)->subtract($disc)];
+        };
+        $scale = fn (array $t, float $ratio) => array_map(fn (Money $m) => $m->multiply($ratio), $t);
+        $remainder = fn (array $t, ?array $p) => $p ? array_combine($keys, array_map(fn ($k) => $this->floor($t[$k]->subtract($p[$k])), $keys)) : $t;
         $out = ['amount' => MoneyBridge::zero(), 'lines' => [], 'delivery' => null, 'platform_discount' => MoneyBridge::zero()];
-        $slice = function (OrderItem $it, int $qty) use (&$out) {
-            $q = max(1, (int) $it->order_quantity);
-            $ratio = $qty / $q;
-            $taxable = MoneyBridge::toMoney($it->taxable_value ?? $it->subtotal ?? 0)->multiply($ratio);
-            $cg = MoneyBridge::toMoney($it->cgst_amount ?? 0)->multiply($ratio);
-            $sg = MoneyBridge::toMoney($it->sgst_amount ?? 0)->multiply($ratio);
-            $ig = MoneyBridge::toMoney($it->igst_amount ?? 0)->multiply($ratio);
-            $tax = $cg->add($sg)->add($ig);
-            $disc = ($it->discount_funded_by ?? 'platform') !== 'vendor' ? MoneyBridge::toMoney($it->discount_amount ?? 0)->multiply($ratio) : MoneyBridge::zero();
-            $vendor = MoneyBridge::toMoney($it->vendor_payable_snapshot ?? 0)->multiply($ratio);
-            $amount = $taxable->add($tax)->subtract($disc); // what the customer paid for this slice
-            $out['lines'][$it->id] = ['quantity' => $qty, 'taxable' => $taxable, 'tax' => $tax, 'cgst' => $cg, 'sgst' => $sg, 'igst' => $ig, 'discount' => $disc, 'vendor_share' => $vendor, 'shop_id' => $it->assigned_shop_id, 'amount' => $amount];
-            $out['amount'] = $out['amount']->add($amount);
-            $out['platform_discount'] = $out['platform_discount']->add($disc);
+        $add = function (OrderItem $it, array $slice, int $qty) use (&$out) {
+            $slice['tax'] = $slice['cgst']->add($slice['sgst'])->add($slice['igst']);
+            $out['lines'][$it->id] = $slice + ['quantity' => $qty, 'shop_id' => $it->assigned_shop_id, 'hsn' => $it->hsn_code, 'rate' => $it->tax_rate];
+            $out['amount'] = $out['amount']->add($slice['amount']);
+            $out['platform_discount'] = $out['platform_discount']->add($slice['discount']);
         };
 
         if ($scope === 'items') {
-            if (!$items) {
+            $want = [];
+            foreach ($items as $req) { // the same line twice in one request is ONE request for the summed units
+                $want[(int) ($req['order_item_id'] ?? 0)] = ($want[(int) ($req['order_item_id'] ?? 0)] ?? 0) + max(1, (int) ($req['quantity'] ?? 1));
+            }
+            if (!$want) {
                 throw new \InvalidArgumentException('Item refund needs at least one line.');
             }
-            foreach ($items as $req) {
-                $it = $lines[(int) ($req['order_item_id'] ?? 0)] ?? null;
+            foreach ($want as $itemId => $qty) {
+                $it = $lines[$itemId] ?? null;
                 if (!$it) {
-                    throw new \InvalidArgumentException('Line ' . ($req['order_item_id'] ?? '?') . ' does not belong to this order.');
+                    throw new \InvalidArgumentException('Line ' . $itemId . ' does not belong to this order.');
                 }
-                $remaining = (int) $it->order_quantity - ($refundedQty[$it->id] ?? 0);
-                $qty = min((int) ($req['quantity'] ?? 1), $remaining);
-                if ($qty <= 0) {
+                $t = $total($it); $p = $prior[$it->id] ?? null;
+                $remainingUnits = (int) $it->order_quantity - (int) ($p['quantity'] ?? 0);
+                $remainingAmt = $t['amount']->subtract($p['amount'] ?? MoneyBridge::zero());
+                if ($remainingUnits <= 0 || $remainingAmt->isZero() || $remainingAmt->isNegative()) {
                     throw new \InvalidArgumentException('Line ' . $it->id . ' has already been fully refunded.');
                 }
-                $slice($it, $qty);
+                $qty = min($qty, $remainingUnits);
+                $slice = $qty === $remainingUnits ? $remainder($t, $p) : $scale($t, $qty / max(1, (int) $it->order_quantity));
+                if ($slice['amount']->amountMinor() > $remainingAmt->amountMinor()) {
+                    $slice = $remainder($t, $p);
+                }
+                $add($it, $slice, $qty);
             }
         } elseif ($scope === 'partial') {
             $want = MoneyBridge::toMoney($requestedAmount ?? '0');
             if ($want->isZero() || $want->isNegative()) {
                 throw new \InvalidArgumentException('A partial refund needs a positive amount.');
             }
-            // Allocate the amount across lines by what the customer paid for each (largest remainder),
-            // then split each slice into taxable/tax by the line's own snapshot proportions.
-            $weights = [];
+            // Allocate across lines by what is STILL refundable on each (largest remainder), then split
+            // each part into taxable/tax/discount/vendor share by the line's own snapshot proportions.
+            $weights = []; $totals = [];
             foreach ($lines as $it) {
-                $gross = MoneyBridge::toMoney($it->taxable_value ?? $it->subtotal ?? 0)->add(MoneyBridge::toMoney($it->tax_amount ?? 0))->subtract(MoneyBridge::toMoney($it->discount_amount ?? 0));
-                $weights[$it->id] = $gross->amountMinor();
+                $t = $total($it); $totals[$it->id] = $t;
+                $rem = $t['amount']->subtract($prior[$it->id]['amount'] ?? MoneyBridge::zero());
+                if (!$rem->isZero() && !$rem->isNegative()) {
+                    $weights[$it->id] = $rem->amountMinor();
+                }
+            }
+            if (!$weights) {
+                throw new \InvalidArgumentException('Nothing is left to refund on this order.');
             }
             foreach (MoneyBridge::allocate($want, $weights) as $itemId => $part) {
                 if ($part->isZero()) {
                     continue;
                 }
-                $it = $lines[$itemId];
-                $gross = max(1, $weights[$itemId]);
-                $ratio = $part->amountMinor() / $gross; // fraction of the line's paid price
-                $taxable = MoneyBridge::toMoney($it->taxable_value ?? $it->subtotal ?? 0)->multiply($ratio);
-                $cg = MoneyBridge::toMoney($it->cgst_amount ?? 0)->multiply($ratio);
-                $sg = MoneyBridge::toMoney($it->sgst_amount ?? 0)->multiply($ratio);
-                $ig = MoneyBridge::toMoney($it->igst_amount ?? 0)->multiply($ratio);
-                $disc = ($it->discount_funded_by ?? 'platform') !== 'vendor' ? MoneyBridge::toMoney($it->discount_amount ?? 0)->multiply($ratio) : MoneyBridge::zero();
-                $vendor = MoneyBridge::toMoney($it->vendor_payable_snapshot ?? 0)->multiply($ratio);
-                $out['lines'][$it->id] = ['quantity' => 0, 'taxable' => $taxable, 'tax' => $cg->add($sg)->add($ig), 'cgst' => $cg, 'sgst' => $sg, 'igst' => $ig, 'discount' => $disc, 'vendor_share' => $vendor, 'shop_id' => $it->assigned_shop_id, 'amount' => $part];
-                $out['amount'] = $out['amount']->add($part);
-                $out['platform_discount'] = $out['platform_discount']->add($disc);
-            }
-        } else { // full: every remaining unit + delivery; the customer gets back exactly what they paid
-            foreach ($lines as $it) {
-                $remaining = (int) $it->order_quantity - ($refundedQty[$it->id] ?? 0);
-                if ($remaining > 0) {
-                    $slice($it, $remaining);
+                $it = $lines[$itemId]; $t = $totals[$itemId]; $p = $prior[$itemId] ?? null;
+                if ($part->amountMinor() >= $weights[$itemId]) {
+                    $slice = $remainder($t, $p); // closes the line exactly
+                } else {
+                    $slice = $scale($t, $part->amountMinor() / max(1, $t['amount']->amountMinor()));
+                    $slice['amount'] = $part; // the customer gets exactly the allocated part; paise drift in the split reconciles in the journal
                 }
+                $add($it, $slice, 0);
             }
-            $lineCg = MoneyBridge::sum(array_map(fn ($l) => $l['cgst'], $out['lines']));
-            $lineSg = MoneyBridge::sum(array_map(fn ($l) => $l['sgst'], $out['lines']));
-            $lineIg = MoneyBridge::sum(array_map(fn ($l) => $l['igst'], $out['lines']));
+        } else { // full: everything still outstanding on every line + delivery; the customer gets back exactly what is still refundable
+            foreach ($lines as $it) {
+                $t = $total($it); $p = $prior[$it->id] ?? null;
+                $rem = $t['amount']->subtract($p['amount'] ?? MoneyBridge::zero());
+                if ($rem->isZero() || $rem->isNegative()) {
+                    continue;
+                }
+                $add($it, $remainder($t, $p), max(0, (int) $it->order_quantity - (int) ($p['quantity'] ?? 0)));
+            }
+            // delivery tax = order-level tax − Σ tax of ALL lines (not just the ones being refunded now)
+            $allCg = MoneyBridge::sum($lines->map(fn ($it) => MoneyBridge::toMoney($it->cgst_amount ?? 0)));
+            $allSg = MoneyBridge::sum($lines->map(fn ($it) => MoneyBridge::toMoney($it->sgst_amount ?? 0)));
+            $allIg = MoneyBridge::sum($lines->map(fn ($it) => MoneyBridge::toMoney($it->igst_amount ?? 0)));
             $dTax = MoneyBridge::toMoney($order->delivery_tax_amount ?? 0);
             $dTaxable = $order->delivery_taxable !== null ? MoneyBridge::toMoney($order->delivery_taxable) : MoneyBridge::toMoney($order->delivery_fee ?? 0)->subtract($dTax);
             $out['delivery'] = [
-                'taxable' => $dTaxable,
-                'cgst' => $this->floor(MoneyBridge::toMoney($order->cgst_amount ?? 0)->subtract($lineCg)),
-                'sgst' => $this->floor(MoneyBridge::toMoney($order->sgst_amount ?? 0)->subtract($lineSg)),
-                'igst' => $this->floor(MoneyBridge::toMoney($order->igst_amount ?? 0)->subtract($lineIg)),
+                'taxable' => $this->floor($dTaxable),
+                'cgst' => $this->floor(MoneyBridge::toMoney($order->cgst_amount ?? 0)->subtract($allCg)),
+                'sgst' => $this->floor(MoneyBridge::toMoney($order->sgst_amount ?? 0)->subtract($allSg)),
+                'igst' => $this->floor(MoneyBridge::toMoney($order->igst_amount ?? 0)->subtract($allIg)),
             ];
             $out['amount'] = $refundable; // exactly what is still refundable; the journal reconciles the paise residual
         }
@@ -150,7 +170,55 @@ class RefundService
         if ($out['amount']->amountMinor() > $refundable->amountMinor()) {
             throw new \InvalidArgumentException('Refund ' . $out['amount']->toDecimal() . ' exceeds the refundable ' . $refundable->toDecimal() . '.');
         }
+        if ($out['amount']->isZero()) {
+            throw new \InvalidArgumentException('Nothing is left to refund on this order.');
+        }
         return $out;
+    }
+
+    /** What earlier APPROVED refunds already took from each line (Money per component), excluding one refund. */
+    private function priorSlices(Order $order, ?int $excludeRefundId = null): array
+    {
+        try {
+            $rows = DB::table('refund_items')->join('refunds', 'refunds.id', '=', 'refund_items.refund_id')
+                ->where('refunds.order_id', $order->id)->where('refunds.status', 'approved')
+                ->when($excludeRefundId, fn ($q) => $q->where('refunds.id', '!=', $excludeRefundId))
+                ->groupBy('refund_items.order_item_id')
+                ->selectRaw('refund_items.order_item_id, SUM(refund_items.quantity) as quantity, SUM(refund_items.amount) as amount, SUM(refund_items.taxable_value) as taxable, SUM(refund_items.cgst_amount) as cgst, SUM(refund_items.sgst_amount) as sgst, SUM(refund_items.igst_amount) as igst, SUM(refund_items.discount_amount) as discount, SUM(refund_items.vendor_share) as vendor_share')
+                ->get();
+        } catch (\Throwable $e) {
+            return [];
+        }
+        $out = [];
+        foreach ($rows as $r) {
+            $out[(int) $r->order_item_id] = ['quantity' => (int) $r->quantity, 'amount' => MoneyBridge::toMoney((string) $r->amount), 'taxable' => MoneyBridge::toMoney((string) $r->taxable),
+                'cgst' => MoneyBridge::toMoney((string) $r->cgst), 'sgst' => MoneyBridge::toMoney((string) $r->sgst), 'igst' => MoneyBridge::toMoney((string) $r->igst),
+                'discount' => MoneyBridge::toMoney((string) $r->discount), 'vendor_share' => MoneyBridge::toMoney((string) $r->vendor_share)];
+        }
+        return $out;
+    }
+
+    /** The customer-side amount a refund actually POSTED (the 2050 credit), or zero when nothing was posted. */
+    public function postedAmount(Refund $refund): Money
+    {
+        if (!$refund->journal_entry_id) {
+            return MoneyBridge::zero();
+        }
+        $je = JournalEntry::find($refund->journal_entry_id);
+        if (!$je) {
+            return MoneyBridge::zero();
+        }
+        $code = $this->config->accountCode('customer_refund_payable');
+        $q = DB::table('acc_journal_lines as l')->join('acc_accounts as a', 'a.id', '=', 'l.account_id')->where('l.journal_entry_id', $je->id)->where('a.code', $code);
+        if ($je->source_type === 'REFUND_POSTED') {
+            $q->where('l.refund_id', $refund->id);
+        }
+        $credit = MoneyBridge::toMoney((string) $q->sum('l.credit'));
+        if ($je->source_type !== 'REFUND_POSTED') { // linked to a CANCEL_REFUND_PAYABLE entry: pay what this refund asked, never more than the payable
+            $asked = MoneyBridge::toMoney($refund->requested_amount ?? $refund->amount);
+            return $asked->amountMinor() < $credit->amountMinor() ? $asked : $credit;
+        }
+        return $credit;
     }
 
     /** Post the refund journal + vendor reversal + credit note. Idempotent (REFUND_POSTED:{id}). */
@@ -167,7 +235,7 @@ class RefundService
         $scope = $refund->scope ?: 'full';
         $items = [];
         if ($scope === 'items') {
-            foreach (DB::table('refund_items')->where('refund_id', $refund->id)->get() as $ri) {
+            foreach (DB::table('refund_items')->where('refund_id', $refund->id)->where('quantity', '>', 0)->get() as $ri) {
                 $items[] = ['order_item_id' => $ri->order_item_id, 'quantity' => $ri->quantity];
             }
         }
@@ -186,7 +254,7 @@ class RefundService
         if ($recognized) {
             $cgT = MoneyBridge::zero(); $sgT = MoneyBridge::zero(); $igT = MoneyBridge::zero(); $taxableT = MoneyBridge::zero();
             foreach ($s['lines'] as $itemId => $l) {
-                $dims = ['order_id' => $order->id, 'order_item_id' => $itemId, 'refund_id' => $refund->id];
+                $dims = ['order_id' => $order->id, 'order_item_id' => $itemId, 'refund_id' => $refund->id, 'hsn_code' => $l['hsn'] ?? null, 'tax_rate' => $l['rate'] ?? null];
                 if (!$l['taxable']->isZero()) { $lines[] = ['account' => $c->accountCode('product_sales'), 'debit' => $l['taxable'], 'description' => 'Refund: sales reversed'] + $dims; }
                 if (!$l['cgst']->isZero()) { $lines[] = ['account' => $c->accountCode('cgst_payable'), 'debit' => $l['cgst'], 'tax_kind' => 'cgst'] + $dims; }
                 if (!$l['sgst']->isZero()) { $lines[] = ['account' => $c->accountCode('sgst_payable'), 'debit' => $l['sgst'], 'tax_kind' => 'sgst'] + $dims; }
@@ -207,7 +275,7 @@ class RefundService
                 $cgT = $cgT->add($d['cgst']); $sgT = $sgT->add($d['sgst']); $igT = $igT->add($d['igst']); $taxableT = $taxableT->add($d['taxable']);
             }
             if (!$s['platform_discount']->isZero()) {
-                $lines[] = ['account' => $c->accountCode('discounts_given'), 'credit' => $s['platform_discount'], 'order_id' => $order->id, 'refund_id' => $refund->id, 'description' => 'Refund: discount reversed'];
+                $lines[] = ['account' => $c->accountCode('discounts_given'), 'credit' => $s['platform_discount'], 'order_id' => $order->id, 'refund_id' => $refund->id, 'description' => 'Refund: discounts given reversed'];
             }
             $lines[] = ['account' => $c->accountCode('customer_refund_payable'), 'credit' => $amount, 'order_id' => $order->id, 'customer_id' => $order->customer_id, 'refund_id' => $refund->id, 'description' => 'Refund payable ' . $order->tracking_number];
             // paise reconciliation: customer-side credit + discount must equal the reversed debits
@@ -221,6 +289,13 @@ class RefundService
             }
             $creditNote = ['taxable' => $taxableT, 'cgst' => $cgT, 'sgst' => $sgT, 'igst' => $igT];
         } else {
+            // Cancelled before delivery: the advance already moved to Refund Payable (CANCEL_REFUND_PAYABLE) —
+            // link this refund to that entry and pay out from it instead of booking the payable twice.
+            if ($cancel = JournalEntry::where('source_key', 'CANCEL_REFUND_PAYABLE:' . $order->id)->where('status', JournalEntry::POSTED)->first()) {
+                $refund->forceFill(['journal_entry_id' => $cancel->id])->saveQuietly();
+                AccountingAuditLog::record('refund', $refund->id, 'linked', null, ['journal' => $cancel->entry_number], 'refund payable already booked at cancellation', $key, $actor);
+                return $cancel;
+            }
             $captured = JournalEntry::where('source_key', 'like', 'PAYMENT_CAPTURED:%:order:' . $order->id)->where('status', JournalEntry::POSTED)->exists();
             $walletFull = strtoupper((string) $order->payment_gateway) === 'FULL_WALLET_PAYMENT';
             if (!$captured && !$walletFull) {
@@ -273,7 +348,7 @@ class RefundService
             return null; // nothing was posted (nothing collected) — no payout on the books
         }
         $order = Order::findOrFail($refund->order_id);
-        $amount = MoneyBridge::toMoney($refund->requested_amount ?? $refund->amount);
+        $amount = $this->postedAmount($refund); // pay what was POSTED, never the request-time figure
         if ($amount->isZero()) {
             return null;
         }
@@ -337,7 +412,10 @@ class RefundService
                 'issue_date' => Carbon::today()->toDateString(), 'taxable_value' => $t['taxable']->toDecimal(),
                 'cgst_amount' => $t['cgst']->toDecimal(), 'sgst_amount' => $t['sgst']->toDecimal(), 'igst_amount' => $t['igst']->toDecimal(),
                 'total' => $total->toDecimal(), 'reason' => $refund->title ?: 'Refund #' . $refund->id, 'journal_entry_id' => $je->id,
-                'lines' => json_encode(array_map(fn ($l, $id) => ['order_item_id' => $id, 'qty' => $l['quantity'], 'taxable' => $l['taxable']->toDecimal(), 'cgst' => $l['cgst']->toDecimal(), 'sgst' => $l['sgst']->toDecimal(), 'igst' => $l['igst']->toDecimal()], $s['lines'], array_keys($s['lines']))),
+                'lines' => json_encode(array_merge(
+                    array_map(fn ($l, $id) => ['order_item_id' => $id, 'qty' => $l['quantity'], 'hsn' => $l['hsn'] ?? null, 'rate' => $l['rate'] ?? null, 'taxable' => $l['taxable']->toDecimal(), 'cgst' => $l['cgst']->toDecimal(), 'sgst' => $l['sgst']->toDecimal(), 'igst' => $l['igst']->toDecimal()], $s['lines'], array_keys($s['lines'])),
+                    $s['delivery'] ? [['order_item_id' => null, 'label' => 'Delivery charge', 'qty' => 1, 'hsn' => null, 'rate' => null, 'taxable' => $s['delivery']['taxable']->toDecimal(), 'cgst' => $s['delivery']['cgst']->toDecimal(), 'sgst' => $s['delivery']['sgst']->toDecimal(), 'igst' => $s['delivery']['igst']->toDecimal()]] : []
+                )),
                 'created_at' => now(), 'updated_at' => now(),
             ]);
         } catch (\Throwable $e) {

@@ -84,6 +84,7 @@ use Marvel\Http\Controllers\AccountingSettlementController;
 use Marvel\Http\Controllers\ReturnRequestController;
 use Marvel\Http\Controllers\AccountingReconciliationController;
 use Marvel\Http\Controllers\CommissionRuleController;
+use Marvel\Http\Controllers\AccountingReportController;
 use Marvel\Http\Controllers\ReportController;
 use Marvel\Http\Controllers\CourierShipmentController;
 use Marvel\Http\Controllers\CourierConfigController;
@@ -945,11 +946,14 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     Route::post('accounting/vendor-adjustments', [AccountingSettlementController::class, 'createAdjustment'])->middleware('permission:accounting.adjustments.create');
     Route::post('accounting/vendor-adjustments/{id}/approve', [AccountingSettlementController::class, 'approveAdjustment'])->whereNumber('id')->middleware('permission:accounting.adjustments.approve');
     Route::post('accounting/vendor-adjustments/{id}/reject', [AccountingSettlementController::class, 'rejectAdjustment'])->whereNumber('id')->middleware('permission:accounting.adjustments.approve');
+    // Reports (spec §59): GST ledger from journal tax dims (P13 adds GL/P&L/balance sheet/AP/statements).
+    Route::get('accounting/tax-ledger', [AccountingReportController::class, 'taxLedger'])->middleware('permission:accounting.view');
     // Vendor commission rules (spec §12): product > category > vendor; frozen per line at recognition.
     Route::get('accounting/commission-rules', [CommissionRuleController::class, 'index'])->middleware('permission:accounting.view');
     Route::post('accounting/commission-rules', [CommissionRuleController::class, 'store'])->middleware('permission:accounting.edit');
     Route::put('accounting/commission-rules/{id}', [CommissionRuleController::class, 'update'])->whereNumber('id')->middleware('permission:accounting.edit');
     Route::delete('accounting/commission-rules/{id}', [CommissionRuleController::class, 'destroy'])->whereNumber('id')->middleware('permission:accounting.edit');
+    Route::post('accounting/refunds/{id}/payout', [\Marvel\Http\Controllers\RefundController::class, 'payout'])->whereNumber('id')->middleware('permission:accounting.approve');
     // Reconciliation / periods / opening balances / audit (spec §37-40, §46, §32).
     Route::get('accounting/reconciliation/runs', [AccountingReconciliationController::class, 'runs'])->middleware('permission:accounting.view');
     Route::post('accounting/reconciliation/run', [AccountingReconciliationController::class, 'run'])->middleware('permission:accounting.edit');

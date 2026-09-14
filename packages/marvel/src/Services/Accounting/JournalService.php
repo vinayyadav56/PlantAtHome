@@ -88,6 +88,9 @@ class JournalService
             $period = AccountingPeriod::forDate(Carbon::parse($e->entry_date));
             if ($period->isClosed()) {
                 $redirect = (bool) ($e->metadata['redirect_closed_period'] ?? ($e->source_type !== 'MANUAL'));
+                if ($redirect) {
+                    AccountingPeriod::forDate(Carbon::today()); // the current month exists (open) even if nothing posted into it yet
+                }
                 $open = $redirect ? AccountingPeriod::where('status', 'open')->where('period_start', '>', $period->period_start)->orderBy('period_start')->first() : null;
                 if (!$open) {
                     throw new ClosedPeriodException('Accounting period ' . $period->period_start->toDateString() . ' is closed; post a reversal/adjustment into an open period instead.');
@@ -296,8 +299,8 @@ class JournalService
 
     private function isUniqueViolation(QueryException $e): bool
     {
-        return $e->getCode() === '23000'
-            || (int) ($e->errorInfo[1] ?? 0) === 1062
+        // SQLSTATE 23000 alone also covers FK / NOT NULL violations — require the duplicate-key signal
+        return (int) ($e->errorInfo[1] ?? 0) === 1062
             || str_contains(strtolower($e->getMessage()), 'unique')
             || str_contains(strtolower($e->getMessage()), 'duplicate');
     }

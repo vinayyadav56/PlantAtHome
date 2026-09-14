@@ -223,10 +223,21 @@ class GstService
             return [];
         }
         $storeInclusive = $this->biz->pricesIncludeTax();
-        $products = Product::whereIn('id', $ids)->with('taxRate')->get(['id', 'hsn_code', 'tax_rate_id', 'tax_inclusive', 'is_taxable']);
+        $cols = ['id', 'hsn_code', 'tax_rate_id', 'tax_inclusive', 'is_taxable'];
+        $hasVerified = \Illuminate\Support\Facades\Schema::hasColumn('products', 'tax_verified');
+        if ($hasVerified) {
+            $cols[] = 'tax_verified';
+        }
+        $products = Product::whereIn('id', $ids)->with('taxRate')->get($cols);
+        $enforce = $hasVerified && $this->biz->enforceTaxVerified();
+        $inherited = $this->categoryTaxRates($products->filter(fn ($p) => !$p->tax_rate_id)->pluck('id')->all());
         $out = [];
         foreach ($products as $p) {
-            $tax = $p->taxRate; // Tax model (tax_classes row) or null
+            // Tax model (tax_classes row) or null; a product with no rate of its own inherits its category's (spec §16)
+            $tax = $p->tax_rate_id ? $p->taxRate : ($inherited[(int) $p->id] ?? null);
+            if ($enforce && !(bool) ($p->tax_verified ?? false)) {
+                $tax = null; // CA has not verified this product's HSN/GST → 0% until they do
+            }
             $active = $tax && $this->isActive($tax);
             $rate = $active ? (float) $tax->rate : 0.0;
             $category = $active ? ($tax->tax_category ?: 'taxable') : 'non_taxable';
@@ -238,6 +249,31 @@ class GstService
             ];
         }
         return $out;
+    }
+
+    /** categories.tax_rate_id inheritance: first configured rate among the product's categories. */
+    private function categoryTaxRates(array $productIds): array
+    {
+        if (!$productIds) {
+            return [];
+        }
+        try {
+            $schema = \Illuminate\Support\Facades\Schema::class;
+            if (!$schema::hasTable('category_product') || !$schema::hasColumn('categories', 'tax_rate_id')) {
+                return [];
+            }
+            $rows = \Illuminate\Support\Facades\DB::table('category_product as cp')->join('categories as c', 'c.id', '=', 'cp.category_id')
+                ->whereIn('cp.product_id', $productIds)->whereNotNull('c.tax_rate_id')->orderBy('cp.product_id')->orderBy('c.id')
+                ->get(['cp.product_id', 'c.tax_rate_id']);
+            $byProduct = [];
+            foreach ($rows as $r) {
+                $byProduct[(int) $r->product_id] ??= (int) $r->tax_rate_id;
+            }
+            $taxes = $byProduct ? \Marvel\Database\Models\Tax::whereIn('id', array_unique(array_values($byProduct)))->get()->keyBy('id') : collect();
+            return array_filter(array_map(fn ($tid) => $taxes[$tid] ?? null, $byProduct));
+        } catch (\Throwable $e) {
+            return [];
+        }
     }
 
     private function unconfigured(): array

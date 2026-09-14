@@ -123,6 +123,33 @@ class VendorLedgerService
     }
 
     /**
+     * P7 — a deduction from the vendor (delivery / packaging / penalty): a NEGATIVE, settle-eligible
+     * row that nets against the vendor's next settlement. Idempotent on the given key.
+     */
+    public function recordDeduction(int $shopId, ?int $orderId, ?int $shipmentId, string $type, string $amount, string $key, ?\Marvel\Database\Models\Accounting\JournalEntry $journal, string $note = ''): ?VendorLedgerEntry
+    {
+        if (!$this->enabled) {
+            return null;
+        }
+        if ($existing = VendorLedgerEntry::where('idempotency_key', $key)->first()) {
+            return $existing;
+        }
+        $m = \Marvel\Services\Accounting\MoneyBridge::toMoney($amount);
+        try {
+            return VendorLedgerEntry::create([
+                'shop_id' => $shopId, 'order_id' => $orderId, 'shipment_id' => $shipmentId, 'entry_type' => $type,
+                'amount' => '-' . $m->toDecimal(), 'journal_entry_id' => $journal?->id, 'idempotency_key' => $key, 'source' => 'delivery',
+                'status' => 'pending', 'available_at' => Carbon::now(), 'earned_at' => Carbon::now(), 'note' => $note,
+            ]);
+        } catch (QueryException $e) {
+            if (!$this->isUniqueViolation($e)) {
+                throw $e;
+            }
+            return VendorLedgerEntry::where('idempotency_key', $key)->first();
+        }
+    }
+
+    /**
      * P10 — reverse PART of the vendor payable on specific lines (item / partial refunds), one
      * 'refund' row per line, idempotent per (line, refund). A still-pending sale that is fully
      * refunded is cancelled (both rows reversed); otherwise the refund row is settle-eligible

@@ -998,6 +998,10 @@ class CourierService
             }
         }
         $shipment->forceFill($fill)->save();
+        if ($target === 'delivered') {
+            // Accounting seam (spec §19): courier/DP cost + vendor share post once per shipment.
+            \Marvel\Services\Accounting\AccountingPostingService::onShipmentDelivered($shipment);
+        }
 
         // Activity log — sits AFTER the terminal-sticky and backward/no-op early returns,
         // so only REAL forward transitions log (webhook replays record nothing). Covers
