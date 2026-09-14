@@ -50,7 +50,7 @@ class ReconciliationEngine
                     $findings[] = $f + ['kind' => $k];
                 }
             }
-            $status = $findings ? 'findings' : 'clean';
+            $status = 'pending'; // decided below once explained differences are known
         } catch (\Throwable $e) {
             $status = 'error';
             $summary['error'] = $e->getMessage();
@@ -60,9 +60,10 @@ class ReconciliationEngine
         foreach ($findings as $i => $f) {
             // still open → same finding; explained with the same difference → a person accepted it, stay quiet
             $dup = DB::table('acc_reconciliation_findings')->where('kind', $f['kind'])->where('subject_type', $f['subject_type'])
-                ->where('subject_id', (string) $f['subject_id'])->whereIn('status', ['open', 'explained'])->where('difference', $f['difference'] ?? null)->orderByRaw("CASE status WHEN 'open' THEN 0 ELSE 1 END")->value('id');
+                ->where('subject_id', (string) $f['subject_id'])->whereIn('status', ['open', 'explained'])->where('difference', $f['difference'] ?? null)->orderByRaw("CASE status WHEN 'open' THEN 0 ELSE 1 END")->first(['id', 'status']);
             if ($dup) {
-                $findings[$i]['id'] = (int) $dup;
+                $findings[$i]['id'] = (int) $dup->id;
+                $findings[$i]['explained'] = $dup->status === 'explained'; // a person accepted this exact difference
                 continue;
             }
             $id = DB::table('acc_reconciliation_findings')->insertGetId([
@@ -72,6 +73,11 @@ class ReconciliationEngine
             ]);
             $findings[$i]['id'] = (int) $id;
             $persisted[] = $findings[$i];
+        }
+        if ($status === 'pending') {
+            $blocking = array_filter($findings, fn ($f) => empty($f['explained']));
+            $status = $blocking ? 'findings' : 'clean';
+            $summary['explained_differences'] = count($findings) - count($blocking);
         }
         DB::table('acc_reconciliation_runs')->where('id', $runId)->update([
             'status' => $status, 'findings_count' => count($findings), 'summary' => json_encode($summary), 'finished_at' => Carbon::now(), 'updated_at' => Carbon::now(),

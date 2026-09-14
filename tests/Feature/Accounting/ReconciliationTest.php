@@ -240,7 +240,11 @@ class ReconciliationTest extends OrdersTestCase
         $engine = new ReconciliationEngine();
         $f = $engine->run(null, null, ['vendor'])['findings'];
         $engine->resolve($f[0]['id'], 'explained', 'accepted legacy drift', 'admin:1');
-        $this->assertCount(0, $engine->run(null, null, ['vendor'])['findings']);
+        $again = $engine->run(null, null, ['vendor']);
+        $this->assertCount(0, $again['findings']);
+        $this->assertSame('clean', $again['run']->status); // an explained difference no longer blocks
+        $this->assertSame(1, $again['summary']['explained_differences']);
+        $this->assertTrue($engine->gate()['pass']);
         $this->assertSame(1, DB::table('acc_reconciliation_findings')->count());
         $engine->resolve($f[0]['id'], 'resolved', 'thought it was fixed', 'admin:1');
         $this->assertCount(1, $engine->run(null, null, ['vendor'])['findings']); // recurred → a new open finding
