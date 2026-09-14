@@ -29,9 +29,16 @@ return new class extends Migration {
                 $t->string('note', 500)->nullable();
                 $t->string('created_by', 64)->nullable();
                 $t->timestamps();
-                $t->index(['product_id', 'variation_option_id', 'warehouse_id']);
-                $t->index(['reference_type', 'reference_id']);
+                $t->index(['product_id', 'variation_option_id', 'warehouse_id'], 'it_prod_var_wh_idx'); // explicit: the generated name exceeds MySQL's 64 chars
+                $t->index(['reference_type', 'reference_id'], 'it_ref_idx');
             });
+        } else {
+            // A first deploy created the table but the over-long generated index name failed the ALTER.
+            try {
+                Schema::table('inventory_transactions', fn (Blueprint $t) => $t->index(['product_id', 'variation_option_id', 'warehouse_id'], 'it_prod_var_wh_idx'));
+            } catch (\Throwable $e) {
+                // index already present
+            }
         }
         if (!Schema::hasTable('inventory_valuations')) {
             Schema::create('inventory_valuations', function (Blueprint $t) {
