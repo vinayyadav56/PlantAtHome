@@ -39,6 +39,11 @@ class CategoryResource extends Resource
             'show_on_homepage'     => (bool) $this->show_on_homepage,
             'homepage_sort_order'  => (int) $this->homepage_sort_order,
             'is_active'            => (bool) $this->is_active,
+            // GST rate inherited by this category's products unless a product
+            // sets its own. GstService::categoryTaxRates reads the column
+            // directly; exposing it here is what lets the admin form show and
+            // edit the current value.
+            'tax_rate_id'          => $this->tax_rate_id,
             'type'                 => getResourceData($this->type, []) // if you need extra data then pass key in array by second parameter
         ];
     }

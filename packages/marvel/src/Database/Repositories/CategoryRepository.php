@@ -44,6 +44,11 @@ class CategoryRepository extends BaseRepository
         'seo_title',
         'seo_description',
         'noindex',
+        // GST: every product in this category inherits this rate unless it sets
+        // its own tax_rate_id. GstService::categoryTaxRates already READS the
+        // column — it was just never writable, so rates had to be applied
+        // product by product.
+        'tax_rate_id',
     ];
 
     public function boot()
@@ -64,15 +69,30 @@ class CategoryRepository extends BaseRepository
         return Category::class;
     }
 
+    /**
+     * A native <select> submits "" for its empty option, and tax_rate_id is a
+     * nullable FK — "" would fail the constraint. Mirrors the same guard in
+     * ProductRepository.
+     */
+    protected function normalizeNullableIds(array $data): array
+    {
+        foreach (['tax_rate_id'] as $col) {
+            if (array_key_exists($col, $data) && is_string($data[$col]) && trim($data[$col]) === '') {
+                $data[$col] = null;
+            }
+        }
+        return $data;
+    }
+
     public function saveCategory(Request $request) {
-        $data = $request->only($this->dataArray);
+        $data = $this->normalizeNullableIds($request->only($this->dataArray));
         $data['slug'] = $this->makeSlug($request);
         return $this->create($data);
     }
     
     public function updateCategory($request, $category)
     {
-        $data = $request->only($this->dataArray);
+        $data = $this->normalizeNullableIds($request->only($this->dataArray));
         if (!empty($request->slug) &&  $request->slug != $category['slug']) {
             $data['slug'] = $this->makeSlug($request);
         }

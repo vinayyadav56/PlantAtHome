@@ -39,6 +39,8 @@ class CategoryUpdateRequest extends FormRequest
             'seo_description' => ['nullable', 'string', 'max:500'],
             'noindex'         => ['nullable', 'boolean'],
             'parent'      => ['nullable', 'integer'],
+            // GST rate inherited by this category's products (nullable = unset).
+            'tax_rate_id' => ['nullable', 'integer', 'exists:tax_classes,id'],
         ];
     }
 
