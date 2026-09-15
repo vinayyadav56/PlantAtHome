@@ -37,8 +37,14 @@ class SettingsController extends CoreController
     {
         $language = $request->language ? $request->language : DEFAULT_LANGUAGE;
 
-        $data = Cache::rememberForever(
+        // Bounded, NOT rememberForever. A forever entry meant one missed or
+        // mistimed bust pinned the old settings (logo, banners, SEO) until the
+        // next save — the storefront then served a stale logo indefinitely.
+        // Ten minutes is long enough to absorb SSR traffic and short enough
+        // that any bust we miss self-heals.
+        $data = Cache::remember(
             'cached_settings_' . $language,
+            now()->addMinutes(10),
             function () use ($request) {
                 return $this->repository->getData($request->language);
             }
@@ -111,14 +117,20 @@ class SettingsController extends CoreController
 
         $data = $this->repository->where('language', $language)->first();
 
-        Cache::forget('cached_settings_' . $language);
-        if ($requested !== $language) {
-            Cache::forget('cached_settings_' . $requested);
-        }
         if ($data) {
             $settings =  tap($data)->update($request->only(['options']));
         } else {
             $settings =  $this->repository->create(['options' => $request['options'], 'language' => $language]);
+        }
+
+        // Bust AFTER the write. It used to run BEFORE, so any GET landing in the
+        // window between the forget and the update re-cached the PRE-update row —
+        // and with the old rememberForever that pinned the stale logo until the
+        // next save. SSR hits /settings on every render, so that window was hit
+        // in practice.
+        Cache::forget('cached_settings_' . $language);
+        if ($requested !== $language) {
+            Cache::forget('cached_settings_' . $requested);
         }
         event(new Maintenance($language));
         return $settings;
