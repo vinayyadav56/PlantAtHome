@@ -571,15 +571,51 @@ class UserController extends CoreController
             throw new AuthorizationException(NOT_AUTHORIZED);
         }
         $uid = $user->id;
+        $oldEmail = $user->email;
+
         try { $user->tokens()->delete(); } catch (\Throwable $e) { /* ignore */ }
         try { optional($user->profile)->delete(); } catch (\Throwable $e) { /* ignore */ }
         try { $user->address()->delete(); } catch (\Throwable $e) { /* ignore */ }
+
+        // Personal data held in satellite tables. Orders, invoices and wallet
+        // rows are deliberately NOT here: Indian tax law (CGST Act s.36) makes
+        // us keep them, and /data-deletion tells the customer so. Each drop is
+        // isolated so one missing table can never block the deletion itself.
+        foreach ([
+            'carts'                      => 'user_id',
+            'wishlists'                  => 'user_id',
+            'device_tokens'              => 'user_id',   // stops push after deletion
+            'providers'                  => 'user_id',   // unlinks Google/social login
+            'plant_doctor_consultations' => 'user_id',   // uploaded plant photos
+            'plant_doctor_logs'          => 'user_id',
+        ] as $table => $column) {
+            try {
+                DB::table($table)->where($column, $uid)->delete();
+            } catch (\Throwable $e) { /* table absent on this deploy — skip */ }
+        }
+        if ($oldEmail) {
+            try { DB::table('email_otps')->where('email', $oldEmail)->delete(); } catch (\Throwable $e) { /* ignore */ }
+        }
+
         $user->forceFill([
-            'name'      => 'Deleted user',
-            'email'     => 'deleted+' . $uid . '@plantathome.invalid',
-            'is_active' => false,
-            'password'  => Hash::make(\Illuminate\Support\Str::random(40)),
+            'name'       => 'Deleted user',
+            'first_name' => null,
+            'last_name'  => null,
+            'email'      => 'deleted+' . $uid . '@plantathome.invalid',
+            'is_active'  => false,
+            'password'   => Hash::make(\Illuminate\Support\Str::random(40)),
+            // Location history is personal data under the Play data-safety
+            // rules, and none of it is needed to keep an invoice valid.
+            'city' => null, 'state' => null, 'preferred_city' => null,
+            'last_detected_city' => null, 'last_lat' => null, 'last_lng' => null,
+            'location_updated_at' => null,
+            'verified_latitude' => null, 'verified_longitude' => null,
+            'verified_address' => null, 'verified_city' => null,
+            'verified_state' => null, 'verified_country' => null,
+            'verified_postal_code' => null, 'verified_place_id' => null,
+            'location_verified' => false, 'location_verified_at' => null,
         ])->save();
+
         return response()->json(['message' => 'Your account has been deleted.']);
     }
 
