@@ -44,6 +44,14 @@ class Kernel extends ConsoleKernel
         // margin so an IP seen during a slow sweep is not missed.
         $schedule->command('logs:enrich-ips')->everyTenMinutes()->withoutOverlapping(5);
 
+        // Mirror legacy users into identity_users (V2 auth). Nothing else writes that
+        // table after the one-off backfill, so an admin created through the legacy
+        // panel could not log into /api/v1 and every V2-backed admin page 401'd.
+        // The tail is cheap; the hourly full pass catches permission changes, which
+        // do not bump users.updated_at.
+        $schedule->command('v2:backfill-users --since-cursor')->everyFiveMinutes()->withoutOverlapping(5);
+        $schedule->command('v2:backfill-users')->hourly()->withoutOverlapping(30);
+
         $schedule->command('marvel:run-settlements')->dailyAt('04:00')->withoutOverlapping();
         // Double-entry accounting: recognise any completed order that still has no journal
         // (recoverable backstop, spec §45) and confirm Razorpay captures our webhook missed.

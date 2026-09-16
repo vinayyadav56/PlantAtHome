@@ -11,7 +11,9 @@ use App\Modules\Identity\Infrastructure\TokenIssuer;
 use App\Shared\Events\EventPublisher;
 use Illuminate\Database\ConnectionInterface;
 use Illuminate\Support\Carbon;
+use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
 
 /**
  * The Identity use-cases: authenticate, refresh, logout, and resolve the user
@@ -37,6 +39,8 @@ class AuthService
      */
     public function login(string $email, string $password, ?string $ip = null): array
     {
+        $this->mirrorLegacyUser($email, $password);
+
         $user = IdentityUser::where('email', $email)->first();
 
         // Verify a hash even when the user is missing to blunt timing/enumeration.
@@ -63,6 +67,35 @@ class AuthService
         });
 
         return ['user' => $user, 'tokens' => $tokens];
+    }
+
+    /**
+     * Legacy admin flows (make admin, staff, self-registration) write only the
+     * `users` table; the one-off v2:backfill-users never sees rows created after
+     * it ran, so those accounts could not log into /api/v1 and every V2-backed
+     * admin page (marketing, withdrawals) answered 401. When the legacy
+     * credentials check out, mirror that row — password hash and role included —
+     * before the normal V2 lookup runs. `--since` is capped at the tail cursor so
+     * a targeted run never moves the cursor past rows the scheduled tail still
+     * has to process. Fail-open: a mirror failure must not block a login.
+     */
+    private function mirrorLegacyUser(string $email, string $password): void
+    {
+        try {
+            $legacy = $this->db->table('users')->where('email', $email)->first();
+            if (! $legacy || empty($legacy->password) || ! Hash::check($password, (string) $legacy->password)) {
+                return;
+            }
+
+            $cursor = $this->db->table('backfill_cursors')->where('resource', 'users')->value('last_source_updated_at');
+            $candidates = array_map('strval', array_filter([$cursor, $legacy->updated_at]));
+
+            Artisan::call('v2:backfill-users', [
+                '--since' => $candidates ? min($candidates) : '1970-01-01 00:00:00',
+            ]);
+        } catch (\Throwable $e) {
+            Log::warning('identity: legacy user mirror failed', ['email' => $email, 'error' => $e->getMessage()]);
+        }
     }
 
     /**
