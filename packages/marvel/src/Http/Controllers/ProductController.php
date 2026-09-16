@@ -949,6 +949,30 @@ class ProductController extends CoreController
             // two-query lookup below on EVERY PDP hit. The WRITE below stays at
             // `data.availability` — that path is the storefront's contract.
             $root = isset($data['data']['id']) ? 'data.' : '';
+
+            // Product-level city scope — the same AvailabilityService scope the list
+            // and checkout apply. In a city with live vendor inventory that scope is
+            // STRICT, so a product the list hides there still opened fully priced,
+            // went into the cart, and checkout's verify then refused the line as
+            // "unavailable". Not a 404 (the page stays browsable): the storefront's
+            // buy box disables on `available_in_city === false`. null scope = full
+            // catalogue (serviceable, unmapped city) = available. Lives HERE, not in
+            // fetchSingleProduct: that payload is cached under a city-less key and
+            // GetSingleProductResource drops attributes it does not enumerate.
+            try {
+                $pid = (int) \Illuminate\Support\Arr::get($data, $root . 'id');
+                if ($pid > 0) {
+                    $scope = (new \Marvel\Services\AvailabilityService())->cityScopeProductIds((string) $request->city);
+                    \Illuminate\Support\Arr::set(
+                        $data,
+                        $root . 'available_in_city',
+                        $scope === null ? true : (clone $scope)->where('product_id', $pid)->exists()
+                    );
+                }
+            } catch (\Throwable $e) {
+                // fail open: no flag = available
+            }
+
             $slug = \Illuminate\Support\Arr::get($data, $root . 'type.slug');
             if (!$slug) {
                 $pslug = \Illuminate\Support\Arr::get($data, $root . 'slug') ?? $request->input('slug');
@@ -1018,22 +1042,6 @@ class ProductController extends CoreController
             // PlantAtHome: eager-load botanical details + ordered gallery images
             // + bundle items + buy-together add-ons + the shop (needed for review shop_id).
             $product->load(['plantAttribute', 'images', 'bundleItems', 'addons', 'shop']);
-
-            // City scope, the same one the list and checkout apply (AvailabilityService::
-            // cityScopeProductIds). The Master Catalog gate above closed the "hidden from
-            // every list, still addable by URL" hole for curation; this closes it for the
-            // CITY dimension: a city with live vendor inventory is strict, so a product
-            // the list hides there was still opening priced, going into the cart, and
-            // being refused by checkout's verify as "unavailable". Not a 404 — the page
-            // stays browsable — the PDP just must not sell it here. null scope = full
-            // catalogue (serviceable, unmapped city) = available.
-            if ($request->filled('city')) {
-                $scope = (new \Marvel\Services\AvailabilityService())->cityScopeProductIds((string) $request->city);
-                $product->setAttribute(
-                    'available_in_city',
-                    $scope === null ? true : (clone $scope)->where('product_id', $product->id)->exists()
-                );
-            }
 
             return $product;
         } catch (Exception $e) {
