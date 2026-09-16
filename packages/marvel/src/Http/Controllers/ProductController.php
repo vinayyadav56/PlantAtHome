@@ -1019,6 +1019,22 @@ class ProductController extends CoreController
             // + bundle items + buy-together add-ons + the shop (needed for review shop_id).
             $product->load(['plantAttribute', 'images', 'bundleItems', 'addons', 'shop']);
 
+            // City scope, the same one the list and checkout apply (AvailabilityService::
+            // cityScopeProductIds). The Master Catalog gate above closed the "hidden from
+            // every list, still addable by URL" hole for curation; this closes it for the
+            // CITY dimension: a city with live vendor inventory is strict, so a product
+            // the list hides there was still opening priced, going into the cart, and
+            // being refused by checkout's verify as "unavailable". Not a 404 — the page
+            // stays browsable — the PDP just must not sell it here. null scope = full
+            // catalogue (serviceable, unmapped city) = available.
+            if ($request->filled('city')) {
+                $scope = (new \Marvel\Services\AvailabilityService())->cityScopeProductIds((string) $request->city);
+                $product->setAttribute(
+                    'available_in_city',
+                    $scope === null ? true : (clone $scope)->where('product_id', $product->id)->exists()
+                );
+            }
+
             return $product;
         } catch (Exception $e) {
             throw new MarvelNotFoundException();
