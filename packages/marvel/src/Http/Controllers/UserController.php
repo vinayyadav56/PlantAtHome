@@ -1349,13 +1349,11 @@ class UserController extends CoreController
     }
     public function subscribeToNewsletter(Request $request)
     {
-        try {
-            $email = $request->email;
-            Newsletter::subscribeOrUpdate($email);
-            return true;
-        } catch (MarvelException $th) {
-            throw new MarvelException(SOMETHING_WENT_WRONG);
-        }
+        // Stored locally: the Mailchimp facade this used to call was never configured
+        // and threw a non-Marvel exception, which surfaced as a 500 on every submit.
+        $email = strtolower(trim((string) $request->validate(['email' => 'required|email'])['email']));
+        DB::table('newsletter_subscribers')->updateOrInsert(['email' => $email], ['updated_at' => now()]);
+        return true;
     }
     public function updateUserEmail(Request $request)
     {
