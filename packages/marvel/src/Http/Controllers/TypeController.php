@@ -36,26 +36,37 @@ class TypeController extends CoreController
     {
         $language = $request->language ?? DEFAULT_LANGUAGE;
 
-        // Types (verticals) rarely change but every storefront page (SSR)
-        // fetches them. Server-cache + edge-cache for anonymous reads; admin
-        // (real Bearer) stays fresh.
-        // Admin (real Bearer) always sees the full, unfiltered vertical list.
-        // Overlay i18n model: rows exist ONLY in DEFAULT_LANGUAGE — localized
-        // fields are merged by the translation overlay, so always query the
-        // canonical rows (a `language=hi` row filter would return nothing).
-        if (!$this->isPublicCacheable($request)) {
-            return TypeResource::collection($this->repository->where('language', DEFAULT_LANGUAGE)->get());
-        }
-
         // Storefront: hide verticals the Operations Control Center has turned off
         // — globally, or in the shopper's city when a `city` is provided — so a
-        // disabled vertical disappears from the nav immediately. The cache key
-        // carries the availability version + city, so any Operations toggle
-        // invalidates it instantly; the short edge TTL bounds CDN staleness.
+        // disabled vertical disappears from the nav immediately.
+        //
+        // The filter used to live INSIDE the cacheable branch below, i.e. it ran
+        // only when isPublicCacheable() was true — and that is just
+        // `empty($request->bearerToken())`. Signed-in customers send a bearer
+        // token, so they skipped the filter entirely and kept seeing a disabled
+        // vertical in the nav, footer, /categories and search: "switch it off
+        // everywhere" failed for exactly the people most likely to buy. Caching
+        // and filtering are separate questions. Only genuine catalogue STAFF get
+        // the unfiltered list, because they need it to turn a vertical back on.
         $availSvc = app(\Marvel\Services\ServiceAvailabilityService::class);
         $city = $request->filled('city') ? (string) $request->city : null;
         $cityKey = \Marvel\Services\ServiceAvailabilityService::norm($city);
         $availVer = (int) Cache::get('service_availability:ver', 1);
+        $isStaff = $this->isCatalogStaff($request);
+
+        // Types (verticals) rarely change but every storefront page (SSR)
+        // fetches them. Server-cache + edge-cache for anonymous reads; a request
+        // carrying a token (admin dashboard OR a signed-in shopper) stays fresh.
+        // Overlay i18n model: rows exist ONLY in DEFAULT_LANGUAGE — localized
+        // fields are merged by the translation overlay, so always query the
+        // canonical rows (a `language=hi` row filter would return nothing).
+        if (!$this->isPublicCacheable($request)) {
+            $types = $this->repository->where('language', DEFAULT_LANGUAGE)->get();
+            if (!$isStaff) {
+                $types = $this->availableOnly($types, $availSvc, $city);
+            }
+            return TypeResource::collection($types);
+        }
 
         $key = 'types:v' . $this->cacheVersion('types')
             . ':a' . $availVer
@@ -66,20 +77,30 @@ class TypeController extends CoreController
             // Canonical rows only — the overlay localizes fields per request
             // language (the cache key above still varies by $language).
             $types = $this->repository->where('language', DEFAULT_LANGUAGE)->get();
-            // FAIL OPEN: only narrow when something is actually disabled, and
-            // never hide EVERY vertical (an explicit all-off is the platform
-            // kill-switch, handled elsewhere — don't blank the storefront here).
-            $available = $availSvc->availableVerticalsForCity($city);
-            $all = $availSvc->allVerticals();
-            if (count($available) > 0 && count($available) < count($all)) {
-                $types = $types->filter(fn ($t) => in_array($t->slug, $available, true))->values();
-            }
-            return TypeResource::collection($types)->response()->getData(true);
+            return TypeResource::collection($this->availableOnly($types, $availSvc, $city))
+                ->response()->getData(true);
         });
 
         // Short shared TTL so an Operations toggle propagates to the CDN in
         // seconds (the version-keyed server cache keeps origin cheap).
         return response()->json($data)->header('Cache-Control', $this->cacheControl(20));
+    }
+
+    /**
+     * Drop verticals the Operations Control Center has disabled.
+     *
+     * FAIL OPEN: only narrows when something is actually disabled, and never
+     * hides EVERY vertical (an explicit all-off is the platform kill-switch,
+     * handled elsewhere — don't blank the storefront here).
+     */
+    private function availableOnly($types, $availSvc, ?string $city)
+    {
+        $available = $availSvc->availableVerticalsForCity($city);
+        $all = $availSvc->allVerticals();
+        if (count($available) > 0 && count($available) < count($all)) {
+            return $types->filter(fn ($t) => in_array($t->slug, $available, true))->values();
+        }
+        return $types;
     }
 
     /**

@@ -294,20 +294,6 @@ class ProductController extends CoreController
      * gate with one query param. Flagged by security review. These routes are public, so the
      * user is resolved explicitly through the sanctum guard rather than middleware.
      */
-    private function isCatalogStaff(Request $request): bool
-    {
-        try {
-            $user = $request->user() ?? $request->user('sanctum');
-            return $user && (
-                $user->hasPermissionTo(Permission::SUPER_ADMIN)
-                || $user->hasPermissionTo(Permission::STORE_OWNER)
-                || $user->hasPermissionTo(Permission::STAFF)
-            );
-        } catch (\Throwable $e) {
-            return false;
-        }
-    }
-
     /**
      * `exclude_status=draft` — drafts are unfinished work and belong in My Draft Products.
      *
