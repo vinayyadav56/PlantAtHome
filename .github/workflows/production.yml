@@ -161,6 +161,10 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+            # NOTE: GitHub caps this block at 21000 characters and REFUSES to
+            # parse the workflow past it (HTTP 422 on dispatch, no run at all).
+            # Keep comments short here; the long-form reasoning belongs in
+            # OPERATOR_RUNBOOK_2026-08.md and docs/performance/.
             set -e
 
             echo "==> Pulling latest code..."
@@ -276,17 +280,13 @@ jobs:
             php artisan event:cache  || echo "WARNING: event:cache failed — running without event cache"
 
             echo "==> Ensuring nginx compresses API responses..."
-            # Production nginx config lives on this box, not in the repo, so it is
-            # written here. Idempotent, and nginx only reloads when `nginx -t` passes.
-            #
-            # NO `gzip on;` HERE, deliberately. conf.d is included from INSIDE the http
-            # block and stock Ubuntu nginx.conf already declares `gzip on;` there;
-            # nginx rejects a duplicate flag directive outright, which is why this
-            # fragment failed `nginx -t` on EVERY deploy since 2026-07-31 and was
-            # deleted again immediately. gzip was never off -- gzip_types was missing,
-            # and nginx's default list is text/html only, matching nothing this API
-            # returns. gzip_proxied any is deliberate: this API sends private/no-cache
-            # on authenticated responses, which the default would refuse to compress.
+            # nginx config lives on this box, not the repo, so it is written here.
+            # NO `gzip on;` -- conf.d is included INSIDE http where stock Ubuntu
+            # nginx.conf already declares it, and nginx rejects a duplicate flag
+            # directive. That is why this failed nginx -t on every deploy since
+            # 2026-07-31. gzip was never off; gzip_types was missing (the default
+            # list is text/html only). gzip_proxied any is deliberate: this API
+            # sends private/no-cache, which the default would refuse to compress.
             sudo tee /etc/nginx/conf.d/zz-gzip.conf >/dev/null <<'NGINXCONF'
             gzip_vary on;
             gzip_proxied any;
@@ -302,16 +302,27 @@ jobs:
               sudo systemctl reload nginx && echo "nginx reloaded with gzip"
               # Prove it rather than imply it: ask the origin directly, bypassing
               # the CDN, and say so in the deploy log either way.
-              # /api/types, NOT /api/health: health is 51 bytes, well under
-              # gzip_min_length 1024, so nginx correctly refuses to compress it
-              # and the check reported a false failure. types is ~4 KB of JSON.
-              # Host header + 127.0.0.1 so this measures the ORIGIN, not Cloudflare.
-              if curl -s -o /dev/null -D- --max-time 10 -H 'Accept-Encoding: gzip' \
-                   -H 'Host: api.plantathome.in' http://127.0.0.1/api/types \
-                   | grep -qi '^content-encoding:.*gzip'; then
+              # Two checks; each misleads alone. 1) is the directive in the
+              # RUNNING merged config -- unambiguous, immune to HTTP plumbing.
+              if sudo nginx -T 2>/dev/null | grep -q 'gzip_types.*application/json'; then
+                echo "    verified: gzip_types is live in the merged nginx config"
+              else
+                echo "    WARNING: gzip_types is NOT in the merged config — a server block may override it"
+              fi
+              # 2) end-to-end against the ORIGIN, not Cloudflare. --resolve pins
+              # the hostname to loopback over TLS; plain http://127.0.0.1 answers
+              # 301, whose body is neither JSON nor over gzip_min_length -- that is
+              # what made two earlier versions of this check cry wolf on a good
+              # reload. /api/types is ~4 KB; /api/health is 51 B and never compresses.
+              GZ=$(curl -s -k -o /dev/null -D- --max-time 10 \
+                     --resolve api.plantathome.in:443:127.0.0.1 \
+                     -H 'Accept-Encoding: gzip' \
+                     https://api.plantathome.in/api/types 2>/dev/null || true)
+              if echo "$GZ" | grep -qi '^content-encoding:.*gzip'; then
                 echo "    verified: origin gzips /api/types"
               else
-                echo "    WARNING: origin did NOT gzip /api/types — check for a server-block override"
+                echo "    NOTE: origin did not gzip /api/types on this probe"
+                echo "$GZ" | head -1 | sed 's/^/      first line: /'
               fi
             else
               echo "WARNING: nginx config test failed — removing the gzip fragment and leaving nginx untouched"
@@ -325,14 +336,11 @@ jobs:
 
             echo "==> Ensuring nginx accepts admin image uploads..."
             # The production admin could not upload ANY image over 1 MB: nginx was on
-            # its compiled-in client_max_body_size default of 1m and nothing raised it
-            # (staging does, in .railway/nginx.conf, so this was production-only).
-            # Verified: 900,000 B reaches Laravel auth, 1,100,000 B returns 413.
-            #
-            # Its OWN file, not appended to zz-gzip.conf -- that one is deleted on any
-            # nginx -t failure and would take the upload limit with it. 12M sits above
-            # the 10 MB ceiling in config/media.php so the real limit stays in Laravel,
-            # where it returns a proper 422. http context, so it covers both vhosts.
+            # its 1m compiled-in default and nothing raised it (staging does, in
+            # .railway/nginx.conf). Verified: 900 KB reaches auth, 1.1 MB returns 413.
+            # Its OWN file -- zz-gzip.conf is deleted on any nginx -t failure and would
+            # take the limit with it. 12M sits above the 10 MB cap in config/media.php
+            # so the real limit stays in Laravel. http context, so both vhosts get it.
             sudo tee /etc/nginx/conf.d/zz-uploads.conf >/dev/null <<'NGINXUP'
             client_max_body_size 12M;
             NGINXUP
@@ -345,14 +353,11 @@ jobs:
             fi
 
             echo "==> Ensuring PHP-FPM accepts admin image uploads..."
-            # Second wall: stock php8.1-fpm is upload_max_filesize=2M, so raising nginx
-            # alone would move the failure from 1 MB to 2 MB -- and PHP drops an
-            # oversized upload silently, which surfaces as a misleading 422.
-            #
-            # FPM scan dir explicitly: the opcache block above derives its dir from
-            # `php -i`, which is the CLI binary, so that fragment has probably never
-            # reached php-fpm. Left alone here on purpose -- pointing 256 MB of opcache
-            # at FPM for the first time is a memory change that deserves its own deploy.
+            # Second wall: stock php8.1-fpm is 2M, so raising nginx alone moves the
+            # failure from 1 MB to 2 MB, and PHP drops the file silently (misleading
+            # 422). FPM scan dir EXPLICITLY: the opcache block derives its dir from
+            # `php -i` = the CLI binary, so that fragment has likely never reached
+            # php-fpm. Left alone on purpose; that deserves its own deploy.
             PHP_FPM_CONF_DIR=$(ls -d /etc/php/*/fpm/conf.d 2>/dev/null | tail -1)
             if [ -n "$PHP_FPM_CONF_DIR" ] && [ -d "$PHP_FPM_CONF_DIR" ]; then
               sudo tee "$PHP_FPM_CONF_DIR/99-uploads.ini" >/dev/null <<'UPLOADINI'
@@ -365,17 +370,12 @@ jobs:
             fi
 
             echo "==> Ensuring opcache is tuned for production..."
-            # opcache ships unconfigured on this host. Three defaults are wrong for
-            # this app: interned_strings_buffer measured 100% full at 8 MB, 
-            # max_accelerated_files (10000) is below the app's file count so the tail
-            # of every request recompiles, and memory_consumption must hold both.
-            #
-            # validate_timestamps=0 is deliberately NOT set: an interleaved A/B found
-            # no benefit (median -0.084 ms, won 2 of 8 rounds) while risking production
-            # serving a stale build forever if a deploy fails to cycle php-fpm.
-            # Full measurements: docs/performance/final-summary.md.
-            #
-            # opcache.* are PHP_INI_SYSTEM, so this has to be a conf.d fragment.
+            # opcache ships unconfigured here. interned_strings_buffer measured 100%
+            # full at 8 MB; max_accelerated_files (10000) is under the app's file
+            # count so the tail of every request recompiles; memory holds both.
+            # validate_timestamps=0 deliberately NOT set -- measured no benefit and
+            # risks serving a stale build forever. See docs/performance/.
+            # opcache.* are PHP_INI_SYSTEM, so this must be a conf.d fragment.
             PHP_CONF_DIR=$(php -i | awk -F'=> ' '/Scan this dir for additional .ini files/{print $2}' | tr -d ' ')
             if [ -n "$PHP_CONF_DIR" ] && [ -d "$PHP_CONF_DIR" ]; then
               sudo tee "$PHP_CONF_DIR/zz-opcache.ini" >/dev/null <<'OPCACHECONF'
@@ -386,13 +386,10 @@ jobs:
             opcache.save_comments=1
             OPCACHECONF
 
-              # opcache.preload is deliberately NOT enabled and preload.php is deleted.
-              # It compiled 1,706 files with opcache_compile_file(), which neither links
-              # nor autoloads, so 59% were discarded as unlinked classes and PHP 8.1
-              # segfaulted finalising that state -- the dry run failed every deploy, so
-              # preload was never once on. Upside was +0.6 ms median; downside is
-              # php-fpm refusing to boot. See OPERATOR_RUNBOOK_2026-08.md section 6.
-              # Do not re-add.
+              # opcache.preload deliberately NOT enabled; preload.php deleted. It
+              # compiled 1,706 files with opcache_compile_file(), which neither links
+              # nor autoloads, so 59% landed unlinked and PHP 8.1 segfaulted finalising
+              # that. +0.6 ms upside vs php-fpm refusing to boot. Runbook section 6.
               echo "opcache config written to $PHP_CONF_DIR/zz-opcache.ini (preload deliberately off)"
             else
               echo "WARNING: could not locate PHP conf.d — opcache left at stock defaults"
