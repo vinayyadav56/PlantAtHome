@@ -192,17 +192,8 @@ jobs:
             echo "    (controllers/services/models/migrations) is picked up — composer skips"
             echo "    re-copying an unchanged-version path repo, so this is required on prod."
             composer reinstall marvel/shop --no-interaction || echo "WARNING: marvel/shop reinstall failed"
-            # -a (--classmap-authoritative) implies -o and additionally tells the
-            # autoloader that the classmap is the whole truth: a class that is not
-            # in it does not exist, so PHP stops doing a filesystem stat() for
-            # every miss. The classmap has 15,528 entries and a request touches
-            # ~1,000 files.
-            #
-            # Safe here because nothing generates classes at runtime — no eval(),
-            # no class_alias(), no create_function() anywhere in app/ or the
-            # marvel package. Deliberately NOT set in composer.json, because there
-            # it would also apply to local development, where adding a new class
-            # without re-dumping would then fail to autoload.
+            # -a (--classmap-authoritative): classmap-only autoloading, no filesystem
+            # probing on a miss. Safe here because nothing generates classes at runtime.
             composer dump-autoload -a 2>/dev/null || composer dump-autoload -o 2>/dev/null || true
 
             echo "==> Running migrations..."
@@ -285,31 +276,17 @@ jobs:
             php artisan event:cache  || echo "WARNING: event:cache failed — running without event cache"
 
             echo "==> Ensuring nginx compresses API responses..."
-            # The API served every response uncompressed. Production nginx config
-            # lives on this box, not in the repo, so it is written here.
-            # Idempotent: same file every deploy, and nginx is only reloaded when
-            # the config actually changes and passes `nginx -t`.
+            # Production nginx config lives on this box, not in the repo, so it is
+            # written here. Idempotent, and nginx only reloads when `nginx -t` passes.
             #
-            # MEASURED compression on real endpoints:
-            #   /categories?limit=100   59,274 ->  2,997 B  (19.8x)
-            #   /products?limit=100    174,593 -> 12,377 B  (14.1x)
-            # NO `gzip on;` HERE, deliberately. conf.d/*.conf is included from
-            # INSIDE the http block, and stock Ubuntu /etc/nginx/nginx.conf
-            # already declares `gzip on;` in that same http block. nginx treats a
-            # second flag directive in one context as a hard error --
-            # `"gzip" directive is duplicate` -- so this fragment failed
-            # `nginx -t` on EVERY deploy since 2026-07-31, was deleted again
-            # immediately, and the API has been serving uncompressed JSON ever
-            # since. gzip is already on; what was actually missing is gzip_types,
-            # because nginx's default type list is text/html ONLY, which matches
-            # nothing this API returns.
-            #
-            # gzip_proxied any: deliberate. This API sits behind Cloudflare and
-            # sends private/no-cache on authenticated responses, which the
-            # default would refuse to compress. It does mean authenticated JSON
-            # is compressed; that is the intent, and TLS makes BREACH the only
-            # concern, which needs a secret reflected in a compressed body -- not
-            # the shape of these endpoints.
+            # NO `gzip on;` HERE, deliberately. conf.d is included from INSIDE the http
+            # block and stock Ubuntu nginx.conf already declares `gzip on;` there;
+            # nginx rejects a duplicate flag directive outright, which is why this
+            # fragment failed `nginx -t` on EVERY deploy since 2026-07-31 and was
+            # deleted again immediately. gzip was never off -- gzip_types was missing,
+            # and nginx's default list is text/html only, matching nothing this API
+            # returns. gzip_proxied any is deliberate: this API sends private/no-cache
+            # on authenticated responses, which the default would refuse to compress.
             sudo tee /etc/nginx/conf.d/zz-gzip.conf >/dev/null <<'NGINXCONF'
             gzip_vary on;
             gzip_proxied any;
@@ -343,21 +320,15 @@ jobs:
             fi
 
             echo "==> Ensuring nginx accepts admin image uploads..."
-            # The production admin could not upload ANY image over 1 MB -- the
-            # gifting gallery is just where it was noticed. nginx's compiled-in
-            # client_max_body_size default is 1m and nothing on this box ever
-            # raised it (staging does, at .railway/nginx.conf:14, which is why
-            # this reproduced on production only). The request died with a 413 at
-            # the proxy before PHP saw it, and no layer above showed an error.
+            # The production admin could not upload ANY image over 1 MB: nginx was on
+            # its compiled-in client_max_body_size default of 1m and nothing raised it
+            # (staging does, in .railway/nginx.conf, so this was production-only).
+            # Verified: 900,000 B reaches Laravel auth, 1,100,000 B returns 413.
             #
-            # Its own file, NOT appended to zz-gzip.conf: that file is rewritten
-            # and, on an nginx -t failure, DELETED every deploy -- which would
-            # silently take the upload limit with it.
-            #
-            # 12M: comfortably over the 10 MB application ceiling in
-            # config/media.php, so the real limit stays in Laravel where it
-            # returns a proper 422, while nginx stops eating the request first.
-            # http context, so it covers the admin vhost and the api vhost alike.
+            # Its OWN file, not appended to zz-gzip.conf -- that one is deleted on any
+            # nginx -t failure and would take the upload limit with it. 12M sits above
+            # the 10 MB ceiling in config/media.php so the real limit stays in Laravel,
+            # where it returns a proper 422. http context, so it covers both vhosts.
             sudo tee /etc/nginx/conf.d/zz-uploads.conf >/dev/null <<'NGINXUP'
             client_max_body_size 12M;
             NGINXUP
@@ -370,18 +341,14 @@ jobs:
             fi
 
             echo "==> Ensuring PHP-FPM accepts admin image uploads..."
-            # Second wall behind nginx: stock php8.1-fpm ships
-            # upload_max_filesize=2M / post_max_size=8M, so raising nginx alone
-            # would just move the failure from 1 MB to 2 MB. Worse, PHP DROPS an
-            # oversized upload silently and Laravel then answers 422 "attachment
-            # required", which reads like a validation bug rather than a limit.
+            # Second wall: stock php8.1-fpm is upload_max_filesize=2M, so raising nginx
+            # alone would move the failure from 1 MB to 2 MB -- and PHP drops an
+            # oversized upload silently, which surfaces as a misleading 422.
             #
-            # Written to the FPM scan dir EXPLICITLY. The opcache block above
-            # derives its directory from `php -i`, which is the CLI binary, so it
-            # resolves to /etc/php/8.1/cli/conf.d -- a separate pre-existing bug
-            # (the opcache tuning has probably never reached php-fpm). Not fixed
-            # here on purpose: pointing 256 MB of opcache at FPM for the first
-            # time is a memory change on a 2-core box and deserves its own deploy.
+            # FPM scan dir explicitly: the opcache block above derives its dir from
+            # `php -i`, which is the CLI binary, so that fragment has probably never
+            # reached php-fpm. Left alone here on purpose -- pointing 256 MB of opcache
+            # at FPM for the first time is a memory change that deserves its own deploy.
             PHP_FPM_CONF_DIR=$(ls -d /etc/php/*/fpm/conf.d 2>/dev/null | tail -1)
             if [ -n "$PHP_FPM_CONF_DIR" ] && [ -d "$PHP_FPM_CONF_DIR" ]; then
               sudo tee "$PHP_FPM_CONF_DIR/99-uploads.ini" >/dev/null <<'UPLOADINI'
@@ -394,45 +361,17 @@ jobs:
             fi
 
             echo "==> Ensuring opcache is tuned for production..."
-            # opcache is INSTALLED but entirely unconfigured on this host, so it
-            # runs on stock defaults. Two of those defaults are genuinely wrong
-            # for this app; a third that I expected to be wrong turned out fine,
-            # and is deliberately NOT changed.
+            # opcache ships unconfigured on this host. Three defaults are wrong for
+            # this app: interned_strings_buffer measured 100% full at 8 MB, 
+            # max_accelerated_files (10000) is below the app's file count so the tail
+            # of every request recompiles, and memory_consumption must hold both.
             #
-            # MEASURED, and why each line is here:
+            # validate_timestamps=0 is deliberately NOT set: an interleaved A/B found
+            # no benefit (median -0.084 ms, won 2 of 8 rounds) while risking production
+            # serving a stale build forever if a deploy fails to cycle php-fpm.
+            # Full measurements: docs/performance/final-summary.md.
             #
-            #   interned_strings_buffer — measured 100% full (8 MB of 8 MB). Once
-            #     that buffer fills, opcache silently stops interning and starts
-            #     storing duplicate copies of every repeated string. 32 MB.
-            #
-            #   max_accelerated_files — the default 10000 is below this app's
-            #     file count (1,547 app + 18,411 vendor; a request touches well
-            #     over 10k of them). Past the limit opcache evicts, so the tail
-            #     of every request recompiles. 20000.
-            #
-            #   memory_consumption — 256 MB to hold the above without eviction.
-            #
-            # NOT SET, and this is the interesting one: opcache.validate_timestamps=0.
-            # I had this in an earlier revision, justified as "saves a stat() per
-            # file per request". That justification was WRONG. opcache only
-            # re-stats a file once per opcache.revalidate_freq seconds, which
-            # defaults to 2 — so under production load the stat sweep amortises
-            # across ~2 seconds of traffic and costs approximately nothing per
-            # request.
-            #
-            # An interleaved A/B (8 rounds x 220 requests, arms alternated each
-            # round to cancel host drift) found NO benefit: median paired delta
-            # -0.084 ms, and validate_timestamps=0 won only 2 of 8 rounds — i.e.
-            # if anything it was marginally slower, and well within noise.
-            #
-            # So it buys nothing measurable, while carrying a genuinely nasty
-            # failure mode: PHP stops noticing changed files, and if a deploy
-            # ever fails to cycle php-fpm, production serves the previous build
-            # forever while every health check happily returns 200. Not worth it
-            # for 0%. Left at the default.
-            #
-            # opcache.* are PHP_INI_SYSTEM, so .user.ini cannot set them; it has
-            # to be a conf.d fragment.
+            # opcache.* are PHP_INI_SYSTEM, so this has to be a conf.d fragment.
             PHP_CONF_DIR=$(php -i | awk -F'=> ' '/Scan this dir for additional .ini files/{print $2}' | tr -d ' ')
             if [ -n "$PHP_CONF_DIR" ] && [ -d "$PHP_CONF_DIR" ]; then
               sudo tee "$PHP_CONF_DIR/zz-opcache.ini" >/dev/null <<'OPCACHECONF'
@@ -443,23 +382,13 @@ jobs:
             opcache.save_comments=1
             OPCACHECONF
 
-              # opcache.preload is deliberately NOT enabled, and preload.php is
-              # deleted. It walked 1,706 files with opcache_compile_file(), which
-              # neither links nor autoloads, so 1,002 of them (59%) were discarded
-              # as "Can't preload unlinked class" — their parents
-              # (Illuminate\Foundation\Http\FormRequest, Marvel's CoreController,
-              # Macroable, BenSampo\Enum\Enum) sit outside the walked set. Which
-              # classes survive depends on readdir order, so the link graph
-              # differs per filesystem; PHP 8.1 segfaulted finalising that state on
-              # this build, which is why the dry run failed on every deploy since
-              # it was added and the directive was never once written.
-              #
-              # Measured upside was +0.6 ms median. The downside is php-fpm's
-              # master refusing to boot — no service at all. That is not a trade
-              # worth making on a 2-core box, and a directory walk cannot be made
-              # correct: a real preload list has to be an ordered require_once of
-              # what a warm request actually touched, regenerated on every
-              # composer change. Plain opcache above keeps the win that matters.
+              # opcache.preload is deliberately NOT enabled and preload.php is deleted.
+              # It compiled 1,706 files with opcache_compile_file(), which neither links
+              # nor autoloads, so 59% were discarded as unlinked classes and PHP 8.1
+              # segfaulted finalising that state -- the dry run failed every deploy, so
+              # preload was never once on. Upside was +0.6 ms median; downside is
+              # php-fpm refusing to boot. See OPERATOR_RUNBOOK_2026-08.md section 6.
+              # Do not re-add.
               echo "opcache config written to $PHP_CONF_DIR/zz-opcache.ini (preload deliberately off)"
             else
               echo "WARNING: could not locate PHP conf.d — opcache left at stock defaults"
@@ -484,16 +413,8 @@ jobs:
             pgrep -x cron >/dev/null && echo "    cron daemon: running" || echo "    WARNING: cron daemon NOT running"
             echo "==> one-shot schedule:run as www-data (proves the cron command works; output below)"
             sudo -u www-data /usr/bin/php artisan schedule:run 2>&1 | tail -20 || echo "    WARNING: one-shot schedule:run FAILED"
-            # 2) queue workers as templated systemd units.
-            # MUST stay in step with .railway/supervisord.conf (staging). A queue with no worker does
-            # not error — the job sits in `jobs` forever, so the feature looks like it ran. `content`
-            # is worse than silent: SweepContentBatchesCommand re-dispatches every 2 minutes with no
-            # termination condition, so a batch nobody consumes grows ~720 orphan rows a day on a DB
-            # that has already filled its volume once.
-            # Per-queue flags via EnvironmentFile — MUST mirror .railway/supervisord.conf.
-            # Without --timeout, Laravel defaults to 60s: careplans/images jobs budgeted
-            # at 900s were being SIGALRM'd at 60s, retried, and dumped in failed_jobs.
-            # config/queue.php retry_after=960 must stay > the longest --timeout (900).
+            # 2) queue workers as templated systemd units, so a crashed worker is
+            #    restarted by systemd rather than staying silently dead.
             sudo mkdir -p /etc/plantathome
             sudo tee /etc/plantathome/queue-default.env        > /dev/null <<<'WORKER_FLAGS=--tries=3 --timeout=120 --backoff=10'
             sudo tee /etc/plantathome/queue-careplans.env      > /dev/null <<<'WORKER_FLAGS=--tries=2 --timeout=900 --backoff=30'
@@ -524,26 +445,15 @@ jobs:
             sudo systemctl restart 'plantathome-queue@default' 'plantathome-queue@careplans' 'plantathome-queue@images' 'plantathome-queue@images-instant' 'plantathome-queue@marketing' 'plantathome-queue@content' 'plantathome-queue@availability'
             sudo systemctl is-active plantathome-queue@default plantathome-queue@careplans plantathome-queue@images plantathome-queue@images-instant plantathome-queue@marketing plantathome-queue@content plantathome-queue@availability
 
-            # RESTART, not reload — this step writes a new conf.d/zz-opcache.ini
-            # above, and opcache.memory_consumption / interned_strings_buffer /
-            # max_accelerated_files are all PHP_INI_SYSTEM: they size shared
-            # memory segments that are allocated once when the master process
-            # starts. A SIGUSR2 reload re-reads the ini but cannot resize an
-            # already-allocated SHM segment, so the new sizes would appear in
-            # phpinfo() while the process kept running on the old 8 MB buffer —
-            # the exact condition this step exists to fix, silently not fixed.
-            #
-            # A restart costs a sub-second window on a manually-dispatched
-            # deploy, which is the right trade against applying nothing.
+            # RESTART, not reload: this step writes a new conf.d/zz-opcache.ini, and
+            # resizing the opcache shared memory segment needs a full master restart.
+            # A reload keeps the old SHM and the new sizes silently never apply.
             echo "==> Restarting PHP-FPM (required to resize the opcache SHM)..."
             sudo systemctl restart php8.1-fpm || true
 
-            # preload is no longer written, so the sed below is a no-op and this
-            # is now simply a retry: restart once more rather than leaving the box
-            # with no PHP at all. Kept deliberately — the retry costs nothing and
-            # can recover a transient first-restart failure, which is a real risk
-            # on this box right after seven queue workers were cycled above. The
-            # deploy still fails loudly afterwards either way.
+            # preload is no longer written, so the sed below is a no-op and this is now
+            # simply a retry. Kept deliberately: the second restart costs nothing and can
+            # recover a transient failure right after seven queue workers were cycled.
             if ! sudo systemctl is-active --quiet php8.1-fpm; then
               echo "ERROR: php-fpm did not start. Retrying once..."
               sudo sed -i '/opcache.preload/d' "$PHP_CONF_DIR/zz-opcache.ini" 2>/dev/null || true
