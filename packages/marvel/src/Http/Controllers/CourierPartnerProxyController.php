@@ -36,6 +36,16 @@ class CourierPartnerProxyController extends CoreController
     public function show(Request $request, string $code)
     {
         $this->assertAdmin($request);
+
+        // The Integration Management page asks this for every integration slug,
+        // including the shipping microservice itself, which is the link the
+        // partners run through rather than a partner. Answer with the link's own
+        // status instead of 404 ("Unknown courier partner").
+        if (strtolower(trim($code)) === 'shipping_service') {
+            $configured = (new ShippingServiceClient())->configured();
+            return ['connected' => $configured, 'config' => ['code' => 'shipping_service', 'configured' => $configured, 'source' => 'monolith']];
+        }
+
         $code = $this->assertPartner($code);
 
         $client = new ShippingServiceClient();
