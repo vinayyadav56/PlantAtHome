@@ -128,7 +128,7 @@ return [
     |
     */
 
-    'active_otp_gateway' => env('ACTIVE_OTP_GATEWAY', 'twilio'),
+    'active_otp_gateway' => env('ACTIVE_OTP_GATEWAY', 'msg91'),
 
     /*
     | Gateway used when a client explicitly requests the "sms" channel (so an app can
