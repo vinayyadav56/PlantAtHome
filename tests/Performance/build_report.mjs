@@ -186,7 +186,7 @@ const report = {
       'Absolute throughput is from a laptop CLI server, not php-fpm on EC2. Treat RPS/core as a relative constant for modelling, not as a production SLA.',
       'The dataset is 8 MB and fits entirely in the InnoDB buffer pool, so these numbers isolate query and framework cost, not disk I/O.',
       'Everything above the measured saturation point is MODELLED, not observed. 100k concurrent users was never generated — this machine has 16,384 ephemeral ports.',
-      'Production runs php-fpm with cached config and opcache preload; per-request overhead there is likely lower than measured here.',
+      'Production runs php-fpm with cached config and opcache (preload deliberately off); per-request overhead there is likely lower than measured here.',
     ],
   },
 
@@ -263,7 +263,7 @@ const report = {
     { step: 3, action: 'Install Redis and move CACHE_DRIVER off database', why: '13-15 MySQL round trips per request just for cache reads, on the storefront database.', unblocks: 'Removes cache load from the primary DB', effort: 'hours' },
     { step: 4, action: 'Put a CDN in front of the public read API', why: 'The API already emits s-maxage=300; the model is most sensitive to this single factor (232 cores at 80% offload vs 555 at 0%).', unblocks: 'Largest single lever in the model', effort: 'days' },
     { step: 5, action: 'Horizontal scale behind an ALB with autoscaling', why: 'Single-box deployment has no failover and no elasticity.', unblocks: 'Beyond one machine', effort: 'weeks' },
-    { step: 6, action: 'Reduce per-request overhead: opcache preload, then evaluate Octane', why: 'Measured as the dominant per-request cost; query tuning cannot move throughput past it.', unblocks: 'Raises RPS/core, lowering every row of the capacity table', effort: 'weeks' },
+    { step: 6, action: 'Reduce per-request overhead: evaluate Octane (opcache preload was tried and removed — see runbook §6)', why: 'Measured as the dominant per-request cost; query tuning cannot move throughput past it.', unblocks: 'Raises RPS/core, lowering every row of the capacity table', effort: 'weeks' },
   ],
 };
 

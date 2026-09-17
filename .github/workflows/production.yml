@@ -293,8 +293,24 @@ jobs:
             # MEASURED compression on real endpoints:
             #   /categories?limit=100   59,274 ->  2,997 B  (19.8x)
             #   /products?limit=100    174,593 -> 12,377 B  (14.1x)
+            # NO `gzip on;` HERE, deliberately. conf.d/*.conf is included from
+            # INSIDE the http block, and stock Ubuntu /etc/nginx/nginx.conf
+            # already declares `gzip on;` in that same http block. nginx treats a
+            # second flag directive in one context as a hard error --
+            # `"gzip" directive is duplicate` -- so this fragment failed
+            # `nginx -t` on EVERY deploy since 2026-07-31, was deleted again
+            # immediately, and the API has been serving uncompressed JSON ever
+            # since. gzip is already on; what was actually missing is gzip_types,
+            # because nginx's default type list is text/html ONLY, which matches
+            # nothing this API returns.
+            #
+            # gzip_proxied any: deliberate. This API sits behind Cloudflare and
+            # sends private/no-cache on authenticated responses, which the
+            # default would refuse to compress. It does mean authenticated JSON
+            # is compressed; that is the intent, and TLS makes BREACH the only
+            # concern, which needs a secret reflected in a compressed body -- not
+            # the shape of these endpoints.
             sudo tee /etc/nginx/conf.d/zz-gzip.conf >/dev/null <<'NGINXCONF'
-            gzip on;
             gzip_vary on;
             gzip_proxied any;
             gzip_comp_level 5;
@@ -303,11 +319,78 @@ jobs:
                        application/xml text/css text/javascript text/plain text/xml
                        image/svg+xml;
             NGINXCONF
-            if sudo nginx -t 2>/dev/null; then
+            # Capture the output instead of discarding it. `2>/dev/null` is what
+            # kept this failure unexplained for seven weeks.
+            if NGINX_T="$(sudo nginx -t 2>&1)"; then
               sudo systemctl reload nginx && echo "nginx reloaded with gzip"
+              # Prove it rather than imply it: ask the origin directly, bypassing
+              # the CDN, and say so in the deploy log either way.
+              if curl -s -o /dev/null -D- --max-time 10 -H 'Accept-Encoding: gzip' \
+                   -H 'Host: api.plantathome.in' http://127.0.0.1/api/health \
+                   | grep -qi '^content-encoding:.*gzip'; then
+                echo "    verified: origin gzips /api/health"
+              else
+                echo "    WARNING: origin did NOT gzip /api/health — check for a server-block override"
+              fi
             else
               echo "WARNING: nginx config test failed — removing the gzip fragment and leaving nginx untouched"
+              echo "$NGINX_T" | sed 's/^/    nginx -t: /'
               sudo rm -f /etc/nginx/conf.d/zz-gzip.conf
+              # Re-test WITHOUT the fragment. If it still fails, the breakage was
+              # already on the box and this fragment was never the culprit --
+              # otherwise an unrelated pre-existing error gets blamed on it forever.
+              sudo nginx -t 2>&1 | sed 's/^/    nginx -t (fragment removed): /'
+            fi
+
+            echo "==> Ensuring nginx accepts admin image uploads..."
+            # The production admin could not upload ANY image over 1 MB -- the
+            # gifting gallery is just where it was noticed. nginx's compiled-in
+            # client_max_body_size default is 1m and nothing on this box ever
+            # raised it (staging does, at .railway/nginx.conf:14, which is why
+            # this reproduced on production only). The request died with a 413 at
+            # the proxy before PHP saw it, and no layer above showed an error.
+            #
+            # Its own file, NOT appended to zz-gzip.conf: that file is rewritten
+            # and, on an nginx -t failure, DELETED every deploy -- which would
+            # silently take the upload limit with it.
+            #
+            # 12M: comfortably over the 10 MB application ceiling in
+            # config/media.php, so the real limit stays in Laravel where it
+            # returns a proper 422, while nginx stops eating the request first.
+            # http context, so it covers the admin vhost and the api vhost alike.
+            sudo tee /etc/nginx/conf.d/zz-uploads.conf >/dev/null <<'NGINXUP'
+            client_max_body_size 12M;
+            NGINXUP
+            if NGINX_U="$(sudo nginx -t 2>&1)"; then
+              sudo systemctl reload nginx && echo "nginx reloaded with client_max_body_size 12M"
+            else
+              echo "WARNING: nginx config test failed — removing the upload fragment"
+              echo "$NGINX_U" | sed 's/^/    nginx -t: /'
+              sudo rm -f /etc/nginx/conf.d/zz-uploads.conf
+            fi
+
+            echo "==> Ensuring PHP-FPM accepts admin image uploads..."
+            # Second wall behind nginx: stock php8.1-fpm ships
+            # upload_max_filesize=2M / post_max_size=8M, so raising nginx alone
+            # would just move the failure from 1 MB to 2 MB. Worse, PHP DROPS an
+            # oversized upload silently and Laravel then answers 422 "attachment
+            # required", which reads like a validation bug rather than a limit.
+            #
+            # Written to the FPM scan dir EXPLICITLY. The opcache block above
+            # derives its directory from `php -i`, which is the CLI binary, so it
+            # resolves to /etc/php/8.1/cli/conf.d -- a separate pre-existing bug
+            # (the opcache tuning has probably never reached php-fpm). Not fixed
+            # here on purpose: pointing 256 MB of opcache at FPM for the first
+            # time is a memory change on a 2-core box and deserves its own deploy.
+            PHP_FPM_CONF_DIR=$(ls -d /etc/php/*/fpm/conf.d 2>/dev/null | tail -1)
+            if [ -n "$PHP_FPM_CONF_DIR" ] && [ -d "$PHP_FPM_CONF_DIR" ]; then
+              sudo tee "$PHP_FPM_CONF_DIR/99-uploads.ini" >/dev/null <<'UPLOADINI'
+            upload_max_filesize=12M
+            post_max_size=16M
+            UPLOADINI
+              echo "upload limits written to $PHP_FPM_CONF_DIR/99-uploads.ini"
+            else
+              echo "WARNING: could not locate the php-fpm conf.d — upload limits left at stock defaults"
             fi
 
             echo "==> Ensuring opcache is tuned for production..."
@@ -360,36 +443,24 @@ jobs:
             opcache.save_comments=1
             OPCACHECONF
 
-              # ── opcache preload ──────────────────────────────────────────────
-              # MEASURED, interleaved A/B (8 rounds x 220 requests, arms
-              # alternated each round, paired medians):
-              #   preload OFF  median 18.874 ms   p95 31.107 ms
-              #   preload ON   median 17.651 ms   p95 24.767 ms
-              #   paired delta +0.627 ms (3.3%), preload ON won 7 of 8 rounds
-              # p95 is the bigger story: -20%. Unlike validate_timestamps (which
-              # won 2 of 8 and was reverted), this is consistently one-directional.
+              # opcache.preload is deliberately NOT enabled, and preload.php is
+              # deleted. It walked 1,706 files with opcache_compile_file(), which
+              # neither links nor autoloads, so 1,002 of them (59%) were discarded
+              # as "Can't preload unlinked class" — their parents
+              # (Illuminate\Foundation\Http\FormRequest, Marvel's CoreController,
+              # Macroable, BenSampo\Enum\Enum) sit outside the walked set. Which
+              # classes survive depends on readdir order, so the link graph
+              # differs per filesystem; PHP 8.1 segfaulted finalising that state on
+              # this build, which is why the dry run failed on every deploy since
+              # it was added and the directive was never once written.
               #
-              # Enabled ONLY if it survives a dry run, because the failure mode is
-              # the worst one available: a fatal inside a preload script means
-              # php-fpm's master REFUSES TO START. Not a 500 — no service at all.
-              # That is not hypothetical; the first version of preload.php
-              # referenced STDERR, which is undefined in the preload context, and
-              # fatalled immediately.
-              #
-              # So: compile it in a throwaway CLI process first. Only if that
-              # exits clean does the directive get written.
-              if php -d opcache.enable=1 -d opcache.enable_cli=1 \
-                     -d opcache.preload="/var/www/plantathome/api/preload.php" \
-                     -d opcache.preload_user="$(whoami)" \
-                     -r 'exit(0);' >/tmp/preload-check.log 2>&1; then
-                echo "opcache.preload=/var/www/plantathome/api/preload.php"  | sudo tee -a "$PHP_CONF_DIR/zz-opcache.ini" >/dev/null
-                echo "opcache.preload_user=www-data"         | sudo tee -a "$PHP_CONF_DIR/zz-opcache.ini" >/dev/null
-                echo "preload ENABLED (dry run clean)"
-              else
-                echo "WARNING: preload dry run FAILED — leaving preload off. Output:"
-                tail -20 /tmp/preload-check.log
-              fi
-              echo "opcache config written to $PHP_CONF_DIR/zz-opcache.ini"
+              # Measured upside was +0.6 ms median. The downside is php-fpm's
+              # master refusing to boot — no service at all. That is not a trade
+              # worth making on a 2-core box, and a directory walk cannot be made
+              # correct: a real preload list has to be an ordered require_once of
+              # what a warm request actually touched, regenerated on every
+              # composer change. Plain opcache above keeps the win that matters.
+              echo "opcache config written to $PHP_CONF_DIR/zz-opcache.ini (preload deliberately off)"
             else
               echo "WARNING: could not locate PHP conf.d — opcache left at stock defaults"
             fi
@@ -467,21 +538,20 @@ jobs:
             echo "==> Restarting PHP-FPM (required to resize the opcache SHM)..."
             sudo systemctl restart php8.1-fpm || true
 
-            # If php-fpm did not come back, the overwhelmingly likely cause is the
-            # opcache.preload directive written above — a fatal inside a preload
-            # script makes the master refuse to start, and the dry run cannot
-            # catch everything (it runs as a different user, with CLI settings).
-            #
-            # Strip preload and restart again rather than leaving the box with no
-            # PHP at all. The deploy still fails loudly afterwards.
+            # preload is no longer written, so the sed below is a no-op and this
+            # is now simply a retry: restart once more rather than leaving the box
+            # with no PHP at all. Kept deliberately — the retry costs nothing and
+            # can recover a transient first-restart failure, which is a real risk
+            # on this box right after seven queue workers were cycled above. The
+            # deploy still fails loudly afterwards either way.
             if ! sudo systemctl is-active --quiet php8.1-fpm; then
-              echo "ERROR: php-fpm did not start. Removing opcache.preload and retrying..."
+              echo "ERROR: php-fpm did not start. Retrying once..."
               sudo sed -i '/opcache.preload/d' "$PHP_CONF_DIR/zz-opcache.ini" 2>/dev/null || true
               sudo systemctl restart php8.1-fpm || true
               if sudo systemctl is-active --quiet php8.1-fpm; then
-                echo "php-fpm recovered WITHOUT preload — preload is the culprit."
+                echo "php-fpm recovered on the second restart — first restart was transient."
               else
-                echo "php-fpm still down after removing preload — unrelated cause."
+                echo "php-fpm still down after a retry — real failure, journal below."
                 sudo journalctl -u php8.1-fpm -n 30 --no-pager || true
               fi
               exit 1

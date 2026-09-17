@@ -72,7 +72,7 @@ categories.slug, types.slug, tags.slug, attributes.slug, attribute_values.slug a
 - Absolute throughput is from a laptop CLI server, not php-fpm on EC2. Treat RPS/core as a relative constant for modelling, not as a production SLA.
 - The dataset is 8 MB and fits entirely in the InnoDB buffer pool, so these numbers isolate query and framework cost, not disk I/O.
 - Everything above the measured saturation point is MODELLED, not observed. 100k concurrent users was never generated — this machine has 16,384 ephemeral ports.
-- Production runs php-fpm with cached config. It does **not** run opcache preload, and until this pass
+- Production runs php-fpm with cached config. It does **not** run opcache preload — that was removed outright (runbook §6), and until this pass
   opcache had no configuration at all — that sentence previously claimed otherwise and was wrong.
   Per-request overhead on production is therefore unlikely to be materially lower than measured here,
   and the host is smaller than this laptop (2 cores vs 8).
@@ -104,7 +104,7 @@ rested on a premise of mine that turned out to be wrong.
 
 | Item | Verdict |
 |---|---|
-| opcache preload | Local A/B **+3.3%, p95 −20%, won 7/8 rounds** — but the deploy's dry run caught a **segfault** on the production PHP build and left it **OFF**. The guard prevented a total outage. |
+| opcache preload | **CLOSED — removed.** The local A/B (**+3.3%, p95 −20%**) ran on macOS, never on production: the dry run segfaulted on every deploy, so the directive was never written. Root cause was `opcache_compile_file()` discarding 59% of the walked files as unlinked classes. `preload.php` is deleted. |
 | 81 service providers | **No effect.** Dropping 19 moved the warm median +0.344 ms, winning 4/6 rounds. Not shipped. |
 | 48 raw `<img>` tags | **Wrong premise.** Not one shifting element is an `<img>`. Real cause fixed: production CLS **0.887 → 0.383**. |
 | Redis | **Slower: −3.0%** on the only client installed anywhere (predis, pure PHP). Not enabled. |
@@ -125,8 +125,7 @@ are in `production-verified.json` and on the admin report page.
   which is installed nowhere. Install `php8.1-redis` and re-measure before
   touching `CACHE_DRIVER` — the pure-PHP client is measurably worse than the
   MySQL cache it would replace.
-- **opcache preload on Ubuntu.** The machinery is in place and self-enabling;
-  it needs the segfault diagnosed on a like-for-like build, not on production.
+- **opcache preload on Ubuntu — CLOSED, do not reopen.** Removed outright; see runbook §6 for why a directory walk cannot be made correct.
 - **Image delivery.** Still worth doing, but for bandwidth rather than CLS:
   resize-at-upload plus a CDN. `next/image` remains the wrong tool here — it
   would spend the CPU that is already the bottleneck.

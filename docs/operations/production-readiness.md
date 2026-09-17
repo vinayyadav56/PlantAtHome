@@ -78,4 +78,4 @@ smoke `/health` + one diagnosis; (6) keep the old instance warm for instant roll
 
 Razorpay LIVE key (prod is `rzp_test_` — no real payment has run); rotate the `chatbot-service`
 committed secret (H8); Cloudflare-range origin firewall (A3); managed Redis + ALB + RDS for
-multi-instance; opcache-preload segfault on the PHP 8.1 box; delete `admin/graphql`.
+multi-instance; delete `admin/graphql`.

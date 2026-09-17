@@ -57,7 +57,7 @@ const A = {
   authenticated_share: 0.35,
 
   cache_hit_rate: 0.9,             // origin-side response cache, affects DB not RPS
-  // Production efficiency vs this laptop rig. php-fpm + opcache + preload on a
+  // Production efficiency vs this laptop rig. php-fpm + opcache (no preload) on a
   // dedicated vCPU is generally faster than PHP's CLI server; 1.0 = same.
   prod_efficiency_factor: 1.0,
   // Headroom: never plan to run a tier at 100% of measured capacity.

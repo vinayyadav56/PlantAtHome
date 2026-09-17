@@ -85,6 +85,7 @@ abstract class IdentityTestCase extends TestCase
             '2026_07_16_000000_create_identity_roles_permissions_tables.php',
             '2026_07_16_000001_create_identity_users_table.php',
             '2026_07_16_000002_create_identity_refresh_tokens_table.php',
+            '2026_09_18_000001_make_identity_users_password_nullable.php',
         ] as $file) {
             (require $dir.'/'.$file)->up();
         }

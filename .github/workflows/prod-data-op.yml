@@ -171,7 +171,10 @@ jobs:
 
             # read a value from .env, stripping surrounding quotes
             getenv() { grep -E "^$1=" .env | head -1 | cut -d '=' -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'\$//"; }
-            CATALOG_TABLES="products plant_attributes variation_options product_inclusions attribute_product category_product categories attributes attribute_values types"
+            # `banners` is in this list because type banners are a child of `types` and
+            # cat-backup was the stated safety net for editing them — without it a
+            # banner delete had no recoverable backup at all.
+            CATALOG_TABLES="products plant_attributes variation_options product_inclusions attribute_product category_product categories attributes attribute_values types banners"
 
             case "$OP_MODE" in
               vendor-state)

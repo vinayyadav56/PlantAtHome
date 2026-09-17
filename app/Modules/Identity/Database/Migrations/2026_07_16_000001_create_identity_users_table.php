@@ -24,7 +24,14 @@ return new class extends Migration
             $table->uuid('uuid')->unique();
             $table->string('name');
             $table->string('email')->unique();
-            $table->string('password');
+            // Nullable: a social-login / phone-OTP account genuinely has no
+            // password, exactly as legacy `users.password` has allowed since
+            // marvel 2021_04_17_051901. AuthService::login treats NULL as
+            // unauthenticatable, so this cannot become a bypass. Kept in sync
+            // with 2026_09_18_000001, which widens already-deployed databases —
+            // this file early-returns when the table exists, so editing it only
+            // affects fresh installs and the test harness.
+            $table->string('password')->nullable();
             $table->unsignedBigInteger('role_id');
             $table->uuid('nursery_id')->nullable()->index();
             $table->boolean('is_active')->default(true);

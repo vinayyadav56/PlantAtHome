@@ -85,7 +85,11 @@ class NurseryBackfillTest extends NurseryTestCase
             $t->bigIncrements('id');
             $t->string('name')->nullable();
             $t->string('email');
-            $t->string('password');
+            // Nullable, matching production: legacy `users.password` has been
+            // nullable since marvel 2021_04_17_051901 (social / OTP accounts).
+            // A NOT NULL replica here is what hid the mirror-wedging bug that
+            // UserMirrorNullPasswordTest now covers.
+            $t->string('password')->nullable();
             $t->unsignedBigInteger('shop_id')->nullable();
             $t->boolean('is_active')->default(true);
             $t->timestamp('email_verified_at')->nullable();

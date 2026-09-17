@@ -84,15 +84,23 @@ this pass is the interim; the managed target:
 
 ---
 
-## 6. opcache preload segfaults on the production PHP build
+## 6. opcache preload — CLOSED, removed on purpose. Do not re-add.
 
-`preload.php` exists and the deploy dry-runs it before enabling — that dry-run **segfaults on the
-prod Ubuntu PHP 8.1 build** and correctly leaves preload OFF (the guard prevented an outage). Worth
-−3.3% median / −20% p95 if fixed.
+`preload.php` is **deleted** and `opcache.preload` is deliberately never written. Nothing to do here.
 
-**Do:** reproduce the segfault on a like-for-like Ubuntu PHP 8.1 box (NOT on prod), narrow
-`preload.php`'s include list until it's stable, then let the deploy's dry-run enable it. Do not
-iterate against production — each attempt burns a prod deploy.
+Why, so nobody reopens it: the script walked 1,706 files with `opcache_compile_file()`, which
+neither links nor autoloads, so **1,002 of them (59%) were discarded** as `Can't preload unlinked
+class` — their parents (`Illuminate\Foundation\Http\FormRequest`, Marvel's `CoreController`,
+`Macroable`, `BenSampo\Enum\Enum`) sat outside the walked set. Which classes survive depends on
+readdir order, so the link graph differs per filesystem; PHP 8.1 segfaulted finalising that state on
+the prod build. The dry-run guard caught it on every deploy, so preload was **never actually on** —
+the −3.3% / −20% figures were measured on a hand-edited macOS box, not here.
+
+Measured upside was +0.6 ms median. The downside is php-fpm's master refusing to boot: no service at
+all. Not a trade worth making on a 2-core box. A directory walk cannot be made correct either — a
+real preload list must be an ordered `require_once` of what a warm request actually touched,
+regenerated on every `composer` change. Registering the autoloader does **not** rescue it (measured:
+996 unlinked with it vs 970 without).
 
 ---
 
