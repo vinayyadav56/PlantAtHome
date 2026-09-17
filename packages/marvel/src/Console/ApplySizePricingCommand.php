@@ -6,8 +6,6 @@ use Illuminate\Console\Command;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
-use Marvel\Database\Models\Attribute;
-use Marvel\Database\Models\AttributeValue;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Shop;
 use Marvel\Database\Models\Type;
@@ -45,18 +43,9 @@ class ApplySizePricingCommand extends Command
         $shopId = Shop::where('slug', 'plantathome')->value('id');
 
         // 1. Ensure the Size attribute + Small/Medium/Large values (once).
-        $attr = Attribute::firstOrCreate(
-            ['slug' => 'size', 'language' => 'en', 'shop_id' => $shopId],
-            ['name' => 'Size']
-        );
-        $valueIds = [];
-        foreach (self::SIZES as $size) {
-            $val = AttributeValue::firstOrCreate(
-                ['attribute_id' => $attr->id, 'value' => $size, 'language' => 'en'],
-                ['slug' => Str::slug($size), 'meta' => null]
-            );
-            $valueIds[$size] = $val->id;
-        }
+        //    Shared helper: keying this on shop_id locally is what used to mint a
+        //    second "Size" attribute and double the size chips on product pages.
+        $valueIds = sizeValueIds(self::SIZES);
         $allValueIds = array_values($valueIds);
 
         // 2. Load pricing signals from the source data (slug → meta).

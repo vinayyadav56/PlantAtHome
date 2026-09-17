@@ -745,7 +745,10 @@ class ProductRepository extends BaseRepository
 
             $product->update($data);
             if ($product->product_type === ProductType::SIMPLE) {
-                $product->variations()->delete();
+                // detach(), not delete(): on a BelongsToMany, delete() removes the
+                // attribute_values ROWS — which every other product shares — rather
+                // than just this product's pivot links.
+                $product->variations()->detach();
                 $product->variation_options()->delete();
             }
             $product->save();

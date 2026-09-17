@@ -4,8 +4,6 @@ namespace Marvel\Database\Seeders;
 
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Str;
-use Marvel\Database\Models\Attribute;
-use Marvel\Database\Models\AttributeValue;
 use Marvel\Database\Models\Category;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Shop;
@@ -69,20 +67,10 @@ class PlantAtHomePotSeeder extends Seeder
             return;
         }
 
-        // 3. Size attribute + Small/Medium/Large values (shared with plants —
-        //    firstOrCreate matches the existing rows, never duplicates them).
-        $attr = Attribute::firstOrCreate(
-            ['slug' => 'size', 'language' => 'en', 'shop_id' => $shopId],
-            ['name' => 'Size']
-        );
-        $valueIds = [];
-        foreach (self::SIZES as $size) {
-            $val = AttributeValue::firstOrCreate(
-                ['attribute_id' => $attr->id, 'value' => $size, 'language' => 'en'],
-                ['slug' => Str::slug($size), 'meta' => null]
-            );
-            $valueIds[$size] = $val->id;
-        }
+        // 3. Size attribute + Small/Medium/Large values, shared with plants via
+        //    the one helper. (This block used to key firstOrCreate on shop_id,
+        //    which minted a second "Size" attribute whenever the id differed.)
+        $valueIds = sizeValueIds(self::SIZES);
         $allValueIds = array_values($valueIds);
 
         // 4. Material CATEGORIES under the pots-planters type (drive the chips).

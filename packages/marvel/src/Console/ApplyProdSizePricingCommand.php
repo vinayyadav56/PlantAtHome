@@ -5,7 +5,6 @@ namespace Marvel\Console;
 use Illuminate\Console\Command;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\DB;
-use Marvel\Database\Models\Attribute;
 use Marvel\Database\Models\AttributeValue;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Type;
@@ -57,10 +56,8 @@ class ApplyProdSizePricingCommand extends Command
         $limit = (int) $this->option('limit');
         $ladderOnly = $this->option('group') === 'ladder';
 
-        $shopId = Product::where('type_id', $type->id)->whereNotNull('shop_id')->value('shop_id');
-
         // Ensure the Size attribute + values (skip writes on dry-run).
-        $valueIds = $dry ? ['Small' => 0, 'Medium' => 0, 'Large' => 0] : $this->ensureSizeAttribute($shopId);
+        $valueIds = $dry ? ['Small' => 0, 'Medium' => 0, 'Large' => 0] : $this->ensureSizeAttribute();
 
         $ladder = 0;   // real min<price<max
         $derived = 0;  // flat → derived ends
@@ -208,20 +205,14 @@ class ApplyProdSizePricingCommand extends Command
         return self::SUCCESS;
     }
 
-    private function ensureSizeAttribute($shopId): array
+    /**
+     * Shared helper — this used to key firstOrCreate on a shop_id derived from
+     * the first plant's shop, which minted a second "Size" attribute and doubled
+     * the size chips on every affected product page.
+     */
+    private function ensureSizeAttribute(): array
     {
-        $attr = Attribute::firstOrCreate(
-            ['slug' => 'size', 'language' => 'en', 'shop_id' => $shopId],
-            ['name' => 'Size']
-        );
-        $ids = [];
-        foreach (self::SIZES as $size) {
-            $ids[$size] = AttributeValue::firstOrCreate(
-                ['attribute_id' => $attr->id, 'value' => $size, 'language' => 'en'],
-                ['slug' => Str::slug($size), 'meta' => null]
-            )->id;
-        }
-        return $ids;
+        return sizeValueIds(self::SIZES);
     }
 
     /** Split stock across sizes, preserving the total (each ≥ 1). */

@@ -190,4 +190,56 @@ if (!function_exists('gateway_path')) {
             return $formatter->formatCurrency($amount, $currency);
         }
     }
+
+    if (!function_exists('sizeValueIds')) {
+        /**
+         * The Size attribute's value ids, keyed by size name — the ONE place that
+         * resolves them.
+         *
+         * Four copies of this used to live in the size-pricing commands and the pot
+         * seeder, each keying firstOrCreate on a differently-derived `shop_id`. A
+         * differing shop_id minted a second attribute named "Size", products ended
+         * up attached to values of both, and product pages rendered the size chips
+         * twice (2026_09_17_100000_merge_duplicate_attributes cleaned that up).
+         *
+         * Attributes are GLOBAL in the single-shop model (2026_07_12_000200 nulls
+         * shop_id), so shop_id is a create-time default here and never a lookup key.
+         *
+         * @param  array<int, string> $sizes
+         * @return array<string, int> size name => attribute_value_id
+         */
+        function sizeValueIds(array $sizes): array
+        {
+            $attribute = \Marvel\Database\Models\Attribute::firstOrCreate(
+                ['slug' => 'size', 'language' => 'en'],
+                ['name' => 'Size', 'shop_id' => null]
+            );
+
+            $ids = [];
+            foreach ($sizes as $size) {
+                $ids[$size] = (int) \Marvel\Database\Models\AttributeValue::firstOrCreate(
+                    ['attribute_id' => $attribute->id, 'value' => $size, 'language' => 'en'],
+                    ['slug' => Str::slug($size), 'meta' => null]
+                )->id;
+            }
+
+            return $ids;
+        }
+    }
+
+    if (!function_exists('allSizeValueIds')) {
+        /**
+         * Every value id under the Size attribute — for detaching stale sizes
+         * before re-attaching the current set.
+         *
+         * @return array<int, int>
+         */
+        function allSizeValueIds(): array
+        {
+            return \Marvel\Database\Models\AttributeValue::whereHas(
+                'attribute',
+                fn ($q) => $q->where('slug', 'size')->where('language', 'en')
+            )->pluck('id')->map(fn ($id) => (int) $id)->all();
+        }
+    }
 }

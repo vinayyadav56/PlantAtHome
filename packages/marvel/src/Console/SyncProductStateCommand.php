@@ -8,8 +8,6 @@ use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
-use Marvel\Database\Models\Attribute;
-use Marvel\Database\Models\AttributeValue;
 use Marvel\Database\Models\Product;
 
 /**
@@ -247,7 +245,7 @@ class SyncProductStateCommand extends Command
             ]);
         }
 
-        // Attach the Size attribute values the variants use (per shop, like size-price-prod).
+        // Attach the Size attribute values the variants use.
         $sizes = [];
         foreach ($want['variants'] ?? [] as $v) {
             foreach ($this->normOptions($v['options'] ?? []) as $o) {
@@ -257,9 +255,13 @@ class SyncProductStateCommand extends Command
             }
         }
         if ($sizes) {
-            $ids = [];
-            foreach (array_keys($sizes) as $size) {
-                $ids[] = $this->sizeValueId($p->shop_id, $size);
+            $ids = array_values($this->sizeValueIds(array_keys($sizes)));
+            // Detach first: syncWithoutDetaching alone used to pile the new ids on
+            // top of whatever a previous run had attached, which is how products
+            // ended up carrying six pivot rows for three sizes (doubled chips).
+            $stale = array_diff(allSizeValueIds(), $ids);
+            if ($stale) {
+                $p->variations()->detach($stale);
             }
             $p->variations()->syncWithoutDetaching($ids);
         }
@@ -345,21 +347,22 @@ class SyncProductStateCommand extends Command
         }
     }
 
-    private function sizeValueId($shopId, string $size): int
+    /**
+     * Size value ids, memoised for the run. Resolution itself lives in the
+     * shared helper — this used to key firstOrCreate on the product's shop_id,
+     * so a product from a different shop minted a whole second "Size" attribute.
+     *
+     * @param  array<int, string> $sizes
+     * @return array<string, int>
+     */
+    private function sizeValueIds(array $sizes): array
     {
-        $key = (string) $shopId;
-        if (isset($this->sizeValueIds[$key][$size])) {
-            return $this->sizeValueIds[$key][$size];
+        $missing = array_values(array_diff($sizes, array_keys($this->sizeValueIds)));
+        if ($missing) {
+            $this->sizeValueIds += sizeValueIds($missing);
         }
-        $attr = Attribute::firstOrCreate(
-            ['slug' => 'size', 'language' => 'en', 'shop_id' => $shopId],
-            ['name' => 'Size']
-        );
-        $id = AttributeValue::firstOrCreate(
-            ['attribute_id' => $attr->id, 'value' => $size, 'language' => 'en'],
-            ['slug' => Str::slug($size), 'meta' => null]
-        )->id;
-        return $this->sizeValueIds[$key][$size] = $id;
+
+        return array_intersect_key($this->sizeValueIds, array_flip($sizes));
     }
 
     private function same($a, $b, string $col): bool

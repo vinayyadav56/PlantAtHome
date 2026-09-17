@@ -83,6 +83,10 @@ class ProductCreateRequest extends FormRequest
             'pickup_locations'             => ['array'],
             'digital_file'                 => ['array'],
             'variations'                   => ['array'],
+            // `distinct` because storeProduct attaches these straight through:
+            // a repeated id would hit the pivot's unique index as a 500 instead
+            // of a validation error (and used to silently double the size chips).
+            'variations.*'                 => ['distinct'],
             'variation_options'            => ['array'],
             'quantity'                     => ['nullable', 'integer'],
             'unit'                         => ['required', 'string'],

@@ -5,6 +5,7 @@ namespace Marvel\Http\Requests;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Validation\Rule;
 
 
 class AttributeRequest extends FormRequest
@@ -27,7 +28,17 @@ class AttributeRequest extends FormRequest
     public function rules()
     {
         return [
-            'name'        => ['required', 'string'],
+            // Unique per language: the storefront groups a product's chips by
+            // attribute, so two attributes named "Size" render one heading with
+            // every value listed twice. Slug uniqueness is not enough — the
+            // slugifier suffixes collisions (`size-zLh`), leaving the names equal.
+            'name'        => [
+                'required',
+                'string',
+                Rule::unique('attributes', 'name')
+                    ->where(fn ($q) => $q->where('language', $this->input('language', 'en')))
+                    ->ignore($this->route('attribute')),
+            ],
             'slug'        => ['nullable', 'string'],
             'shop_id'     => ['required', 'exists:Marvel\Database\Models\Shop,id'],
             'values'      => ['array'],
