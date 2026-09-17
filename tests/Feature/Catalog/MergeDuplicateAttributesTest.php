@@ -116,6 +116,28 @@ class MergeDuplicateAttributesTest extends TestCase
         $this->assertSame(0, $orphans);
     }
 
+    /**
+     * The guards are the reason this can't come back, so assert they land.
+     * Schema::hasIndex() is Laravel 11+ and this app is on 10.x, hence the
+     * driver-level check in the migration (and here).
+     *
+     * @test
+     */
+    public function it_adds_the_unique_indexes_that_make_the_doubling_unrepresentable(): void
+    {
+        $this->runMigration();
+
+        $this->assertTrue($this->indexExists('attribute_product', 'attribute_product_product_value_unique'));
+        $this->assertTrue($this->indexExists('attributes', 'attributes_slug_language_unique'));
+
+        // And the pivot index really does reject a second identical link.
+        $this->expectException(\Illuminate\Database\QueryException::class);
+        DB::table('attribute_product')->insert([
+            ['product_id' => 1, 'attribute_value_id' => 38],
+            ['product_id' => 1, 'attribute_value_id' => 38],
+        ]);
+    }
+
     /** @test */
     public function it_records_what_it_removed_and_busts_the_product_cache(): void
     {
@@ -197,6 +219,17 @@ class MergeDuplicateAttributesTest extends TestCase
     {
         $path = base_path('packages/marvel/database/migrations/2026_09_17_100000_merge_duplicate_attributes.php');
         (require $path)->up();
+    }
+
+    private function indexExists(string $table, string $index): bool
+    {
+        foreach (DB::select("PRAGMA index_list(\"{$table}\")") as $row) {
+            if (($row->name ?? null) === $index) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function pivotCount(int $productId): int

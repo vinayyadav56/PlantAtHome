@@ -323,12 +323,42 @@ return new class extends Migration
             ->exists();
     }
 
+    /**
+     * Schema::hasIndex() only arrived in Laravel 11 and this is 10.x, so ask the
+     * driver directly rather than letting a duplicate-index exception be the
+     * control flow.
+     */
     private function hasIndex(string $table, string $index): bool
     {
         try {
-            return Schema::hasIndex($table, $index);
+            $connection = Schema::getConnection();
+            $driver = $connection->getDriverName();
+
+            if ($driver === 'sqlite') {
+                foreach ($connection->select("PRAGMA index_list(\"{$table}\")") as $row) {
+                    if (($row->name ?? null) === $index) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            if ($driver === 'mysql' || $driver === 'mariadb') {
+                return (bool) $connection->selectOne(
+                    'SELECT 1 AS found FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ? LIMIT 1',
+                    [$table, $index]
+                );
+            }
+
+            // pgsql and anything else
+            return (bool) $connection->selectOne(
+                'SELECT 1 AS found FROM pg_indexes WHERE tablename = ? AND indexname = ? LIMIT 1',
+                [$table, $index]
+            );
         } catch (\Throwable $e) {
-            return false;
+            // Unknown driver or a locked-down information schema: report "present"
+            // so the migration skips the DDL rather than throwing at it blindly.
+            return true;
         }
     }
 
