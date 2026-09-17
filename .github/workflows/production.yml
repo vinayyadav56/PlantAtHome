@@ -302,12 +302,16 @@ jobs:
               sudo systemctl reload nginx && echo "nginx reloaded with gzip"
               # Prove it rather than imply it: ask the origin directly, bypassing
               # the CDN, and say so in the deploy log either way.
+              # /api/types, NOT /api/health: health is 51 bytes, well under
+              # gzip_min_length 1024, so nginx correctly refuses to compress it
+              # and the check reported a false failure. types is ~4 KB of JSON.
+              # Host header + 127.0.0.1 so this measures the ORIGIN, not Cloudflare.
               if curl -s -o /dev/null -D- --max-time 10 -H 'Accept-Encoding: gzip' \
-                   -H 'Host: api.plantathome.in' http://127.0.0.1/api/health \
+                   -H 'Host: api.plantathome.in' http://127.0.0.1/api/types \
                    | grep -qi '^content-encoding:.*gzip'; then
-                echo "    verified: origin gzips /api/health"
+                echo "    verified: origin gzips /api/types"
               else
-                echo "    WARNING: origin did NOT gzip /api/health — check for a server-block override"
+                echo "    WARNING: origin did NOT gzip /api/types — check for a server-block override"
               fi
             else
               echo "WARNING: nginx config test failed — removing the gzip fragment and leaving nginx untouched"
