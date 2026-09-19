@@ -1,0 +1,83 @@
+name: Set MSG91_AUTH_KEY (prod)
+
+# One-shot: writes the account's MSG91 auth key onto the prod EC2 API .env,
+# reloads config, restarts queue workers, and reports back which OTHER
+# MSG91_* vars are already present (names only) plus a live re-test of
+# /api/send-otp-code so we know immediately whether this alone fixed it.
+#
+# Mirrors set-openai-key.yml's box-side mechanism. Manual only.
+# Requires secrets: MSG91_AUTH_KEY, EC2_SSH_KEY, EC2_HOST, EC2_USER,
+# AWS_* + AWS_EC2_SG_ID (port-22 window, same as the production deploy).
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  set-key:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open port 22 for this runner
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          RUNNER_IP=$(curl -s ifconfig.me/ip)
+          echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_ENV
+          aws ec2 authorize-security-group-ingress \
+            --group-id ${{ secrets.AWS_EC2_SG_ID }} \
+            --protocol tcp --port 22 --cidr "${RUNNER_IP}/32" \
+            --region ${{ secrets.AWS_REGION }} || true
+
+      - name: Set MSG91_AUTH_KEY on prod EC2 .env, report config + logs
+        uses: appleboy/ssh-action@v1.2.5
+        env:
+          MSG91_KEY: ${{ secrets.MSG91_AUTH_KEY }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: MSG91_KEY
+          script: |
+            set -e
+            cd /var/www/plantathome/api
+            if sudo grep -q '^MSG91_AUTH_KEY=' .env; then
+              sudo sed -i "s|^MSG91_AUTH_KEY=.*|MSG91_AUTH_KEY=${MSG91_KEY}|" .env
+            else
+              echo "MSG91_AUTH_KEY=${MSG91_KEY}" | sudo tee -a .env >/dev/null
+            fi
+            sudo -u www-data /usr/bin/php artisan config:clear >/dev/null
+            sudo -u www-data /usr/bin/php artisan config:cache >/dev/null
+            # OTP send itself is synchronous (php-fpm), but order/refund SMS via
+            # notify_gateway can run through a queued listener — restart so any
+            # long-running worker picks up the new key too.
+            sudo -u www-data /usr/bin/php artisan queue:restart >/dev/null
+
+            echo "── MSG91_* keys present in .env (names only) ──"
+            sudo grep -oE '^MSG91_[A-Z_]+' .env | sort -u || echo "(none found)"
+
+            echo
+            echo "── last 15 min of otp/msg91-related log lines ──"
+            sudo find storage/logs -name '*.log' -newermt '-15 minutes' -exec \
+              grep -niE 'otp\.|msg91|OTP_GATEWAY|OTP_SEND' {} + 2>/dev/null | tail -60 || true
+
+      - name: Close port 22
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id ${{ secrets.AWS_EC2_SG_ID }} \
+            --protocol tcp --port 22 --cidr "${RUNNER_IP}/32" \
+            --region ${{ secrets.AWS_REGION }} || true
+
+      - name: Live re-test /api/send-otp-code (sms channel)
+        if: always()
+        run: |
+          echo "Result AFTER patch:"
+          curl -sS -w "\nHTTP:%{http_code}  time:%{time_total}s\n" -X POST \
+            https://api.plantathome.in/api/send-otp-code \
+            -H "Content-Type: application/json" -H "Accept: application/json" \
+            -d '{"phone_number":"+911111111111","channel":"sms"}' || true
