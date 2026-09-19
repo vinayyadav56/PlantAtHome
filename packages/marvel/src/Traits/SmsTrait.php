@@ -36,13 +36,8 @@ trait SmsTrait
             }
 
             if ($userType['admin'] == true) {
-
-                $adminList = $this->adminList();
-
-
-                foreach ($adminList as $admin) {
-                    $adminProfile = $admin->profile;
-                    if ($adminProfile) $this->deliverSms($smsGateway, $adminProfile->contact, $smsArray['adminMessage'], 'refund.admin');
+                foreach ($this->ownerNotifyContacts($smsArray['language'] ?? DEFAULT_LANGUAGE) as $contact) {
+                    $this->deliverSms($smsGateway, $contact, $smsArray['adminMessage'], 'refund.admin');
                 }
             }
         } catch (Exception $e) {
@@ -100,13 +95,10 @@ trait SmsTrait
                 }
             }
             if ($userType['admin']) {
-
-                $adminList = $this->adminList();
-
-
-                foreach ($adminList as $admin) {
-                    $adminProfile = $admin->profile;
-                    if ($adminProfile) $this->deliverSms($smsGateway, $adminProfile->contact, $smsArray['adminMessage'], 'order.admin');
+                // One configurable destination, falling back to every
+                // super-admin's profile contact when none is set.
+                foreach ($this->ownerNotifyContacts($smsArray['language'] ?? DEFAULT_LANGUAGE) as $contact) {
+                    $this->deliverSms($smsGateway, $contact, $smsArray['adminMessage'], 'order.admin');
                 }
             }
             if ($userType['vendor']) {
@@ -187,6 +179,52 @@ trait SmsTrait
     public function adminList(): Collection
     {
         return User::permission(Permission::SUPER_ADMIN)->get();
+    }
+
+    /**
+     * Where owner alerts (new order, new signup) should actually go.
+     *
+     * Historically this was "every super-admin's profile contact", which is
+     * neither configurable nor predictable — add a second super-admin and the
+     * owner silently starts sharing their alerts. A number set at
+     * Settings -> Events -> "Owner notification number" wins outright; with
+     * nothing set the old behaviour is preserved exactly, so this is safe to
+     * deploy before anyone fills the field in.
+     *
+     * WhatsappGateway::normalize() accepts any format and prefixes 91 for a
+     * bare 10-digit number, so no canonicalisation is needed here.
+     *
+     * @return string[]
+     */
+    public function ownerNotifyContacts(string $language = DEFAULT_LANGUAGE): array
+    {
+        try {
+            $settings = Settings::getData($language);
+            $configured = trim((string) ($settings->options['ownerNotify']['number'] ?? ''));
+        } catch (\Throwable $e) {
+            $configured = '';
+        }
+
+        if ($configured !== '') {
+            return [$configured];
+        }
+
+        return $this->adminList()
+            ->map(fn ($admin) => $admin->profile->contact ?? null)
+            ->filter()
+            ->unique()
+            ->values()
+            ->all();
+    }
+
+    /**
+     * Is this owner alert switched on? Reuses the same settings matrix the
+     * order toggles already live in, so the admin's notification-events form
+     * renders it with no new UI plumbing.
+     */
+    public function ownerAlertEnabled(string $eventName, string $language = DEFAULT_LANGUAGE): bool
+    {
+        return (bool) ($this->getWhichUserWillGetSms($eventName, $language)['admin'] ?? false);
     }
 
     public function getWhichUserWillGetEmail($emailEventName, $language): array

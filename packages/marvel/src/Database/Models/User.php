@@ -95,6 +95,26 @@ class User extends Authenticatable implements MustVerifyEmail
                 }
             }
         });
+
+        // Owner alert on a new signup. Hung off the model rather than the three
+        // controllers that create customers (register, social login, OTP login)
+        // because that is the one place all of them pass through — and because
+        // no usable event exists: `Registered` is gated behind
+        // useMustVerifyEmail, which production has switched off.
+        //
+        // The job re-reads the user and gates on the customer role. It has to:
+        // this hook runs BEFORE givePermissionTo() does, so nothing useful is
+        // knowable here yet. Dispatch must never break a signup.
+        static::created(function (User $user) {
+            try {
+                \Marvel\Jobs\NotifyOwnerOfSignup::dispatch($user->id)->afterCommit();
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('sms.customer_signup.dispatch_failed', [
+                    'user_id' => $user->id,
+                    'error'   => $e->getMessage(),
+                ]);
+            }
+        });
     }
 
     public function getEmailVerifiedAttribute(): bool

@@ -3,6 +3,14 @@
 // every string must read as a complete, clean sentence on its own. Keep the
 // :PLACEHOLDER tokens exactly as-is — OrderSmsTrait/SmsTrait substitute them.
 return [
+    // Owner alerts. One line, one WhatsApp template variable — the gateway
+    // flattens newlines because Meta rejects them in body parameters.
+    'owner' => [
+        'customerSignup' => [
+            'message' => 'New signup on PlantAtHome: :NAME (:CONTACT).',
+            'subject' => 'New customer signed up',
+        ],
+    ],
     'order' => [
         'cancelOrder'         => [
             'admin'      => [

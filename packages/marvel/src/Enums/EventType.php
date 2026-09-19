@@ -24,4 +24,11 @@ final class EventType extends Enum
     public const QUESTION_CREATED      = 'createQuestion';
     public const REVIEW_CREATED        = 'createReview';
 
+    /**
+     * A real customer signed up. Named to slot straight into the existing
+     * settings matrix (settings.options.smsEvent.admin.customerSignup), so the
+     * toggle needs no new plumbing in getWhichUserWillGetEventSmsOrEmail().
+     */
+    public const CUSTOMER_REGISTERED   = 'customerSignup';
+
 }
