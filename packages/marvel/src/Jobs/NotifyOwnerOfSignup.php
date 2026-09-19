@@ -9,6 +9,7 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use Marvel\Database\Models\Settings;
 use Marvel\Database\Models\User;
 use Marvel\Enums\EventType;
 use Marvel\Enums\Permission;
@@ -37,6 +38,30 @@ class NotifyOwnerOfSignup implements ShouldQueue
     use Dispatchable, InteractsWithQueue, Queueable, SerializesModels, SmsTrait;
 
     public int $tries = 3;
+
+    /**
+     * Is the owner signup alert switched on at all?
+     *
+     * Checked BEFORE dispatch as well as inside handle(). User::created fires
+     * for every row anything creates — seeders, factories, admin tooling — so
+     * dispatching unconditionally put a job on the queue for all of them. Tests
+     * that assert nothing was pushed are the visible symptom; a queue full of
+     * jobs that immediately return is the real cost.
+     *
+     * Reads the same settings matrix as the order toggles. Never throws: a
+     * missing settings row must not break user creation.
+     */
+    public static function isEnabled(): bool
+    {
+        try {
+            $settings = Settings::getData(DEFAULT_LANGUAGE);
+            $options = $settings->options ?? [];
+
+            return (bool) ($options['smsEvent']['admin'][EventType::CUSTOMER_REGISTERED] ?? false);
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
 
     public function __construct(public int $userId)
     {

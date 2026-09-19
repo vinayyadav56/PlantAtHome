@@ -107,6 +107,12 @@ class User extends Authenticatable implements MustVerifyEmail
         // knowable here yet. Dispatch must never break a signup.
         static::created(function (User $user) {
             try {
+                // Gate BEFORE dispatch: this hook fires for every user anything
+                // creates — seeders, factories, admin tooling — so dispatching
+                // unconditionally queues a job per row that then returns.
+                if (! \Marvel\Jobs\NotifyOwnerOfSignup::isEnabled()) {
+                    return;
+                }
                 \Marvel\Jobs\NotifyOwnerOfSignup::dispatch($user->id)->afterCommit();
             } catch (\Throwable $e) {
                 \Illuminate\Support\Facades\Log::warning('sms.customer_signup.dispatch_failed', [
