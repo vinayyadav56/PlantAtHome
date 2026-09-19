@@ -10,7 +10,20 @@ name: Set MSG91_AUTH_KEY (prod)
 # AWS_* + AWS_EC2_SG_ID (port-22 window, same as the production deploy).
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      template_id:
+        description: "MSG91 OTP template/flow ID (DLT-approved). Leave blank to keep the current value."
+        required: false
+        default: ""
+      sender:
+        description: "MSG91 Sender ID, e.g. PLNTAT. Leave blank to keep the current value."
+        required: false
+        default: ""
+      flow_id:
+        description: "MSG91 Flow ID for non-OTP transactional SMS. Leave blank to keep the current value."
+        required: false
+        default: ""
 
 jobs:
   set-key:
@@ -33,11 +46,16 @@ jobs:
         uses: appleboy/ssh-action@v1.2.5
         env:
           MSG91_KEY: ${{ secrets.MSG91_AUTH_KEY }}
+          # Not secrets: a DLT template id and a 6-char sender id are public
+          # identifiers, so they ride as plain dispatch inputs.
+          MSG91_TEMPLATE_ID_IN: ${{ inputs.template_id }}
+          MSG91_SENDER_IN: ${{ inputs.sender }}
+          MSG91_FLOW_ID_IN: ${{ inputs.flow_id }}
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: MSG91_KEY
+          envs: MSG91_KEY,MSG91_TEMPLATE_ID_IN,MSG91_SENDER_IN,MSG91_FLOW_ID_IN
           script: |
             set -e
             cd /var/www/plantathome/api
@@ -46,6 +64,22 @@ jobs:
             else
               echo "MSG91_AUTH_KEY=${MSG91_KEY}" | sudo tee -a .env >/dev/null
             fi
+            # Optional extras — only written when a value was supplied, so a
+            # bare dispatch never blanks something already configured.
+            set_env () {
+              local k="$1" v="$2"
+              [ -z "$v" ] && return 0
+              if sudo grep -q "^${k}=" .env; then
+                sudo sed -i "s|^${k}=.*|${k}=${v}|" .env
+              else
+                echo "${k}=${v}" | sudo tee -a .env >/dev/null
+              fi
+              echo "set ${k}"
+            }
+            set_env MSG91_TEMPLATE_ID "${MSG91_TEMPLATE_ID_IN}"
+            set_env MSG91_SENDER      "${MSG91_SENDER_IN}"
+            set_env MSG91_FLOW_ID     "${MSG91_FLOW_ID_IN}"
+
             sudo -u www-data /usr/bin/php artisan config:clear >/dev/null
             sudo -u www-data /usr/bin/php artisan config:cache >/dev/null
             # OTP send itself is synchronous (php-fpm), but order/refund SMS via

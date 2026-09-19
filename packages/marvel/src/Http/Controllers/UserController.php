@@ -1064,6 +1064,12 @@ class UserController extends CoreController
                 Log::warning('otp.send_failed', [
                     'provider' => $gatewayName,
                     'phone_suffix' => substr(preg_replace('/\D+/', '', (string) $phoneNumber), -4),
+                    // The gateway's OWN reason ("template_id missing", a provider
+                    // error code) used to be dropped here, so the only signal left
+                    // was a bare 502 — and Cloudflare replaces a 5xx body with its
+                    // own error page, so from outside the box it looked like the
+                    // worker had crashed. Never discard the reason.
+                    'errors' => method_exists($sendOtpCode, 'getErrors') ? $sendOtpCode->getErrors() : null,
                 ]);
                 return response()->json([
                     'message' => OTP_SEND_FAIL,
