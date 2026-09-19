@@ -1,0 +1,96 @@
+name: Enable Ask AI (prod)
+
+# One-shot. Two things production was missing for the per-plant "Ask AI" chat:
+#
+#   1. AI_CHAT_SERVICE_API_KEY in the API .env. Without it AiChatController's
+#      persist() compares against an empty string and 401s every callback, so
+#      transcripts are never stored — verified live: the correct shared key and
+#      a deliberately wrong one both returned 401.
+#   2. ai_chat_settings.enabled, which production has had false since launch.
+#
+# Run this only AFTER the storefront carries CHATBOT_SERVICE_URL/_API_KEY,
+# otherwise the toggle publishes a pill whose chat answers 503.
+#
+# `enable` is separate from the key write so the flag can be flipped back
+# without touching credentials.
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable:
+        description: 'Set the Ask AI feature flag'
+        required: true
+        default: 'true'
+        type: choice
+        options: ['true', 'false']
+
+jobs:
+  enable:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Open port 22 for this runner
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          RUNNER_IP=$(curl -s ifconfig.me/ip)
+          echo "RUNNER_IP=$RUNNER_IP" >> $GITHUB_ENV
+          aws ec2 authorize-security-group-ingress \
+            --group-id ${{ secrets.AWS_EC2_SG_ID }} \
+            --protocol tcp --port 22 --cidr "${RUNNER_IP}/32" \
+            --region ${{ secrets.AWS_REGION }} || true
+
+      - name: Set the service key and the feature flag
+        uses: appleboy/ssh-action@v1.2.5
+        env:
+          AI_CHAT_KEY: ${{ secrets.AI_CHAT_SERVICE_API_KEY }}
+          WANT_ENABLED: ${{ inputs.enable }}
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: AI_CHAT_KEY,WANT_ENABLED
+          script: |
+            set -e
+            cd /var/www/plantathome/api
+            if sudo grep -q '^AI_CHAT_SERVICE_API_KEY=' .env; then
+              sudo sed -i "s|^AI_CHAT_SERVICE_API_KEY=.*|AI_CHAT_SERVICE_API_KEY=${AI_CHAT_KEY}|" .env
+            else
+              echo "AI_CHAT_SERVICE_API_KEY=${AI_CHAT_KEY}" | sudo tee -a .env >/dev/null
+            fi
+            sudo -u www-data /usr/bin/php artisan config:clear >/dev/null
+            sudo -u www-data /usr/bin/php artisan config:cache >/dev/null
+            sudo -u www-data /usr/bin/php artisan queue:restart >/dev/null
+
+            echo "── flipping the feature flag ──"
+            sudo -u www-data /usr/bin/php artisan tinker --execute='
+              $want = filter_var(getenv("WANT_ENABLED") ?: "true", FILTER_VALIDATE_BOOLEAN);
+              $row = \Marvel\Database\Models\AiChatSetting::first();
+              if (! $row) { $row = \Marvel\Database\Models\AiChatSetting::create(["enabled" => $want]); }
+              else { $row->update(["enabled" => $want]); }
+              echo "ai_chat_settings.enabled = ", var_export((bool) $row->fresh()->enabled, true), PHP_EOL;
+            ' 2>&1 | tail -5
+
+            echo "── AI_CHAT_* keys now in .env (names only) ──"
+            sudo grep -oE '^AI_CHAT_[A-Z_]+' .env | sort -u || echo "(none)"
+
+      - name: Close port 22
+        if: always()
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          aws ec2 revoke-security-group-ingress \
+            --group-id ${{ secrets.AWS_EC2_SG_ID }} \
+            --protocol tcp --port 22 --cidr "${RUNNER_IP}/32" \
+            --region ${{ secrets.AWS_REGION }} || true
+
+      - name: Verify from outside
+        if: always()
+        run: |
+          echo "feature flag:"; curl -s https://api.plantathome.in/api/ai-chat/settings; echo
+          echo "persist auth (401 = key still missing, 422 = key accepted):"
+          curl -s -o /dev/null -w "%{http_code}\n" -X POST https://api.plantathome.in/api/ai-chat/persist \
+            -H "Content-Type: application/json" -H "X-Api-Key: ${{ secrets.AI_CHAT_SERVICE_API_KEY }}" -d '{}'
