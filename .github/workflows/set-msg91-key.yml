@@ -57,9 +57,36 @@ jobs:
             sudo grep -oE '^MSG91_[A-Z_]+' .env | sort -u || echo "(none found)"
 
             echo
-            echo "── last 15 min of otp/msg91-related log lines ──"
+            echo "── does the gateway class exist on the box? ──"
+            ls -l packages/marvel/src/Otp/Gateways/Msg91Gateway.php 2>&1 || echo "MISSING"
+            sudo -u www-data /usr/bin/php -r 'require "vendor/autoload.php"; var_dump(class_exists("Marvel\\Otp\\Gateways\\Msg91Gateway"));' 2>&1 | tail -3
+
+            echo
+            echo "── exercise the real send path in-process (no HTTP layer) ──"
+            # This is the diagnostic that matters: if the HTTP request dies as a
+            # raw 502 but this prints a clean Result, the fault is the fpm worker,
+            # not the gateway code.
+            sudo -u www-data /usr/bin/php artisan tinker --execute='
+              try {
+                  $g = new \Marvel\Otp\Gateways\Msg91Gateway();
+                  $r = $g->startVerification("+919999999999");
+                  echo "RESULT valid=", var_export($r->isValid(), true), " errors=", json_encode($r->getErrors()), PHP_EOL;
+              } catch (\Throwable $e) {
+                  echo "THROWN: ", get_class($e), ": ", $e->getMessage(), PHP_EOL;
+              }' 2>&1 | tail -15
+
+            echo
+            echo "── nginx errors mentioning 502 / upstream (last 40) ──"
+            sudo tail -200 /var/log/nginx/error.log 2>/dev/null | grep -iE "upstream|502|SIGSEGV|exited on signal" | tail -40 || echo "(none)"
+
+            echo
+            echo "── php-fpm log (last 40) ──"
+            sudo tail -40 /var/log/php8.1-fpm.log 2>/dev/null || echo "(none)"
+
+            echo
+            echo "── last 15 min of otp/msg91-related laravel log lines ──"
             sudo find storage/logs -name '*.log' -newermt '-15 minutes' -exec \
-              grep -niE 'otp\.|msg91|OTP_GATEWAY|OTP_SEND' {} + 2>/dev/null | tail -60 || true
+              grep -niE 'otp\.|msg91|OTP_GATEWAY|OTP_SEND' {} + 2>/dev/null | tail -40 || true
 
       - name: Close port 22
         if: always()
