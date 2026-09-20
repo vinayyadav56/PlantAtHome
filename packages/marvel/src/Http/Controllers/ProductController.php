@@ -801,6 +801,7 @@ class ProductController extends CoreController
             if (!$cacheable) {
                 $product = $this->fetchSingleProduct($request);
                 $data = (new GetSingleProductResource($product))->response()->getData(true);
+                $data = $this->attachTaxConfig($data, $product, $request);
                 $data = $this->attachCityPricing($data, $request);
                 $data = $this->attachAvailability($data, $request);
                 return response()->json($data);
@@ -830,6 +831,36 @@ class ProductController extends CoreController
      * error ⇒ no block, never throws). The storefront reads it to gate
      * add-to-cart + show the maintenance message.
      */
+    /**
+     * GST configuration, for the admin product form only.
+     *
+     * The edit form prefills from this payload and submits every field it registered,
+     * so a field this endpoint does not return comes back EMPTY and overwrites the
+     * stored value: opening and saving any product silently nulled `tax_rate_id`,
+     * blanked `hsn_code` and cleared the CA's `tax_verified` tick.
+     *
+     * Deliberately NOT in GetSingleProductResource — that payload is the public PDP
+     * (cached 300s, edge-cached), which needs none of this and should not carry an
+     * internal compliance flag. Staff always miss that cache (they carry a token),
+     * so this runs on the live branch only. Same post-resource seam as
+     * attachCityPricing/attachAvailability.
+     */
+    private function attachTaxConfig(array $data, $product, Request $request): array
+    {
+        try {
+            if (!$this->isCatalogStaff($request)) {
+                return $data;
+            }
+            $root = isset($data['data']['id']) ? 'data.' : '';
+            foreach (['hsn_code', 'tax_rate_id', 'tax_inclusive', 'tax_verified'] as $field) {
+                \Illuminate\Support\Arr::set($data, $root . $field, $product->{$field} ?? null);
+            }
+        } catch (\Throwable $e) {
+            // fail open: the form simply keeps today's behaviour
+        }
+        return $data;
+    }
+
     /**
      * Rewrite a PDP payload's prices to the customer's CITY prices.
      *
