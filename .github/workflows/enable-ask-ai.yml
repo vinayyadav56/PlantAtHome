@@ -63,14 +63,24 @@ jobs:
             sudo -u www-data /usr/bin/php artisan config:cache >/dev/null
             sudo -u www-data /usr/bin/php artisan queue:restart >/dev/null
 
+            echo "── which AI service keys does .env carry? (names only) ──"
+            sudo grep -oE '^(AI_CHAT|PLANT_DOCTOR|CARE_PLAN)_[A-Z_]+' .env | sort -u || echo "(none)"
+
+            echo
             echo "── flipping the feature flag ──"
-            sudo -u www-data /usr/bin/php artisan tinker --execute='
+            # `env HOME=/tmp`: tinker boots psysh, which writes a config dir under
+            # $HOME. sudo drops the environment, so HOME stayed /var/www — not
+            # writable by www-data — and every tinker call died with
+            # "Writing to directory /var/www/.config/psysh is not allowed."
+            # The step still went green because the error was swallowed by a pipe.
+            sudo -u www-data env HOME=/tmp /usr/bin/php artisan tinker --execute='
               $want = filter_var(getenv("WANT_ENABLED") ?: "true", FILTER_VALIDATE_BOOLEAN);
               $row = \Marvel\Database\Models\AiChatSetting::first();
               if (! $row) { $row = \Marvel\Database\Models\AiChatSetting::create(["enabled" => $want]); }
               else { $row->update(["enabled" => $want]); }
               echo "ai_chat_settings.enabled = ", var_export((bool) $row->fresh()->enabled, true), PHP_EOL;
             ' 2>&1 | tail -5
+            test "${PIPESTATUS[0]}" -eq 0 || { echo "tinker failed"; exit 1; }
 
             echo "── AI_CHAT_* keys now in .env (names only) ──"
             sudo grep -oE '^AI_CHAT_[A-Z_]+' .env | sort -u || echo "(none)"

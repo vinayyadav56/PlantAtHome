@@ -25,6 +25,20 @@ return [
     |
     */
     'kyc' => [
+        /*
+         * Master switch for the whole vendor-paperwork policy. OFF by owner
+         * decision: documents are not required to approve a vendor for now.
+         *
+         * It gates BOTH halves deliberately. Turning off only the approve gate
+         * would let a vendor go live and then be put on hold weeks later by the
+         * nightly sweep, for documents we had just stopped asking for — the
+         * approve screen and the sweep have to agree about whether paperwork
+         * is required at all.
+         *
+         * Set VENDOR_KYC_ENFORCE=true to bring the gate and the clock back;
+         * nothing else has to change, and existing deadlines are untouched.
+         */
+        'enforce'          => filter_var(env('VENDOR_KYC_ENFORCE', false), FILTER_VALIDATE_BOOLEAN),
         'window_days'      => (int) env('VENDOR_KYC_WINDOW_DAYS', 15),
         'warn_before_days' => (int) env('VENDOR_KYC_WARN_BEFORE_DAYS', 3),
     ],

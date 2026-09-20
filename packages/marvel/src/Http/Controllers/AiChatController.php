@@ -77,7 +77,7 @@ class AiChatController extends CoreController
             return response()->json(['message' => 'Ask AI is currently unavailable.'], 503);
         }
         $serviceUrl = rtrim((string) $this->integrations()->config('ai_chat', 'service_url', env('CHATBOT_SERVICE_URL')), '/');
-        $serviceKey = $this->integrations()->secret('ai_chat', 'service_api_key', (string) env('AI_CHAT_SERVICE_API_KEY'));
+        $serviceKey = $this->integrations()->secret('ai_chat', 'service_api_key', (string) config('services.ai_chat.service_api_key'));
         if (empty($serviceUrl)) {
             return response()->json(['message' => 'Ask AI service is not configured.'], 503);
         }
@@ -117,7 +117,7 @@ class AiChatController extends CoreController
     public function end(Request $request): JsonResponse
     {
         $serviceUrl = rtrim((string) $this->integrations()->config('ai_chat', 'service_url', env('CHATBOT_SERVICE_URL')), '/');
-        $serviceKey = $this->integrations()->secret('ai_chat', 'service_api_key', (string) env('AI_CHAT_SERVICE_API_KEY'));
+        $serviceKey = $this->integrations()->secret('ai_chat', 'service_api_key', (string) config('services.ai_chat.service_api_key'));
         $conversationId = $request->input('conversation_id');
         if ($serviceUrl && $conversationId) {
             try {
@@ -138,7 +138,7 @@ class AiChatController extends CoreController
      */
     public function persist(Request $request): JsonResponse
     {
-        $expected = $this->integrations()->secret('ai_chat', 'service_api_key', (string) env('AI_CHAT_SERVICE_API_KEY'));
+        $expected = $this->integrations()->secret('ai_chat', 'service_api_key', (string) config('services.ai_chat.service_api_key'));
         // hash_equals: this compares an attacker-supplied header against a secret, so the
         // comparison itself must not leak length or prefix through timing.
         if (empty($expected) || !hash_equals($expected, (string) $request->header('X-Api-Key'))) {

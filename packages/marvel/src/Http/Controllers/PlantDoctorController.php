@@ -91,8 +91,8 @@ class PlantDoctorController extends CoreController
         // Resolved through the Integration module (integration_providers → this feature's table →
         // env), so a rotated key is an admin action rather than a redeploy.
         $integrations = app(\Marvel\Integrations\IntegrationService::class);
-        $serviceUrl = rtrim((string) $integrations->config('plant_doctor', 'service_url', env('PLANT_DOCTOR_SERVICE_URL')), '/');
-        $serviceKey = $integrations->secret('plant_doctor', 'service_api_key', (string) env('PLANT_DOCTOR_SERVICE_API_KEY'));
+        $serviceUrl = rtrim((string) $integrations->config('plant_doctor', 'service_url', config('services.plant_doctor.service_url')), '/');
+        $serviceKey = $integrations->secret('plant_doctor', 'service_api_key', (string) config('services.plant_doctor.service_api_key'));
         if (empty($serviceUrl)) {
             return response()->json(['message' => 'Plant Doctor service is not configured.'], 503);
         }

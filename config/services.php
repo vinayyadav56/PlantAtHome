@@ -49,6 +49,32 @@ return [
     ],
 
     // PlantAtHome — MSG91 OTP gateway (phone signup). DLT-registered sender + template.
+    /*
+     * The three AI microservices. These live in config, NOT read straight from
+     * env() at the call site, because production runs `artisan config:cache` on
+     * every deploy — and once the config is cached, env() returns NULL for
+     * anything a config file did not already read. Every one of these was being
+     * pulled with a bare env() fallback inside a controller, so the fallback
+     * could never fire on production and each service reported itself as "not
+     * configured" unless its Integrations DB row happened to be filled in.
+     * The Integrations store still takes precedence; this is what makes the
+     * env fallback behind it actually work.
+     */
+    'ai_chat' => [
+        'service_url' => env('AI_CHAT_SERVICE_URL'),
+        'service_api_key' => env('AI_CHAT_SERVICE_API_KEY'),
+    ],
+
+    'plant_doctor' => [
+        'service_url' => env('PLANT_DOCTOR_SERVICE_URL'),
+        'service_api_key' => env('PLANT_DOCTOR_SERVICE_API_KEY'),
+    ],
+
+    'care_plan' => [
+        'service_url' => env('CARE_PLAN_SERVICE_URL'),
+        'service_api_key' => env('CARE_PLAN_SERVICE_API_KEY'),
+    ],
+
     'msg91' => [
         'auth_key' => env('MSG91_AUTH_KEY'),
         'template_id' => env('MSG91_TEMPLATE_ID'),

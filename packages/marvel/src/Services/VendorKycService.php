@@ -28,9 +28,24 @@ class VendorKycService
         'cheque'         => 'Cancelled cheque',
     ];
 
-    /** Which of the required documents this shop is still missing (labels). */
+    /** Is the paperwork policy switched on at all? */
+    public function enforced(): bool
+    {
+        return (bool) config('shop.kyc.enforce', false);
+    }
+
+    /**
+     * Which of the required documents this shop is still missing (labels).
+     *
+     * Returns nothing at all while the policy is off, which is what makes the
+     * approve gate, the deadline clock and the vendor page agree without each
+     * of them having to know about the switch.
+     */
     public function missingDocuments(Shop $shop): array
     {
+        if (! $this->enforced()) {
+            return [];
+        }
         $documents = data_get($shop->settings, 'documents', []);
         $missing = [];
         foreach (self::REQUIRED_DOCUMENTS as $key => $label) {

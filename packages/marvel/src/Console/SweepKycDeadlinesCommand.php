@@ -30,6 +30,11 @@ class SweepKycDeadlinesCommand extends Command
 
     public function handle(VendorKycService $kyc, EmailService $email): int
     {
+        if (! $kyc->enforced()) {
+            $this->info('Vendor KYC enforcement is off (shop.kyc.enforce) — nothing to warn or hold.');
+            return self::SUCCESS;
+        }
+
         if (!Schema::hasColumn('shops', 'documents_due_at')) {
             $this->warn('shops.documents_due_at missing — migration not applied; nothing to do.');
             return self::SUCCESS;
