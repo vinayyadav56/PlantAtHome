@@ -14,6 +14,8 @@ class OrderPivotRegressionTest extends OrdersTestCase
             // GST snapshot + accounting P3 enrichment that rides on the line for order_items
             'hsn_code' => '0602', 'tax_rate' => 0, 'taxable_value' => 274.8, 'cgst_amount' => 0, 'sgst_amount' => 0, 'igst_amount' => 0, 'tax_amount' => 0,
             'ownership_model' => 'VENDOR_SUPPLIED', 'discount_amount' => 0, 'discount_funded_by' => 'platform', 'delivery_allocation' => 22.09,
+            // per-size delivery + what was bought, added 2026-09-22
+            'delivery_fee' => 200.0, 'product_name' => 'Areca Palm', 'variant_title' => 'Large', 'variant_code' => 'L',
         ]];
         $rows = OrderRepository::pivotRows($lines);
         $this->assertSame(['product_id', 'variation_option_id', 'order_quantity', 'unit_price', 'subtotal'], array_keys($rows[0]));

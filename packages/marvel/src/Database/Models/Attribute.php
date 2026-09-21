@@ -47,7 +47,12 @@ class Attribute extends Model
      */
     public function values(): HasMany
     {
-        return $this->hasMany(AttributeValue::class, 'attribute_id');
+        $relation = $this->hasMany(AttributeValue::class, 'attribute_id');
+
+        // Small -> Medium -> Large, not insertion order.
+        return AttributeValue::hasVariantMaster()
+            ? $relation->orderBy('sort_order')->orderBy('id')
+            : $relation;
     }
 
     /**

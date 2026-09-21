@@ -49,7 +49,31 @@ abstract class TaxTestCase extends TestCase
             $t->boolean('tax_inclusive')->nullable();
             $t->boolean('is_taxable')->default(false);
             $t->boolean('tax_verified')->default(false);
+            $t->decimal('delivery_charge', 10, 2)->nullable();
             $t->softDeletes();
+        });
+        // The variant master: delivery is charged by SIZE, resolved off the
+        // variation option's options JSON.
+        Schema::create('attributes', function ($t) {
+            $t->id();
+            $t->string('slug')->nullable();
+            $t->string('name')->nullable();
+            $t->string('language')->default('en');
+        });
+        Schema::create('attribute_values', function ($t) {
+            $t->id();
+            $t->unsignedBigInteger('attribute_id');
+            $t->string('value')->nullable();
+            $t->string('code', 8)->nullable();
+            $t->integer('sort_order')->default(0);
+            $t->decimal('delivery_charge', 10, 2)->nullable();
+            $t->string('language')->default('en');
+        });
+        Schema::create('variation_options', function ($t) {
+            $t->id();
+            $t->unsignedBigInteger('product_id')->nullable();
+            $t->string('title')->nullable();
+            $t->text('options')->nullable();
         });
         Schema::create('settings', function ($t) {
             $t->id();
@@ -111,6 +135,50 @@ abstract class TaxTestCase extends TestCase
             'unit_price' => $unitPrice,
             'subtotal' => $unitPrice * $qty,
         ];
+    }
+
+    /**
+     * Seed the Size attribute with the owner's charges.
+     *
+     * @return array<string, int> value => attribute_values.id
+     */
+    protected function sizeMaster(array $charges = ['Small' => 100.0, 'Medium' => 150.0, 'Large' => 200.0]): array
+    {
+        $attributeId = DB::table('attributes')->insertGetId(['slug' => 'size', 'name' => 'Size', 'language' => 'en']);
+        $codes = ['Small' => 'S', 'Medium' => 'M', 'Large' => 'L'];
+        $ids = [];
+        $order = 0;
+        foreach ($charges as $value => $charge) {
+            $ids[$value] = DB::table('attribute_values')->insertGetId([
+                'attribute_id' => $attributeId,
+                'value' => $value,
+                'code' => $codes[$value] ?? null,
+                'sort_order' => ++$order,
+                'delivery_charge' => $charge,
+                'language' => 'en',
+            ]);
+        }
+
+        return $ids;
+    }
+
+    /**
+     * A variation option. Pass $valueId for the admin-built shape (options carry
+     * the attribute_values id); leave it null for the seeded shape, which has
+     * only the value text — both exist in production.
+     */
+    protected function variationOption(int $productId, string $size, ?int $valueId = null, string $name = 'Size'): int
+    {
+        $option = ['name' => $name, 'value' => $size];
+        if ($valueId !== null) {
+            $option['id'] = $valueId;
+        }
+
+        return DB::table('variation_options')->insertGetId([
+            'product_id' => $productId,
+            'title' => $size,
+            'options' => json_encode([$option]),
+        ]);
     }
 
     /** Shipping address in a given state. */

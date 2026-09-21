@@ -53,6 +53,11 @@ class GstService
         $sgst = 0.0;
         $igst = 0.0;
         $weightedRateNum = 0.0; // Σ taxable × rate  (for the delivery principal rate)
+        // Same idea, but weighted by what each line actually costs to DELIVER.
+        // Freight follows the goods it carries, and a ₹200 Large parcel of 0%
+        // plants is not taxed by how expensive the 18% pot beside it was.
+        $deliveryWeightedRateNum = 0.0; // Σ line delivery × rate
+        $sumLineDelivery = 0.0;
 
         foreach ($lines as $line) {
             $pid = (int) ($line['product_id'] ?? 0);
@@ -84,6 +89,10 @@ class GstService
             $igst += $lig;
             $weightedRateNum += $taxable * $rate;
 
+            $lineDelivery = Money::round((float) ($line['delivery_fee'] ?? 0));
+            $sumLineDelivery += $lineDelivery;
+            $deliveryWeightedRateNum += $lineDelivery * $rate;
+
             $lineOut[] = [
                 'product_id'          => $pid,
                 'variation_option_id' => $line['variation_option_id'] ?? null,
@@ -99,6 +108,7 @@ class GstService
                 'sgst_amount'         => $lsg,
                 'igst_amount'         => $lig,
                 'tax_amount'          => $tax,
+                'delivery_fee'        => $lineDelivery,
             ];
         }
 
@@ -110,7 +120,12 @@ class GstService
             if ($treatment === 'separate') {
                 $dRate = $this->biz->deliveryGstRate();
             } else { // follow_principal — weighted average of the goods' rates
-                $dRate = $sumTaxable > 0 ? ($weightedRateNum / $sumTaxable) : 0.0;
+                // Weighted by each line's delivery charge when the caller priced
+                // delivery per line; by taxable value otherwise (an older caller,
+                // or a cart where nothing carries a charge).
+                $dRate = $sumLineDelivery > 0
+                    ? ($deliveryWeightedRateNum / $sumLineDelivery)
+                    : ($sumTaxable > 0 ? ($weightedRateNum / $sumTaxable) : 0.0);
             }
         }
         // Delivery follows the store's inclusive preference (the fee the customer sees).

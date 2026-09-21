@@ -153,7 +153,9 @@ class OrderItemService
             foreach (['hsn_code', 'tax_category', 'tax_rate', 'tax_inclusive', 'taxable_value',
                 'cgst_rate', 'sgst_rate', 'igst_rate', 'cgst_amount', 'sgst_amount', 'igst_amount', 'tax_amount',
                 // accounting line snapshot (OrderRepository::mergeLineFinancials)
-                'ownership_model', 'discount_amount', 'discount_funded_by', 'delivery_allocation'] as $c) {
+                'ownership_model', 'discount_amount', 'discount_funded_by', 'delivery_allocation',
+                // what was bought (OrderRepository::mergeLineIdentity)
+                'product_name', 'variant_title', 'variant_code'] as $c) {
                 if (\Illuminate\Support\Facades\Schema::hasColumn('order_items', $c)) {
                     $taxCols[] = $c;
                 }

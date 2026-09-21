@@ -19,6 +19,33 @@ class AttributeValue extends Model
 
     protected $appends = ['translated_languages'];
 
+    protected $casts = [
+        'sort_order'      => 'integer',
+        'delivery_charge' => 'float',
+    ];
+
+    /**
+     * Whether the variant-master columns exist yet.
+     *
+     * Relations order by sort_order, and a deploy runs its migrations after the
+     * new code is already serving — so the ordering has to be asked for only
+     * once the column it names is actually there.
+     */
+    public static function hasVariantMaster(): bool
+    {
+        static $has = null;
+
+        if ($has === null) {
+            try {
+                $has = \Illuminate\Support\Facades\Schema::hasColumn('attribute_values', 'sort_order');
+            } catch (\Throwable $e) {
+                $has = false;
+            }
+        }
+
+        return $has;
+    }
+
 
     public function scopeWithUniqueSlugConstraints(Builder $query, Model $model): Builder
     {

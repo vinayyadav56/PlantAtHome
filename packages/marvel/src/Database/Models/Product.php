@@ -553,7 +553,14 @@ class Product extends Model
      */
     public function variations(): BelongsToMany
     {
-        return $this->belongsToMany(AttributeValue::class, 'attribute_product');
+        $relation = $this->belongsToMany(AttributeValue::class, 'attribute_product');
+
+        // The PDP renders its size chips straight off this relation, which had no
+        // ordering at all — so chips came back in whatever order the pivot rows
+        // were written, and Large could precede Small.
+        return AttributeValue::hasVariantMaster()
+            ? $relation->orderBy('attribute_values.sort_order')->orderBy('attribute_values.id')
+            : $relation;
     }
 
     /**

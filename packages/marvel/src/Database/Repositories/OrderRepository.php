@@ -433,6 +433,11 @@ class OrderRepository extends BaseRepository
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning('line financial snapshot failed', ['error' => $e->getMessage()]);
         }
+        try {
+            $request['products'] = $this->mergeLineIdentity((array) $request['products']);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('line identity snapshot failed', ['error' => $e->getMessage()]);
+        }
         if (($useWalletPoints || $request->isFullWalletPayment) && $user) {
             $wallet = $user->wallet;
             $amount = null;
@@ -775,13 +780,67 @@ class OrderRepository extends BaseRepository
         $weights = array_map(fn ($p) => max(0.0, (float) ($p['subtotal'] ?? 0)), $products);
         $discountParts = \Marvel\Services\Accounting\MoneyBridge::allocate(\Marvel\Services\Accounting\MoneyBridge::toMoney($discount), $weights);
         $deliveryParts = \Marvel\Services\Accounting\MoneyBridge::allocate(\Marvel\Services\Accounting\MoneyBridge::toMoney($deliveryFee), $weights);
+
+        // Delivery is charged per SIZE, so each line's own charge is its true
+        // allocation — but only when the two agree to the paisa. A free-shipping
+        // coupon, the free-delivery threshold and the optimizer's flat fee all
+        // replace the order's fee wholesale, and Σ allocations must still equal
+        // orders.delivery_fee; those fall back to the proportional split.
+        $lineCharges = array_map(fn ($p) => isset($p['delivery_fee']) ? (float) $p['delivery_fee'] : null, $products);
+        $useLineCharges = !in_array(null, $lineCharges, true)
+            && abs(array_sum($lineCharges) - $deliveryFee) < 0.005;
+
         foreach ($products as $i => &$p) {
             $p['ownership_model']     = $ownership[(int) ($p['product_id'] ?? 0)] ?? 'VENDOR_SUPPLIED';
             $p['discount_amount']     = $discountParts[$i]->toDecimal();
             $p['discount_funded_by']  = $fundedBy;
-            $p['delivery_allocation'] = $deliveryParts[$i]->toDecimal();
+            $p['delivery_allocation'] = $useLineCharges
+                ? round((float) $lineCharges[$i], 2)
+                : $deliveryParts[$i]->toDecimal();
         }
         unset($p);
+        return $products;
+    }
+
+    /**
+     * Freeze WHAT was bought onto each line: the product's name, the variant's
+     * title and its stable master code.
+     *
+     * Lines carried ids only, so a rename rewrote history — last year's invoice
+     * silently started describing today's catalogue. Deliberately separate from
+     * mergeLineFinancials: that one allocates money, and a fault looking up a
+     * variant must not take the discount and delivery split down with it.
+     */
+    protected function mergeLineIdentity(array $products): array
+    {
+        if (!$products) {
+            return $products;
+        }
+
+        $productIds = array_values(array_unique(array_map(fn ($p) => (int) ($p['product_id'] ?? 0), $products)));
+        $names = \Illuminate\Support\Facades\DB::table('products')->whereIn('id', $productIds)->pluck('name', 'id')->all();
+
+        $variantIds = array_values(array_filter(array_map(fn ($p) => (int) ($p['variation_option_id'] ?? 0), $products)));
+        $titles = $variantIds
+            ? \Illuminate\Support\Facades\DB::table('variation_options')->whereIn('id', $variantIds)->pluck('title', 'id')->all()
+            : [];
+
+        $sizes = [];
+        try {
+            $sizes = (new \Marvel\Services\VariantResolver())->mapForLines($products);
+        } catch (\Throwable $e) {
+            // a line simply keeps no variant code
+        }
+
+        foreach ($products as &$p) {
+            $pid = (int) ($p['product_id'] ?? 0);
+            $vid = (int) ($p['variation_option_id'] ?? 0);
+            $p['product_name']  = $names[$pid] ?? null;
+            $p['variant_title'] = $vid ? ($titles[$vid] ?? null) : null;
+            $p['variant_code']  = $sizes[$pid . ':' . $vid]->code ?? null;
+        }
+        unset($p);
+
         return $products;
     }
 
@@ -797,8 +856,12 @@ class OrderRepository extends BaseRepository
             if (!$t) {
                 continue;
             }
+            // delivery_fee is not an order_items column — it rides along so
+            // mergeLineFinancials can allocate delivery by what each line actually
+            // costs to ship instead of by its share of the cart's value.
             foreach (['hsn_code', 'tax_category', 'tax_rate', 'tax_inclusive', 'taxable_value',
-                'cgst_rate', 'sgst_rate', 'igst_rate', 'cgst_amount', 'sgst_amount', 'igst_amount', 'tax_amount'] as $f) {
+                'cgst_rate', 'sgst_rate', 'igst_rate', 'cgst_amount', 'sgst_amount', 'igst_amount', 'tax_amount',
+                'delivery_fee'] as $f) {
                 $p[$f] = $t[$f] ?? null;
             }
         }

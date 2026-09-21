@@ -551,7 +551,7 @@ class CheckoutRepository
      */
     public function calculateTax($request, $shipping_charge, $amount)
     {
-        $products = (array) ($request['products'] ?? []);
+        $products = $this->withLineDelivery($request['products'] ?? []);
         $shippingAddress = $request['shipping_address'] ?? ($request['billing_address'] ?? null);
         $addon = (new \Marvel\Services\Tax\GstService())->taxAddon($products, (float) $shipping_charge, is_array($shippingAddress) ? $shippingAddress : null);
         if ($addon > 0) {
@@ -569,7 +569,7 @@ class CheckoutRepository
     /** Full GST breakdown for snapshot/preview. Single source: the GST engine. */
     public function gstBreakdown($request, $shipping_charge): array
     {
-        $products = (array) ($request['products'] ?? []);
+        $products = $this->withLineDelivery($request['products'] ?? []);
         $shippingAddress = $request['shipping_address'] ?? ($request['billing_address'] ?? null);
         return (new \Marvel\Services\Tax\GstService())->compute($products, (float) $shipping_charge, is_array($shippingAddress) ? $shippingAddress : null);
     }
@@ -593,7 +593,7 @@ class CheckoutRepository
             if (!count($physical_products)) {
                 return 0;
             }
-            // PlantAtHome charges delivery PER PRODUCT: Σ qty × product.delivery_charge.
+            // PlantAtHome charges delivery by SIZE: Σ qty × the variant's charge.
             $perProductDelivery = $this->calculatePerProductDelivery($ordered_products);
             if ($perProductDelivery > 0) {
                 return $perProductDelivery;
@@ -613,18 +613,79 @@ class CheckoutRepository
         }
     }
 
-    /** Σ qty × product.delivery_charge across the cart (one query). */
+    /** Σ of the per-line delivery charges across the cart. */
     protected function calculatePerProductDelivery($products): float
     {
+        return round(array_sum($this->perLineDelivery($products)), 2);
+    }
+
+    /**
+     * What each line costs to deliver, keyed "productId:variationOptionId".
+     *
+     * The customer pays by SIZE — Small, Medium and Large each carry their own
+     * charge in the variant master — falling back to the product's own flat
+     * charge for anything with no size (simple products, non-size variants).
+     * Per UNIT, exactly like the per-product charge this replaces: a plant ships
+     * as its own parcel.
+     *
+     * A resolver fault degrades to that per-product charge rather than
+     * propagating: calculateShippingCharge catches everything and returns 0, so
+     * an exception here would quietly hand out free delivery on every order.
+     */
+    public function perLineDelivery($products): array
+    {
+        $products = (array) $products;
         $ids = Arr::pluck($products, 'product_id');
-        $charges = Product::whereIn('id', $ids)->pluck('delivery_charge', 'id');
-        $total = 0.0;
-        foreach ($products as $product) {
-            $qty    = (int) ($product['order_quantity'] ?? 1);
-            $charge = (float) ($charges[$product['product_id']] ?? 0);
-            $total += $charge * max($qty, 1);
+        $productCharges = Product::whereIn('id', $ids)->pluck('delivery_charge', 'id');
+
+        $sizes = [];
+        try {
+            $sizes = (new \Marvel\Services\VariantResolver())->mapForLines($products);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('variant delivery lookup failed; using the per-product charge', ['error' => $e->getMessage()]);
         }
-        return round($total, 2);
+
+        $out = [];
+        foreach ($products as $product) {
+            $pid = (int) ($product['product_id'] ?? 0);
+            $vid = (int) ($product['variation_option_id'] ?? 0);
+            $qty = max((int) ($product['order_quantity'] ?? 1), 1);
+
+            $perUnit = $sizes[$pid . ':' . $vid]->delivery_charge ?? null;
+            if ($perUnit === null) {
+                $perUnit = $productCharges[$pid] ?? 0;
+            }
+            $out[$pid . ':' . $vid] = round(((float) $perUnit) * $qty, 2);
+        }
+
+        return $out;
+    }
+
+    /**
+     * Cart lines carrying their own delivery charge.
+     *
+     * The GST engine uses these only as WEIGHTS — freight is taxed at the
+     * quantity-weighted average of the goods' rates, then applied to whatever
+     * delivery actually costs — so a free-shipping coupon or the optimizer fee
+     * replacing the total cannot skew the split. Without them a mixed-rate cart
+     * weighted freight by goods value, which is not what the customer is paying
+     * per parcel.
+     */
+    public function withLineDelivery($products): array
+    {
+        $products = (array) $products;
+        try {
+            $map = $this->perLineDelivery($products);
+        } catch (\Throwable $e) {
+            return $products;
+        }
+        foreach ($products as &$product) {
+            $key = ((int) ($product['product_id'] ?? 0)) . ':' . ((int) ($product['variation_option_id'] ?? 0));
+            $product['delivery_fee'] = $map[$key] ?? 0.0;
+        }
+        unset($product);
+
+        return $products;
     }
 
     protected function calculateShippingChargeByProduct($products)
