@@ -71,19 +71,22 @@ class InvoiceNumberService
         return substr((string) $startYear, -2) . substr((string) ($startYear + 1), -2);
     }
 
-    /** Columns and the counter table both arrive with migrations, which run after the code. */
+    /**
+     * Columns and the counter table both arrive with migrations, which deploys
+     * run AFTER the new code is already serving.
+     *
+     * Deliberately not memoised in a static. A worker that asked during that
+     * window would cache "no" for its whole life and quietly stop numbering
+     * invoices until it recycled — and a gap in an invoice series is the one
+     * thing this feature exists to prevent. It is asked once per payable order
+     * transition, which is nothing.
+     */
     private static function available(): bool
     {
-        static $available = null;
-
-        if ($available === null) {
-            try {
-                $available = Schema::hasColumn('orders', 'invoice_number') && Schema::hasTable('acc_sequences');
-            } catch (\Throwable $e) {
-                $available = false;
-            }
+        try {
+            return Schema::hasColumn('orders', 'invoice_number') && Schema::hasTable('acc_sequences');
+        } catch (\Throwable $e) {
+            return false;
         }
-
-        return $available;
     }
 }
