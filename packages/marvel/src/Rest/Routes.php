@@ -93,6 +93,7 @@ use Marvel\Http\Controllers\CourierConfigController;
 use Marvel\Http\Controllers\IntegrationController;
 use Marvel\Http\Controllers\CourierPartnerProxyController;
 use Marvel\Http\Controllers\PricingMarginController;
+use Marvel\Http\Controllers\HsnCodeController;
 use Marvel\Http\Controllers\VariantDeliveryChargeController;
 use Marvel\Http\Controllers\VendorController;
 use Marvel\Http\Controllers\RolePermissionController;
@@ -1385,6 +1386,15 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('users/block-user', [UserController::class, 'banUser']);
     Route::post('users/unblock-user', [UserController::class, 'activeUser']);
     Route::apiResource('taxes', TaxController::class);
+    // Scheduled rate changes: an announced GST revision lands on its date by
+    // itself instead of someone editing the rate by hand that morning.
+    Route::get('taxes/{id}/versions', [TaxController::class, 'versions']);
+    Route::post('taxes/{id}/versions', [TaxController::class, 'storeVersion']);
+    Route::delete('taxes/{id}/versions/{versionId}', [TaxController::class, 'destroyVersion']);
+    // HSN/SAC master — the list products are validated against.
+    Route::apiResource('hsn-codes', HsnCodeController::class, [
+        'only' => ['index', 'store', 'update', 'destroy'],
+    ]);
     Route::apiResource('shippings', ShippingController::class);
     // Operator recovery: rebuild one vendor's city-availability projection now
     // (also reports the inventory-without-service-areas trap).

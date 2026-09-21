@@ -75,6 +75,16 @@ abstract class TaxTestCase extends TestCase
             $t->string('title')->nullable();
             $t->text('options')->nullable();
         });
+        Schema::create('tax_rate_versions', function ($t) {
+            $t->id();
+            $t->unsignedBigInteger('tax_class_id');
+            $t->decimal('rate', 5, 2);
+            $t->date('effective_from');
+            $t->date('effective_to')->nullable();
+            $t->string('note')->nullable();
+            $t->unsignedBigInteger('created_by_user_id')->nullable();
+            $t->timestamps();
+        });
         Schema::create('settings', function ($t) {
             $t->id();
             $t->json('options')->nullable();
@@ -178,6 +188,16 @@ abstract class TaxTestCase extends TestCase
             'product_id' => $productId,
             'title' => $size,
             'options' => json_encode([$option]),
+        ]);
+    }
+
+    /** Schedule a rate change for a tax class. */
+    protected function scheduleRate(int $taxClassId, float $rate, string $from, ?string $to = null): int
+    {
+        return DB::table('tax_rate_versions')->insertGetId([
+            'tax_class_id' => $taxClassId, 'rate' => $rate,
+            'effective_from' => $from, 'effective_to' => $to,
+            'created_at' => now(), 'updated_at' => now(),
         ]);
     }
 

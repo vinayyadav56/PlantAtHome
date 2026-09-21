@@ -104,6 +104,11 @@ class ProductCreateRequest extends FormRequest
             'external_product_button_text' => ['nullable', 'string'],
             'in_stock'                     => ['boolean'],
             'is_taxable'                   => ['boolean'],
+            // HSN must come from the master. Free text in two places is how the
+            // same pot ended up filed under 3924 and 39240090, and a code the
+            // department does not recognise is a rejected return. Guarded on the
+            // table existing because deploys migrate after the code lands.
+            'hsn_code'                     => ['nullable', 'string', 'max:8', new \Marvel\Rules\KnownHsnCode()],
             'is_digital'                   => ['boolean'],
             'is_external'                  => ['boolean'],
             'is_rental'                    => ['boolean'],

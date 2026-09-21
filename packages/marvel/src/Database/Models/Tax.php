@@ -25,6 +25,12 @@ class Tax extends Model
         'effective_to' => 'date:Y-m-d',
     ];
 
+    /** Scheduled rate changes, newest start first. */
+    public function versions(): HasMany
+    {
+        return $this->hasMany(TaxRateVersion::class, 'tax_class_id')->orderByDesc('effective_from');
+    }
+
     protected static function boot()
     {
         parent::boot();

@@ -118,6 +118,7 @@ class OrderRepository extends BaseRepository
         'seller_gstin',
         'seller_state',
         'seller_state_code',
+        'tax_calc_version',
     ];
 
     public function boot()
@@ -421,9 +422,30 @@ class OrderRepository extends BaseRepository
             $request['seller_gstin']           = $gst['seller_gstin'];
             $request['seller_state']           = $gst['seller_state'];
             $request['seller_state_code']      = $gst['seller_state_code'];
+            $request['tax_calc_version']       = $gst['tax_calc_version'] ?? null;
             $request['products']               = $this->mergeLineTax((array) $request['products'], $gst['lines']);
         } catch (\Throwable $e) {
             \Illuminate\Support\Facades\Log::warning('GST snapshot failed (order kept without tax breakdown)', ['error' => $e->getMessage()]);
+        }
+
+        // Refuse rather than quietly bill 0% GST on something taxable. Flag-gated
+        // and OFF until the Missing Tax Config report reads zero — until then this
+        // would close the shop — but silently under-collecting only surfaces at
+        // filing time, months later, as a liability nobody budgeted for.
+        // Outside the try above deliberately: that one swallows everything so a
+        // tax fault can never break checkout, and this refusal must not be swallowed.
+        $taxUnconfigured = array_values(array_unique(array_map(
+            fn ($l) => (int) $l['product_id'],
+            array_filter($gst['lines'] ?? [], fn ($l) => ($l['tax_status'] ?? null) === 'unconfigured')
+        )));
+        if ($taxUnconfigured && (new \Marvel\Services\Tax\BusinessTaxConfig())->blockUnconfiguredAtCheckout()) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(
+                response()->json([
+                    'code'        => 'TAX_CONFIG_MISSING',
+                    'message'     => 'Some items are missing their tax configuration and cannot be sold yet.',
+                    'product_ids' => $taxUnconfigured,
+                ], 422)
+            );
         }
         // Per-line financial snapshot for accounting: ownership model, the order discount
         // allocated to lines (largest-remainder, so Σ == discount to the paisa) with WHO funds
@@ -618,7 +640,7 @@ class OrderRepository extends BaseRepository
                 foreach ([
                     'place_of_supply', 'place_of_supply_code', 'is_inter_state', 'taxable_amount',
                     'cgst_amount', 'sgst_amount', 'igst_amount', 'total_tax', 'delivery_tax_treatment',
-                    'delivery_taxable', 'delivery_tax_amount', 'seller_gstin', 'seller_state', 'seller_state_code',
+                    'delivery_taxable', 'delivery_tax_amount', 'seller_gstin', 'seller_state', 'seller_state_code', 'tax_calc_version',
                 ] as $gstCol) {
                     if (array_key_exists($gstCol, $orderInput) && !\Illuminate\Support\Facades\Schema::hasColumn('orders', $gstCol)) {
                         unset($orderInput[$gstCol]);

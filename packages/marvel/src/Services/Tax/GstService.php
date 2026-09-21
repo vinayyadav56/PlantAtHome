@@ -27,7 +27,23 @@ use Marvel\Support\Money;
  */
 class GstService
 {
+    /**
+     * Stamped on every order this computes, so a snapshot can be attributed to
+     * the revision that produced it. Bump when the ARITHMETIC changes, not when
+     * a rate does — rates are data and already snapshotted per line.
+     *
+     * gst-1  the original engine
+     * gst-2  freight tax weighted by each line's delivery charge rather than by
+     *        its share of cart value, and scheduled rate versions
+     */
+    public const VERSION = 'gst-2';
+
     private BusinessTaxConfig $biz;
+
+    /** @var array<int, object|null> tax_class_id => the version in force today */
+    private array $versionCache = [];
+
+    private ?bool $versionsAvailable = null;
 
     public function __construct(?BusinessTaxConfig $biz = null)
     {
@@ -109,6 +125,9 @@ class GstService
                 'igst_amount'         => $lig,
                 'tax_amount'          => $tax,
                 'delivery_fee'        => $lineDelivery,
+                // configured | unverified (rate set, CA has not signed it off)
+                // | unconfigured (no rate anywhere — taxed at 0, never guessed)
+                'tax_status'          => $cfg['status'] ?? 'configured',
             ];
         }
 
@@ -167,6 +186,7 @@ class GstService
             'delivery_tax_treatment' => $treatment,
             'delivery_taxable'       => Money::round($dTaxable),
             'delivery_tax_amount'    => Money::round($dTax),
+            'tax_calc_version'       => self::VERSION,
             'lines'                  => $lineOut,
         ];
     }
@@ -230,6 +250,65 @@ class GstService
         return [Money::round($tax - $half), $half, 0.0];
     }
 
+    /**
+     * The rate this class carries TODAY.
+     *
+     * A scheduled change (tax_rate_versions) wins over the column when one has
+     * taken effect: the version whose effective_from is the latest on or before
+     * today, and which has not already ended. That is how an announced rate
+     * change lands on the day without anyone editing a row at 9am — and without
+     * re-pointing the products, which all keep referencing this same class.
+     *
+     * No versions (every class that exists today) → tax_classes.rate, unchanged.
+     */
+    private function rateFor($tax): float
+    {
+        $version = $this->versionFor((int) ($tax->id ?? 0));
+
+        return (float) ($version->rate ?? $tax->rate ?? 0.0);
+    }
+
+    /** The scheduled rate in force today for a class, or null. */
+    private function versionFor(int $taxClassId)
+    {
+        if ($taxClassId <= 0 || !$this->versionsAvailable()) {
+            return null;
+        }
+
+        if (!array_key_exists($taxClassId, $this->versionCache)) {
+            $today = now()->toDateString();
+            try {
+                $this->versionCache[$taxClassId] = \Illuminate\Support\Facades\DB::table('tax_rate_versions')
+                    ->where('tax_class_id', $taxClassId)
+                    ->whereDate('effective_from', '<=', $today)
+                    ->where(function ($q) use ($today) {
+                        $q->whereNull('effective_to')->orWhereDate('effective_to', '>=', $today);
+                    })
+                    ->orderByDesc('effective_from')
+                    ->orderByDesc('id')
+                    ->first();
+            } catch (\Throwable $e) {
+                $this->versionCache[$taxClassId] = null;
+            }
+        }
+
+        return $this->versionCache[$taxClassId];
+    }
+
+    /** The table arrives with a migration, and deploys migrate after the code lands. */
+    private function versionsAvailable(): bool
+    {
+        if ($this->versionsAvailable === null) {
+            try {
+                $this->versionsAvailable = \Illuminate\Support\Facades\Schema::hasTable('tax_rate_versions');
+            } catch (\Throwable $e) {
+                $this->versionsAvailable = false;
+            }
+        }
+
+        return $this->versionsAvailable;
+    }
+
     /** Batch-resolve each product's effective tax config (product → its tax class, else 0%/unverified). */
     private function resolveConfigs(array $lines): array
     {
@@ -249,18 +328,29 @@ class GstService
         $out = [];
         foreach ($products as $p) {
             // Tax model (tax_classes row) or null; a product with no rate of its own inherits its category's (spec §16)
-            $tax = $p->tax_rate_id ? $p->taxRate : ($inherited[(int) $p->id] ?? null);
-            if ($enforce && !(bool) ($p->tax_verified ?? false)) {
+            $resolved = $p->tax_rate_id ? $p->taxRate : ($inherited[(int) $p->id] ?? null);
+            $configured = $resolved && $this->isActive($resolved);
+            $verified = (bool) ($p->tax_verified ?? false);
+
+            // Reported whether or not enforcement is ON, because the point of the
+            // status is to SHOW what is unconfigured — a report that only tells
+            // the truth once the gate is switched on is no use for deciding
+            // whether to switch it on.
+            $status = !$configured ? 'unconfigured' : ($verified ? 'configured' : 'unverified');
+
+            $tax = $resolved;
+            if ($enforce && !$verified) {
                 $tax = null; // CA has not verified this product's HSN/GST → 0% until they do
             }
             $active = $tax && $this->isActive($tax);
-            $rate = $active ? (float) $tax->rate : 0.0;
+            $rate = $active ? $this->rateFor($tax) : 0.0;
             $category = $active ? ($tax->tax_category ?: 'taxable') : 'non_taxable';
             $out[(int) $p->id] = [
                 'rate'      => max(0.0, $rate),
                 'hsn'       => $p->hsn_code ?: ($tax->hsn_code ?? null),
                 'category'  => $category,
                 'inclusive' => $p->tax_inclusive === null ? $storeInclusive : (bool) $p->tax_inclusive,
+                'status'    => $status,
             ];
         }
         return $out;
@@ -293,7 +383,7 @@ class GstService
 
     private function unconfigured(): array
     {
-        return ['rate' => 0.0, 'hsn' => null, 'category' => 'non_taxable', 'inclusive' => $this->biz->pricesIncludeTax()];
+        return ['rate' => 0.0, 'hsn' => null, 'category' => 'non_taxable', 'inclusive' => $this->biz->pricesIncludeTax(), 'status' => 'unconfigured'];
     }
 
     private function isActive($tax): bool

@@ -178,6 +178,15 @@ class CheckoutRepository
         if (empty($unavailable_products) && $total < $minimumOrderAmount) {
             throw new HttpException(400, 'Minimum order amount is ' . $minimumOrderAmount);
         }
+        // Products the engine would have to tax at 0% because nothing is configured.
+        $tax_unconfigured_products = array_values(array_unique(array_map(
+            fn ($l) => (int) $l['product_id'],
+            array_filter($gst['lines'] ?? [], fn ($l) => ($l['tax_status'] ?? null) === 'unconfigured')
+        )));
+        if ($tax_unconfigured_products && (new \Marvel\Services\Tax\BusinessTaxConfig())->blockUnconfiguredAtCheckout()) {
+            throw new HttpException(422, 'Some items are missing their tax configuration and cannot be sold yet.');
+        }
+
         $response = [
             'total_tax'            => $tax,
             'taxable_amount'       => $gst['taxable_amount'],
@@ -189,6 +198,21 @@ class CheckoutRepository
             'gst_total_tax'        => $gst['total_tax'],
             'delivery_tax_amount'  => $gst['delivery_tax_amount'],
             'shipping_charge'      => $shipping_charge,
+            // ── The rest of the breakdown the engine already produced. verify
+            // computed all of this and returned none of it, so the storefront
+            // could not render a GST-compliant summary without doing tax
+            // arithmetic of its own — which is the one thing it must never do.
+            'place_of_supply_code'   => $gst['place_of_supply_code'] ?? null,
+            'seller_state'           => $gst['seller_state'] ?? null,
+            'seller_state_code'      => $gst['seller_state_code'] ?? null,
+            'delivery_taxable'       => $gst['delivery_taxable'] ?? 0,
+            'delivery_tax_treatment' => $gst['delivery_tax_treatment'] ?? null,
+            'prices_include_tax'     => (new \Marvel\Services\Tax\BusinessTaxConfig())->pricesIncludeTax(),
+            'tax_calc_version'       => $gst['tax_calc_version'] ?? null,
+            // What the customer pays. The server has always computed this and
+            // thrown it away, leaving each client to re-add the three parts.
+            'grand_total'            => round((float) $total, 2),
+            'tax_unconfigured_products' => $tax_unconfigured_products,
             // Delivery Optimizer (additive, flag-gated): FIRM consolidated shipments at
             // checkout. Metadata only for now — `shipping_charge` above is unchanged until
             // an explicit cutover, so the charged total stays byte-identical. Never throws.
@@ -215,6 +239,9 @@ class CheckoutRepository
                 'unit_price'          => $p['unit_price'] ?? null,
                 'subtotal'            => $p['subtotal'] ?? null,
             ], (array) $request['products']),
+            // Per-line GST + delivery, for the checkout breakdown and the invoice
+            // preview. Same shape that gets frozen onto order_items.
+            'lines'                => $this->verifyLines((array) $request['products'], $gst['lines'] ?? []),
             'wallet_amount' => isset($wallet->available_points) ? $wallet->available_points : 0,
             'wallet_currency' => isset($wallet->available_points) ? $this->walletPointsToCurrency($wallet->available_points) : 0
         ];
@@ -224,6 +251,51 @@ class CheckoutRepository
             $response['coverage'] = $coverage;
         }
         return $response;
+    }
+
+    /**
+     * Cart lines merged with their tax, keyed the same way the order snapshot is.
+     *
+     * @param  array $products cart lines as repriced by the server
+     * @param  array $taxLines GstService per-line output
+     */
+    protected function verifyLines(array $products, array $taxLines): array
+    {
+        $key = fn ($pid, $vid) => ((int) $pid) . ':' . ($vid ? (int) $vid : 0);
+        $byKey = [];
+        foreach ($taxLines as $line) {
+            $byKey[$key($line['product_id'] ?? 0, $line['variation_option_id'] ?? null)] = $line;
+        }
+
+        $out = [];
+        foreach ($products as $product) {
+            $tax = $byKey[$key($product['product_id'] ?? 0, $product['variation_option_id'] ?? null)] ?? [];
+            $out[] = [
+                'product_id'          => isset($product['product_id']) ? (int) $product['product_id'] : null,
+                'variation_option_id' => isset($product['variation_option_id']) && $product['variation_option_id']
+                    ? (int) $product['variation_option_id']
+                    : null,
+                'order_quantity'      => (int) ($product['order_quantity'] ?? 1),
+                'unit_price'          => isset($product['unit_price']) ? (float) $product['unit_price'] : null,
+                'subtotal'            => isset($product['subtotal']) ? (float) $product['subtotal'] : null,
+                'hsn_code'            => $tax['hsn_code'] ?? null,
+                'tax_category'        => $tax['tax_category'] ?? null,
+                'tax_rate'            => $tax['tax_rate'] ?? 0,
+                'tax_inclusive'       => $tax['tax_inclusive'] ?? null,
+                'taxable_value'       => $tax['taxable_value'] ?? null,
+                'cgst_rate'           => $tax['cgst_rate'] ?? 0,
+                'sgst_rate'           => $tax['sgst_rate'] ?? 0,
+                'igst_rate'           => $tax['igst_rate'] ?? 0,
+                'cgst_amount'         => $tax['cgst_amount'] ?? 0,
+                'sgst_amount'         => $tax['sgst_amount'] ?? 0,
+                'igst_amount'         => $tax['igst_amount'] ?? 0,
+                'tax_amount'          => $tax['tax_amount'] ?? 0,
+                'delivery_fee'        => $tax['delivery_fee'] ?? 0,
+                'tax_status'          => $tax['tax_status'] ?? 'configured',
+            ];
+        }
+
+        return $out;
     }
 
     /** Shipping pincode from the verify payload (zip | pincode | postal_code, possibly nested under address). */

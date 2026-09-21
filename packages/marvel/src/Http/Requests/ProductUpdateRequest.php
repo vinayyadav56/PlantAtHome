@@ -63,6 +63,8 @@ class ProductUpdateRequest extends FormRequest
             'name'                         => ['string', 'max:255'],
             'price'                        => ['nullable', 'numeric'],
             'delivery_charge'              => ['nullable', 'numeric'],
+            // Must come from the master — see Marvel\Rules\KnownHsnCode.
+            'hsn_code'                     => ['nullable', 'string', 'max:8', new \Marvel\Rules\KnownHsnCode()],
             'sale_price'                   => ['nullable', 'lte:price'],
             'type_id'                      => ['exists:Marvel\Database\Models\Type,id'],
             'shop_id'                      => ['exists:Marvel\Database\Models\Shop,id'],

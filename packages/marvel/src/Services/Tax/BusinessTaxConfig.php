@@ -36,6 +36,20 @@ class BusinessTaxConfig
         return (bool) ($this->tax['enforce_tax_verified'] ?? false);
     }
 
+    /**
+     * When ON, checkout REFUSES a cart containing a product with no tax
+     * configuration, rather than quietly selling it at 0%.
+     *
+     * Default OFF, and it has to stay off until the Missing Tax Config report
+     * reads zero — switching it on before that would close the shop. It is the
+     * end state though: silently billing 0% GST on something taxable is a
+     * liability that surfaces at filing time, months later.
+     */
+    public function blockUnconfiguredAtCheckout(): bool
+    {
+        return (bool) ($this->tax['block_unconfigured_at_checkout'] ?? false);
+    }
+
     /** Store-wide default: are configured product prices inclusive of GST? Default TRUE. */
     public function pricesIncludeTax(): bool
     {
