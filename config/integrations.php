@@ -41,4 +41,31 @@ return [
     // what lets the sync work purely from environment before any admin has
     // touched that page.
     'sync_key' => env('INTEGRATION_SYNC_KEY', ''),
+
+    /*
+     * Where credential bags live.
+     *
+     *   secrets_manager  AWS Secrets Manager, one secret per provider per environment
+     *                    (plantathome/{environment}/{slug}). REQUIRED on production and
+     *                    staging — the container binding refuses to store anything there
+     *                    with any other driver.
+     *   database         the encrypted `integration_providers.credentials` column. Local
+     *                    development only, so a laptop needs no AWS identity.
+     */
+    'credential_store' => env('INTEGRATIONS_CREDENTIAL_STORE', 'database'),
+
+    'secrets_manager' => [
+        // Identity is the SDK default chain (instance profile on EC2, env vars on Railway,
+        // a developer's own profile locally). No key is read from config on purpose.
+        'region' => env('AWS_REGION', env('AWS_DEFAULT_REGION', 'ap-south-1')),
+        'prefix' => env('INTEGRATIONS_SECRET_PREFIX', 'plantathome'),
+    ],
+
+    /*
+     * Signal the queue workers to restart after a credential CHANGES (the one line
+     * `php artisan queue:restart` writes). ConfigOverlay applies at boot, so without this a
+     * long-running worker keeps the previous key until its hourly --max-time expiry, and a
+     * rotation made to fix failing jobs looks like it did nothing.
+     */
+    'restart_workers_on_change' => (bool) env('INTEGRATIONS_RESTART_WORKERS', true),
 ];

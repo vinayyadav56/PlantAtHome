@@ -129,6 +129,7 @@ class ShopServiceProvider extends ServiceProvider
         \Marvel\Console\AccountingReconcileCommand::class,
         \Marvel\Console\BackfillOrderItemsCommand::class,
         \Marvel\Console\ReconcileSettlementsCommand::class,
+        \Marvel\Console\MigrateIntegrationCredentials::class,
         CheckIntegrationHealth::class,
         InstallCommand::class,
         AdminCreateCommand::class,
@@ -269,6 +270,31 @@ class ShopServiceProvider extends ServiceProvider
         // ⚠️ Without this line every config('integrations.*') lookup silently returns null — the
         // same trap that makes packages/marvel/config/services.php dead code.
         $this->mergeConfigFrom(__DIR__ . '/../config/integrations.php', 'integrations');
+
+        // Where third-party credential bags live. Keyed off APP_ENV, not the integrations
+        // environment label: a test may point the label at "production" while running as
+        // "testing", and must never be handed a real Secrets Manager client.
+        $this->app->singleton(\Marvel\Integrations\Store\CredentialStore::class, function ($app) {
+            $driver = (string) config('integrations.credential_store', \Marvel\Integrations\Store\CredentialStore::DRIVER_DATABASE);
+            $store = $driver === \Marvel\Integrations\Store\CredentialStore::DRIVER_SECRETS_MANAGER
+                ? new \Marvel\Integrations\Store\SecretsManagerCredentialStore()
+                : new \Marvel\Integrations\Store\DatabaseCredentialStore();
+
+            // Production and staging hold credentials in Secrets Manager, full stop. Any other
+            // driver there keeps READS working (env and whatever is already stored) but refuses
+            // to store anything new — a save that quietly landed in MySQL would defeat the module
+            // without anyone noticing until an audit asked where the keys were.
+            if ($driver !== \Marvel\Integrations\Store\CredentialStore::DRIVER_SECRETS_MANAGER
+                && $app->environment('production', 'staging')) {
+                return new \Marvel\Integrations\Store\RefusingCredentialStore(
+                    $store,
+                    'Secrets Manager is required in ' . $app->environment()
+                        . ' — set INTEGRATIONS_CREDENTIAL_STORE=secrets_manager. Nothing was saved.'
+                );
+            }
+
+            return $store;
+        });
 
         config([
             'auth'               => File::getRequire(__DIR__ . '/../config/auth.php'),

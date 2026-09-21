@@ -920,6 +920,9 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
         ->middleware('permission:settings.integrations.view');
     Route::get('integrations/{slug}', [IntegrationController::class, 'show'])
         ->middleware('permission:settings.integrations.view');
+    // Who changed what — the audit rows the model writes, masked at write time.
+    Route::get('integrations/{slug}/history', [IntegrationController::class, 'history'])
+        ->middleware('permission:settings.integrations.view');
     Route::put('integrations/{slug}', [IntegrationController::class, 'update'])
         ->middleware(['permission:settings.integrations.edit', 'throttle:30,1']);
     // Test + sync make OUTBOUND calls, so they are throttled harder than a read.

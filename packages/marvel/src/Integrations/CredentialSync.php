@@ -98,9 +98,16 @@ class CredentialSync
         }
 
         if (!$res->successful()) {
-            $body = (string) $res->body();
+            // The body goes to the log, never to the row: sync_error is rendered verbatim in the
+            // admin, and a service that ever echoed its request would put the sealed payload —
+            // or worse, a decoded one — on screen.
+            Log::warning('credential sync rejected by the shipping service', [
+                'provider' => $slug,
+                'status'   => $res->status(),
+                'body'     => mb_substr((string) $res->body(), 0, 300),
+            ]);
 
-            return ['ok' => false, 'error' => 'Shipping service returned ' . $res->status() . ': ' . mb_substr($body, 0, 300)];
+            return ['ok' => false, 'error' => 'Shipping service returned HTTP ' . $res->status() . ' — see the application log.'];
         }
 
         $data = (array) $res->json();
@@ -108,7 +115,7 @@ class CredentialSync
         // The service answers 200 with applied=false when it ignored a stale version. Reporting
         // that as success would leave the row marked synced while the service kept the old key.
         if (array_key_exists('applied', $data) && $data['applied'] === false) {
-            return ['ok' => false, 'error' => (string) ($data['message'] ?? 'Shipping service did not apply the credentials.')];
+            return ['ok' => false, 'error' => mb_substr((string) ($data['message'] ?? 'Shipping service did not apply the credentials.'), 0, 200)];
         }
 
         return ['ok' => true, 'fields' => (int) ($data['fields'] ?? count($bag))];

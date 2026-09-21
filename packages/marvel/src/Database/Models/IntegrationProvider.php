@@ -40,6 +40,15 @@ class IntegrationProvider extends Model
      */
     protected $hidden = ['credentials'];
 
+    /**
+     * Credential field NAMES changed by the write in flight, set by IntegrationService::put() when
+     * the bag lives outside this row (Secrets Manager). Not an attribute — never persisted — read
+     * once by writeAuditRow() so the audit still says WHICH fields moved.
+     *
+     * @var string[]
+     */
+    public array $auditCredentialFields = [];
+
     /** Health states, mirroring the module spec. */
     public const HEALTH_CONNECTED    = 'connected';
     public const HEALTH_AUTH_FAILED  = 'auth_failed';
@@ -61,7 +70,8 @@ class IntegrationProvider extends Model
         // Go service keeps serving the previous key from its cache until the TTL expires and the
         // rotation looks like it silently failed.
         static::saving(function (self $provider) {
-            if ($provider->isDirty('credentials')) {
+            // `credentials` dirties on the database driver; `secret_version_id` on Secrets Manager.
+            if ($provider->isDirty('credentials') || $provider->isDirty('secret_version_id')) {
                 $provider->credentials_version = (int) $provider->getOriginal('credentials_version', 0) + 1;
             }
         });
@@ -126,6 +136,12 @@ class IntegrationProvider extends Model
                     $changed[] = "credentials.$name";
                 }
             }
+            // Secrets Manager path: the bag is not on the row, so the service tells us what moved.
+            foreach ($this->auditCredentialFields as $name) {
+                $changed[] = "credentials.$name";
+            }
+            $changed = array_values(array_unique($changed));
+            $this->auditCredentialFields = [];
 
             $request = request();
 
@@ -145,25 +161,6 @@ class IntegrationProvider extends Model
             // Auditing is best-effort. Losing an audit row is bad; losing the credential save that
             // an operator just made, because the audit table hiccuped, is worse.
         }
-    }
-
-    /**
-     * Credential field names that are actually set — NEVER their values. This is the read contract
-     * every provider form uses: it can render "— set (leave blank to keep)" without the secret ever
-     * reaching the browser.
-     *
-     * @param  string[]  $fields
-     * @return array<string,bool>
-     */
-    public function credentialsSet(array $fields): array
-    {
-        $creds = (array) ($this->credentials ?? []);
-        $out = [];
-        foreach ($fields as $field) {
-            $out[$field] = isset($creds[$field]) && trim((string) $creds[$field]) !== '';
-        }
-
-        return $out;
     }
 
     /**

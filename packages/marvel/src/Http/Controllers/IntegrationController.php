@@ -4,7 +4,10 @@ namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\IntegrationProvider;
+use Marvel\Integrations\Store\CredentialStoreUnavailable;
 use Marvel\Integrations\ConnectionTester;
 use Marvel\Integrations\CredentialSync;
 use Marvel\Integrations\IntegrationService;
@@ -54,9 +57,11 @@ class IntegrationController extends CoreController
             $rows = collect();
         }
 
+        $actors = $this->actorNames($rows->pluck('last_updated_by')->filter()->unique()->all());
+
         $items = [];
         foreach ($defs as $def) {
-            $items[] = $this->card($def, $rows->get($def->slug));
+            $items[] = $this->card($def, $rows->get($def->slug), $actors);
         }
 
         // Stable order: category first (display order), then priority, then name.
@@ -69,9 +74,11 @@ class IntegrationController extends CoreController
         return response()->json([
             'data' => $items,
             'meta' => [
-                'environment' => $this->integrations->environment(),
-                'categories'  => ProviderRegistry::categories(),
-                'sync_enabled' => $this->sync->enabled(),
+                'environment'      => $this->integrations->environment(),
+                'categories'       => ProviderRegistry::categories(),
+                'sync_enabled'     => $this->sync->enabled(),
+                // secrets_manager | database — so the page can say where a saved key goes.
+                'credential_store' => $this->integrations->store()->driver(),
             ],
         ]);
     }
@@ -85,9 +92,10 @@ class IntegrationController extends CoreController
         }
 
         $row = $this->integrations->provider($slug);
+        $actors = $row?->last_updated_by ? $this->actorNames([$row->last_updated_by]) : [];
 
         return response()->json([
-            'data' => array_merge($this->card($def, $row), [
+            'data' => array_merge($this->card($def, $row, $actors), [
                 'fields'        => $def->fieldSchema(),
                 'configuration' => $this->effectiveConfiguration($def),
                 'docs_url'      => $def->docsUrl,
@@ -113,19 +121,33 @@ class IntegrationController extends CoreController
         $validated = $request->validate([
             'enabled'       => ['sometimes', 'boolean'],
             'priority'      => ['sometimes', 'integer', 'min:0', 'max:65535'],
-            'environment'   => ['sometimes', 'string', 'in:sandbox,production'],
+            'environment'   => ['sometimes', 'string', 'in:sandbox,production,staging'],
             'configuration' => ['sometimes', 'array'],
             'credentials'   => ['sometimes', 'array'],
         ]);
 
         $attributes = array_intersect_key($validated, array_flip(['enabled', 'priority', 'environment']));
 
-        $row = $this->integrations->put(
-            $slug,
-            $attributes,
-            (array) ($validated['credentials'] ?? []),
-            (array) ($validated['configuration'] ?? [])
-        );
+        try {
+            $row = $this->integrations->put(
+                $slug,
+                $attributes,
+                (array) ($validated['credentials'] ?? []),
+                (array) ($validated['configuration'] ?? []),
+                $request->user()?->id
+            );
+        } catch (CredentialStoreUnavailable $e) {
+            // This environment must hold credentials in Secrets Manager and is not configured to.
+            // Nothing was saved; say exactly which variable fixes it.
+            return response()->json(['message' => $e->getMessage(), 'code' => 'CREDENTIAL_STORE_UNAVAILABLE'], 422);
+        } catch (\Aws\Exception\AwsException $e) {
+            // The store refused the write. The AWS error CODE is safe and actionable
+            // (AccessDeniedException → an IAM policy); the message body is neither.
+            return response()->json([
+                'message' => 'Secrets Manager rejected the write (' . ($e->getAwsErrorCode() ?: 'unknown error') . '). Nothing was saved.',
+                'code'    => 'CREDENTIAL_STORE_REJECTED',
+            ], 502);
+        }
 
         $syncResult = null;
         if ($def->syncsToShipping && $this->sync->enabled()) {
@@ -181,9 +203,15 @@ class IntegrationController extends CoreController
         ]);
     }
 
-    /** The card payload — no secret values, ever. */
-    private function card(ProviderDefinition $def, ?IntegrationProvider $row): array
+    /**
+     * The card payload — no secret values, ever.
+     *
+     * @param  array<int,string> $actors  user id => display name, looked up once by the caller
+     */
+    private function card(ProviderDefinition $def, ?IntegrationProvider $row, array $actors = []): array
     {
+        $sources = $this->integrations->credentialSources($def->slug);
+
         return [
             'slug'              => $def->slug,
             'display_name'      => $row->display_name ?? $def->displayName,
@@ -193,7 +221,15 @@ class IntegrationController extends CoreController
             'enabled'           => (bool) ($row->enabled ?? false),
             'environment'       => $row->environment ?? $this->integrations->environment(),
             'configured'        => $this->isConfigured($def),
-            'credentials_set'   => $this->integrations->credentialsSet($def->slug),
+            'credentials_set'   => array_map(static fn (string $s) => $s !== 'none', $sources),
+            // Per field: secrets_manager | database | env | none. "env" is a credential that
+            // works but is not managed here — the admin renders it as "migrate".
+            'credentials_source' => $sources,
+            // The Secrets Manager reference, never its contents. Null until the first save
+            // through the store (or on the database driver).
+            'secret_name'       => $row->secret_name ?? null,
+            'last_updated_by'   => $row->last_updated_by ?? null,
+            'last_updated_by_name' => isset($row->last_updated_by) ? ($actors[(int) $row->last_updated_by] ?? null) : null,
             'health_status'     => $row->health_status ?? IntegrationProvider::HEALTH_UNKNOWN,
             'health_checked_at' => optional($row?->health_checked_at)->toIso8601String(),
             'health_detail'     => $row->health_detail ?? null,
@@ -204,6 +240,68 @@ class IntegrationController extends CoreController
             'webhook'           => $this->webhook($def),
             'updated_at'        => optional($row?->updated_at)->toIso8601String(),
         ];
+    }
+
+    /**
+     * Who changed what, for one provider — the audit rows the model has been writing since
+     * 2026-07-29, which until now had no reader. Values were masked at write time; this only
+     * adds the actor's name.
+     */
+    public function history(Request $request, string $slug): JsonResponse
+    {
+        if (!ProviderRegistry::has($slug)) {
+            return response()->json(['message' => "Unknown integration provider: {$slug}"], 404);
+        }
+        if (!Schema::hasTable('integration_audits')) {
+            return response()->json(['data' => [], 'meta' => ['current_page' => 1, 'last_page' => 1, 'total' => 0]]);
+        }
+
+        $limit = min(max((int) $request->query('limit', 25), 1), 100);
+        $page = DB::table('integration_audits')
+            ->where('provider_slug', $slug)
+            ->when($request->filled('environment'), fn ($q) => $q->where('environment', (string) $request->query('environment')))
+            ->orderByDesc('id')
+            ->paginate($limit);
+
+        $actors = $this->actorNames(collect($page->items())->pluck('user_id')->filter()->unique()->all());
+
+        $data = collect($page->items())->map(static function ($row) use ($actors) {
+            return [
+                'id'             => (int) $row->id,
+                'environment'    => $row->environment,
+                'action'         => $row->action,
+                'changed_fields' => json_decode((string) $row->changed_fields, true) ?: [],
+                'before'         => json_decode((string) $row->before, true) ?: null,
+                'after'          => json_decode((string) $row->after, true) ?: null,
+                'user_id'        => $row->user_id ? (int) $row->user_id : null,
+                'user_name'      => $row->user_id ? ($actors[(int) $row->user_id] ?? null) : null,
+                'ip'             => $row->ip,
+                'created_at'     => $row->created_at,
+            ];
+        })->values();
+
+        return response()->json([
+            'data' => $data,
+            'meta' => ['current_page' => $page->currentPage(), 'last_page' => $page->lastPage(), 'total' => $page->total()],
+        ]);
+    }
+
+    /**
+     * @param  int[] $userIds
+     * @return array<int,string>
+     */
+    private function actorNames(array $userIds): array
+    {
+        if ($userIds === []) {
+            return [];
+        }
+        try {
+            return DB::table('users')->whereIn('id', $userIds)->pluck('name', 'id')
+                ->map(static fn ($name) => (string) $name)
+                ->all();
+        } catch (\Throwable) {
+            return [];
+        }
     }
 
     /**

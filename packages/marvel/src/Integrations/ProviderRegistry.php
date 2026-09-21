@@ -271,20 +271,22 @@ class ProviderRegistry
             ),
 
             // ── Storage ─────────────────────────────────────────────────────────────────────
+            // AWS identity is deliberately NOT a credential here. On EC2 it is the instance role,
+            // on Railway the environment, locally the developer's own profile — the SDK's default
+            // chain. A key stored on this row would be written over filesystems.disks.s3.* at boot
+            // and quietly defeat the role. This card manages the bucket, not the identity.
             new ProviderDefinition(
                 slug: 'aws_s3',
                 displayName: 'AWS S3',
                 category: ProviderDefinition::CATEGORY_STORAGE,
-                credentialFields: [
-                    ['name' => 'secret_access_key', 'label' => 'Secret Access Key', 'required' => true, 'config_key' => 'filesystems.disks.s3.secret'],
-                ],
+                credentialFields: [],
                 configFields: [
-                    ['name' => 'access_key_id', 'label' => 'Access Key ID', 'required' => true, 'config_key' => 'filesystems.disks.s3.key'],
                     ['name' => 'region', 'label' => 'Region', 'config_key' => 'filesystems.disks.s3.region', 'placeholder' => 'ap-south-1'],
                     ['name' => 'bucket', 'label' => 'Bucket', 'required' => true, 'config_key' => 'filesystems.disks.s3.bucket'],
                     ['name' => 'url', 'label' => 'Public URL / CDN base', 'config_key' => 'filesystems.disks.s3.url'],
                 ],
                 priority: 10,
+                blurb: 'Media storage. Identity comes from the IAM role (production) or the environment (staging); this card only names the bucket.',
             ),
             new ProviderDefinition(
                 slug: 'cloudinary',

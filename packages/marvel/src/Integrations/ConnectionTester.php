@@ -104,12 +104,51 @@ class ConnectionTester
             'sendgrid'  => $this->testBearer('https://api.sendgrid.com/v3/scopes', $this->integrations->secret('sendgrid', 'api_key')),
             'google_maps' => $this->testGoogleMaps(),
             'whatsapp'  => $this->testWhatsapp(),
+            'aws_s3'    => $this->testS3(),
             default => $this->result(
                 IntegrationProvider::HEALTH_UNKNOWN,
                 false,
                 'No automated read-only test exists for this provider yet; credentials are stored but unverified.'
             ),
         };
+    }
+
+    /**
+     * S3 through whatever identity the SDK resolved — the instance role in production. HeadBucket
+     * is the cheapest call that still proves both reachability and permission on THIS bucket.
+     */
+    private function testS3(): array
+    {
+        $bucket = trim((string) ($this->integrations->config('aws_s3', 'bucket') ?? config('filesystems.disks.s3.bucket') ?? ''));
+        if ($bucket === '') {
+            return $this->result(IntegrationProvider::HEALTH_UNKNOWN, false, 'Not configured: bucket is missing.');
+        }
+
+        $started = microtime(true);
+        try {
+            /** @var \Aws\S3\S3Client $client */
+            $client = \Illuminate\Support\Facades\Storage::disk('s3')->getClient();
+            $client->headBucket(['Bucket' => $bucket]);
+
+            return $this->result(IntegrationProvider::HEALTH_CONNECTED, true, "Bucket {$bucket} is reachable.", [
+                'bucket'     => $bucket,
+                'latency_ms' => (int) round((microtime(true) - $started) * 1000),
+            ]);
+        } catch (\Aws\S3\Exception\S3Exception $e) {
+            $code = (string) ($e->getAwsErrorCode() ?: $e->getStatusCode());
+            $authFailure = in_array($code, ['AccessDenied', 'InvalidAccessKeyId', 'SignatureDoesNotMatch', '403'], true);
+
+            return $this->result(
+                $authFailure ? IntegrationProvider::HEALTH_AUTH_FAILED : IntegrationProvider::HEALTH_UNKNOWN,
+                false,
+                $authFailure
+                    ? "S3 refused access to {$bucket} ({$code}) — check the IAM role or key policy."
+                    : "S3 returned {$code} for {$bucket}.",
+                ['bucket' => $bucket, 'code' => $code]
+            );
+        } catch (Throwable $e) {
+            return $this->result(IntegrationProvider::HEALTH_UNKNOWN, false, 'S3 probe failed: ' . class_basename($e) . '.');
+        }
     }
 
     /** The Go shipping-service itself: its health endpoint is public and cheap. */

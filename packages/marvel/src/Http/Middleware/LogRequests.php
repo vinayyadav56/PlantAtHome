@@ -41,7 +41,14 @@ class LogRequests
         'plaintexttoken', 'access_token', 'refresh_token', 'auth_token',
         // courier partner secret field names (POST /courier-settings)
         'api_token', 'webhook_token', 'callback_token', 'callback_key',
+        // integration credential field names that the exact-match list above missed
+        'aws_secret_access_key', 'secret_access_key', 'auth_key', 'webhook_secret',
+        'webhook_verify_token', 'app_secret', 'server_key', 'private_key', 'sync_key',
     ];
+    // Any key ending like this is a secret whatever its prefix (razorpay_key_secret,
+    // partner_api_token, service_api_key). Suffix-only, so `secret_name` — the Secrets
+    // Manager reference returned by the integrations API — stays readable in logs.
+    private const REDACT_SUFFIXES = ['_secret', '_token', '_key'];
     // Whole nested secret bags — redact the entire value (covers any current/future field name).
     private const REDACT_SUBTREE = ['credentials', 'secrets'];
     private const SKIP_CONTAINS = ['request-logs', 'admin-tasks', '/health'];
@@ -186,7 +193,7 @@ class LogRequests
         }
         foreach ($data as $k => $v) {
             $lk = is_string($k) ? strtolower($k) : '';
-            if ($lk !== '' && in_array($lk, self::REDACT, true)) {
+            if ($lk !== '' && (in_array($lk, self::REDACT, true) || $this->hasSecretSuffix($lk))) {
                 $data[$k] = '***redacted***';
             } elseif ($lk !== '' && in_array($lk, self::REDACT_SUBTREE, true)) {
                 // Redact the WHOLE nested bag (e.g. courier partner credentials) so no secret
@@ -199,6 +206,17 @@ class LogRequests
             }
         }
         return $data;
+    }
+
+    private function hasSecretSuffix(string $lowerKey): bool
+    {
+        foreach (self::REDACT_SUFFIXES as $suffix) {
+            if (str_ends_with($lowerKey, $suffix)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /** Redact secret keys inside a JSON response body before it is persisted to request_logs. */

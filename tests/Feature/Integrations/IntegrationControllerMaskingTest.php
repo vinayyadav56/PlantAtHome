@@ -87,6 +87,24 @@ final class IntegrationControllerMaskingTest extends TestCase
     }
 
     /**
+     * Where each credential comes from is reported alongside whether it is set — a name for the
+     * source, never the value — so the admin can tell "managed here" from "still in the env file".
+     */
+    public function test_credentials_source_names_the_source_and_never_the_value(): void
+    {
+        $data = json_decode($this->controller->show($this->req('/integrations/razorpay'), 'razorpay')->getContent(), true)['data'];
+
+        $this->assertArrayHasKey('credentials_source', $data);
+        $this->assertSame('env', $data['credentials_source']['key_secret'], 'a config-sourced secret is reported as env, not as managed');
+        foreach ($data['credentials_source'] as $field => $source) {
+            $this->assertContains($source, ['secrets_manager', 'database', 'env', 'none'], "credentials_source.{$field}");
+        }
+        $this->assertArrayHasKey('secret_name', $data);
+        $this->assertArrayHasKey('last_updated_by', $data);
+        $this->assertStringNotContainsString(self::RAZORPAY_SECRET, json_encode($data));
+    }
+
+    /**
      * A PUBLIC identifier is supposed to be visible — it is what the browser and the mobile app
      * need. Asserting it appears proves the masking above is field-aware rather than blanket
      * suppression that would leave the form unusable.
@@ -124,8 +142,9 @@ final class IntegrationControllerMaskingTest extends TestCase
     public function test_routes_are_permission_gated_and_throttled(): void
     {
         $expect = [
-            'GET|api/integrations'              => ['settings.integrations.view', null],
-            'PUT|api/integrations/{slug}'       => ['settings.integrations.edit', 'throttle:30,1'],
+            'GET|api/integrations'                 => ['settings.integrations.view', null],
+            'GET|api/integrations/{slug}/history'  => ['settings.integrations.view', null],
+            'PUT|api/integrations/{slug}'          => ['settings.integrations.edit', 'throttle:30,1'],
             'POST|api/integrations/{slug}/test' => ['settings.integrations.test', 'throttle:20,1'],
             'POST|api/integrations/{slug}/sync' => ['settings.integrations.edit', 'throttle:20,1'],
         ];

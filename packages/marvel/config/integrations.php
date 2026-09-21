@@ -21,11 +21,13 @@ return [
     'environment' => env('INTEGRATIONS_ENVIRONMENT', ''),
 
     /*
-     | Seconds to cache a provider row. The cached value is the ENCRYPTED model, never decrypted
-     | secrets: a plaintext credential in Redis would undo the encryption-at-rest this module
-     | exists to provide.
+     | Seconds to cache a provider row and its credential bag. Cached values are ENCRYPTED —
+     | the model as stored, and the bag under APP_KEY — never plaintext: a readable credential
+     | in Redis would undo the at-rest protection this module exists to provide. Every write
+     | busts these keys, so the TTL only bounds an edit made outside the admin (e.g. in the
+     | AWS console).
      */
-    'cache_ttl' => (int) env('INTEGRATIONS_CACHE_TTL', 60),
+    'cache_ttl' => (int) env('INTEGRATIONS_CACHE_TTL', 600),
 
     /*
      | Push credentials to the Go shipping-service on save. Off ⇒ the row is stored locally and the
@@ -51,4 +53,12 @@ return [
      | operator need — the vendor is the source of a key you do not have.
      */
     'allow_reveal' => (bool) env('INTEGRATIONS_ALLOW_REVEAL', false),
+
+    // See config/integrations.php (the app file, which wins on merge) for the credential store.
+    'credential_store'          => env('INTEGRATIONS_CREDENTIAL_STORE', 'database'),
+    'secrets_manager'           => [
+        'region' => env('AWS_REGION', env('AWS_DEFAULT_REGION', 'ap-south-1')),
+        'prefix' => env('INTEGRATIONS_SECRET_PREFIX', 'plantathome'),
+    ],
+    'restart_workers_on_change' => (bool) env('INTEGRATIONS_RESTART_WORKERS', true),
 ];
