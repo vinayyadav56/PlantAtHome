@@ -93,6 +93,7 @@ use Marvel\Http\Controllers\CourierConfigController;
 use Marvel\Http\Controllers\IntegrationController;
 use Marvel\Http\Controllers\CourierPartnerProxyController;
 use Marvel\Http\Controllers\PricingMarginController;
+use Marvel\Http\Controllers\VariantDeliveryChargeController;
 use Marvel\Http\Controllers\VendorController;
 use Marvel\Http\Controllers\RolePermissionController;
 use Marvel\Http\Controllers\DesignationController;
@@ -1092,6 +1093,13 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // Matrix rows resolve city+vertical → city → vertical → global (MarginResolver).
     Route::apiResource('pricing-margins', PricingMarginController::class, [
         'only' => ['index', 'store', 'update', 'destroy'],
+    ]);
+
+    // The variant master: what each SIZE costs to deliver (per unit), its code
+    // and its display order. Index/update only — sizes are created with the
+    // attribute itself, and nothing here may delete one.
+    Route::apiResource('variant-delivery-charges', VariantDeliveryChargeController::class, [
+        'only' => ['index', 'update'],
     ]);
 
     // Review queue: approve/reject a vendor-proposed catalog product (lightweight —
