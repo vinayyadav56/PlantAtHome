@@ -264,10 +264,19 @@ jobs:
             # 30 days (43200 min); revoke-all-devices already exists as the theft remedy. Enabling
             # logs out sessions older than the window ONCE at deploy — accepted, near-zero users.
             set_env SANCTUM_EXPIRATION_MINUTES 43200
-            set_env AWS_ACCESS_KEY_ID "${{ secrets.AWS_ACCESS_KEY_ID }}"
-            set_env AWS_SECRET_ACCESS_KEY "${{ secrets.AWS_SECRET_ACCESS_KEY }}"
+            # No AWS access key on the box, on purpose. S3 and Secrets Manager both run on
+            # the EC2 instance profile (PlantAtHomeEC2SSM) through the SDK's default chain —
+            # see docs/aws/SECRETS_MANAGER_CUTOVER.md. set_env only rewrites keys it is
+            # called for, so a stale AWS_ACCESS_KEY_ID line from an earlier deploy is removed
+            # by the one-shot cutover-secrets-manager.yml, not by this deploy.
             set_env AWS_DEFAULT_REGION "${{ secrets.AWS_REGION }}"
+            set_env AWS_REGION "${{ secrets.AWS_REGION }}"
             set_env AWS_BUCKET plantathome-media-prod
+            # Written explicitly: the secret name plantathome/{environment}/{slug} derives from
+            # these, and neither was ever managed by a workflow before.
+            set_env APP_ENV production
+            set_env INTEGRATIONS_ENVIRONMENT production
+            set_env INTEGRATIONS_CREDENTIAL_STORE secrets_manager
 
             echo "==> Caching config / routes / views / events..."
             php artisan config:cache || echo "WARNING: config:cache failed — running without config cache"

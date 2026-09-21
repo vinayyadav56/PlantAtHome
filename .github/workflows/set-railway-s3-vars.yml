@@ -1,12 +1,25 @@
 name: Set staging S3 vars (Railway)
 
-# One-shot: copies the API repo's AWS secrets onto the STAGING Railway API service
-# so staging media can use the S3 disk (start.sh reads these env vars). Manual only.
-# Requires secrets: RAILWAY_API_TOKEN (account token), AWS_ACCESS_KEY_ID,
-# AWS_SECRET_ACCESS_KEY, AWS_REGION.
+# One-shot: sets the STAGING Railway API service's AWS identity and integration-store
+# variables (start.sh reads these env vars). Manual only.
+#
+# The identity should be the `plantathome-app-staging` IAM user — scoped to
+# plantathome/staging/* secrets and the media bucket — held in the repo secrets
+# STAGING_AWS_ACCESS_KEY_ID / STAGING_AWS_SECRET_ACCESS_KEY. Until those exist the
+# workflow falls back to the deploy identity, which can reach S3 but NOT staging secrets.
+# Requires secrets: RAILWAY_API_TOKEN (account token), AWS_REGION, and the pair above.
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      credential_store:
+        description: "Where staging stores integration credentials"
+        type: choice
+        options: [secrets_manager, database]
+        default: secrets_manager
+      integrations_environment:
+        description: "Environment label for integration rows and secret names"
+        default: staging
 
 jobs:
   set-vars:
@@ -16,10 +29,12 @@ jobs:
       PROJECT_ID: e6fc52de-45a9-4bc0-92fe-5b9840a4d399
       ENVIRONMENT_ID: 268099e7-b634-4d26-a5ff-a95a0c145f8f
       SERVICE_ID: da92f9ad-814e-4e0e-a0bb-932268379c6b
-      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_ACCESS_KEY_ID: ${{ secrets.STAGING_AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.STAGING_AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
       AWS_BUCKET: plantathome-media-prod
+      CREDENTIAL_STORE: ${{ inputs.credential_store }}
+      INTEGRATIONS_ENVIRONMENT: ${{ inputs.integrations_environment }}
     steps:
       - name: Upsert AWS vars onto the staging API service
         run: |
@@ -35,7 +50,12 @@ jobs:
           upsert AWS_ACCESS_KEY_ID     "$AWS_ACCESS_KEY_ID"
           upsert AWS_SECRET_ACCESS_KEY "$AWS_SECRET_ACCESS_KEY"
           upsert AWS_DEFAULT_REGION    "$AWS_REGION"
+          upsert AWS_REGION            "$AWS_REGION"
           upsert AWS_BUCKET            "$AWS_BUCKET"
+          # Integration credentials: which store, and the environment label that names the
+          # secrets (plantathome/{environment}/{slug}). Railway restarts the service on change.
+          upsert INTEGRATIONS_CREDENTIAL_STORE "$CREDENTIAL_STORE"
+          upsert INTEGRATIONS_ENVIRONMENT      "$INTEGRATIONS_ENVIRONMENT"
           # Container env vars take precedence over the .env start.sh writes, so
           # setting these here flips media to S3 without waiting on an image rebuild.
           upsert MEDIA_DISK            "s3"
