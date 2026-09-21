@@ -63,8 +63,11 @@ class TaxReportExport implements FromCollection, WithHeadings
         $prefix = $settings->options['tax']['invoice_prefix'] ?? 'INV';
 
         foreach ($orders as $order) {
-            $invoiceNo = ($prefix ? $prefix . '-' : '') . $order->tracking_number;
-            $date = (new Carbon($order->created_at))->format('Y-m-d');
+            // The number actually printed on the invoice. Falls back to the old
+            // tracking-number form for orders raised before invoice numbering, so
+            // the return still matches the document the customer holds.
+            $invoiceNo = $order->invoice_number ?: (($prefix ? $prefix . '-' : '') . $order->tracking_number);
+            $date = (new Carbon($order->invoice_date ?? $order->created_at))->format('Y-m-d');
             $customer = $order?->customer?->name ?? $order->customer_name ?? 'Guest';
             $pos = $order->place_of_supply ?? '';
             $posCode = $order->place_of_supply_code ?? '';

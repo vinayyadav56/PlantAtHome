@@ -95,8 +95,19 @@ class Order extends Model
                 'payment_status' => $order->payment_status,
                 'parent_id'      => $order->parent_id,
             ]);
+            // COD and full-wallet orders are payable the moment they exist.
+            \Marvel\Services\Tax\InvoiceNumberService::stamp($order);
         });
         static::updated(function (Order $order) {
+            // Prepaid orders become payable when the gateway confirms. This is
+            // the same seam the events above use, and for the same reason:
+            // payment_status is written from a dozen scattered sites (payment
+            // traits, the reconcile command, wallet), and the model is the only
+            // place that sees them all. Idempotent, so a replayed webhook
+            // cannot mint a second number.
+            if ($order->wasChanged('payment_status')) {
+                \Marvel\Services\Tax\InvoiceNumberService::stamp($order);
+            }
             if ($order->wasChanged('order_status')) {
                 OrderEvent::record($order->id, 'order.status', [
                     'from' => $order->getOriginal('order_status'),

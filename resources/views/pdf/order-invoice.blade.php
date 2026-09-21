@@ -46,6 +46,11 @@
         $sellerLegalName = $taxConfig['legal_name'] ?? ($settings['siteTitle'] ?? null);
         $sellerState = $order->seller_state ?? ($taxConfig['registration_state'] ?? null);
         $placeOfSupply = $order->place_of_supply ?? ($shippingAddress['state'] ?? null);
+        $invoiceNumber = $order->invoice_number
+            ?: (($hasGst && !empty($taxConfig['invoice_prefix'])) ? $taxConfig['invoice_prefix'] . '-' : '') . $order->tracking_number;
+        // The date the invoice was RAISED, not today — reprinting last quarter's
+        // invoice used to silently re-date it to the day it was reprinted.
+        $invoiceDate = $order->invoice_date ?? $order->created_at;
         $gstItems = $hasGst ? $order->items : collect();
 
         $amountDue = $order->payment_status !== 'payment-success' ? $order->paid_total - intval($order?->wallet_point?->amount) : 0;
@@ -76,8 +81,14 @@
                 <p style="font-size: 20px; font-weight: bold; margin: 0 0 8px 0;">TAX INVOICE</p>
             @endif
             @if (isset($translated_text['invoice_no']) || isset($order->tracking_number))
+                {{-- A real invoice number once one has been minted; orders placed
+                     before invoice numbering keep the old tracking-number form so
+                     a reprint still matches what the customer was sent. --}}
                 <p>{{ $translated_text['invoice_no'] }}:
-                    {{ $hasGst && !empty($taxConfig['invoice_prefix']) ? $taxConfig['invoice_prefix'] . '-' : '' }}{{ $order->tracking_number }}</p>
+                    {{ $invoiceNumber }}</p>
+            @endif
+            @if ($hasGst)
+                <p style="margin: 2px 0;">Order ref: {{ $order->tracking_number }}</p>
             @endif
             @if (isset($translated_text['delivery_time']) || isset($order->delivery_time))
                 <p>{{ isset($translated_text['payment_method']) ? $translated_text['payment_method'] : 'Payment Method' }}:
@@ -92,7 +103,7 @@
                 ? ' direction: rtl; float: left; margin-left: 10px;'
                 : 'float: right; text-align: right; margin-right: 5px;' }}">
             @if (isset($translated_text['date']))
-                <p>{{ $translated_text['date'] }}: {{ date('jS F, Y') }}</p>
+                <p>{{ $translated_text['date'] }}: {{ $invoiceDate ? \Illuminate\Support\Carbon::parse($invoiceDate)->format('jS F, Y') : date('jS F, Y') }}</p>
             @endif
         </div>
         <div style="clear: both;"></div>
@@ -157,7 +168,15 @@
                 : 'text-align: right; margin: 0; margin-right: 5px;' }} list-style: none; padding: 0; float: right;">
             @if (isset($settings['siteTitle']))
                 <li style="display: block; color: #000000; font-size:18px; font-weight:bold">
-                    <div style="margin-bottom: 10px">{{ $settings['siteTitle'] }}</div>
+                    <div style="margin-bottom: {{ $hasGst && $sellerLegalName && $sellerLegalName !== ($settings['siteTitle'] ?? null) ? '2px' : '10px' }}">{{ $settings['siteTitle'] }}</div>
+                </li>
+            @endif
+
+            {{-- The registered entity, which is who the invoice is actually FROM
+                 and need not be the trading name. --}}
+            @if ($hasGst && $sellerLegalName && $sellerLegalName !== ($settings['siteTitle'] ?? null))
+                <li style="display: block; color: #6f6f6f; font-size:14px;">
+                    <div style="margin-bottom: 10px">{{ $sellerLegalName }}</div>
                 </li>
             @endif
 
@@ -528,6 +547,27 @@
         </div>
         <div style="clear: both;"></div>
     </div>
+
+    @if ($hasGst)
+        <div style="clear: both; margin-top: 30px;">
+            {{-- Every taxable supply has to say which way the liability runs.
+                 PlantAtHome sells as principal on its own GSTIN, so forward
+                 charge always: the customer is not liable to pay this GST to
+                 the department themselves. --}}
+            <p style="color: #6b7280; font-size: 12px; margin: 0 0 4px 0;">Tax payable on reverse charge: No</p>
+            <p style="color: #6b7280; font-size: 12px; margin: 0;">
+                This is a computer-generated invoice.
+            </p>
+
+            <div style="margin-top: 26px; width: 40%; float: right; text-align: center;">
+                <div style="border-top: 1px solid #9ca3af; padding-top: 6px; color: #374151; font-size: 12px;">
+                    For {{ $sellerLegalName ?: ($settings['siteTitle'] ?? '') }}<br>
+                    <span style="color: #6b7280;">Authorised signatory</span>
+                </div>
+            </div>
+            <div style="clear: both;"></div>
+        </div>
+    @endif
 </body>
 
 </html>
