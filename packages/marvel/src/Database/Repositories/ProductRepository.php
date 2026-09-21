@@ -743,7 +743,27 @@ class ProductRepository extends BaseRepository
                 }
             }
 
+            // A product's tax setup decides what every customer is charged for it,
+            // and it was being silently rewritten by an unrelated edit (see the
+            // GetSingleProductResource fix) with no record of who or when. Only
+            // the tax keys are diffed — auditing the whole payload would bury them.
+            $taxKeys = ['hsn_code', 'tax_rate_id', 'tax_verified', 'tax_inclusive'];
+            $taxBefore = $product->only($taxKeys);
+
             $product->update($data);
+
+            $taxAfter = $product->fresh()?->only($taxKeys) ?? [];
+            if ($taxBefore != $taxAfter) {
+                \Marvel\Database\Models\Accounting\AccountingAuditLog::record(
+                    'product_tax',
+                    $product->id,
+                    'updated',
+                    $taxBefore,
+                    $taxAfter,
+                    $product->name
+                );
+            }
+
             if ($product->product_type === ProductType::SIMPLE) {
                 // detach(), not delete(): on a BelongsToMany, delete() removes the
                 // attribute_values ROWS — which every other product shares — rather

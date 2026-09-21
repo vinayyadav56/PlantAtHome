@@ -95,6 +95,33 @@ class SettingsController extends CoreController
      * @return mixed
      * @throws ValidatorException
      */
+    /**
+     * Record changes to the financial config blocks (tax, vendor pricing).
+     *
+     * Settings is one JSON blob overwritten wholesale, so "who changed the GSTIN"
+     * or "when did the margin move" had no answer at all — and those two blocks
+     * decide what every customer is charged. Only the financial keys are diffed:
+     * logging the whole blob on every homepage-banner save would bury them.
+     */
+    private function auditFinancialOptions(?array $before, ?array $after): void
+    {
+        foreach (['tax', 'vendorPricing'] as $key) {
+            $was = $before[$key] ?? null;
+            $now = $after[$key] ?? null;
+            if ($was == $now) {
+                continue;
+            }
+            \Marvel\Database\Models\Accounting\AccountingAuditLog::record(
+                $key === 'tax' ? 'tax_settings' : 'pricing_settings',
+                $key,
+                'updated',
+                is_array($was) ? $was : null,
+                is_array($now) ? $now : null,
+                'Settings'
+            );
+        }
+    }
+
     public function store(SettingsRequest $request)
     {
         // Settings are SINGLE-ROW by design (the translation engine is
@@ -116,6 +143,7 @@ class SettingsController extends CoreController
         ]);
 
         $data = $this->repository->where('language', $language)->first();
+        $before = $data ? (array) $data->options : null;
 
         if ($data) {
             $settings =  tap($data)->update($request->only(['options']));
@@ -133,6 +161,7 @@ class SettingsController extends CoreController
             Cache::forget('cached_settings_' . $requested);
         }
         event(new Maintenance($language));
+        $this->auditFinancialOptions($before, (array) $request['options']);
         return $settings;
     }
 
@@ -164,7 +193,9 @@ class SettingsController extends CoreController
         $language = $request->language ? $request->language : DEFAULT_LANGUAGE;
         $settings = $this->repository->first();
         if (isset($settings->id)) {
+            $before = (array) $settings->options;
             $updated = $this->repository->update($request->only(['options']), $settings->id);
+            $this->auditFinancialOptions($before, (array) $request['options']);
             // Bust the forever-cached settings response so storefront + admin reflect the edit
             // immediately. store() already did this; update() previously did NOT — so admin
             // saves (homepage banners, hero slides, design system, …) read stale until restart.

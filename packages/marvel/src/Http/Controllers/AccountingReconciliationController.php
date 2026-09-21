@@ -94,12 +94,43 @@ class AccountingReconciliationController extends CoreController
         return response()->json(['journal' => (new OpeningBalanceService())->confirm((int) $shopId, $this->actor($request), $request->input('note'))]);
     }
 
+    /**
+     * Finance -> Change History: the same log, narrowed to the config that
+     * decides what customers are charged.
+     *
+     * A separate entry point because it is gated on settings.view, not
+     * accounting.view — the people who set tax rates and margins are not
+     * necessarily the people with ledger access, and until now they could not
+     * see their own changes.
+     */
+    public function financialConfigHistory(Request $request)
+    {
+        $request->merge(['auditable_type' => self::FINANCIAL_CONFIG_TYPES]);
+
+        return $this->auditLog($request);
+    }
+
+    /** The config surfaces Change History covers. */
+    private const FINANCIAL_CONFIG_TYPES = [
+        'tax_class',
+        'tax_rate_version',
+        'hsn_code',
+        'product_tax',
+        'pricing_margin',
+        'variant_delivery_charge',
+        'tax_settings',
+        'pricing_settings',
+    ];
+
     public function auditLog(Request $request)
     {
         $q = AccountingAuditLog::query()->orderByDesc('id');
         foreach (['auditable_type', 'auditable_id', 'action', 'actor_id', 'reference'] as $col) {
             if ($request->filled($col)) {
-                $q->where($col, $request->input($col));
+                // An array narrows to a set — Change History passes the whole
+                // financial-config list rather than one type at a time.
+                $value = $request->input($col);
+                is_array($value) ? $q->whereIn($col, $value) : $q->where($col, $value);
             }
         }
         if ($request->filled('from')) {

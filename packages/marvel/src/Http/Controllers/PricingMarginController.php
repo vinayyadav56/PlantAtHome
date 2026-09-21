@@ -4,6 +4,7 @@ namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Artisan;
+use Marvel\Database\Models\Accounting\AccountingAuditLog;
 use Marvel\Database\Models\PricingMargin;
 use Marvel\Services\AvailabilityService;
 use Marvel\Services\MarginResolver;
@@ -16,6 +17,9 @@ use Marvel\Services\MarginResolver;
  */
 class PricingMarginController extends CoreController
 {
+    /** What a margin change is, for the audit trail. */
+    private const AUDITED = ['city', 'type_id', 'margin_type', 'margin_percent', 'margin_flat', 'is_active'];
+
     /** GET pricing-margins — full matrix, global default first, then by specificity. */
     public function index(Request $request)
     {
@@ -45,6 +49,9 @@ class PricingMarginController extends CoreController
         }
 
         $cityKey = $this->normalizeCity($data['city'] ?? null);
+        $before = PricingMargin::where('city', $cityKey)
+            ->where('type_id', $data['type_id'] ?? null)
+            ->first()?->only(self::AUDITED);
         // updateOrCreate (not the unique index) enforces one row per pair — MySQL
         // unique indexes allow multiple NULLs (see the migration note).
         $margin = PricingMargin::updateOrCreate(
@@ -55,6 +62,14 @@ class PricingMarginController extends CoreController
                 'margin_flat'    => $type === 'flat' ? (float) ($data['margin_flat'] ?? 0) : null,
                 'is_active'      => (bool) ($data['is_active'] ?? true),
             ]
+        );
+
+        AccountingAuditLog::record(
+            'pricing_margin',
+            $margin->id,
+            $margin->wasRecentlyCreated ? 'created' : 'updated',
+            $margin->wasRecentlyCreated ? null : $before,
+            $margin->only(self::AUDITED)
         );
 
         $this->refreshPricing();
@@ -86,7 +101,16 @@ class PricingMarginController extends CoreController
         if (array_key_exists('is_active', $data) && $data['is_active'] !== null) {
             $margin->is_active = (bool) $data['is_active'];
         }
+        $before = $margin->getOriginal();
         $margin->save();
+
+        AccountingAuditLog::record(
+            'pricing_margin',
+            $margin->id,
+            'updated',
+            array_intersect_key($before, array_flip(self::AUDITED)),
+            $margin->only(self::AUDITED)
+        );
 
         $this->refreshPricing();
         return $margin->fresh('type:id,name,slug');
@@ -96,6 +120,7 @@ class PricingMarginController extends CoreController
     public function destroy(Request $request, $id)
     {
         $margin = PricingMargin::findOrFail((int) $id);
+        AccountingAuditLog::record('pricing_margin', $margin->id, 'deleted', $margin->only(self::AUDITED), null);
         $margin->delete();
 
         $this->refreshPricing();

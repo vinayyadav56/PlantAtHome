@@ -996,6 +996,9 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     Route::post('accounting/opening-balances', [AccountingReconciliationController::class, 'postOpeningBalance'])->middleware('permission:accounting.approve');
     Route::post('accounting/opening-balances/{shopId}/confirm', [AccountingReconciliationController::class, 'confirmOpeningBalance'])->whereNumber('shopId')->middleware('permission:accounting.approve');
     Route::get('accounting/audit-log', [AccountingReconciliationController::class, 'auditLog'])->middleware('permission:accounting.view');
+    // Same log, narrowed to tax/pricing config and gated on settings rather than
+    // accounting: whoever sets a GST rate must be able to see who changed it last.
+    Route::get('settings/change-history', [AccountingReconciliationController::class, 'financialConfigHistory'])->middleware('permission:settings.view');
     // Returns lifecycle (spec §27): customers open against their own lines; admins decide.
     Route::get('return-requests', [ReturnRequestController::class, 'index'])->middleware('permission:orders.view');
     Route::post('return-requests', [ReturnRequestController::class, 'store']);

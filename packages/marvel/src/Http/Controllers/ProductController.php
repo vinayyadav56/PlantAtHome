@@ -308,6 +308,48 @@ class ProductController extends CoreController
         return empty($statuses) ? $query : $query->whereNotIn('products.status', $statuses);
     }
 
+    /**
+     * `missing_tax_config=1` — products the GST engine would have to tax at 0%
+     * because nothing is configured, or whose rate the CA has not signed off.
+     *
+     * Deliberately NOT a Prettus `search` filter: this is a negation over two
+     * tables (a product with no rate of its own still inherits its category's),
+     * and that grammar only builds equality/in/between. Same shape as
+     * applyStatusExclusion — a raw param applied to the builder.
+     *
+     * Only on the list, not on facetBaseQuery: this is an admin worklist, not a
+     * storefront filter, so there are no facet counts to keep in step with it.
+     */
+    private function applyMissingTaxConfig($query, Request $request)
+    {
+        if (!$request->boolean('missing_tax_config')) {
+            return $query;
+        }
+
+        $hasCategoryRates = \Illuminate\Support\Facades\Schema::hasColumn('categories', 'tax_rate_id');
+
+        return $query->where(function ($q) use ($hasCategoryRates) {
+            // no rate of its own, and none inherited from a category
+            $q->where(function ($noRate) use ($hasCategoryRates) {
+                $noRate->whereNull('products.tax_rate_id');
+                if ($hasCategoryRates) {
+                    $noRate->whereNotExists(function ($sub) {
+                        $sub->selectRaw(1)
+                            ->from('category_product')
+                            ->join('categories', 'categories.id', '=', 'category_product.category_id')
+                            ->whereColumn('category_product.product_id', 'products.id')
+                            ->whereNotNull('categories.tax_rate_id');
+                    });
+                }
+            })
+                // or no HSN, which the return needs even when the rate is right
+                ->orWhereNull('products.hsn_code')
+                ->orWhere('products.hsn_code', '')
+                // or the CA has not signed it off
+                ->orWhere('products.tax_verified', false);
+        });
+    }
+
     private function facetBaseQuery(Request $request)
     {
         $query = Product::query()
@@ -564,6 +606,7 @@ class ProductController extends CoreController
         $products_query = $this->applyUnpricedGate($products_query, $request);
         $products_query = $this->applyCatalogGate($products_query, $request);
         $products_query = $this->applyStatusExclusion($products_query, $request);
+        $products_query = $this->applyMissingTaxConfig($products_query, $request);
 
         // City-first availability (single source of truth: AvailabilityService::cityScopeProductIds):
         //   - city has vendor inventory -> STRICT, only that inventory
