@@ -36,7 +36,13 @@ AWS_DEFAULT_REGION=${AWS_DEFAULT_REGION:-ap-south-1}
 AWS_REGION=${AWS_REGION:-${AWS_DEFAULT_REGION:-ap-south-1}}
 AWS_BUCKET=${AWS_BUCKET:-plantathome-media-prod}
 INTEGRATIONS_ENVIRONMENT=${INTEGRATIONS_ENVIRONMENT:-staging}
-INTEGRATIONS_CREDENTIAL_STORE=${INTEGRATIONS_CREDENTIAL_STORE:-database}
+# Staging holds credentials in Secrets Manager, like production. Defaulted here rather than
+# set as a Railway variable because the container var wins anyway when one is set, and this
+# way staging exercises the real code path without depending on Railway API access.
+# The key staging already uses carries plantathome/staging/* access and nothing in production.
+# If that access is ever missing the failure is contained: reads fall through to the env
+# values below (the app keeps working) and a credential SAVE returns a clear 422.
+INTEGRATIONS_CREDENTIAL_STORE=${INTEGRATIONS_CREDENTIAL_STORE:-secrets_manager}
 MAIL_MAILER=smtp
 MAIL_HOST=smtp.sendgrid.net
 MAIL_PORT=587
