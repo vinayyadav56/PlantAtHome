@@ -227,6 +227,49 @@ if (!function_exists('gateway_path')) {
         }
     }
 
+    if (!function_exists('sizeNames')) {
+        /**
+         * The size names the catalog actually uses, cheapest first — read from
+         * the Size attribute, which the variant-master work made the master
+         * record (2026_09_22_000000 added `code`/`sort_order`/`delivery_charge`
+         * to attribute_values).
+         *
+         * The pricing commands and the pot seeder each used to carry their own
+         * ['Small', 'Medium', 'Large'] literal. Renaming a size in admin, or
+         * adding a fourth, left those writers building variations for names the
+         * storefront no longer offers -- and the delivery charge now hangs off
+         * these rows, so a size the writers do not know about ships for nothing.
+         *
+         * Falls back to the launch three only when the attribute has no values
+         * yet, which is the fresh-database case the seeders bootstrap.
+         *
+         * @return array<int, string>
+         */
+        function sizeNames(): array
+        {
+            $query = \Marvel\Database\Models\AttributeValue::whereHas(
+                'attribute',
+                fn ($q) => $q->where('slug', 'size')->where('language', 'en')
+            );
+
+            // Checked per call, never memoised in a static: deploys migrate AFTER
+            // the new code is already serving, so a worker that cached "no such
+            // column" would keep the launch order until it recycled.
+            if (\Illuminate\Support\Facades\Schema::hasColumn('attribute_values', 'sort_order')) {
+                $query->orderBy('sort_order');
+            }
+
+            $names = $query->orderBy('id')->pluck('value')
+                ->map(fn ($v) => trim((string) $v))
+                ->filter()
+                ->unique()
+                ->values()
+                ->all();
+
+            return $names ?: ['Small', 'Medium', 'Large'];
+        }
+    }
+
     if (!function_exists('allSizeValueIds')) {
         /**
          * Every value id under the Size attribute — for detaching stale sizes

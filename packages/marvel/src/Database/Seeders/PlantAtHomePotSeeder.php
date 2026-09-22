@@ -29,7 +29,6 @@ use Marvel\Database\Models\Type;
  */
 class PlantAtHomePotSeeder extends Seeder
 {
-    private const SIZES = ['Small', 'Medium', 'Large'];
 
     private function dataPath(): string
     {
@@ -67,10 +66,25 @@ class PlantAtHomePotSeeder extends Seeder
             return;
         }
 
-        // 3. Size attribute + Small/Medium/Large values, shared with plants via
+        // 3. Size attribute + its values, shared with plants via
         //    the one helper. (This block used to key firstOrCreate on shop_id,
         //    which minted a second "Size" attribute whenever the id differed.)
-        $valueIds = sizeValueIds(self::SIZES);
+        // Every size the Size attribute already knows, PLUS any this data file
+        // names. Syncing $allValueIds onto each pot below is what renders the PDP
+        // chips, so a size present in the data but missing from the attribute
+        // would create a variation row no chip can select.
+        $dataSizes = [];
+        foreach ($pots as $p) {
+            foreach (($p['sizes'] ?? []) as $s) {
+                $name = trim((string) ($s['size'] ?? ''));
+                if ($name !== '') {
+                    $dataSizes[$name] = true;
+                }
+            }
+        }
+        $valueIds = sizeValueIds(array_values(array_unique(
+            array_merge(sizeNames(), array_keys($dataSizes))
+        )));
         $allValueIds = array_values($valueIds);
 
         // 4. Material CATEGORIES under the pots-planters type (drive the chips).

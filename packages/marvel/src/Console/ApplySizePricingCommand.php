@@ -28,10 +28,16 @@ class ApplySizePricingCommand extends Command
 
     protected $description = 'Convert plants to variable products with Small/Medium/Large size pricing; flat-price other demo products.';
 
-    private const SIZES = ['Small', 'Medium', 'Large'];
+    /**
+     * Larger pot/plant → higher price, indexed by POSITION in the size ladder
+     * rather than by name, so renaming a size in admin cannot silently drop its
+     * multiplier. The three anchors are the ones the catalog launched with;
+     * a fourth size and beyond keeps climbing by the last step.
+     */
+    private const SIZE_MULT = [1.0, 1.7, 2.6];
 
-    /** Larger pot/plant → higher price. Small = derived base. */
-    private const SIZE_MULT = ['Small' => 1.0, 'Medium' => 1.7, 'Large' => 2.6];
+    /** @var array<int, string> cheapest first, from the Size attribute */
+    private array $sizes = [];
 
     public function handle(): int
     {
@@ -45,7 +51,8 @@ class ApplySizePricingCommand extends Command
         // 1. Ensure the Size attribute + Small/Medium/Large values (once).
         //    Shared helper: keying this on shop_id locally is what used to mint a
         //    second "Size" attribute and double the size chips on product pages.
-        $valueIds = sizeValueIds(self::SIZES);
+        $this->sizes = sizeNames();
+        $valueIds = sizeValueIds($this->sizes);
         $allValueIds = array_values($valueIds);
 
         // 2. Load pricing signals from the source data (slug → meta).
@@ -116,7 +123,7 @@ class ApplySizePricingCommand extends Command
         $slug = (string) $product->slug;
         $base = $this->basePrice($slug, $meta); // the Small price
 
-        foreach (self::SIZES as $size) {
+        foreach ($this->sizes as $index => $size) {
             // Preserve any existing row (admin edits survive re-deploys).
             $existing = $product->variation_options()->where('title', $size)->first();
             if ($existing) {
@@ -127,7 +134,7 @@ class ApplySizePricingCommand extends Command
                 }
                 continue;
             }
-            $price = $this->roundTo9($base * self::SIZE_MULT[$size]);
+            $price = $this->roundTo9($base * $this->multiplier($index));
             $product->variation_options()->create([
                 'title'      => $size,
                 'price'      => $price,
@@ -196,6 +203,18 @@ class ApplySizePricingCommand extends Command
     }
 
     /** Round to a retail-looking …9 ending. */
+    /** Price multiplier for the size at $index, extrapolating past the anchors. */
+    private function multiplier(int $index): float
+    {
+        if (isset(self::SIZE_MULT[$index])) {
+            return self::SIZE_MULT[$index];
+        }
+        $last = count(self::SIZE_MULT) - 1;
+        $step = self::SIZE_MULT[$last] - self::SIZE_MULT[$last - 1];
+
+        return self::SIZE_MULT[$last] + $step * ($index - $last);
+    }
+
     private function roundTo9(float $p): int
     {
         return (int) max(49, ((int) round($p / 10) * 10) - 1);

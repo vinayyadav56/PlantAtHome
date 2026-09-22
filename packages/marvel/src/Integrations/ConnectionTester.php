@@ -63,7 +63,7 @@ class ConnectionTester
             // the detail goes to the application log.
             \Illuminate\Support\Facades\Log::warning('integration probe threw', [
                 'provider' => $slug,
-                'error'    => $e->getMessage(),
+                'error'    => self::scrubSecrets($e->getMessage()),
             ]);
             $res = $this->result(IntegrationProvider::HEALTH_UNKNOWN, false, 'Probe failed (' . class_basename($e) . ') — see the application log.');
         }
@@ -114,6 +114,7 @@ class ConnectionTester
             'google_maps' => $this->testGoogleMaps(),
             'whatsapp'  => $this->testWhatsapp(),
             'aws_s3'    => $this->testS3(),
+            'msg91'     => $this->testMsg91(),
             default => $this->result(
                 IntegrationProvider::HEALTH_UNKNOWN,
                 false,
@@ -371,6 +372,73 @@ class ConnectionTester
             'body'        => isset($response['body']) ? mb_substr((string) $response['body'], 0, 500) : null,
             'duration_ms' => $exchange['duration_ms'] ?? null,
         ];
+    }
+
+    /**
+     * Strip credential values out of a transport error before it is logged.
+     *
+     * Keeping the URL out of the API response was only half the fix: a Guzzle
+     * ConnectionException quotes the full request URL, and two probes have to pass
+     * their credential in the query string because that is the only contract the
+     * vendor offers -- Google Maps takes `key`, MSG91's balance API takes `authkey`.
+     * Writing that message to the application log verbatim files a live credential
+     * in a place the whole ops team can read.
+     */
+    private static function scrubSecrets(string $message): string
+    {
+        return (string) preg_replace(
+            '/\b(authkey|auth_key|key|api_key|token|password|secret)=[^&\s\'\"]*/i',
+            '$1=[REDACTED]',
+            $message
+        );
+    }
+
+    /**
+     * MSG91 read-only probe: the route-balance API.
+     *
+     * MSG91 has no "who am I" endpoint, and every other call it offers SENDS something --
+     * an OTP, an SMS -- which a settings-screen button must never do. balance.php is the
+     * one documented read-only call that still exercises the auth key.
+     *
+     * Two awkward parts of that contract, both deliberate here:
+     *   - the key travels in the query string; there is no header form. scrubSecrets()
+     *     above covers the logging half of that.
+     *   - a bad key comes back as HTTP 200 with a message, not a 4xx. So the test is what
+     *     the body IS, not what the status says: a balance is a number.
+     */
+    private function testMsg91(): array
+    {
+        $key = $this->integrations->secret('msg91', 'auth_key') ?: config('services.msg91.auth_key');
+        if (!$key) {
+            return $this->result(IntegrationProvider::HEALTH_UNKNOWN, false, 'Not configured: Auth Key is missing.');
+        }
+
+        $res = Http::timeout(10)->get('https://api.msg91.com/api/balance.php', [
+            'authkey' => $key,
+            'type'    => 4, // transactional route -- the one the OTP gateway sends on
+        ]);
+        $body = trim((string) $res->body());
+
+        if ($res->status() >= 500) {
+            return $this->result(IntegrationProvider::HEALTH_MAINTENANCE, false, 'MSG91 returned ' . $res->status() . '.');
+        }
+        if (is_numeric($body)) {
+            return $this->result(
+                IntegrationProvider::HEALTH_CONNECTED,
+                true,
+                'Connected.',
+                // A working key with no credit still fails every send, so the number is
+                // the part of this answer an operator actually needs.
+                ['route_balance' => (float) $body]
+            );
+        }
+        if (stripos($body, 'authkey') !== false || stripos($body, 'invalid') !== false || $res->status() === 401 || $res->status() === 403) {
+            return $this->result(IntegrationProvider::HEALTH_AUTH_FAILED, false, 'MSG91 rejected the auth key.');
+        }
+
+        // Never echo $body: an unrecognised MSG91 reply has, historically, been the
+        // request echoed back.
+        return $this->result(IntegrationProvider::HEALTH_UNKNOWN, false, 'MSG91 returned an unrecognised reply (HTTP ' . $res->status() . ').');
     }
 
     private function result(string $status, bool $ok, string $message, array $detail = []): array

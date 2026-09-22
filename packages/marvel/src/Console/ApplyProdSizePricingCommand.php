@@ -38,7 +38,8 @@ class ApplyProdSizePricingCommand extends Command
 
     protected $description = 'Reversibly convert production plants to variable Small/Medium/Large size pricing (real prices preserved).';
 
-    private const SIZES = ['Small', 'Medium', 'Large'];
+    /** @var array<int, string> cheapest first, read from the Size attribute */
+    private array $sizes = [];
 
     public function handle(): int
     {
@@ -47,6 +48,10 @@ class ApplyProdSizePricingCommand extends Command
             $this->error('Plants type not found.');
             return self::FAILURE;
         }
+
+        // The Size attribute is the variant master, so the ladder is however many
+        // sizes it defines -- not a literal three this command carries itself.
+        $this->sizes = sizeNames();
 
         if ($this->option('rollback')) {
             return $this->rollback($type);
@@ -57,7 +62,7 @@ class ApplyProdSizePricingCommand extends Command
         $ladderOnly = $this->option('group') === 'ladder';
 
         // Ensure the Size attribute + values (skip writes on dry-run).
-        $valueIds = $dry ? ['Small' => 0, 'Medium' => 0, 'Large' => 0] : $this->ensureSizeAttribute();
+        $valueIds = $dry ? array_fill_keys($this->sizes, 0) : $this->ensureSizeAttribute();
 
         $ladder = 0;   // real min<price<max
         $derived = 0;  // flat → derived ends
@@ -72,7 +77,7 @@ class ApplyProdSizePricingCommand extends Command
                         return false;
                     }
                     // Already converted? skip (idempotent).
-                    if ($p->product_type === 'variable' && $p->variation_options()->where('title', 'Small')->exists()) {
+                    if ($p->product_type === 'variable' && $p->variation_options()->whereIn('title', $this->sizes)->exists()) {
                         continue;
                     }
 
@@ -87,7 +92,7 @@ class ApplyProdSizePricingCommand extends Command
 
                     $small = $isLadder ? (float) $p->min_price : $this->round9($price * 0.7);
                     $large = ((float) $p->max_price > $price) ? (float) $p->max_price : $this->round9($price * 1.4);
-                    $sizes = ['Small' => $small, 'Medium' => $price, 'Large' => $large];
+                    $sizes = $this->ladderAcross($small, $price, $large);
 
                     $isLadder ? $ladder++ : $derived++;
                     $converted++;
@@ -134,7 +139,7 @@ class ApplyProdSizePricingCommand extends Command
         }
 
         $qParts = $this->splitQty((int) $p->quantity);
-        foreach (self::SIZES as $size) {
+        foreach ($this->sizes as $size) {
             if ($p->variation_options()->where('title', $size)->exists()) {
                 continue;
             }
@@ -173,8 +178,9 @@ class ApplyProdSizePricingCommand extends Command
             $this->warn('No backup rows — nothing to roll back.');
             return self::SUCCESS;
         }
-        $sizeAttrValueIds = AttributeValue::whereHas('attribute', fn ($q) => $q->where('slug', 'size'))
-            ->whereIn('value', self::SIZES)->pluck('id')->all();
+        // Every value ever filed under Size, not just the ones currently named:
+        // a size renamed after conversion would otherwise stay attached forever.
+        $sizeAttrValueIds = allSizeValueIds();
 
         $restored = 0;
         foreach ($backups as $b) {
@@ -183,7 +189,7 @@ class ApplyProdSizePricingCommand extends Command
                 continue;
             }
             DB::transaction(function () use ($p, $b, $sizeAttrValueIds, &$restored) {
-                $p->variation_options()->whereIn('title', self::SIZES)->delete();
+                $p->variation_options()->whereIn('title', $this->sizes)->delete();
                 if ($sizeAttrValueIds) {
                     $p->variations()->detach($sizeAttrValueIds);
                 }
@@ -212,19 +218,66 @@ class ApplyProdSizePricingCommand extends Command
      */
     private function ensureSizeAttribute(): array
     {
-        return sizeValueIds(self::SIZES);
+        return sizeValueIds($this->sizes);
     }
 
-    /** Split stock across sizes, preserving the total (each ≥ 1). */
+    /**
+     * Spread the product's real price ladder across however many sizes there are.
+     * With the usual three this returns exactly [min, price, max] -- the price the
+     * product already carries stays on the middle size. With more, the interior
+     * sizes interpolate along the same piecewise-linear curve, so adding a size
+     * never re-prices the two ends.
+     *
+     * @return array<string, int>
+     */
+    private function ladderAcross(float $small, float $price, float $large): array
+    {
+        $n = count($this->sizes);
+        if ($n === 1) {
+            return [$this->sizes[0] => (int) round($price)];
+        }
+
+        $out = [];
+        foreach ($this->sizes as $i => $name) {
+            $t = $i / ($n - 1);
+            $out[$name] = (int) round(
+                $t <= 0.5
+                    ? $small + ($price - $small) * ($t / 0.5)
+                    : $price + ($large - $price) * (($t - 0.5) / 0.5)
+            );
+        }
+
+        return $out;
+    }
+
+    /**
+     * Split stock across sizes, preserving the total (each >= 1). Stock skews to
+     * the middle of the ladder, which is what sells; the 35/40/25 weights are the
+     * ones the catalog launched with and still apply to the usual three sizes.
+     *
+     * @return array<string, int>
+     */
     private function splitQty(int $q): array
     {
-        if ($q <= 3) {
-            return ['Small' => 1, 'Medium' => 1, 'Large' => 1];
+        $n = count($this->sizes);
+        if ($q <= $n) {
+            return array_fill_keys($this->sizes, 1);
         }
-        $s = max(1, (int) round($q * 0.35));
-        $m = max(1, (int) round($q * 0.40));
-        $l = max(1, $q - $s - $m);
-        return ['Small' => $s, 'Medium' => $m, 'Large' => $l];
+
+        $weights = $n === 3 ? [0.35, 0.40, 0.25] : array_fill(0, $n, 1 / $n);
+
+        $out = [];
+        $used = 0;
+        foreach ($this->sizes as $i => $name) {
+            if ($i === $n - 1) {
+                $out[$name] = max(1, $q - $used);
+                break;
+            }
+            $out[$name] = max(1, (int) round($q * $weights[$i]));
+            $used += $out[$name];
+        }
+
+        return $out;
     }
 
     private function round9(float $p): int
