@@ -112,13 +112,28 @@ class ConfigOverlay
         try {
             $environment = (new IntegrationService())->environment();
             $key = self::bagsCacheKey($environment, $rows);
-            $cached = Cache::remember(
-                $key,
-                (int) config('integrations.cache_ttl', 600),
-                fn () => Crypt::encrypt(app(CredentialStore::class)->getMany($rows))
-            );
+            $cached = Cache::get($key);
+            if (is_string($cached)) {
+                return (array) Crypt::decrypt($cached);
+            }
 
-            return (array) Crypt::decrypt($cached);
+            $bags = app(CredentialStore::class)->getMany($rows);
+
+            // Cache only a COMPLETE read. getMany never throws — a failed or partially failed
+            // batch comes back as a short array, and caching that would serve "nothing is
+            // configured" as the truth for a full TTL while the admin still showed every
+            // provider green. Every row that names a secret must have produced a bag.
+            $expected = 0;
+            foreach ($rows as $row) {
+                if (!empty($row->secret_name)) {
+                    $expected++;
+                }
+            }
+            if (count($bags) >= $expected) {
+                Cache::put($key, Crypt::encrypt($bags), (int) config('integrations.cache_ttl', 600));
+            }
+
+            return $bags;
         } catch (DecryptException) {
             // cached under a since-rotated APP_KEY — drop it and read through once
             try {

@@ -86,6 +86,21 @@ class MigrateIntegrationCredentials extends Command
 
         $this->table(['provider', 'action', 'secret', 'verified', 'column'], $report);
 
+        // Nothing reads a row outside the active environment any more (the cross-environment
+        // fallback was removed when secrets became environment-scoped), so a row left under
+        // another label is invisible to the running app. Worth saying out loud rather than
+        // leaving someone to find it when a provider stops working.
+        $others = IntegrationProvider::query()
+            ->where('environment', '!=', $environment)
+            ->whereNotNull('credentials')
+            ->get(['provider_slug', 'environment']);
+        if ($others->isNotEmpty()) {
+            $this->warn('Rows holding credentials under a DIFFERENT environment label (not touched, and not read by this deployment):');
+            foreach ($others as $other) {
+                $this->line("  {$other->provider_slug} [{$other->environment}] — re-enter it under '{$environment}', or run again with --relabel={$other->environment}:{$environment}");
+            }
+        }
+
         if ($failures > 0) {
             $this->error("{$failures} row(s) could not be verified in the store and were NOT purged.");
 
@@ -101,35 +116,38 @@ class MigrateIntegrationCredentials extends Command
         $slug = (string) $row->provider_slug;
         $def = ProviderRegistry::find($slug);
         $declared = $def ? $def->credentialNames() : [];
-        $bag = array_intersect_key($column->get($row) ?? [], array_flip($declared));
-        $hasColumnBag = ($column->get($row) ?? []) !== [];
+        $columnBag = $column->get($row) ?? [];
+        $bag = array_intersect_key($columnBag, array_flip($declared));
         $alreadyStored = !empty($row->secret_name);
 
-        // Nothing declared (aws_s3 after the identity fields were removed): there is nothing to
-        // store, only a stale bag to drop.
-        if ($declared === []) {
-            if ($hasColumnBag && $purge && !$dryRun) {
-                $this->purge($row, null);
-            }
+        // A bag this command cannot copy is a bag it must not destroy. Both of these mean the
+        // registry no longer declares the fields the column holds — aws_s3 after its AWS keys
+        // moved to the IAM role is the known case, but the same branch would fire for a typo or
+        // a half-finished registry edit, and purging there would erase live credentials with no
+        // copy anywhere. Reported and LEFT ALONE; the column is encrypted and unread.
+        if ($columnBag !== [] && $bag === []) {
+            $note = $declared === []
+                ? 'no credential fields declared — bag left in place'
+                : 'bag holds no declared fields — left in place';
 
-            return [[$slug, $hasColumnBag ? 'drop stale bag (no credential fields declared)' : 'nothing to do', '—', '—', $hasColumnBag && $purge && !$dryRun ? 'purged' : ($hasColumnBag ? 'kept' : 'empty')], true];
-        }
-
-        if (!$hasColumnBag) {
-            return [[$slug, $alreadyStored ? 'already migrated' : 'nothing stored', (string) ($row->secret_name ?? '—'), '—', 'empty'], true];
+            return [[$slug, $note, (string) ($row->secret_name ?? '—'), '—', 'kept'], true];
         }
 
         if ($bag === []) {
-            // The column holds keys the registry no longer declares — nothing worth copying.
-            if ($purge && !$dryRun) {
-                $this->purge($row, null);
-            }
-
-            return [[$slug, 'drop bag (no declared fields present)', '—', '—', $purge && !$dryRun ? 'purged' : 'kept'], true];
+            return [[$slug, $alreadyStored ? 'already migrated' : 'nothing stored', (string) ($row->secret_name ?? '—'), '—', 'empty'], true];
         }
 
         if ($dryRun) {
-            return [[$slug, $alreadyStored ? 'would verify' : 'would copy ' . count($bag) . ' field(s)', $store->secretName($row) ?? '—', 'n/a', $purge ? 'would purge' : 'kept'], true];
+            // A dry run that makes no AWS call is a weak pre-flight for a one-way operation, so
+            // it does the one call that proves reachability AND permission without writing.
+            try {
+                $store->get($row);
+                $reachable = 'store reachable';
+            } catch (Throwable $e) {
+                $reachable = 'STORE UNREACHABLE: ' . class_basename($e);
+            }
+
+            return [[$slug, ($alreadyStored ? 'would verify' : 'would copy ' . count($bag) . ' field(s)') . " ({$reachable})", $store->secretName($row) ?? '—', 'n/a', $purge ? 'would purge' : 'kept'], true];
         }
 
         try {
@@ -143,13 +161,19 @@ class MigrateIntegrationCredentials extends Command
             return [[$slug, 'FAILED: store write', $store->secretName($row) ?? '—', 'no', 'kept'], false];
         }
 
-        // What we read back must be exactly what the column held (or, for a row migrated
-        // earlier, must at least cover it — the store may legitimately be newer).
-        $verified = $alreadyStored
-            ? array_intersect_key($readback, $bag) !== [] || $readback === $bag
-            : $readback === $bag;
+        // Compare VALUES, field by field. An earlier version intersected KEYS, which a single
+        // overlapping field name satisfied — so a store holding one stale field would have
+        // "verified" a five-field bag and the purge would have destroyed the other four.
+        // Extra fields in the store are fine: it may legitimately be newer than the column.
+        $verified = true;
+        foreach ($bag as $field => $value) {
+            if (!array_key_exists($field, $readback) || $readback[$field] !== $value) {
+                $verified = false;
+                break;
+            }
+        }
         if (!$verified) {
-            $this->warn("{$slug}: the store did not read back what was written; column left intact.");
+            $this->warn("{$slug}: the store does not hold every column field verbatim; column left intact.");
 
             return [[$slug, 'FAILED: readback mismatch', $store->secretName($row) ?? '—', 'no', 'kept'], false];
         }
@@ -219,7 +243,14 @@ class MigrateIntegrationCredentials extends Command
                 continue;
             }
             if (!$dryRun) {
-                DB::table('integration_providers')->where('id', $row->id)->update(['environment' => $to, 'updated_at' => now()]);
+                // secret_name embeds the environment, so a relabelled row must forget it or the
+                // migration treats it as already stored and verifies against the wrong secret.
+                DB::table('integration_providers')->where('id', $row->id)->update([
+                    'environment'       => $to,
+                    'secret_name'       => null,
+                    'secret_version_id' => null,
+                    'updated_at'        => now(),
+                ]);
             }
             $this->line(($dryRun ? '[dry-run] ' : '') . "relabelled {$row->provider_slug}: {$from} → {$to}");
         }

@@ -162,29 +162,4 @@ class IntegrationProvider extends Model
             // an operator just made, because the audit table hiccuped, is worse.
         }
     }
-
-    /**
-     * Merge new credential values, IGNORING blank ones.
-     *
-     * "Blank means leave it alone" is the contract the admin forms promise: a form re-submitted
-     * without retyping every secret must not wipe the ones it did not show. Passing an explicit
-     * null removes a field.
-     *
-     * @param  array<string,string|null>  $values
-     */
-    public function mergeCredentials(array $values): void
-    {
-        $creds = (array) ($this->credentials ?? []);
-        foreach ($values as $key => $value) {
-            if ($value === null) {
-                unset($creds[$key]);
-                continue;
-            }
-            if (trim((string) $value) === '') {
-                continue; // leave the stored value untouched
-            }
-            $creds[$key] = (string) $value;
-        }
-        $this->credentials = $creds;
-    }
 }

@@ -56,7 +56,16 @@ class ConnectionTester
         try {
             $res = $this->probe($slug, $def);
         } catch (Throwable $e) {
-            $res = $this->result(IntegrationProvider::HEALTH_UNKNOWN, false, 'Probe failed: ' . $e->getMessage());
+            // NOT $e->getMessage(): a transport failure from Guzzle quotes the request URL, and
+            // the Maps probe carries its server key in the query string. That message is
+            // returned to the browser AND written to integration_logs.error_message, so echoing
+            // it would put a live credential in two places. The class name is enough to act on;
+            // the detail goes to the application log.
+            \Illuminate\Support\Facades\Log::warning('integration probe threw', [
+                'provider' => $slug,
+                'error'    => $e->getMessage(),
+            ]);
+            $res = $this->result(IntegrationProvider::HEALTH_UNKNOWN, false, 'Probe failed (' . class_basename($e) . ') — see the application log.');
         }
         $res['detail']['latency_ms'] = (int) round((microtime(true) - $started) * 1000);
 

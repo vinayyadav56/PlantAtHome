@@ -57,19 +57,28 @@ final class LogRequestsRedactionTest extends TestCase
         $this->assertSame('***redacted***', $out['nested']['porter_api_key']);
     }
 
+    /**
+     * The suffix rule must not swallow keys that carry no secret but make a log readable —
+     * idempotency_key is what ties a duplicated request to its original, and secret_name is a
+     * Secrets Manager reference, not its contents.
+     */
     public function test_references_and_public_identifiers_stay_readable(): void
     {
         $out = $this->redact([
-            'secret_name'    => 'plantathome/production/razorpay',
-            'key_id'         => 'rzp_live_public',
-            'secret_version' => 'v-12',
-            'bucket'         => 'plantathome-media-prod',
+            'secret_name'     => 'plantathome/production/razorpay',
+            'key_id'          => 'rzp_live_public',
+            'secret_version'  => 'v-12',
+            'bucket'          => 'plantathome-media-prod',
+            'idempotency_key' => 'order-4471-attempt-2',
+            'public_key'      => 'pk_live_visible',
         ]);
 
         $this->assertSame('plantathome/production/razorpay', $out['secret_name']);
         $this->assertSame('rzp_live_public', $out['key_id']);
         $this->assertSame('v-12', $out['secret_version']);
         $this->assertSame('plantathome-media-prod', $out['bucket']);
+        $this->assertSame('order-4471-attempt-2', $out['idempotency_key']);
+        $this->assertSame('pk_live_visible', $out['public_key']);
     }
 
     public function test_the_whole_credentials_bag_is_still_one_redacted_value(): void

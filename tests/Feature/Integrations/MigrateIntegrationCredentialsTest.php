@@ -158,15 +158,55 @@ final class MigrateIntegrationCredentialsTest extends TestCase
         $this->assertArrayHasKey('razorpay@staging', $this->fake->bags);
     }
 
-    public function test_a_provider_with_no_credential_fields_gets_no_secret(): void
+    public function test_a_bag_the_registry_no_longer_declares_is_left_alone_not_destroyed(): void
     {
-        // aws_s3: identity is the IAM role now; a stored key is only something to drop.
+        // aws_s3 after its AWS keys moved to the IAM role. The same branch would fire for a
+        // typo or a half-finished registry edit, so purging here would erase live credentials
+        // with no copy anywhere. Reported and kept; the column is encrypted and unread.
         $row = $this->seedRow('aws_s3', ['secret_access_key' => 'AKIA-old']);
 
         $this->artisan('integrations:migrate-credentials', ['--purge' => true])->assertSuccessful();
 
         $this->assertArrayNotHasKey('aws_s3@production', $this->fake->bags);
-        $this->assertNull($this->column($row->id));
+        $this->assertNotNull($this->column($row->id), 'a bag that was never copied must never be purged');
+    }
+
+    /**
+     * The readback check used to intersect KEYS, so one overlapping field name "verified" a
+     * whole bag — and --purge then destroyed the fields the store did not actually hold.
+     */
+    public function test_a_store_holding_only_some_fields_does_not_verify(): void
+    {
+        $row = $this->seedRow('razorpay', ['key_secret' => 'rzp', 'webhook_secret' => 'wh']);
+        $this->fake->bags['razorpay@production'] = ['key_secret' => 'rzp']; // one field, no webhook_secret
+        $row->forceFill(['secret_name' => 'plantathome/production/razorpay'])->saveQuietly();
+
+        $this->artisan('integrations:migrate-credentials', ['--purge' => true])->assertFailed();
+
+        $this->assertNotNull($this->column($row->id));
+    }
+
+    public function test_a_store_holding_a_stale_value_does_not_verify(): void
+    {
+        $row = $this->seedRow('razorpay', ['key_secret' => 'rotated-value']);
+        $this->fake->bags['razorpay@production'] = ['key_secret' => 'OLD-value'];
+        $row->forceFill(['secret_name' => 'plantathome/production/razorpay'])->saveQuietly();
+
+        $this->artisan('integrations:migrate-credentials', ['--purge' => true])->assertFailed();
+
+        $this->assertNotNull($this->column($row->id));
+    }
+
+    public function test_relabel_forgets_the_old_environments_secret_reference(): void
+    {
+        $row = $this->seedRow('razorpay', ['key_secret' => 'a'], 'sandbox');
+        $row->forceFill(['secret_name' => 'plantathome/sandbox/razorpay'])->saveQuietly();
+
+        $this->artisan('integrations:migrate-credentials', ['--environment' => 'staging', '--relabel' => 'sandbox:staging'])->assertSuccessful();
+
+        // Re-copied under the new environment rather than "verified" against the old secret.
+        $this->assertSame(['key_secret' => 'a'], $this->fake->bags['razorpay@staging']);
+        $this->assertSame('plantathome/staging/razorpay', $row->fresh()->secret_name);
     }
 
     public function test_it_refuses_when_the_store_is_the_database(): void

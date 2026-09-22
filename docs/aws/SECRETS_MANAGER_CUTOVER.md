@@ -43,6 +43,14 @@ characters, so the policies' trailing `/*` is load-bearing):
 | `PlantAtHomeEC2SSM` | allowed | **implicitDeny** | allowed (incl. `s3:ListBucket` for the probe) |
 | `plantathome-s3-app` | **implicitDeny** | allowed | unchanged |
 
+⚠️ `secretsmanager:BatchGetSecretValue` is granted on `Resource: "*"`, in its own statement. It
+is an account-level operation with no resource type — scoping it to a secret ARN makes it match
+nothing and it falls to an implicit deny. That is not a hole: the batch call still requires
+`GetSecretValue` on each individual secret, which stays scoped, so neither principal can read
+the other environment (verified above). Scoped originally, `ConfigOverlay` would have read
+nothing, cached that empty result, and left every provider running on its env value while the
+admin showed it green — the exact silent failure the overlay exists to prevent.
+
 ### Why staging is not on `plantathome-app-staging`
 
 That user exists and now carries the correct SECRET policy, but its S3 write scope is

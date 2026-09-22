@@ -40,10 +40,12 @@ final class IntegrationServiceStoreTest extends TestCase
         $this->fake = new class implements CredentialStore {
             public array $bags = [];
             public int $puts = 0;
+            /** Simulates the store being unreachable: get() answers null, exactly as the real one does. */
+            public bool $readsFail = false;
 
             public function driver(): string { return CredentialStore::DRIVER_SECRETS_MANAGER; }
             private function key(IntegrationProvider $row): string { return $row->provider_slug . '@' . $row->environment; }
-            public function get(IntegrationProvider $row): ?array { return $this->bags[$this->key($row)] ?? null; }
+            public function get(IntegrationProvider $row): ?array { return $this->readsFail ? null : ($this->bags[$this->key($row)] ?? null); }
             public function getMany(iterable $rows): array
             {
                 $out = [];
@@ -216,10 +218,29 @@ final class IntegrationServiceStoreTest extends TestCase
         $this->service()->put('razorpay', [], ['key_secret' => 'x']);
     }
 
-    public function test_the_container_guard_wraps_the_database_driver_in_production(): void
+    /** A deployment that declares itself production or staging may not store credentials in MySQL. */
+    public function test_the_container_guard_refuses_the_database_driver_where_the_environment_is_declared(): void
+    {
+        foreach (['production', 'staging'] as $declared) {
+            $this->app->forgetInstance(CredentialStore::class);
+            config(['integrations.credential_store' => 'database', 'integrations.environment' => $declared]);
+
+            $store = $this->app->make(CredentialStore::class);
+            $this->app->forgetInstance(CredentialStore::class);
+
+            $this->assertInstanceOf(RefusingCredentialStore::class, $store, "{$declared} must refuse the database driver");
+        }
+    }
+
+    /**
+     * The trap this guard has to avoid: APP_ENV reads 'production' on a developer laptop in this
+     * project, so keying the guard off it would refuse every local save. Only a deployed
+     * environment sets INTEGRATIONS_ENVIRONMENT, so an unset label means "not a real environment".
+     */
+    public function test_a_laptop_keeps_the_database_driver_even_though_app_env_says_production(): void
     {
         $this->app->forgetInstance(CredentialStore::class);
-        config(['integrations.credential_store' => 'database']);
+        config(['integrations.credential_store' => 'database', 'integrations.environment' => '']);
         $this->app['env'] = 'production';
 
         try {
@@ -229,17 +250,28 @@ final class IntegrationServiceStoreTest extends TestCase
             $this->app->forgetInstance(CredentialStore::class);
         }
 
-        $this->assertInstanceOf(RefusingCredentialStore::class, $store);
+        $this->assertInstanceOf(DatabaseCredentialStore::class, $store);
     }
 
-    public function test_the_database_driver_is_plain_outside_production(): void
+    /**
+     * get() answers null for both "nothing stored" and "the read failed". On a WRITE that
+     * ambiguity would replace every stored field with just the one being typed.
+     */
+    public function test_a_failed_read_refuses_the_save_rather_than_replacing_the_bag(): void
     {
-        $this->app->forgetInstance(CredentialStore::class);
-        config(['integrations.credential_store' => 'database']);
+        $this->service()->put('razorpay', [], ['key_secret' => 'one', 'webhook_secret' => 'two']);
+        $stored = $this->fake->bags['razorpay@production'];
 
-        $store = $this->app->make(CredentialStore::class);
-        $this->app->forgetInstance(CredentialStore::class);
+        $this->fake->readsFail = true;
 
-        $this->assertInstanceOf(DatabaseCredentialStore::class, $store);
+        try {
+            $this->service()->put('razorpay', [], ['key_secret' => 'three']);
+            $this->fail('a save must not proceed on an unreadable bag');
+        } catch (CredentialStoreUnavailable $e) {
+            $this->assertStringContainsString('not overwritten', $e->getMessage());
+        }
+
+        $this->fake->readsFail = false;
+        $this->assertSame($stored, $this->fake->bags['razorpay@production'], 'the stored bag is untouched');
     }
 }

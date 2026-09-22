@@ -163,6 +163,17 @@ class SecretsManagerCredentialStore implements CredentialStore
             'region'  => (string) config('integrations.secrets_manager.region', 'ap-south-1'),
             'version' => 'latest',
             // Deliberately no 'credentials' key — see the class docblock.
+            //
+            // Timeouts are NOT optional here. The SDK's default defaults_mode is 'legacy',
+            // which leaves Guzzle's connect_timeout and timeout at 0 (unbounded), and this
+            // client is reached from ConfigOverlay at BOOT — every request, every queue
+            // worker, every minute's schedule:run. If the endpoint became unreachable at the
+            // network level (a security-group change, a DNS failure) rather than answering,
+            // each call would block on TCP SYN retries until the php-fpm pool was exhausted
+            // and nginx returned 502 for the whole site. Bounded at roughly what the module's
+            // own probes already use, so the worst case is "fall back to the env value".
+            'http'    => ['connect_timeout' => 2, 'timeout' => 5],
+            'retries' => 1,
         ]);
     }
 

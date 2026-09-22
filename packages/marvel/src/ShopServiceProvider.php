@@ -284,11 +284,18 @@ class ShopServiceProvider extends ServiceProvider
             // driver there keeps READS working (env and whatever is already stored) but refuses
             // to store anything new — a save that quietly landed in MySQL would defeat the module
             // without anyone noticing until an audit asked where the keys were.
+            // Keyed on the DECLARED integrations environment, not APP_ENV: APP_ENV reads
+            // 'production' on a developer laptop in this project (and historically on Railway
+            // too), so guarding on it would refuse every local save. Only the two deployed
+            // environments set INTEGRATIONS_ENVIRONMENT explicitly — production.yml writes it
+            // on the box, Railway sets it on the service — so an explicit value is the one
+            // honest signal that this is a real environment.
+            $declared = (string) config('integrations.environment', '');
             if ($driver !== \Marvel\Integrations\Store\CredentialStore::DRIVER_SECRETS_MANAGER
-                && $app->environment('production', 'staging')) {
+                && in_array($declared, ['production', 'staging'], true)) {
                 return new \Marvel\Integrations\Store\RefusingCredentialStore(
                     $store,
-                    'Secrets Manager is required in ' . $app->environment()
+                    'Secrets Manager is required in ' . $declared
                         . ' — set INTEGRATIONS_CREDENTIAL_STORE=secrets_manager. Nothing was saved.'
                 );
             }

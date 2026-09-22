@@ -49,6 +49,10 @@ class LogRequests
     // partner_api_token, service_api_key). Suffix-only, so `secret_name` — the Secrets
     // Manager reference returned by the integrations API — stays readable in logs.
     private const REDACT_SUFFIXES = ['_secret', '_token', '_key'];
+    // Keys the suffix rule would swallow but which carry no secret and are needed to read a
+    // log at all: idempotency_key is what ties a duplicated request to its original, and
+    // secret_name is a Secrets Manager REFERENCE (plantathome/{env}/{slug}), not its contents.
+    private const NEVER_REDACT = ['idempotency_key', 'secret_name', 'public_key', 'key_id'];
     // Whole nested secret bags — redact the entire value (covers any current/future field name).
     private const REDACT_SUBTREE = ['credentials', 'secrets'];
     private const SKIP_CONTAINS = ['request-logs', 'admin-tasks', '/health'];
@@ -210,6 +214,9 @@ class LogRequests
 
     private function hasSecretSuffix(string $lowerKey): bool
     {
+        if (in_array($lowerKey, self::NEVER_REDACT, true)) {
+            return false;
+        }
         foreach (self::REDACT_SUFFIXES as $suffix) {
             if (str_ends_with($lowerKey, $suffix)) {
                 return true;

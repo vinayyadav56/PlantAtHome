@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Crypt;
 use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\IntegrationProvider;
 use Marvel\Integrations\Store\CredentialStore;
+use Marvel\Integrations\Store\CredentialStoreUnavailable;
 use Throwable;
 
 /**
@@ -220,8 +221,20 @@ class IntegrationService
         $credentialsChanged = false;
         if ($credentials !== []) {
             $incoming = array_intersect_key($credentials, array_flip($def->credentialNames()));
-            $current  = $row->exists ? ($this->store()->get($row) ?? []) : [];
-            $merged   = self::mergeBag($current, $incoming);
+
+            // get() answers null for BOTH "nothing stored" and "the read failed" — it never
+            // throws, so a boot can always fall through to the env value. On a WRITE that
+            // ambiguity is dangerous: merging onto an empty bag would replace every stored
+            // field with just the one being typed. A row that names a secret must have a
+            // readable bag, so null there means the read failed, and the save is refused.
+            $current = $row->exists ? $this->store()->get($row) : [];
+            if ($current === null && !empty($row->secret_name)) {
+                throw new CredentialStoreUnavailable(
+                    "Could not read the stored credentials for {$slug}, so they were not overwritten. Nothing was saved — try again."
+                );
+            }
+            $current = $current ?? [];
+            $merged  = self::mergeBag($current, $incoming);
 
             if ($merged !== $current) {
                 // Throws on a refused environment or an AWS failure — the operator must see it.
