@@ -201,13 +201,24 @@ final class IntegrationServiceStoreTest extends TestCase
         $this->assertNull(Cache::get('illuminate:queue:restart'), 'the hourly sweep would otherwise restart every worker');
     }
 
+    /**
+     * With secrets named per environment, resolving a row from another environment would read
+     * the WRONG secret — so the old `?? first()` fallback in provider() is gone.
+     */
     public function test_there_is_no_cross_environment_fallback(): void
     {
         IntegrationProvider::create(['provider_slug' => 'razorpay', 'environment' => 'sandbox', 'category' => 'payment', 'display_name' => 'Razorpay']);
         $this->fake->bags['razorpay@sandbox'] = ['key_secret' => 'SANDBOX'];
 
-        $this->assertNull($this->service()->provider('razorpay'));
-        $this->assertSame('', (new IntegrationService())->secret('razorpay', 'key_secret'));
+        // Silence the legacy/env leg so this asserts the ROW behaviour and nothing else. CI's
+        // env template ships shop.razorpay.key_secret=REPLACE_ME, which made an
+        // assertSame('') version of this pass locally and fail there.
+        config(['shop.razorpay.key_secret' => null, 'shop.razorpay.key_id' => null]);
+
+        $this->assertNull($this->service()->provider('razorpay'), 'the sandbox row is not the active environment');
+        $resolved = (new IntegrationService())->secret('razorpay', 'key_secret');
+        $this->assertNotSame('SANDBOX', $resolved, 'the other environment\'s secret must never be read');
+        $this->assertSame('', $resolved);
     }
 
     public function test_production_refuses_to_store_anywhere_but_secrets_manager(): void
