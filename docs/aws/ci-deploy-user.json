@@ -1,0 +1,14 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "OpenAndCloseTheSshWindowOnTheAppSecurityGroupOnly",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:AuthorizeSecurityGroupIngress",
+        "ec2:RevokeSecurityGroupIngress"
+      ],
+      "Resource": "arn:aws:ec2:ap-south-1:648163408188:security-group/sg-01c9aa54d0994af13"
+    }
+  ]
+}

@@ -232,9 +232,12 @@ jobs:
                 echo "==> backup size: ${SZ} bytes"
                 if [ "$SZ" -lt 10000 ]; then echo "ERROR: backup suspiciously small"; exit 1; fi
                 # best-effort offsite copy to S3
-                AWSKEY=$(getenv AWS_ACCESS_KEY_ID); AWSSEC=$(getenv AWS_SECRET_ACCESS_KEY); AWSBUCKET=$(getenv AWS_BUCKET)
+                AWSBUCKET=$(getenv AWS_BUCKET)
+                # No explicit keys: this box authenticates to AWS with its EC2 instance role
+                # (PlantAtHomeEC2SSM), which carries PutObject on the media bucket. Exporting
+                # the now-absent .env keys here would hand the CLI two empty strings instead.
                 if command -v aws >/dev/null 2>&1 && [ -n "$AWSBUCKET" ]; then
-                  AWS_ACCESS_KEY_ID="$AWSKEY" AWS_SECRET_ACCESS_KEY="$AWSSEC" AWS_DEFAULT_REGION="$(getenv AWS_DEFAULT_REGION)" \
+                  AWS_DEFAULT_REGION="$(getenv AWS_DEFAULT_REGION)" \
                     aws s3 cp "$BK" "s3://${AWSBUCKET}/backups/$(basename $BK)" && echo "==> uploaded to S3" || echo "WARN: S3 upload failed (local backup is the restore point)"
                 fi
                 echo "==> BACKUP COMPLETE: $BK"
