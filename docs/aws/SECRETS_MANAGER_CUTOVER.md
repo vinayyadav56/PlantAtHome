@@ -10,42 +10,60 @@ repository, in config, or (after this cutover) in `.env` on the production box:
 | Where | Identity | May touch |
 |---|---|---|
 | Production EC2 | instance profile `PlantAtHomeEC2SSM` | `plantathome/production/*`, `plantathome/sandbox/*`, the media bucket |
-| Staging (Railway) | IAM user `plantathome-app-staging`, key in Railway variables | `plantathome/staging/*`, the media bucket (its existing scope) |
+| Staging (Railway) | IAM user `plantathome-s3-app` (the key it already uses) | `plantathome/staging/*`, the media bucket |
 | A developer laptop | their own `~/.aws` profile, or `INTEGRATIONS_CREDENTIAL_STORE=database` | nothing production |
+
+Administration is IAM user `pah-admin` (AdministratorAccess). The account root access key is not
+used by anything here and should be deleted once this is complete.
 
 Environment separation is IAM, not convention: neither identity can even list the other's
 secrets by name pattern. (`sandbox` is the production box's partner-UAT lane — Porter UAT and
 Porter production must coexist during onboarding — so the production role covers both.)
 
-## 1. IAM (one-off, from an admin identity — not the root key)
+## 1. IAM — DONE 2026-09-22 (applied as `pah-admin`, verified by policy simulation)
 
 ```bash
-# production: extend the existing EC2 role
-aws iam put-role-policy --role-name PlantAtHomeEC2SSM \
+# production: the EC2 role gains Secrets Manager (production/* + sandbox/*) and the media bucket
+aws iam put-role-policy --role-name PlantAtHomeEC2SSM --profile pah-admin \
   --policy-name plantathome-secrets-and-media \
   --policy-document file://docs/aws/ec2-role-secrets-and-media.json
 
-# staging: activate the user that was created scoped but never given a key
-aws iam put-user-policy --user-name plantathome-app-staging \
+# staging: the key staging ALREADY uses gains staging/* secrets, and nothing in production
+aws iam put-user-policy --user-name plantathome-s3-app --profile pah-admin \
   --policy-name plantathome-staging-secrets \
   --policy-document file://docs/aws/staging-user-secrets.json
-aws iam create-access-key --user-name plantathome-app-staging   # copy once; it is never shown again
 ```
 
-⚠️ The local CLI profile on the owner's machine is the **account root key**, and root access
-keys exist. Run the above from an IAM admin user, then delete the root access key
-(`aws iam delete-access-key` as root, after creating the admin user). Nothing in this module
-needs root.
+Verified with `aws iam simulate-principal-policy` against a realistically suffixed ARN
+(`…:secret:plantathome/production/razorpay-Ab3xYz` — Secrets Manager appends six random
+characters, so the policies' trailing `/*` is load-bearing):
+
+| Principal | production/* | staging/* | media bucket |
+|---|---|---|---|
+| `PlantAtHomeEC2SSM` | allowed | **implicitDeny** | allowed (incl. `s3:ListBucket` for the probe) |
+| `plantathome-s3-app` | **implicitDeny** | allowed | unchanged |
+
+### Why staging is not on `plantathome-app-staging`
+
+That user exists and now carries the correct SECRET policy, but its S3 write scope is
+`media/s/*` only — and the live upload path is spatie media-library's `DefaultPathGenerator`,
+which writes bare `{media_id}/…` keys. The bucket's newest objects are `2449/…`, `2448/…`;
+`media/s/` has never been written to at all. One credential set serves every AWS call in a
+process, so pointing staging at that user would have broken every admin image upload there.
+The access key minted for it during this work was deleted unused. See §6.
+
+⚠️ The owner's local default CLI profile is the **account root key**, and root access keys
+exist. Everything above ran as `pah-admin`; delete the root key when the cutover is done.
 
 ## 2. Staging first (Railway has no instance role, so the key must precede the deploy)
 
 Railway injects real process env vars and `start.sh` runs `config:clear`, so the SDK's env
 provider wins there. Order matters:
 
-1. Dispatch `set-railway-s3-vars.yml` with the new key and:
-   `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (the `plantathome-app-staging` key),
-   `AWS_REGION=ap-south-1`, `INTEGRATIONS_CREDENTIAL_STORE=secrets_manager`,
-   `INTEGRATIONS_ENVIRONMENT=staging`. Railway restarts the service on a variable change.
+1. Dispatch `set-railway-s3-vars.yml` (`credential_store=secrets_manager`,
+   `integrations_environment=staging`). It sets `AWS_REGION`,
+   `INTEGRATIONS_CREDENTIAL_STORE` and `INTEGRATIONS_ENVIRONMENT`, and deliberately leaves
+   `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` alone. Railway restarts on a variable change.
 2. Merge `main` → `staging` (auto-deploys; runs migrations).
 3. `php artisan integrations:migrate-credentials --environment=staging --relabel=sandbox:staging`
    (rows on staging were labelled `sandbox` before; the relabel is refused for any slug that
@@ -92,3 +110,23 @@ secret back into MySQL.
   Manager itself (it runs on Railway with no role).
 - Scheduled commands fork a fresh process every minute and need nothing; queue workers are
   signalled to restart on every credential change.
+
+## 6. Follow-up: give staging its own identity
+
+Staging currently shares `plantathome-s3-app` with production (until §3 completes, after which
+only staging uses it). To move staging onto `plantathome-app-staging`, its S3 write scope has to
+match what the app actually writes:
+
+```json
+{ "Sid": "WriteMediaExceptProduction", "Effect": "Allow",
+  "Action": ["s3:PutObject", "s3:DeleteObject"],
+  "Resource": "arn:aws:s3:::plantathome-media-prod/*" }
+```
+keeping the existing `NeverTouchProdMedia` deny (`media/p/*`, `plants/*`, `backups/*`). That is
+*stronger* isolation than today, because the shared key can currently write production media and
+backups.
+
+Before switching, confirm `config('media.env')` resolves to `staging` on the Railway service —
+it derives from `RAILWAY_PUBLIC_DOMAIN` being set (`config/media.php`), and if it resolved to
+`production` the new media system would target `media/p/` and be denied. Then mint a key for the
+user, set it on Railway, and upload an image from the staging admin before trusting it.

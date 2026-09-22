@@ -3,11 +3,19 @@ name: Set staging S3 vars (Railway)
 # One-shot: sets the STAGING Railway API service's AWS identity and integration-store
 # variables (start.sh reads these env vars). Manual only.
 #
-# The identity should be the `plantathome-app-staging` IAM user — scoped to
-# plantathome/staging/* secrets and the media bucket — held in the repo secrets
-# STAGING_AWS_ACCESS_KEY_ID / STAGING_AWS_SECRET_ACCESS_KEY. Until those exist the
-# workflow falls back to the deploy identity, which can reach S3 but NOT staging secrets.
-# Requires secrets: RAILWAY_API_TOKEN (account token), AWS_REGION, and the pair above.
+# ⚠️ This deliberately does NOT change staging's AWS identity. Staging keeps the
+# `plantathome-s3-app` key it already uses, which was granted
+# `plantathome/staging/*` secret access (and nothing in production) on 2026-09-22.
+#
+# The scoped `plantathome-app-staging` user exists and has the right SECRET policy, but its
+# S3 write scope is `media/s/*` only — and the live upload path is spatie media-library's
+# DefaultPathGenerator, which writes bare `{media_id}/…` prefixes (the newest objects in the
+# bucket are `2449/…`; `media/s/` has never been written to at all). One credential serves
+# both S3 and Secrets Manager in a process, so switching identity here would break every
+# admin image upload on staging. See docs/aws/SECRETS_MANAGER_CUTOVER.md §6 for the
+# follow-up that would make that switch safe.
+#
+# Requires secrets: RAILWAY_API_TOKEN (account token), AWS_REGION.
 
 on:
   workflow_dispatch:
@@ -29,8 +37,6 @@ jobs:
       PROJECT_ID: e6fc52de-45a9-4bc0-92fe-5b9840a4d399
       ENVIRONMENT_ID: 268099e7-b634-4d26-a5ff-a95a0c145f8f
       SERVICE_ID: da92f9ad-814e-4e0e-a0bb-932268379c6b
-      AWS_ACCESS_KEY_ID: ${{ secrets.STAGING_AWS_ACCESS_KEY_ID || secrets.AWS_ACCESS_KEY_ID }}
-      AWS_SECRET_ACCESS_KEY: ${{ secrets.STAGING_AWS_SECRET_ACCESS_KEY || secrets.AWS_SECRET_ACCESS_KEY }}
       AWS_REGION: ${{ secrets.AWS_REGION }}
       AWS_BUCKET: plantathome-media-prod
       CREDENTIAL_STORE: ${{ inputs.credential_store }}
@@ -47,8 +53,8 @@ jobs:
             resp=$(curl -sS -X POST https://backboard.railway.app/graphql/v2 -H "Authorization: Bearer $RAILWAY_API_TOKEN" -H "Content-Type: application/json" --data "$q")
             echo "$resp" | python3 -c "import json,sys;d=json.load(sys.stdin);print('  ${nm} ->',d.get('data'),'errors:',d.get('errors'));sys.exit(1 if d.get('errors') else 0)"
           }
-          upsert AWS_ACCESS_KEY_ID     "$AWS_ACCESS_KEY_ID"
-          upsert AWS_SECRET_ACCESS_KEY "$AWS_SECRET_ACCESS_KEY"
+          # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY are intentionally NOT touched — see the
+          # header. Staging's existing key already carries staging-secret access.
           upsert AWS_DEFAULT_REGION    "$AWS_REGION"
           upsert AWS_REGION            "$AWS_REGION"
           upsert AWS_BUCKET            "$AWS_BUCKET"
