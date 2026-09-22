@@ -80,7 +80,21 @@ provider wins there. Order matters:
    provider → connected; `aws secretsmanager list-secrets --filters Key=name,Values=plantathome/staging/`.
 5. `... --environment=staging --purge` once step 4 is green.
 
-## 3. Production
+## 3. Production — DONE 2026-09-22
+
+Applied in this order, each verified before the next: role policy attached → `main` deployed
+(`0a5a021`) → cutover `dry_run=true` (inspection only) → cutover `dry_run=false purge=false`.
+
+What the box reports now: IMDS resolves `PlantAtHomeEC2SSM`; `.env` holds only `AWS_BUCKET`,
+`AWS_DEFAULT_REGION`, `AWS_REGION`, `AWS_URL` — no access key; `S3 OK via default chain
+(instance role)`; `enabled=2 with_secret=1 bags_read=1`, i.e. the batch read the overlay depends
+on works against the corrected policy. `plantathome/production/whatsapp` exists and is tagged.
+
+**Still to do:** the `--purge` run, deliberately deferred. The column is inert (the store is
+Secrets Manager, so nothing reads it) but it is the rollback, and this runbook's own rule is to
+purge only after a day of `integrations:health` showing every enabled provider connected.
+
+### The original ordered procedure
 
 On the production box every deploy runs `config:cache`, and Laravel then never reads `.env`
 into the process environment — so the SDK cannot see the static S3 key that is still in that
@@ -98,8 +112,9 @@ first and the key removed last, with the site running throughout.
    `connected`; Settings → Integrations → AWS S3 → Test Connection → connected **through the
    role**; upload an image from the admin.
 5. Dispatch `cutover-secrets-manager.yml` with `purge=true`. This is the one-way step.
-6. `aws iam update-access-key --user-name plantathome-s3-app --access-key-id … --status Inactive`.
-   Delete the user a week later if nothing has complained.
+6. ⚠️ Do **NOT** deactivate `plantathome-s3-app`'s access key. Production no longer uses it, but
+   STAGING does — it is staging's S3 identity and now also its Secrets Manager identity. It can
+   only be retired after the §6 follow-up moves staging onto `plantathome-app-staging`.
 
 ## 4. Rollback
 
