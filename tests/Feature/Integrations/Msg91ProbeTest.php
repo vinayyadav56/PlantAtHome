@@ -11,21 +11,26 @@ use Marvel\Integrations\ConnectionTester;
 use Tests\TestCase;
 
 /**
- * MSG91 was the last provider with no read-only probe, because every other call it
- * offers sends an OTP -- and a settings-screen button must never message a customer.
+ * MSG91 has no "who am I" endpoint and almost everything it offers SENDS something, which a
+ * settings-screen button must never do. The v5 balance report is the read-only call that still
+ * exercises the key.
  *
- * The balance API is the one read-only call, but it has two traps a probe has to
- * survive: a bad key comes back as HTTP 200, and the key travels in the query
- * string, so a transport failure quotes it straight into the log.
+ * The first version of this probe used the legacy balance.php and was wrong in the way that
+ * matters most for a health check: it could not go red. That endpoint answers a bogus key with
+ * the body "0", is_numeric() accepted it, and an entirely invalid credential reported
+ * "Connected". The tests below exist mostly to keep that from coming back.
  */
 final class Msg91ProbeTest extends TestCase
 {
     use RefreshDatabase;
 
+    private const KEY = 'LIVE-AUTHKEY-CANARY-4a1b2c';
+    private const ENDPOINT = 'control.msg91.com/api/v5/report/balance';
+
     protected function setUp(): void
     {
         parent::setUp();
-        config(['services.msg91.auth_key' => 'LIVE-AUTHKEY-CANARY-4a1b2c']);
+        config(['services.msg91.auth_key' => self::KEY]);
     }
 
     private function probe(): array
@@ -33,9 +38,9 @@ final class Msg91ProbeTest extends TestCase
         return (new ConnectionTester())->test('msg91');
     }
 
-    public function test_a_balance_reads_as_connected_and_reports_the_credit_left(): void
+    public function test_a_valid_key_with_credit_is_connected(): void
     {
-        Http::fake(['api.msg91.com/*' => Http::response('4821', 200)]);
+        Http::fake([self::ENDPOINT => Http::response(['data' => ['balance' => 4821]], 200)]);
 
         $res = $this->probe();
 
@@ -44,25 +49,12 @@ final class Msg91ProbeTest extends TestCase
         $this->assertSame(4821.0, $res['detail']['route_balance']);
     }
 
-    public function test_the_probe_only_ever_reads(): void
+    public function test_a_rejected_key_is_auth_failed(): void
     {
-        Http::fake(['api.msg91.com/*' => Http::response('12', 200)]);
-
-        $this->probe();
-
-        Http::assertSent(function ($request) {
-            $this->assertSame('GET', $request->method());
-            $this->assertStringContainsString('balance.php', $request->url());
-            // /otp and /flow are the send endpoints -- a probe must never reach them.
-            $this->assertStringNotContainsString('/otp', $request->url());
-
-            return true;
-        });
-    }
-
-    public function test_a_rejected_key_is_auth_failed_even_though_msg91_answers_200(): void
-    {
-        Http::fake(['api.msg91.com/*' => Http::response('authkey is invalid', 200)]);
+        Http::fake([self::ENDPOINT => Http::response(
+            ['status' => 'fail', 'errors' => 'Unauthorized', 'code' => '401'],
+            401
+        )]);
 
         $res = $this->probe();
 
@@ -70,40 +62,67 @@ final class Msg91ProbeTest extends TestCase
         $this->assertFalse($res['ok']);
     }
 
-    public function test_an_unrecognised_reply_is_never_echoed_back(): void
+    /**
+     * The regression this file exists for. The legacy endpoint returned "0" for a bogus key, so a
+     * numeric body could never be trusted as proof of authentication. Now a zero balance is only
+     * ever reachable AFTER a 200, and it still must not read as a flat green.
+     */
+    public function test_a_valid_key_with_no_credit_does_not_report_a_flat_green(): void
     {
-        // MSG91 has historically echoed the request back on malformed calls, which would
-        // put the auth key straight into the admin screen and integration_logs.
-        Http::fake(['api.msg91.com/*' => Http::response('authkey=LIVE-AUTHKEY-CANARY-4a1b2c&type=4', 200)]);
+        Http::fake([self::ENDPOINT => Http::response(['data' => ['balance' => 0]], 200)]);
 
         $res = $this->probe();
 
-        $this->assertFalse($res['ok']);
-        $this->assertStringNotContainsString('LIVE-AUTHKEY-CANARY-4a1b2c', json_encode($res));
+        $this->assertFalse($res['ok'], 'zero balance means every send fails; it is not "connected"');
+        $this->assertSame(IntegrationProvider::HEALTH_MAINTENANCE, $res['status']);
+        $this->assertStringContainsString('0', $res['message']);
+    }
+
+    public function test_the_key_travels_in_a_header_and_never_in_the_url(): void
+    {
+        Http::fake([self::ENDPOINT => Http::response(['balance' => 10], 200)]);
+
+        $this->probe();
+
+        Http::assertSent(function ($request) {
+            $this->assertSame('GET', $request->method(), 'a probe must never write');
+            // The whole reason for moving off balance.php: a transport error quotes the URL, and
+            // that message goes to the application log.
+            $this->assertStringNotContainsString(self::KEY, $request->url(), 'the key must not be in the URL');
+            $this->assertSame(self::KEY, $request->header('authkey')[0] ?? null);
+            $this->assertStringNotContainsString('/otp', $request->url(), 'must not touch a send endpoint');
+
+            return true;
+        });
     }
 
     public function test_an_outage_is_maintenance_not_a_bad_credential(): void
     {
-        Http::fake(['api.msg91.com/*' => Http::response('gateway down', 503)]);
+        Http::fake([self::ENDPOINT => Http::response('gateway down', 503)]);
+
+        $this->assertSame(IntegrationProvider::HEALTH_MAINTENANCE, $this->probe()['status']);
+    }
+
+    public function test_an_unrecognised_reply_is_never_echoed_back(): void
+    {
+        // MSG91 has historically echoed the request back on malformed calls.
+        Http::fake([self::ENDPOINT => Http::response('authkey=' . self::KEY, 418)]);
 
         $res = $this->probe();
 
-        $this->assertSame(IntegrationProvider::HEALTH_MAINTENANCE, $res['status']);
+        $this->assertFalse($res['ok']);
+        $this->assertStringNotContainsString(self::KEY, json_encode($res));
     }
 
-    public function test_the_log_scrubber_strips_every_credential_a_probe_url_can_carry(): void
+    public function test_an_undocumented_balance_shape_still_connects(): void
     {
-        $m = (new \ReflectionClass(ConnectionTester::class))->getMethod('scrubSecrets');
-        $m->setAccessible(true);
+        // The payload is undocumented and has changed shape before; a rename must not turn a
+        // healthy integration red.
+        Http::fake([self::ENDPOINT => Http::response(['ok' => true], 200)]);
 
-        $url = 'cURL error 28: connect timeout for '
-            . 'https://api.msg91.com/api/balance.php?authkey=LIVE-AUTHKEY-CANARY-4a1b2c&type=4';
-        $this->assertStringNotContainsString('LIVE-AUTHKEY-CANARY-4a1b2c', $m->invoke(null, $url));
+        $res = $this->probe();
 
-        $maps = 'https://maps.googleapis.com/maps/api/geocode/json?address=Bengaluru&key=AIza-CANARY-9z8y';
-        $scrubbed = $m->invoke(null, $maps);
-        $this->assertStringNotContainsString('AIza-CANARY-9z8y', $scrubbed);
-        // The part that makes the error actionable has to survive.
-        $this->assertStringContainsString('maps.googleapis.com', $scrubbed);
+        $this->assertSame(IntegrationProvider::HEALTH_CONNECTED, $res['status']);
+        $this->assertArrayNotHasKey('route_balance', $res['detail']);
     }
 }

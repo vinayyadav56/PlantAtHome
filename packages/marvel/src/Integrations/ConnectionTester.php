@@ -394,17 +394,21 @@ class ConnectionTester
     }
 
     /**
-     * MSG91 read-only probe: the route-balance API.
+     * MSG91 read-only probe: the v5 balance report.
      *
-     * MSG91 has no "who am I" endpoint, and every other call it offers SENDS something --
-     * an OTP, an SMS -- which a settings-screen button must never do. balance.php is the
-     * one documented read-only call that still exercises the auth key.
+     * The first version of this used the legacy `api.msg91.com/api/balance.php`, and it was
+     * WRONG in a way that mattered: that endpoint answers a bogus auth key with the body `0`,
+     * which is_numeric() accepts, so a completely invalid credential reported "Connected" with a
+     * zero balance. A test that cannot fail is worse than no test; so is a probe that cannot go
+     * red. Measured against the live API before rewriting:
      *
-     * Two awkward parts of that contract, both deliberate here:
-     *   - the key travels in the query string; there is no header form. scrubSecrets()
-     *     above covers the logging half of that.
-     *   - a bad key comes back as HTTP 200 with a message, not a 4xx. So the test is what
-     *     the body IS, not what the status says: a balance is a number.
+     *   balance.php, bogus key   -> HTTP 200, body "0"          (indistinguishable from no credit)
+     *   balance.php, no key      -> HTTP 200, {"msgType":"error"}
+     *   v5/report/balance, bogus -> HTTP 401, {"errors":"Unauthorized"}   <- a real contract
+     *
+     * The v5 route also takes the key in a HEADER rather than the query string, which removes the
+     * whole class of leak the query-string version needed scrubbing for: a Guzzle transport error
+     * quotes the request URL, and that URL used to carry a live auth key into the application log.
      */
     private function testMsg91(): array
     {
@@ -413,32 +417,68 @@ class ConnectionTester
             return $this->result(IntegrationProvider::HEALTH_UNKNOWN, false, 'Not configured: Auth Key is missing.');
         }
 
-        $res = Http::timeout(10)->get('https://api.msg91.com/api/balance.php', [
-            'authkey' => $key,
-            'type'    => 4, // transactional route -- the one the OTP gateway sends on
-        ]);
-        $body = trim((string) $res->body());
+        $res = Http::withHeaders(['authkey' => $key])
+            ->acceptJson()
+            ->timeout(10)
+            ->get('https://control.msg91.com/api/v5/report/balance');
 
+        if (in_array($res->status(), [401, 403], true)) {
+            return $this->result(IntegrationProvider::HEALTH_AUTH_FAILED, false, 'MSG91 rejected the auth key.');
+        }
         if ($res->status() >= 500) {
             return $this->result(IntegrationProvider::HEALTH_MAINTENANCE, false, 'MSG91 returned ' . $res->status() . '.');
         }
-        if (is_numeric($body)) {
-            return $this->result(
-                IntegrationProvider::HEALTH_CONNECTED,
-                true,
-                'Connected.',
-                // A working key with no credit still fails every send, so the number is
-                // the part of this answer an operator actually needs.
-                ['route_balance' => (float) $body]
-            );
-        }
-        if (stripos($body, 'authkey') !== false || stripos($body, 'invalid') !== false || $res->status() === 401 || $res->status() === 403) {
-            return $this->result(IntegrationProvider::HEALTH_AUTH_FAILED, false, 'MSG91 rejected the auth key.');
+        if (!$res->successful()) {
+            // Never echo the body: an unrecognised MSG91 reply has historically been the request
+            // echoed back, and the request is the thing carrying the credential.
+            return $this->result(IntegrationProvider::HEALTH_UNKNOWN, false, 'MSG91 returned HTTP ' . $res->status() . '.');
         }
 
-        // Never echo $body: an unrecognised MSG91 reply has, historically, been the
-        // request echoed back.
-        return $this->result(IntegrationProvider::HEALTH_UNKNOWN, false, 'MSG91 returned an unrecognised reply (HTTP ' . $res->status() . ').');
+        $balance = $this->numericIn((array) $res->json());
+
+        // A working key with no credit still fails every send, so say so rather than reporting a
+        // flat green that the next failed OTP will contradict.
+        if ($balance !== null && $balance <= 0) {
+            return $this->result(
+                IntegrationProvider::HEALTH_MAINTENANCE,
+                false,
+                'Credentials are valid, but the MSG91 balance is 0 — sends will fail.',
+                ['route_balance' => $balance]
+            );
+        }
+
+        return $this->result(
+            IntegrationProvider::HEALTH_CONNECTED,
+            true,
+            'Connected.',
+            $balance === null ? [] : ['route_balance' => $balance]
+        );
+    }
+
+    /**
+     * First numeric value anywhere in a shallow response tree.
+     *
+     * MSG91's balance payload is not documented and has changed shape before, so this looks for a
+     * number rather than pinning one key and reporting "unknown" the day they rename it.
+     */
+    private function numericIn(array $data, int $depth = 0): ?float
+    {
+        if ($depth > 3) {
+            return null;
+        }
+        foreach ($data as $value) {
+            if (is_numeric($value)) {
+                return (float) $value;
+            }
+            if (is_array($value)) {
+                $found = $this->numericIn($value, $depth + 1);
+                if ($found !== null) {
+                    return $found;
+                }
+            }
+        }
+
+        return null;
     }
 
     private function result(string $status, bool $ok, string $message, array $detail = []): array
