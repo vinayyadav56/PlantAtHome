@@ -175,51 +175,120 @@ class DeliveryCoverageService
 
     /**
      * Per-scope gate for the public pincode check: is coverage configured for
-     * the STATE this pin sits in, i.e. does any vendor project at least one
-     * pin there? One vendor's first rule in Karnataka must not turn every
-     * Haryana pin non-serviceable — outside every projected state the check
-     * stays open. Unknown pins keep the platform-wide answer.
+     * the STATE this pin sits in? One vendor's first rule in Karnataka must not
+     * turn every Haryana pin non-serviceable. Delegates to the one resolver so
+     * there is a single definition of "configured".
      */
-    public function coverageConfiguredFor(string $pincode): bool
+    public function coverageConfiguredFor(string $pincode, ?string $vertical = null): bool
     {
-        $pin = $this->normalizePincode($pincode);
-        $stateId = $pin === '' ? null : $this->db->table('postal_codes')->where('pincode', $pin)->value('state_id');
-        if ($stateId === null) {
-            return $this->anyCoverageConfigured();
-        }
-
-        return (bool) Cache::remember(
-            "coverage:v{$this->version()}:configured:state:{$stateId}",
-            300,
-            fn () => $this->db->table('vendor_covered_pincodes')->where('state_id', $stateId)->exists(),
-        );
+        return app(VendorServiceabilityResolver::class)->configuredFor($pincode, $vertical);
     }
 
     /**
      * Dry-run the projection ladder over a candidate rule set — no writes.
+     * With a parent node, also returns one entry per CHILD of that parent with
+     * its covered/excluded counts and a none|partial|all state: that is what
+     * draws the tri-state tree, so the admin never has to load pincodes.
      *
-     * @return array{total:int, by_source:array<string,int>, sample:string[]}
+     * @param  array<int, array>  $rules
+     * @return array{total:int, excluded:int, by_source:array<string,int>, cities_covered:int, sample:string[], nodes:array}
      */
-    public function previewCoverage(array $rules): array
+    public function previewCoverage(array $rules, ?string $vertical = null, ?string $parentType = null, ?int $parentId = null): array
     {
+        $vertical = $vertical === null ? null : VendorCoverageRule::normalizeVertical($vertical);
+
         $normalized = [];
         foreach ($rules as $rule) {
-            $normalized[] = $this->validatedRuleAttributes(
-                (string) ($rule['rule_type'] ?? ''),
-                is_array($rule) ? $rule : [],
-            );
+            $attrs = $this->validatedRuleAttributes((string) ($rule['rule_type'] ?? ''), is_array($rule) ? $rule : []);
+            // A named vertical projects from its own rules alone; the '*' rules
+            // are what answers every vertical the vendor never named.
+            if ($vertical === null || $attrs['vertical'] === $vertical) {
+                $normalized[] = $attrs;
+            }
         }
 
         [$map] = $this->projector->computeMap($normalized);
 
         $bySource = [];
+        $cities = [];
         foreach ($map as $hit) {
             $bySource[$hit['source']] = ($bySource[$hit['source']] ?? 0) + 1;
+            if ($hit['city_id'] !== null) {
+                $cities[$hit['city_id']] = true;
+            }
         }
         $pins = array_map('strval', array_keys($map));
         sort($pins);
 
-        return ['total' => count($map), 'by_source' => $bySource, 'sample' => array_slice($pins, 0, 10)];
+        return [
+            'total'          => count($map),
+            'by_source'      => $bySource,
+            'cities_covered' => count($cities),
+            'sample'         => array_slice($pins, 0, 10),
+        ] + $this->nodeCounts($map, $parentType, $parentId);
+    }
+
+    /**
+     * Child-by-child coverage under one parent node, for the tri-state tree.
+     * `excluded` = pins in scope the rules did NOT cover, so a partially
+     * covered district reads "12 of 23" without shipping a pincode list.
+     *
+     * @param  array<string, array>  $map
+     * @return array{excluded:int, nodes:array<int, array>}
+     */
+    private function nodeCounts(array $map, ?string $parentType, ?int $parentId): array
+    {
+        $scope = $this->db->table('postal_codes')->where('status', 'active');
+        [$groupBy, $joinTable] = match ($parentType) {
+            'root'     => ['state_id', 'states'],
+            'state'    => ['district_id', 'districts'],
+            'district' => ['city_id', 'cities'],
+            default    => [null, null],
+        };
+        if ($groupBy === null) {
+            return ['excluded' => 0, 'nodes' => []];
+        }
+        if ($parentType === 'state') {
+            $scope->where('state_id', $parentId);
+        } elseif ($parentType === 'district') {
+            $scope->where('district_id', $parentId);
+        }
+
+        $totals = $scope->selectRaw("{$groupBy} as node_id, COUNT(*) as n")
+            ->groupBy($groupBy)->pluck('n', 'node_id')->all();
+
+        $covered = [];
+        foreach ($map as $hit) {
+            $id = $hit[$groupBy] ?? null;
+            $covered[$id === null ? '' : (int) $id] = ($covered[$id === null ? '' : (int) $id] ?? 0) + 1;
+        }
+
+        $names = $this->namesById($joinTable, array_filter(array_keys($totals), fn ($k) => $k !== null && $k !== ''));
+        $childType = ['state_id' => 'state', 'district_id' => 'district', 'city_id' => 'city'][$groupBy];
+
+        $nodes = [];
+        $excluded = 0;
+        foreach ($totals as $id => $total) {
+            $total = (int) $total;
+            $key = $id === null || $id === '' ? '' : (int) $id;
+            $hits = (int) ($covered[$key] ?? 0);
+            $excluded += $total - $hits;
+            $nodes[] = [
+                // A null id is the real "pins with no city yet" bucket: two
+                // thirds of master cities were never rolled up, so hiding it
+                // would make a district look smaller than it is.
+                'type'     => $key === '' ? $childType.'_unassigned' : $childType,
+                'id'       => $key === '' ? null : $key,
+                'name'     => $key === '' ? 'Not assigned' : ($names[$key] ?? ('#'.$key)),
+                'total'    => $total,
+                'covered'  => $hits,
+                'excluded' => $total - $hits,
+                'state'    => $hits === 0 ? 'none' : ($hits >= $total ? 'all' : 'partial'),
+            ];
+        }
+        usort($nodes, fn ($a, $b) => [$a['id'] === null, $a['name']] <=> [$b['id'] === null, $b['name']]);
+
+        return ['excluded' => $excluded, 'nodes' => $nodes];
     }
 
     /* ── writes ────────────────────────────────────────────────────────── */
@@ -319,9 +388,10 @@ class DeliveryCoverageService
     /**
      * Validate a (rule_type, target) pair and return the rule attributes incl.
      * target_key. Referenced geo rows must exist; include pins must exist in
-     * postal_codes (else the rule could never project).
+     * postal_codes (else the rule could never project). Excludes are lenient:
+     * excluding something we do not know about is harmless and future-proof.
      *
-     * @return array{rule_type:string, state_id:?int, district_id:?int, city_id:?int, pincode:?string, target_key:string}
+     * @return array{rule_type:string, vertical:string, state_id:?int, district_id:?int, city_id:?int, pincode:?string, fulfillment_mode:?string, eta_days:?int, target_key:string}
      */
     private function validatedRuleAttributes(string $ruleType, array $target): array
     {
@@ -329,7 +399,24 @@ class DeliveryCoverageService
             throw DomainActionException::unprocessable('Unknown coverage rule type.', 'INVALID_RULE_TYPE', 'rule_type');
         }
 
-        $attrs = ['rule_type' => $ruleType, 'state_id' => null, 'district_id' => null, 'city_id' => null, 'pincode' => null];
+        $vertical = VendorCoverageRule::normalizeVertical($target['vertical'] ?? null);
+
+        $mode = $target['fulfillment_mode'] ?? null;
+        if ($mode !== null && $mode !== '' && ! in_array($mode, VendorCoverageRule::MODES, true)) {
+            throw DomainActionException::unprocessable('Unknown fulfilment mode.', 'INVALID_MODE', 'fulfillment_mode');
+        }
+        $eta = $target['eta_days'] ?? null;
+
+        $attrs = [
+            'rule_type'        => $ruleType,
+            'vertical'         => $vertical,
+            'state_id'         => null,
+            'district_id'      => null,
+            'city_id'          => null,
+            'pincode'          => null,
+            'fulfillment_mode' => $mode === '' ? null : $mode,
+            'eta_days'         => $eta === null || $eta === '' ? null : (int) $eta,
+        ];
 
         if (in_array($ruleType, [VendorCoverageRule::TYPE_PINCODE_INCLUDE, VendorCoverageRule::TYPE_PINCODE_EXCLUDE], true)) {
             $pin = $this->normalizePincode((string) ($target['pincode'] ?? ''));
@@ -341,19 +428,25 @@ class DeliveryCoverageService
                 throw DomainActionException::unprocessable("Pincode {$pin} is not in the postal master.", 'PINCODE_UNKNOWN', 'pincode');
             }
             $attrs['pincode'] = $pin;
-            $attrs['target_key'] = VendorCoverageRule::targetKey($ruleType, $pin);
+            $attrs['target_key'] = VendorCoverageRule::targetKey($ruleType, $pin, $vertical);
 
             return $attrs;
         }
 
-        $column = $ruleType.'_id'; // state_id | district_id | city_id
+        // state | district | city | district_exclude | city_exclude
+        $column = match ($ruleType) {
+            VendorCoverageRule::TYPE_STATE            => 'state_id',
+            VendorCoverageRule::TYPE_DISTRICT,
+            VendorCoverageRule::TYPE_DISTRICT_EXCLUDE => 'district_id',
+            default                                   => 'city_id',
+        };
         $id = (int) ($target[$column] ?? 0);
-        $table = ['state' => 'states', 'district' => 'districts', 'city' => 'cities'][$ruleType];
+        $table = ['state_id' => 'states', 'district_id' => 'districts', 'city_id' => 'cities'][$column];
         if ($id <= 0 || ! $this->db->table($table)->where('id', $id)->exists()) {
-            throw DomainActionException::unprocessable(ucfirst($ruleType).' not found.', 'TARGET_NOT_FOUND', $column);
+            throw DomainActionException::unprocessable(ucfirst(str_replace('_', ' ', $ruleType)).' not found.', 'TARGET_NOT_FOUND', $column);
         }
         $attrs[$column] = $id;
-        $attrs['target_key'] = VendorCoverageRule::targetKey($ruleType, $id);
+        $attrs['target_key'] = VendorCoverageRule::targetKey($ruleType, $id, $vertical);
 
         return $attrs;
     }

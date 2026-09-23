@@ -33,7 +33,7 @@ class DeliveryPincodeController extends CoreController
         $coveredCount = 0;
         try {
             $service = \Marvel\Services\CoverageBridge::service();
-            if ($service !== null && $service->coverageConfiguredFor($pincode)) {
+            if ($service !== null && $service->coverageConfiguredFor($pincode, $request->get('vertical'))) {
                 $coverageConfigured = true;
                 $coveredCount = count($service->getAvailableNurseryIds($pincode));
             }

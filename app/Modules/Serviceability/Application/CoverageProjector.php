@@ -20,49 +20,68 @@ class CoverageProjector
     }
 
     /**
-     * @return array{pincodes:int, by_source:array<string,int>, cities:int, unknown_pincodes:string[], duration_ms:int}
+     * Project one vendor, one map per vertical. Rules scoped to vertical X
+     * project X's rows ALONE (a named vertical REPLACES the '*' default rather
+     * than adding to it); verticals the vendor never named are answered by the
+     * '*' map. The legacy city bridge sees the union of all of them.
+     *
+     * @return array{pincodes:int, by_source:array<string,int>, cities:int, unknown_pincodes:string[], by_vertical:array<string,int>, duration_ms:int}
      */
     public function project(int $shopId): array
     {
         $startedAt = microtime(true);
 
-        $rules = VendorCoverageRule::where('shop_id', $shopId)
-            ->where('is_active', true)
-            ->get(['rule_type', 'state_id', 'district_id', 'city_id', 'pincode'])
-            ->map(fn (VendorCoverageRule $r) => $r->toArray())
-            ->all();
+        $byVertical = [];
+        foreach (VendorCoverageRule::where('shop_id', $shopId)->where('is_active', true)->get() as $rule) {
+            $byVertical[$rule->vertical ?: VendorCoverageRule::VERTICAL_ALL][] = $rule->toArray();
+        }
 
-        [$map, $unknown] = $this->computeMap($rules);
+        $maps = [];
+        $unknown = [];
+        foreach ($byVertical as $vertical => $rules) {
+            [$maps[$vertical], $missing] = $this->computeMap($rules);
+            $unknown = array_merge($unknown, $missing);
+        }
 
         // Full rewrite: the projection has no timestamps/identity worth keeping.
         $this->db->table('vendor_covered_pincodes')->where('shop_id', $shopId)->delete();
         $rows = [];
-        foreach ($map as $pincode => $hit) {
-            $rows[] = [
-                'shop_id'     => $shopId,
-                'pincode'     => (string) $pincode,
-                'source'      => $hit['source'],
-                'state_id'    => $hit['state_id'],
-                'district_id' => $hit['district_id'],
-                'city_id'     => $hit['city_id'],
-            ];
+        $bySource = [];
+        $byVerticalCount = [];
+        $union = [];
+        foreach ($maps as $vertical => $map) {
+            $byVerticalCount[$vertical] = count($map);
+            foreach ($map as $pincode => $hit) {
+                $rows[] = [
+                    'shop_id'          => $shopId,
+                    'pincode'          => (string) $pincode,
+                    'vertical'         => (string) $vertical,
+                    'source'           => $hit['source'],
+                    'fulfillment_mode' => $hit['fulfillment_mode'],
+                    'eta_days'         => $hit['eta_days'],
+                    'state_id'         => $hit['state_id'],
+                    'district_id'      => $hit['district_id'],
+                    'city_id'          => $hit['city_id'],
+                ];
+                $bySource[$hit['source']] = ($bySource[$hit['source']] ?? 0) + 1;
+                // The '*' map wins the bridge's mode/ETA: it is the vendor's default promise.
+                if (! isset($union[$pincode]) || $vertical === VendorCoverageRule::VERTICAL_ALL) {
+                    $union[$pincode] = $hit;
+                }
+            }
         }
         foreach (array_chunk($rows, 2000) as $chunk) {
             $this->db->table('vendor_covered_pincodes')->insert($chunk);
         }
 
-        $cityNames = $this->bridgeToLegacyServiceAreas($shopId, $map);
-
-        $bySource = [];
-        foreach ($map as $hit) {
-            $bySource[$hit['source']] = ($bySource[$hit['source']] ?? 0) + 1;
-        }
+        $cityNames = $this->bridgeToLegacyServiceAreas($shopId, $union);
 
         return [
-            'pincodes'         => count($map),
+            'pincodes'         => count($rows),
             'by_source'        => $bySource,
+            'by_vertical'      => $byVerticalCount,
             'cities'           => count($cityNames),
-            'unknown_pincodes' => $unknown,
+            'unknown_pincodes' => array_values(array_unique($unknown)),
             'duration_ms'      => (int) round((microtime(true) - $startedAt) * 1000),
         ];
     }
@@ -70,67 +89,87 @@ class CoverageProjector
     /**
      * The projection ladder, shared with previewCoverage (no writes). Rules
      * apply in ASCENDING priority — state, district, city, include — each tier
-     * overwriting the source of pins it re-covers; exclude unsets pins last.
+     * overwriting the source AND the delivery promise of pins it re-covers;
+     * the excludes (whole district, whole city, single pin) unset pins last.
      * Include pins missing from the postal master are reported, never added.
      *
-     * @param  array<int, array{rule_type:string, state_id?:int|null, district_id?:int|null, city_id?:int|null, pincode?:string|null}>  $rules
-     * @return array{0: array<string, array{source:string, state_id:?int, district_id:?int, city_id:?int}>, 1: string[]}
+     * Every rule in $rules is assumed to belong to ONE vertical: project()
+     * groups them before calling this.
+     *
+     * @param  array<int, array{rule_type:string, state_id?:int|null, district_id?:int|null, city_id?:int|null, pincode?:string|null, fulfillment_mode?:string|null, eta_days?:int|null}>  $rules
+     * @return array{0: array<string, array{source:string, state_id:?int, district_id:?int, city_id:?int, fulfillment_mode:?string, eta_days:?int}>, 1: string[]}
      */
     public function computeMap(array $rules): array
     {
-        $byType = ['state' => [], 'district' => [], 'city' => [], 'include' => [], 'exclude' => []];
+        // Each tier keeps its targets AND the delivery promise declared per
+        // target, so a pin picks up the mode/ETA of the rule that covered it.
+        $byType = ['state' => [], 'district' => [], 'city' => [], 'include' => [], 'exclude' => [], 'district_exclude' => [], 'city_exclude' => []];
         foreach ($rules as $rule) {
+            $promise = [
+                'fulfillment_mode' => $rule['fulfillment_mode'] ?? null,
+                'eta_days'         => isset($rule['eta_days']) && $rule['eta_days'] !== null ? (int) $rule['eta_days'] : null,
+            ];
             match ($rule['rule_type'] ?? null) {
-                VendorCoverageRule::TYPE_STATE           => $byType['state'][] = (int) $rule['state_id'],
-                VendorCoverageRule::TYPE_DISTRICT        => $byType['district'][] = (int) $rule['district_id'],
-                VendorCoverageRule::TYPE_CITY            => $byType['city'][] = (int) $rule['city_id'],
-                VendorCoverageRule::TYPE_PINCODE_INCLUDE => $byType['include'][] = (string) $rule['pincode'],
-                VendorCoverageRule::TYPE_PINCODE_EXCLUDE => $byType['exclude'][] = (string) $rule['pincode'],
-                default                                  => null,
+                VendorCoverageRule::TYPE_STATE            => $byType['state'][(int) $rule['state_id']] = $promise,
+                VendorCoverageRule::TYPE_DISTRICT         => $byType['district'][(int) $rule['district_id']] = $promise,
+                VendorCoverageRule::TYPE_CITY             => $byType['city'][(int) $rule['city_id']] = $promise,
+                VendorCoverageRule::TYPE_PINCODE_INCLUDE  => $byType['include'][(string) $rule['pincode']] = $promise,
+                VendorCoverageRule::TYPE_PINCODE_EXCLUDE  => $byType['exclude'][] = (string) $rule['pincode'],
+                VendorCoverageRule::TYPE_DISTRICT_EXCLUDE => $byType['district_exclude'][] = (int) $rule['district_id'],
+                VendorCoverageRule::TYPE_CITY_EXCLUDE     => $byType['city_exclude'][] = (int) $rule['city_id'],
+                default                                   => null,
             };
         }
 
         $map = [];
-        $collect = function ($query, string $source) use (&$map) {
+        $collect = function ($query, string $source, array $promises, string $key) use (&$map) {
             foreach ($query->get(['pincode', 'state_id', 'district_id', 'city_id']) as $row) {
+                $promise = $promises[$key === 'pincode' ? (string) $row->pincode : (int) $row->{$key}] ?? [];
                 $map[(string) $row->pincode] = [
-                    'source'      => $source,
-                    'state_id'    => $row->state_id !== null ? (int) $row->state_id : null,
-                    'district_id' => $row->district_id !== null ? (int) $row->district_id : null,
-                    'city_id'     => $row->city_id !== null ? (int) $row->city_id : null,
+                    'source'           => $source,
+                    'state_id'         => $row->state_id !== null ? (int) $row->state_id : null,
+                    'district_id'      => $row->district_id !== null ? (int) $row->district_id : null,
+                    'city_id'          => $row->city_id !== null ? (int) $row->city_id : null,
+                    'fulfillment_mode' => $promise['fulfillment_mode'] ?? null,
+                    'eta_days'         => $promise['eta_days'] ?? null,
                 ];
             }
         };
 
         if ($byType['state'] !== []) {
-            $collect($this->activePins()->whereIn('state_id', $byType['state']), 'state');
+            $collect($this->activePins()->whereIn('state_id', array_keys($byType['state'])), 'state', $byType['state'], 'state_id');
         }
         if ($byType['district'] !== []) {
-            $collect($this->activePins()->whereIn('district_id', $byType['district']), 'district');
+            $collect($this->activePins()->whereIn('district_id', array_keys($byType['district'])), 'district', $byType['district'], 'district_id');
         }
         if ($byType['city'] !== []) {
-            $collect($this->activePins()->whereIn('city_id', $byType['city']), 'city');
+            $collect($this->activePins()->whereIn('city_id', array_keys($byType['city'])), 'city', $byType['city'], 'city_id');
         }
 
         $unknown = [];
         if ($byType['include'] !== []) {
-            $found = [];
-            $q = $this->activePins()->whereIn('pincode', array_unique($byType['include']));
-            foreach ($q->get(['pincode', 'state_id', 'district_id', 'city_id']) as $row) {
-                $found[(string) $row->pincode] = true;
-                $map[(string) $row->pincode] = [
-                    'source'      => 'manual',
-                    'state_id'    => $row->state_id !== null ? (int) $row->state_id : null,
-                    'district_id' => $row->district_id !== null ? (int) $row->district_id : null,
-                    'city_id'     => $row->city_id !== null ? (int) $row->city_id : null,
-                ];
-            }
-            $unknown = array_values(array_unique(array_filter(
-                $byType['include'],
-                fn (string $pin) => ! isset($found[$pin]),
-            )));
+            // PHP turns numeric array keys into ints; pincodes are strings on
+            // both sides of the query and in the reported list.
+            $wanted = array_map('strval', array_keys($byType['include']));
+            $collect($this->activePins()->whereIn('pincode', $wanted), 'manual', $byType['include'], 'pincode');
+            $unknown = array_values(array_filter(
+                $wanted,
+                fn (string $pin) => ($map[$pin]['source'] ?? null) !== 'manual',
+            ));
         }
 
+        // Removals last, so "the whole state EXCEPT this district" is one rule
+        // pair rather than hundreds of pincode excludes.
+        if ($byType['district_exclude'] !== [] || $byType['city_exclude'] !== []) {
+            $districts = array_flip($byType['district_exclude']);
+            $cities = array_flip($byType['city_exclude']);
+            foreach ($map as $pin => $hit) {
+                if (($hit['district_id'] !== null && isset($districts[$hit['district_id']]))
+                    || ($hit['city_id'] !== null && isset($cities[$hit['city_id']]))) {
+                    unset($map[$pin]);
+                }
+            }
+        }
         foreach ($byType['exclude'] as $pin) {
             unset($map[(string) $pin]);
         }
@@ -150,7 +189,7 @@ class CoverageProjector
      * pruned; a vendor's manual rows (source NULL) are read-only here — their
      * fulfillment_mode/eta_days are inherited for the same city.
      *
-     * @param  array<string, array{city_id:?int}>  $map
+     * @param  array<string, array{city_id:?int, fulfillment_mode:?string, eta_days:?int}>  $map
      * @return string[] derived city names
      */
     private function bridgeToLegacyServiceAreas(int $shopId, array $map): array

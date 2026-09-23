@@ -32,6 +32,26 @@ final class CoverageBridge
         }
     }
 
+    /**
+     * The one serviceability resolver ("can vendor V deliver vertical X to
+     * pincode P?"). Same fail-open contract as service(): null means the
+     * module is unavailable and the caller behaves as it did before coverage.
+     */
+    public static function resolver(): ?\App\Modules\Serviceability\Application\VendorServiceabilityResolver
+    {
+        try {
+            return app(\App\Modules\Serviceability\Application\VendorServiceabilityResolver::class);
+        } catch (\Throwable $e) {
+            if (!self::$warned) {
+                self::$warned = true;
+                Log::warning('CoverageBridge: VendorServiceabilityResolver unavailable — coverage features fail open', [
+                    'error' => $e->getMessage(),
+                ]);
+            }
+            return null;
+        }
+    }
+
     /** Test hook: reset the once-per-request warning latch. */
     public static function resetWarning(): void
     {

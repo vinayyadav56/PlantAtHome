@@ -40,6 +40,8 @@ abstract class ServiceabilityTestCase extends CatalogTestCase
             '2026_07_15_100009_add_source_to_vendor_service_areas.php',
             '2026_07_15_100010_add_delivery_coverage_to_orders.php',
             '2026_07_15_100011_create_delivery_notify_requests_table.php',
+            '2026_09_24_100001_add_vertical_and_delivery_to_coverage_rules.php',
+            '2026_09_24_100002_add_vertical_and_delivery_to_covered_pincodes.php',
         ] as $file) {
             (require $dir.'/'.$file)->up();
         }
@@ -72,6 +74,7 @@ abstract class ServiceabilityTestCase extends CatalogTestCase
             $t->string('name')->nullable();
             $t->string('slug')->nullable();
             $t->boolean('is_active')->default(false);
+            $t->unsignedSmallInteger('sla_default_days')->nullable();
             $t->timestamps();
         });
 
