@@ -8,7 +8,9 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
+use Marvel\Database\Models\Product;
 use Marvel\Http\Controllers\ProductController;
+use Marvel\Http\Resources\ProductResource;
 use Marvel\Services\ServiceAvailabilityService;
 use Tests\TestCase;
 
@@ -103,6 +105,15 @@ final class CatalogMembershipTest extends TestCase
         Schema::create('shops', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->string('name')->nullable();
+        });
+        // kodeine Metable reads this on any attribute miss; without the stub the resource
+        // payload cannot be built at all (see the switch-state test below).
+        Schema::create('products_meta', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('product_id');
+            $t->string('key')->nullable();
+            $t->text('value')->nullable();
+            $t->string('type')->nullable();
         });
         Schema::create('types', function (Blueprint $t) {
             $t->bigIncrements('id');
@@ -273,5 +284,24 @@ final class CatalogMembershipTest extends TestCase
             $this->namesFor(Request::create('/api/products', 'GET', ['catalog_scope' => 'all'])),
             'an anonymous caller must not be able to opt out of the gate',
         );
+    }
+
+    public function test_the_list_payload_carries_the_catalogue_switch_state(): void
+    {
+        // Available Products renders its per-row switch from this field. ProductResource is an
+        // explicit allowlist, and it omitted both columns — so the switch read `undefined`, drew
+        // itself OFF for every row whatever the database said, and each click wrote `true`, got a
+        // payload that still said nothing, and snapped back. "The toggle does nothing."
+        $payload = (new ProductResource(Product::find(3)))
+            ->toArray(Request::create('/api/products', 'GET'));
+
+        $this->assertArrayHasKey('listing_enabled', $payload, 'the row switch has nothing to render from');
+        $this->assertTrue($payload['listing_enabled']);
+        $this->assertArrayHasKey('is_available_product', $payload);
+        $this->assertTrue($payload['is_available_product']);
+
+        $off = (new ProductResource(Product::find(2)))
+            ->toArray(Request::create('/api/products', 'GET'));
+        $this->assertFalse($off['listing_enabled'], 'a curated-but-unlisted row must report OFF, not absent');
     }
 }

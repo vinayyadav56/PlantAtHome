@@ -30,6 +30,13 @@ class ProductResource extends Resource
             'image'                => $this->image,
             'size_guide'           => $this->size_guide,
             'status'               => $this->status,
+            // Master Catalog membership + its listing switch. This resource is an allowlist, so
+            // omitting them did not merely hide two flags — it left the Available Products row
+            // switch with nothing to render from: it drew OFF for every product whatever the
+            // database held, and every click wrote `true`, refetched a payload that still said
+            // nothing, and snapped back. Orthogonal to `status`, which is already public here.
+            'is_available_product' => (bool) $this->is_available_product,
+            'listing_enabled'      => (bool) $this->listing_enabled,
             // Single-shop model: who proposed this catalog product (review queue).
             'proposed_by_shop_id'  => $this->proposed_by_shop_id ?? null,
             'proposed_by_shop'     => $this->whenLoaded('proposedByShop', fn () => [
