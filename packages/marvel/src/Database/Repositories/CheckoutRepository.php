@@ -427,6 +427,10 @@ class CheckoutRepository
                 return $none;
             }
             $service = \Marvel\Services\CoverageBridge::service();
+            // Platform-wide on purpose: enforcement here is PER-VENDOR opt-in
+            // (a line whose vendors have no rules passes), so this is only a
+            // cheap early-out. coverageConfiguredFor() would be wrong — a vendor
+            // that drops its last rule in a state must start blocking there.
             if ($service === null || !$service->anyCoverageConfigured()) {
                 return $none;
             }

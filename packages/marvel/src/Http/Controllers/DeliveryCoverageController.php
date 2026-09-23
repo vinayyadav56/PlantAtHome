@@ -65,7 +65,7 @@ class DeliveryCoverageController extends CoreController
     {
         $request->validate(['pincode' => 'required|digits:6']);
         $svc = $this->serviceOrNull();
-        if ($svc === null || ! $svc->anyCoverageConfigured()) {
+        if ($svc === null || ! $svc->coverageConfiguredFor((string) $request->pincode)) {
             return ['pincode' => (string) $request->pincode, 'nurseries' => [], 'unconfigured' => true];
         }
 

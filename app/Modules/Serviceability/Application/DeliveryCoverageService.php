@@ -174,6 +174,28 @@ class DeliveryCoverageService
     }
 
     /**
+     * Per-scope gate for the public pincode check: is coverage configured for
+     * the STATE this pin sits in, i.e. does any vendor project at least one
+     * pin there? One vendor's first rule in Karnataka must not turn every
+     * Haryana pin non-serviceable — outside every projected state the check
+     * stays open. Unknown pins keep the platform-wide answer.
+     */
+    public function coverageConfiguredFor(string $pincode): bool
+    {
+        $pin = $this->normalizePincode($pincode);
+        $stateId = $pin === '' ? null : $this->db->table('postal_codes')->where('pincode', $pin)->value('state_id');
+        if ($stateId === null) {
+            return $this->anyCoverageConfigured();
+        }
+
+        return (bool) Cache::remember(
+            "coverage:v{$this->version()}:configured:state:{$stateId}",
+            300,
+            fn () => $this->db->table('vendor_covered_pincodes')->where('state_id', $stateId)->exists(),
+        );
+    }
+
+    /**
      * Dry-run the projection ladder over a candidate rule set — no writes.
      *
      * @return array{total:int, by_source:array<string,int>, sample:string[]}

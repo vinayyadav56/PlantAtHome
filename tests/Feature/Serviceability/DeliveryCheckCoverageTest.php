@@ -108,10 +108,27 @@ class DeliveryCheckCoverageTest extends ServiceabilityTestCase
         // Allow-list unconfigured — no divergence may be logged.
         $this->assertSame(0, $this->divergenceCount());
 
-        // A pin the vendor does NOT cover is a plain miss (not unconfigured).
-        $miss = $this->getJson('/api/delivery-pincodes/check?pincode=302001');
+        // A pin in a configured state the vendor does NOT cover is a plain miss (not unconfigured).
+        $miss = $this->getJson('/api/delivery-pincodes/check?pincode=121001');
         $miss->assertStatus(200)->assertJson(['serviceable' => false, 'available_vendors' => 0, 'source' => null]);
         $miss->assertJsonMissing(['unconfigured' => true]);
+    }
+
+    public function test_a_rule_in_another_state_leaves_the_pin_unconfigured(): void
+    {
+        // Coverage is configured per STATE: a Haryana-only vendor must not turn
+        // a Rajasthan pin non-serviceable — it stays fail-open as if unconfigured.
+        $this->coverage->addCoverage(1, 'district', ['district_id' => $this->geo['gurgaon']]);
+
+        $this->getJson('/api/delivery-pincodes/check?pincode=302001')
+            ->assertStatus(200)
+            ->assertJson(['serviceable' => true, 'unconfigured' => true, 'available_vendors' => 0, 'source' => null]);
+
+        // ...and a pin nobody in the postal master knows keeps the platform-wide answer.
+        $this->getJson('/api/delivery-pincodes/check?pincode=999999')
+            ->assertStatus(200)
+            ->assertJson(['serviceable' => false, 'available_vendors' => 0])
+            ->assertJsonMissing(['unconfigured' => true]);
     }
 
     public function test_divergence_logged_only_on_disagreement_and_throttled(): void

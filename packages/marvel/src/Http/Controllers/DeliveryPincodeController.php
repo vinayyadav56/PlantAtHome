@@ -17,7 +17,9 @@ class DeliveryPincodeController extends CoreController
      * the legacy allow-list (delivery_pincodes rows) and the vendor Delivery
      * Coverage projection (via CoverageBridge). `source` reports which side(s)
      * said yes; `available_vendors` = active vendors covering the pin. Fails
-     * OPEN ("unconfigured") only when NEITHER system has any configuration.
+     * OPEN ("unconfigured") when NEITHER system is configured for the pin —
+     * coverage counts per STATE, so one vendor's rules in Karnataka never
+     * block a Haryana pin.
      */
     public function check(Request $request)
     {
@@ -31,7 +33,7 @@ class DeliveryPincodeController extends CoreController
         $coveredCount = 0;
         try {
             $service = \Marvel\Services\CoverageBridge::service();
-            if ($service !== null && $service->anyCoverageConfigured()) {
+            if ($service !== null && $service->coverageConfiguredFor($pincode)) {
                 $coverageConfigured = true;
                 $coveredCount = count($service->getAvailableNurseryIds($pincode));
             }
