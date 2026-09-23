@@ -61,6 +61,26 @@ class CheckoutCoverageGateTest extends ServiceabilityTestCase
             ['id' => 22, 'shop_id' => 2, 'name' => 'Snake Plant', 'created_at' => now(), 'updated_at' => now()],
         ]);
 
+        // Supply, the way the gate reads it. Under the single-shop master
+        // catalog the product's own shop is the master shop and never carries
+        // rules, so the gate asks vendor_product_prices who can actually ship.
+        Schema::create('vendor_product_prices', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('shop_id')->index();
+            $t->unsignedBigInteger('product_id')->index();
+            $t->unsignedBigInteger('variation_option_id')->nullable();
+            $t->decimal('cost_price', 14, 2)->default(0);
+            $t->date('effective_from')->nullable();
+            $t->date('effective_to')->nullable();
+            $t->boolean('is_available')->default(true);
+            $t->timestamps();
+            $t->softDeletes();
+        });
+        DB::table('vendor_product_prices')->insert([
+            ['shop_id' => 1, 'product_id' => 11, 'cost_price' => 100, 'is_available' => true, 'created_at' => now(), 'updated_at' => now()],
+            ['shop_id' => 2, 'product_id' => 22, 'cost_price' => 100, 'is_available' => true, 'created_at' => now(), 'updated_at' => now()],
+        ]);
+
         $this->repo = new class extends CheckoutRepository {
             public function gate(array $lines, ?string $zip): array
             {
@@ -84,6 +104,12 @@ class CheckoutCoverageGateTest extends ServiceabilityTestCase
             'created_at' => now(),
             'updated_at' => now(),
         ]);
+    }
+
+    /** Shop 2 is inactive in the shared fixture; the gate only counts active vendors. */
+    private function activateShopTwo(): void
+    {
+        DB::table('shops')->where('id', 2)->update(['is_active' => true]);
     }
 
     private function lines(int ...$productIds): array
@@ -119,6 +145,7 @@ class CheckoutCoverageGateTest extends ServiceabilityTestCase
     public function test_covered_pincode_blocks_nothing_and_uncovered_blocks_the_line(): void
     {
         $this->setFlag(true);
+        $this->activateShopTwo();
         $this->coverage->addCoverage(1, 'district', ['district_id' => $this->geo['gurgaon']]);
         // Shop 2 opts into coverage with a rule that does NOT reach 122001.
         $this->coverage->addCoverage(2, 'pincode_include', ['pincode' => '302001']);
@@ -184,13 +211,39 @@ class CheckoutCoverageGateTest extends ServiceabilityTestCase
     public function test_inactive_vendor_shops_never_count_as_covering(): void
     {
         $this->setFlag(true);
-        // Shop 2 is INACTIVE in the fixture — its rule projects, but
-        // getAvailableNurseryIds joins shops.is_active, so it cannot cover.
+        // Two vendors supply product 22. Shop 1 is active and configured but
+        // does not reach 122001; shop 2 DOES cover it — and is inactive, so its
+        // rule must not rescue the line.
+        DB::table('vendor_product_prices')->insert([
+            'shop_id' => 1, 'product_id' => 22, 'cost_price' => 100, 'is_available' => true,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->coverage->addCoverage(1, 'pincode_include', ['pincode' => '302001']);
         $this->coverage->addCoverage(2, 'pincode_include', ['pincode' => '122001']);
 
         $result = $this->repo->gate($this->lines(22), '122001');
 
         $this->assertSame([22], $result['blocked']);
+
+        // Activating shop 2 is all it takes for the same cart to pass.
+        $this->activateShopTwo();
+        $this->assertSame([], $this->repo->gate($this->lines(22), '122001')['blocked']);
+    }
+
+    public function test_a_vendor_is_only_enforced_for_verticals_it_declared(): void
+    {
+        $this->setFlag(true);
+        $this->activateShopTwo();
+        // Shop 2 declares TOOLS coverage only. A plants line it supplies is not
+        // something it ever opted into, so the line must fail open rather than
+        // block on an empty plants scope.
+        $this->coverage->addCoverage(2, 'pincode_include', ['pincode' => '302001', 'vertical' => 'tools']);
+
+        $this->assertSame([], $this->repo->gate($this->lines(22), '122001')['blocked']);
+
+        // Once it declares a default ('*') rule, the same cart is enforced.
+        $this->coverage->addCoverage(2, 'pincode_include', ['pincode' => '302001']);
+        $this->assertSame([22], $this->repo->gate($this->lines(22), '122001')['blocked']);
     }
 
     public function test_shipping_zip_extraction_matches_the_verify_payload_shapes(): void
@@ -201,5 +254,51 @@ class CheckoutCoverageGateTest extends ServiceabilityTestCase
         $this->assertSame('122001', $this->repo->zipOf(['shipping_address' => ['postal_code' => '122001']]));
         $this->assertNull($this->repo->zipOf(['shipping_address' => ['city' => 'Gurugram']]));
         $this->assertNull($this->repo->zipOf([]));
+    }
+
+    /**
+     * verify() shows the verdict; storeOrder() throws it. Both go through
+     * applyCoverageGate, and assertCoverage is the ONLY place that turns it
+     * into an exception — so the advisory payload and the 422 body can never
+     * drift apart. storeOrder's own line is a single call to this method.
+     */
+    public function test_the_advisory_verdict_and_the_thrown_422_are_the_same_payload(): void
+    {
+        $this->setFlag(true);
+        $this->activateShopTwo();
+        $this->coverage->addCoverage(2, 'pincode_include', ['pincode' => '302001']);
+
+        $request = [
+            'products'         => $this->lines(22),
+            'shipping_address' => ['zip' => '122001'],
+        ];
+
+        // What verify() merges into its response.
+        $advisory = $this->repo->gate($request['products'], '122001');
+        $this->assertSame([22], $advisory['blocked']);
+        $this->assertSame('PINCODE_NOT_COVERED', $advisory['coverage']['code']);
+
+        // What storeOrder() throws, for the same cart.
+        try {
+            $this->repo->assertCoverage($request);
+            $this->fail('assertCoverage must reject a cart verify() reports as blocked.');
+        } catch (\Illuminate\Http\Exceptions\HttpResponseException $e) {
+            $response = $e->getResponse();
+            $this->assertSame(422, $response->getStatusCode());
+            $this->assertSame($advisory['coverage'], json_decode($response->getContent(), true));
+        }
+    }
+
+    public function test_a_covered_cart_passes_both_gates(): void
+    {
+        $this->setFlag(true);
+        $this->activateShopTwo();
+        $this->coverage->addCoverage(2, 'pincode_include', ['pincode' => '122001']);
+
+        $request = ['products' => $this->lines(22), 'shipping_address' => ['zip' => '122001']];
+
+        $this->assertSame([], $this->repo->gate($request['products'], '122001')['blocked']);
+        $this->repo->assertCoverage($request);
+        $this->addToAssertionCount(1); // assertCoverage returning at all is the assertion
     }
 }

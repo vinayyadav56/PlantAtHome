@@ -90,6 +90,11 @@ class VendorServiceabilityResolver
     /**
      * Every active vendor that can deliver this vertical to this pincode.
      *
+     * Only the PROJECTION is cached. Vendor activation and the shop's default
+     * SLA are read fresh every call: they change through paths that know
+     * nothing about coverage, and caching them meant approving a vendor left
+     * them invisible for up to an hour.
+     *
      * @return array<int, array> shop_id => verdict
      */
     public function vendorsFor(string $pincode, string $vertical = VendorCoverageRule::VERTICAL_ALL): array
@@ -100,53 +105,70 @@ class VendorServiceabilityResolver
             return [];
         }
 
-        return Cache::remember("coverage:v{$this->version()}:pin:{$pin}:{$vertical}", 3600, function () use ($pin, $vertical) {
+        $rows = Cache::remember("coverage:v{$this->version()}:pin:{$pin}:{$vertical}", 3600, function () use ($pin, $vertical) {
             // Which vendors even scope this vertical? The rest answer from '*'.
-            $named = $vertical === VendorCoverageRule::VERTICAL_ALL ? [] : $this->db->table('vendor_coverage_rules')
-                ->where('vertical', $vertical)->where('is_active', true)
-                ->distinct()->pluck('shop_id')->map(fn ($id) => (int) $id)->all();
-            $named = array_flip($named);
-
-            $rows = $this->db->table('vendor_covered_pincodes')
-                ->join('shops', 'shops.id', '=', 'vendor_covered_pincodes.shop_id')
-                ->where('vendor_covered_pincodes.pincode', $pin)
-                ->where('shops.is_active', 1)
-                ->whereIn('vendor_covered_pincodes.vertical', array_unique([$vertical, VendorCoverageRule::VERTICAL_ALL]))
-                ->orderBy('vendor_covered_pincodes.shop_id')
-                ->get([
-                    'vendor_covered_pincodes.shop_id', 'vendor_covered_pincodes.vertical',
-                    'vendor_covered_pincodes.source', 'vendor_covered_pincodes.fulfillment_mode',
-                    'vendor_covered_pincodes.eta_days', 'vendor_covered_pincodes.state_id',
-                    'vendor_covered_pincodes.district_id', 'vendor_covered_pincodes.city_id',
-                    'shops.sla_default_days',
-                ]);
+            $named = $vertical === VendorCoverageRule::VERTICAL_ALL ? [] : array_flip(
+                $this->db->table('vendor_coverage_rules')
+                    ->where('vertical', $vertical)->where('is_active', true)
+                    ->distinct()->pluck('shop_id')->map(fn ($id) => (int) $id)->all()
+            );
 
             $out = [];
-            foreach ($rows as $row) {
+            $projected = $this->db->table('vendor_covered_pincodes')
+                ->where('pincode', $pin)
+                ->whereIn('vertical', array_unique([$vertical, VendorCoverageRule::VERTICAL_ALL]))
+                ->orderBy('shop_id')
+                ->get(['shop_id', 'vertical', 'source', 'fulfillment_mode', 'eta_days', 'state_id', 'district_id', 'city_id']);
+            foreach ($projected as $row) {
                 $shopId = (int) $row->shop_id;
                 $scope = isset($named[$shopId]) ? $vertical : VendorCoverageRule::VERTICAL_ALL;
                 if ($row->vertical !== $scope) {
                     continue; // a '*' row for a vendor that replaced it for this vertical
                 }
-                $mode = $row->fulfillment_mode ?: 'both';
-                $eta = $row->eta_days !== null ? (int) $row->eta_days
-                    : ((int) ($row->sla_default_days ?? 0) ?: ($mode === 'local' ? self::DEFAULT_LOCAL_ETA : self::DEFAULT_COURIER_ETA));
                 $out[$shopId] = [
-                    'serviceable'      => true,
-                    'reason'           => null,
-                    'source'           => $row->source,
-                    'vertical_scope'   => $scope,
-                    'state_id'         => $row->state_id !== null ? (int) $row->state_id : null,
-                    'district_id'      => $row->district_id !== null ? (int) $row->district_id : null,
-                    'city_id'          => $row->city_id !== null ? (int) $row->city_id : null,
-                    'fulfillment_mode' => $mode,
-                    'eta_days'         => $eta,
-                    'sla_bucket'       => $this->slaBucket($eta),
+                    'source'      => $row->source,
+                    'scope'       => $scope,
+                    'mode'        => $row->fulfillment_mode ?: 'both',
+                    'eta'         => $row->eta_days !== null ? (int) $row->eta_days : null,
+                    'state_id'    => $row->state_id !== null ? (int) $row->state_id : null,
+                    'district_id' => $row->district_id !== null ? (int) $row->district_id : null,
+                    'city_id'     => $row->city_id !== null ? (int) $row->city_id : null,
                 ];
             }
 
             return $out;
         });
+
+        if ($rows === []) {
+            return [];
+        }
+
+        $shops = $this->db->getSchemaBuilder()->hasTable('shops')
+            ? $this->db->table('shops')->whereIn('id', array_keys($rows))->where('is_active', 1)
+                ->pluck('sla_default_days', 'id')->all()
+            : array_fill_keys(array_keys($rows), null);
+
+        $out = [];
+        foreach ($rows as $shopId => $row) {
+            if (! array_key_exists($shopId, $shops)) {
+                continue; // deactivated since the projection was cached
+            }
+            $eta = $row['eta'] ?? ((int) ($shops[$shopId] ?? 0) ?: ($row['mode'] === 'local' ? self::DEFAULT_LOCAL_ETA : self::DEFAULT_COURIER_ETA));
+            $out[$shopId] = [
+                'serviceable'      => true,
+                'reason'           => null,
+                'source'           => $row['source'],
+                'vertical_scope'   => $row['scope'],
+                'state_id'         => $row['state_id'],
+                'district_id'      => $row['district_id'],
+                'city_id'          => $row['city_id'],
+                'fulfillment_mode' => $row['mode'],
+                'eta_days'         => $eta,
+                'sla_bucket'       => $this->slaBucket($eta),
+            ];
+        }
+
+        return $out;
     }
 
     /**

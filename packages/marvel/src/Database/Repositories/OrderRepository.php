@@ -245,6 +245,13 @@ class OrderRepository extends BaseRepository
                 );
             }
         }
+
+        // Delivery Coverage — the SAME gate verify() runs, so a client that
+        // POSTs straight to /orders cannot slip past a pincode no vendor
+        // covers. Outside the shopping_city block on purpose: the pincode is
+        // the address's own, whether or not the client declared a city. Fails
+        // open exactly as it does in verify (flag off, no zip, module absent).
+        $checkoutGate->assertCoverage($request);
         // Deliver-to-someone-else: a recipient must be identifiable for the courier.
         if (($request['deliver_to'] ?? null) === 'someone_else') {
             $shipAddr = (array) ($request['shipping_address'] ?? []);

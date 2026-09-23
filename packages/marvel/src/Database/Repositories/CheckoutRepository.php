@@ -299,7 +299,7 @@ class CheckoutRepository
     }
 
     /** Shipping pincode from the verify payload (zip | pincode | postal_code, possibly nested under address). */
-    protected function shippingZip($request): ?string
+    public function shippingZip($request): ?string
     {
         $ship = is_array($request['shipping_address'] ?? null) ? $request['shipping_address'] : [];
         $addr = (array) ($ship['address'] ?? $ship);
@@ -398,24 +398,28 @@ class CheckoutRepository
     }
 
     /**
-     * Delivery Coverage checkout gate. Guard chain — each miss skips the gate
-     * silently (fail open): settings flag `coverageCheckoutGate` truthy, a
-     * >= 6-digit shipping pincode, the V2 coverage service resolvable via
-     * CoverageBridge, and at least one active coverage rule configured.
+     * Delivery Coverage checkout gate — the ONE pincode gate, shared by
+     * verify() and OrderRepository::storeOrder() so a client that skips verify
+     * cannot slip past it. Guard chain, each miss failing open silently: the
+     * `coverageCheckoutGate` setting, a >= 6-digit shipping pincode, and a
+     * resolvable coverage module.
      *
-     * Vendor semantics (single-shop master catalog!): a line's candidate
-     * vendors are the SUPPLYING shops from the assignment engine — the
-     * product's own shop is the master catalog shop, which never carries
-     * coverage rules. Enforcement is PER-VENDOR opt-in: a candidate only
-     * counts against the line when it has coverage rules configured; vendors
-     * without rules fail open (not yet migrated). A line blocks only when it
-     * has candidates, every candidate is coverage-configured, and none of
-     * them covers the pincode.
+     * Vendor semantics (single-shop master catalog!): a line's vendors are the
+     * SUPPLYING shops in vendor_product_prices — the product's own shop is the
+     * master catalog shop, which never carries coverage rules, so there is
+     * deliberately no fall back to it. Enforcement is PER-VENDOR, PER-VERTICAL
+     * opt-in: a vendor is only enforced for a line once it has rules that could
+     * answer that line's vertical ('*' or the vertical itself). A line blocks
+     * only when it has supplying vendors, every one of them is configured for
+     * the vertical, and none of them covers the pincode.
+     *
+     * Asks VendorServiceabilityResolver, not the assignment engine: the engine
+     * consults this same resolver, so calling it here would be circular.
      *
      * @param  array<int, array>  $lines  cart lines ({product_id, ...})
      * @return array{blocked: int[], coverage: ?array}
      */
-    protected function applyCoverageGate(array $lines, ?string $zip): array
+    public function applyCoverageGate(array $lines, ?string $zip): array
     {
         $none = ['blocked' => [], 'coverage' => null];
         try {
@@ -426,73 +430,44 @@ class CheckoutRepository
             if ($zip === null || strlen($zip) < 6) {
                 return $none;
             }
-            $service = \Marvel\Services\CoverageBridge::service();
-            // Platform-wide on purpose: enforcement here is PER-VENDOR opt-in
-            // (a line whose vendors have no rules passes), so this is only a
-            // cheap early-out. coverageConfiguredFor() would be wrong — a vendor
-            // that drops its last rule in a state must start blocking there.
-            if ($service === null || !$service->anyCoverageConfigured()) {
+            $resolver = \Marvel\Services\CoverageBridge::resolver();
+            if ($resolver === null) {
                 return $none;
             }
 
-            $coveredShopIds = array_map('intval', $service->getAvailableNurseryIds($zip));
-            $covered = array_flip($coveredShopIds);
-
-            $lineList = collect($lines)
-                ->filter(fn ($l) => !empty($l['product_id']))
-                ->values();
-            if ($lineList->isEmpty()) {
+            $ids = collect($lines)->pluck('product_id')->filter()
+                ->map(fn ($id) => (int) $id)->unique()->values()->all();
+            if ($ids === []) {
                 return $none;
             }
 
-            $assigner = app(\Marvel\Services\ItemAssignmentService::class);
-
-            // Candidate supplying vendors per line via the assignment engine;
-            // fall back to the product's own shop when no candidates exist.
-            $ids = $lineList->pluck('product_id')->unique()->map(fn ($id) => (int) $id)->values()->all();
-            $shopByProduct = \Illuminate\Support\Facades\DB::table('products')
-                ->whereIn('id', $ids)->pluck('shop_id', 'id');
-
-            $candidatesByProduct = [];
-            $allCandidateShops = [];
-            foreach ($lineList as $line) {
-                $pid = (int) $line['product_id'];
-                $vo = isset($line['variation_option_id']) ? (int) $line['variation_option_id'] : null;
-                $qty = max(1, (int) ($line['order_quantity'] ?? $line['quantity'] ?? 1));
-                $shops = [];
-                try {
-                    $cands = $assigner->candidatesFor($pid, $vo, $qty, null, $zip);
-                    $shops = collect($cands)->pluck('shop_id')->filter()->map(fn ($s) => (int) $s)->unique()->values()->all();
-                } catch (\Throwable $e) {
-                    // assignment engine unavailable → fall through to own shop
-                }
-                if ($shops === [] && isset($shopByProduct[$pid])) {
-                    $shops = [(int) $shopByProduct[$pid]];
-                }
-                $candidatesByProduct[$pid] = $shops;
-                foreach ($shops as $s) {
-                    $allCandidateShops[$s] = true;
-                }
+            $verticalByProduct = $this->productVerticals($ids);
+            $supplyByProduct = $this->supplyingShops($ids);
+            $allShops = collect($supplyByProduct)->flatten()->unique()->values()->all();
+            if ($allShops === []) {
+                return $none;
             }
 
-            // Per-vendor opt-in: only vendors WITH active rules are enforced.
-            $configured = array_flip(
-                \Illuminate\Support\Facades\DB::table('vendor_coverage_rules')
-                    ->whereIn('shop_id', array_keys($allCandidateShops))
-                    ->where('is_active', 1)
-                    ->distinct()->pluck('shop_id')
-                    ->map(fn ($s) => (int) $s)->all()
-            );
+            // Which vendors have opted in, per vertical scope.
+            $rules = \Illuminate\Support\Facades\DB::table('vendor_coverage_rules')
+                ->whereIn('shop_id', $allShops)->where('is_active', 1)
+                ->distinct()->get(['shop_id', 'vertical']);
+            $configured = [];
+            foreach ($rules as $rule) {
+                $configured[(int) $rule->shop_id][$rule->vertical ?? '*'] = true;
+            }
 
+            $coveredByVertical = [];
             $blocked = [];
-            foreach ($candidatesByProduct as $pid => $shops) {
-                if ($shops === []) {
-                    continue; // no known vendor — leave to stock/city gates
-                }
+            foreach ($supplyByProduct as $pid => $shops) {
+                $vertical = $verticalByProduct[$pid] ?? '*';
+                $coveredByVertical[$vertical] ??= $resolver->vendorsFor($zip, $vertical);
+                $covered = $coveredByVertical[$vertical];
+
                 $anyPasses = false;
-                foreach ($shops as $s) {
-                    // Covered, or not coverage-configured (fail open) → passes.
-                    if (isset($covered[$s]) || !isset($configured[$s])) {
+                foreach ($shops as $shopId) {
+                    $optedIn = isset($configured[$shopId]['*']) || isset($configured[$shopId][$vertical]);
+                    if (isset($covered[$shopId]) || !$optedIn) {
                         $anyPasses = true;
                         break;
                     }
@@ -508,6 +483,7 @@ class CheckoutRepository
             return [
                 'blocked'  => $blocked,
                 'coverage' => [
+                    'code'             => 'PINCODE_NOT_COVERED',
                     'pincode'          => $zip,
                     'blocked_products' => $blocked,
                     'reason'           => 'pincode_not_covered',
@@ -518,6 +494,86 @@ class CheckoutRepository
             \Illuminate\Support\Facades\Log::warning('coverage checkout gate failed open', ['error' => $e->getMessage()]);
             return $none;
         }
+    }
+
+    /**
+     * The blocking form of the gate, for order creation: same verdict verify()
+     * shows advisorily, thrown as the structured 422 the clients switch on.
+     * Lives here so verify() and storeOrder() cannot drift apart — there is one
+     * gate and one payload, and this is the only place that turns it into an
+     * exception.
+     */
+    public function assertCoverage($request): void
+    {
+        $gate = $this->applyCoverageGate((array) ($request['products'] ?? []), $this->shippingZip($request));
+        if ($gate['coverage'] === null) {
+            return;
+        }
+
+        throw new \Illuminate\Http\Exceptions\HttpResponseException(
+            response()->json($gate['coverage'], 422)
+        );
+    }
+
+    /**
+     * Vertical (Type slug) per product — the scope a vendor's rules are matched
+     * against. '*' whenever the catalogue cannot say.
+     *
+     * @param  int[]  $ids
+     * @return array<int,string>
+     */
+    private function productVerticals(array $ids): array
+    {
+        $schema = \Illuminate\Support\Facades\DB::getSchemaBuilder();
+        if (!$schema->hasColumn('products', 'type_id') || !$schema->hasTable('types')) {
+            return [];
+        }
+
+        return \Illuminate\Support\Facades\DB::table('products')
+            ->leftJoin('types', 'types.id', '=', 'products.type_id')
+            ->whereIn('products.id', $ids)
+            ->pluck('types.slug', 'products.id')
+            ->filter()->map(fn ($slug) => (string) $slug)->all();
+    }
+
+    /**
+     * Supplying vendors per product: live vendor_product_prices rows (available,
+     * inside their effective window, vendor active and not on hold). Same supply
+     * definition AvailabilityService projects city availability from, so the gate
+     * cannot disagree with what the customer was shown.
+     *
+     * @param  int[]  $ids
+     * @return array<int, int[]>
+     */
+    private function supplyingShops(array $ids): array
+    {
+        $db = \Illuminate\Support\Facades\DB::table('vendor_product_prices')
+            ->join('shops', 'shops.id', '=', 'vendor_product_prices.shop_id')
+            ->whereIn('vendor_product_prices.product_id', $ids)
+            ->where('vendor_product_prices.is_available', 1)
+            ->where('shops.is_active', 1);
+
+        $schema = \Illuminate\Support\Facades\DB::getSchemaBuilder();
+        if ($schema->hasColumn('vendor_product_prices', 'deleted_at')) {
+            $db->whereNull('vendor_product_prices.deleted_at');
+        }
+        if ($schema->hasColumn('vendor_product_prices', 'review_status')) {
+            $db->where('vendor_product_prices.review_status', 'approved');
+        }
+        if ($schema->hasColumn('shops', 'approval_status')) {
+            $db->where(fn ($q) => $q->whereNull('shops.approval_status')
+                ->orWhere('shops.approval_status', '!=', \Marvel\Database\Models\Shop::STATUS_ON_HOLD));
+        }
+        $today = \Carbon\Carbon::today()->toDateString();
+        $db->where(fn ($q) => $q->whereNull('vendor_product_prices.effective_from')->orWhere('vendor_product_prices.effective_from', '<=', $today))
+            ->where(fn ($q) => $q->whereNull('vendor_product_prices.effective_to')->orWhere('vendor_product_prices.effective_to', '>=', $today));
+
+        $out = [];
+        foreach ($db->get(['vendor_product_prices.product_id', 'vendor_product_prices.shop_id']) as $row) {
+            $out[(int) $row->product_id][(int) $row->shop_id] = true;
+        }
+
+        return array_map('array_keys', $out);
     }
 
     /**
