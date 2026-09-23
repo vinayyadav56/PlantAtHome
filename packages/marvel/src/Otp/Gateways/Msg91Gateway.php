@@ -43,15 +43,30 @@ class Msg91Gateway implements OtpInterface
     /** Trigger MSG91 to send an OTP to the number. */
     public function startVerification($phone_number)
     {
-        if (empty($this->authKey) || empty($this->templateId)) {
-            return new Result(['MSG91 is not configured (auth_key / template_id missing).']);
-        }
         $mobile = $this->normalize($phone_number);
-        // The DLT registry row for the login OTP wins when configured (admin
-        // enters its MSG91 Flow/Template ID post-approval); the Integrations
-        // 'OTP Template ID' stays as the fallback.
+
+        // Resolve the template BEFORE the guard. The DLT registry row an admin fills in wins when
+        // configured (they enter the MSG91 template id post-approval); the env value is the
+        // fallback. Guarding on the env value FIRST made the admin-managed path unreachable:
+        // registering an approved template in the admin could never switch OTP back on, because
+        // this returned "not configured" without ever looking at it.
         $otpTemplateId = \Marvel\Services\SmsTemplateService::providerTemplateId('PlantAtHome_Login_OTP')
             ?: $this->templateId;
+
+        if (empty($this->authKey) || empty($otpTemplateId)) {
+            // Name the piece that is actually missing. "auth_key / template_id missing" sent
+            // someone hunting for a credential problem on production for hours when the auth key
+            // was present and correct, and only the DLT template id had never been set.
+            $missing = [];
+            if (empty($this->authKey)) {
+                $missing[] = 'auth key';
+            }
+            if (empty($otpTemplateId)) {
+                $missing[] = 'DLT template id';
+            }
+
+            return new Result(['MSG91 is not configured: ' . implode(' and ', $missing) . ' missing.']);
+        }
         try {
             $resp = Http::withHeaders(['authkey' => $this->authKey])
                 ->timeout(8) // fail fast — a hung MSG91 must not pin a php-fpm worker on the auth path
