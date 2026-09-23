@@ -888,8 +888,11 @@ Route::group(
  * visibility (view) or the ability to run a connection test without also being handed the right to
  * edit credentials.
  *
- * Reads never return a credential VALUE — only which fields are set. There is deliberately no
- * reveal endpoint.
+ * Reads never return a credential VALUE — only which fields are set. The single exception is
+ * POST integrations/{slug}/reveal, added at the owner's request: it carries its own permission
+ * (which .edit does not imply), re-checks the caller's password in the request body, and is rate
+ * limited hard. POST rather than GET so the slug never lands in a browser history or an access
+ * log alongside a password, and so it can never be triggered by a link.
  */
 Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     // Vendor delivery capability (SELF vs PLATFORM). Authorization is inside the
@@ -930,6 +933,11 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
         ->middleware(['permission:settings.integrations.test', 'throttle:20,1']);
     Route::post('integrations/{slug}/sync', [IntegrationController::class, 'sync'])
         ->middleware(['permission:settings.integrations.edit', 'throttle:20,1']);
+    // The one endpoint that returns a credential value. Throttled an order of magnitude tighter
+    // than its siblings: this is an interactive confirmation, and anything hitting it in a loop
+    // is either brute-forcing the password or dumping the whole store.
+    Route::post('integrations/{slug}/reveal', [IntegrationController::class, 'reveal'])
+        ->middleware(['permission:settings.integrations.reveal', 'throttle:10,1']);
 
     // City landing pages — admin CRUD. Distinct URI from the public
     // locations/pages reads so the two never collide.

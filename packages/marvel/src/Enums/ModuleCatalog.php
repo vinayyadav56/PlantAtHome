@@ -88,7 +88,11 @@ final class ModuleCatalog
                 // Third-party Integration Management. Split finer than CRUD because the actions
                 // carry very different risk: viewing which providers exist is harmless, editing a
                 // credential is not, and testing a connection makes an outbound call.
-                'integrations'  => ['view', 'edit', 'test'],
+                // `reveal` is deliberately NOT implied by `edit`: replacing a credential you
+                // cannot read is a much weaker power than reading every third-party secret the
+                // company owns, and only the second one is useful to an attacker who takes over
+                // an admin session. Grant it to almost nobody.
+                'integrations'  => ['view', 'edit', 'test', 'reveal'],
             ],
             // Double-entry accounting. `accounting` (default) = GL/COA/journals/reports;
             // settlements + adjustments carry their own approve/pay gates because they

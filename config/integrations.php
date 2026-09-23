@@ -68,4 +68,22 @@ return [
      * rotation made to fix failing jobs looks like it did nothing.
      */
     'restart_workers_on_change' => (bool) env('INTEGRATIONS_RESTART_WORKERS', true),
+
+    /*
+     * "Show credentials" in Settings → Integrations.
+     *
+     * This reverses the module's original write-only posture, so it is deliberately gated three
+     * ways rather than one: the caller needs the separate `settings.integrations.reveal`
+     * permission (NOT implied by .edit — rotating a credential and reading one are different
+     * powers), must re-enter their OWN account password on the spot, and every reveal is written
+     * to integration_audits naming the fields but never their values.
+     *
+     * This flag is the break-glass switch. Set INTEGRATIONS_ALLOW_REVEAL=false and the endpoint
+     * 403s for everyone including a super admin, with no deploy and no permission edit.
+     */
+    'allow_reveal' => (bool) env('INTEGRATIONS_ALLOW_REVEAL', true),
+
+    // Wrong-password attempts per user per minute before the endpoint locks them out. Low on
+    // purpose: this is an interactive confirmation, not a login form anyone types fast.
+    'reveal_max_attempts' => (int) env('INTEGRATIONS_REVEAL_MAX_ATTEMPTS', 5),
 ];

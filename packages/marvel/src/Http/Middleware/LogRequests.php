@@ -55,7 +55,11 @@ class LogRequests
     private const NEVER_REDACT = ['idempotency_key', 'secret_name', 'public_key', 'key_id'];
     // Whole nested secret bags — redact the entire value (covers any current/future field name).
     private const REDACT_SUBTREE = ['credentials', 'secrets'];
-    private const SKIP_CONTAINS = ['request-logs', 'admin-tasks', '/health'];
+    // '/reveal' is here for a different reason than the rest: the others are noise, this one
+    // RETURNS A CREDENTIAL. Error responses always keep their body (see below) and
+    // store_response_bodies can opt success bodies in too, so without this entry an operator
+    // flipping that setting would start writing live third-party secrets into request_logs.
+    private const SKIP_CONTAINS = ['request-logs', 'admin-tasks', '/health', '/reveal'];
 
     // Headers worth keeping, allowlisted — never the Authorization/Cookie family.
     private const HEADER_ALLOWLIST = ['referer', 'origin', 'accept-language', 'content-type'];

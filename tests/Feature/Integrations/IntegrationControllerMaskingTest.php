@@ -40,7 +40,11 @@ final class IntegrationControllerMaskingTest extends TestCase
             'shop.razorpay.key_secret'          => self::RAZORPAY_SECRET,
             'services.shipping_service.url'     => 'https://shipping.test',
             'services.shipping_service.api_key' => self::SHIPPING_KEY,
-            'location.google_maps_server_key'   => self::MAPS_KEY,
+            // The real key is `location.google_maps_key` (see LegacyBridge::secret). This said
+            // `google_maps_server_key`, which resolves nowhere — so the Maps canary was never
+            // actually present and that assertion could not fail. A security test that cannot
+            // fail is worse than no test, because it reads as coverage.
+            'location.google_maps_key'          => self::MAPS_KEY,
         ]);
 
         $this->controller = new IntegrationController();

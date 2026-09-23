@@ -45,14 +45,32 @@ return [
     'sync_key' => env('INTEGRATION_SYNC_KEY', ''),
 
     /*
-     | Reveal a stored credential back to a super admin.
+     | Reveal a stored credential back to an authorised admin.
      |
-     | OFF, and it should stay off. It converts a write-only store into a read-anywhere one: the
-     | response shape is not covered by LogRequests redaction, and the admin SPA would cache the
-     | plaintext in react-query and the browser devtools network panel. There is no legitimate
-     | operator need — the vendor is the source of a key you do not have.
+     | This was OFF and documented as "should stay off". The owner asked for it on 2026-09-23,
+     | so it is built — but each of the original three objections is answered rather than waved
+     | through, because they were all real:
+     |
+     |   "not covered by LogRequests redaction"  -> the /reveal path is in that middleware's
+     |                                              SKIP list, so the row is never written at all,
+     |                                              and the response carries Cache-Control: no-store.
+     |   "the SPA would cache the plaintext"     -> the admin calls it as a mutation with no query
+     |                                              cache, holds the value in component state only,
+     |                                              and drops it on close or after a timeout.
+     |   "no legitimate operator need"           -> there is one: recovering a credential nobody
+     |                                              else has a copy of. That is the owner's call.
+     |
+     | What is NOT waved through: .edit does not imply .reveal, the caller re-enters their own
+     | password per reveal, attempts are rate limited, and every reveal lands in integration_audits
+     | with the field names and never the values.
      */
-    'allow_reveal' => (bool) env('INTEGRATIONS_ALLOW_REVEAL', false),
+    // Break-glass switch for "Show credentials" (Settings → Integrations). This key sat here
+    // unread since the module was built; it is now the flag IntegrationController::reveal()
+    // checks first. The real gate is the `settings.integrations.reveal` permission plus a
+    // password re-entry — this just turns the whole endpoint off with no deploy.
+    'allow_reveal' => (bool) env('INTEGRATIONS_ALLOW_REVEAL', true),
+
+    'reveal_max_attempts' => (int) env('INTEGRATIONS_REVEAL_MAX_ATTEMPTS', 5),
 
     // See config/integrations.php (the app file, which wins on merge) for the credential store.
     'credential_store'          => env('INTEGRATIONS_CREDENTIAL_STORE', 'database'),

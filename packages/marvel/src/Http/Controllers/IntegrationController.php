@@ -5,6 +5,8 @@ namespace Marvel\Http\Controllers;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\IntegrationProvider;
 use Marvel\Integrations\Store\CredentialStoreUnavailable;
@@ -23,9 +25,11 @@ use Marvel\Integrations\ProviderRegistry;
  * non-empty value is supplied, so re-saving a form without retyping every secret cannot wipe the
  * ones it never displayed.
  *
- * There is deliberately no "reveal credential" endpoint. It would convert a write-only store into a
- * read-anywhere one, and the response shape is not covered by the request-side redaction in
- * LogRequests.
+ * The ONE exception to "never return a value" is reveal(), added at the owner's request. It is not
+ * a relaxation of the rule so much as a second, much narrower door: a separate permission that
+ * .edit does not imply, the caller's own password re-entered per reveal, a rate limit, an audit row
+ * every time, and a break-glass config flag that disables it for everyone including a super admin.
+ * Everything else on this controller still answers `credentials_set` and nothing more.
  */
 class IntegrationController extends CoreController
 {
@@ -201,6 +205,134 @@ class IntegrationController extends CoreController
             'ok'      => (bool) ($result['ok'] ?? false),
             'message' => $result['error'] ?? 'Credentials pushed to the shipping service.',
         ]);
+    }
+
+    /**
+     * Show the stored credential values for one provider.
+     *
+     * The only endpoint in the module that returns a secret, so it is gated four ways:
+     *
+     *   1. `settings.integrations.reveal`, which `.edit` does NOT imply. Being able to replace a
+     *      credential you cannot read is a far weaker power than reading every third-party secret
+     *      the company owns, and only the second is worth stealing an admin session for.
+     *   2. The caller re-enters their OWN account password here, per reveal. A permission check
+     *      alone would let an unattended logged-in laptop dump every credential.
+     *   3. Wrong passwords are rate limited per user, so this cannot be used to guess one.
+     *   4. `integrations.allow_reveal=false` turns it off for everyone, super admins included,
+     *      without a deploy or a permission edit.
+     *
+     * The response is never logged (LogRequests skips this path) and never cached
+     * (Cache-Control: no-store). The audit row records WHICH fields were read, never their values.
+     */
+    public function reveal(Request $request, string $slug): JsonResponse
+    {
+        if (!config('integrations.allow_reveal', false)) {
+            return response()->json([
+                'message' => 'Showing credentials is switched off for this installation.',
+            ], 403);
+        }
+
+        $def = ProviderRegistry::find($slug);
+        if ($def === null) {
+            return response()->json(['message' => "Unknown integration provider: {$slug}"], 404);
+        }
+
+        $user = $request->user();
+        if ($user === null) {
+            return response()->json(['message' => 'Not authenticated.'], 401);
+        }
+
+        $request->validate(['password' => 'required|string']);
+
+        // Keyed on the USER, not the IP: several admins behind one office NAT must not lock each
+        // other out, and one admin must not get a fresh budget by changing network.
+        $throttleKey = 'integration-reveal:' . $user->id;
+        $maxAttempts = max(1, (int) config('integrations.reveal_max_attempts', 5));
+
+        if (RateLimiter::tooManyAttempts($throttleKey, $maxAttempts)) {
+            return response()->json([
+                'message' => 'Too many incorrect passwords. Try again in '
+                    . RateLimiter::availableIn($throttleKey) . ' seconds.',
+            ], 429);
+        }
+
+        if (!is_string($user->password) || $user->password === ''
+            || !Hash::check((string) $request->input('password'), $user->password)) {
+            RateLimiter::hit($throttleKey, 300);
+            $this->auditReveal($slug, $user->id, $request, [], false);
+
+            // Deliberately the same message whether the account has no usable password hash (a
+            // social-login admin) or simply typed the wrong one — the difference is not the
+            // caller's business.
+            return response()->json(['message' => 'That password is not correct.'], 403);
+        }
+
+        RateLimiter::clear($throttleKey);
+
+        $sources = $this->integrations->credentialSources($slug);
+
+        // secret() rather than credentialBag(): the bag returns [] when the provider has no
+        // integration_providers row, and a provider still running off config()/env() has none.
+        // Those are exactly the credentials an operator most needs to read back, because nothing
+        // in this module is managing them yet. secret() is also literally what the app resolves at
+        // runtime, so what is shown here is what is actually in use.
+        //
+        // Only fields the registry DECLARES as credentials: a stray key left in an old bag by a
+        // previous schema is not something to hand back.
+        $fields = [];
+        foreach ($def->credentialFields as $field) {
+            $name  = $field['name'];
+            $value = $this->integrations->secret($slug, $name);
+            if ($value !== '') {
+                $fields[$name] = [
+                    'label'  => $field['label'] ?? $name,
+                    'value'  => $value,
+                    'source' => $sources[$name] ?? 'none',
+                ];
+            }
+        }
+
+        $this->auditReveal($slug, $user->id, $request, array_keys($fields), true);
+
+        return response()->json([
+            'provider'    => $slug,
+            'environment' => $this->integrations->environment(),
+            'fields'      => $fields,
+        ])->header('Cache-Control', 'no-store, no-cache, must-revalidate, private')
+          ->header('Pragma', 'no-cache');
+    }
+
+    /**
+     * Record a reveal — successful or refused — in the same table the History tab reads.
+     *
+     * `changed_fields` carries the field NAMES so an auditor can see what was exposed; before/after
+     * stay null because there is no value here that may be written down. A refused attempt is
+     * logged too: repeated failures against one provider are exactly the signal worth having.
+     *
+     * @param  array<int,string> $fields
+     */
+    private function auditReveal(string $slug, ?int $userId, Request $request, array $fields, bool $ok): void
+    {
+        try {
+            if (!Schema::hasTable('integration_audits')) {
+                return;
+            }
+            DB::table('integration_audits')->insert([
+                'provider_slug'  => $slug,
+                'environment'    => $this->integrations->environment(),
+                'action'         => $ok ? 'revealed' : 'reveal_refused',
+                'user_id'        => $userId,
+                'ip'             => substr((string) $request->ip(), 0, 45),
+                'user_agent'     => substr((string) $request->userAgent(), 0, 255),
+                'changed_fields' => json_encode(array_values($fields)),
+                'before'         => null,
+                'after'          => null,
+                'created_at'     => now(),
+            ]);
+        } catch (\Throwable) {
+            // Auditing must never be the reason a reveal fails; the request log and the AWS-side
+            // CloudTrail GetSecretValue entry both still record that this happened.
+        }
     }
 
     /**
