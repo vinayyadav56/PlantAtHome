@@ -305,6 +305,32 @@ class CoverageApiTest extends ServiceabilityTestCase
 
     /* ── The tree's own endpoints ─────────────────────────────────────── */
 
+    public function test_preview_accepts_an_empty_rule_set_and_reports_zero_coverage(): void
+    {
+        // A vendor with no rules yet is a legitimate state — and the one that most needs an
+        // answer, because "0 deliverable pincodes" is what tells an operator this vendor cannot
+        // sell anywhere. `required|array` rejected an empty array (Laravel treats [] as absent),
+        // so the coverage editor's live preview 422'd and rendered an ambiguous "—" instead.
+        // Note syncRules on this same controller already validates `present|array`: clearing every
+        // rule was allowed, while previewing that same cleared state was not.
+        $res = $this->controller->preview(Request::create('/coverage/preview', 'POST', [
+            'rules' => [], 'parent_type' => 'root',
+        ]));
+
+        $this->assertSame(0, $res['total']);
+        $this->assertSame(0, $res['cities_covered']);
+        $this->assertSame([], $res['sample']);
+        $this->assertSame([], $res['by_source']);
+
+        // The tri-state tree must still render every child, all uncovered — an empty rule set
+        // means "nothing is covered", not "there is nothing to show".
+        $this->assertNotEmpty($res['nodes']);
+        foreach ($res['nodes'] as $node) {
+            $this->assertSame(0, $node['covered'], "{$node['name']} should be uncovered");
+            $this->assertSame('none', $node['state']);
+        }
+    }
+
     public function test_preview_returns_per_child_counts_and_a_tri_state(): void
     {
         // One rule covering Gurgaon, previewed against the children of Haryana.

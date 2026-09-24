@@ -355,7 +355,12 @@ class DeliveryCoverageController extends CoreController
     private function previewFor(Request $request)
     {
         $request->validate([
-            'rules'       => 'required|array',
+            // `present`, not `required`: Laravel treats an empty array as absent, so `required`
+            // 422'd the one preview an operator most needs — a vendor with NO rules, whose honest
+            // answer is "0 deliverable pincodes". The key must still be sent and must still be an
+            // array; only emptiness is allowed. syncRules below already validates it this way, so
+            // clearing every rule was permitted while previewing that same cleared state was not.
+            'rules'       => 'present|array',
             'vertical'    => 'nullable|string|max:64',
             'parent_type' => 'nullable|in:root,state,district,city',
             'parent_id'   => 'nullable|integer|min:1',
