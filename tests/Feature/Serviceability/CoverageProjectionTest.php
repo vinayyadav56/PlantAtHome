@@ -126,4 +126,100 @@ class CoverageProjectionTest extends ServiceabilityTestCase
         $this->assertSame([], $stats['unknown_pincodes']);
         $this->assertIsInt($stats['duration_ms']);
     }
+
+    /* ── per-vertical projection ──────────────────────────────────────── */
+
+    public function test_each_vertical_projects_its_own_rows(): void
+    {
+        $this->coverage->syncRules(1, [
+            ['rule_type' => 'district', 'district_id' => $this->geo['gurgaon']],
+            ['rule_type' => 'district', 'district_id' => $this->geo['faridabad_d'], 'vertical' => 'tools'],
+        ]);
+
+        $this->assertSame(['122001', '122002'], $this->projection(1)->where('vertical', '*')
+            ->orderBy('pincode')->pluck('pincode')->all());
+        $this->assertSame(['121001', '121002'], $this->projection(1)->where('vertical', 'tools')
+            ->orderBy('pincode')->pluck('pincode')->all());
+    }
+
+    public function test_the_same_pincode_can_belong_to_two_verticals(): void
+    {
+        // The old unique key was (shop_id, pincode) — this pair would have
+        // collided and the second row been dropped.
+        $this->coverage->syncRules(1, [
+            ['rule_type' => 'pincode_include', 'pincode' => '122001'],
+            ['rule_type' => 'pincode_include', 'pincode' => '122001', 'vertical' => 'tools'],
+        ]);
+
+        $this->assertSame(2, $this->projection(1)->where('pincode', '122001')->count());
+    }
+
+    public function test_the_winning_tier_sets_the_delivery_promise(): void
+    {
+        $this->coverage->syncRules(1, [
+            ['rule_type' => 'state', 'state_id' => $this->geo['haryana'], 'fulfillment_mode' => 'courier', 'eta_days' => 7],
+            ['rule_type' => 'city', 'city_id' => $this->geo['gurugram_c'], 'fulfillment_mode' => 'local', 'eta_days' => 1],
+        ]);
+
+        $city = $this->projection(1)->where('pincode', '122001')->first();
+        $this->assertSame(['city', 'local', 1], [$city->source, $city->fulfillment_mode, (int) $city->eta_days]);
+
+        $state = $this->projection(1)->where('pincode', '121001')->first();
+        $this->assertSame(['state', 'courier', 7], [$state->source, $state->fulfillment_mode, (int) $state->eta_days]);
+    }
+
+    public function test_a_district_exclude_removes_its_pins_without_hundreds_of_rules(): void
+    {
+        $this->coverage->syncRules(1, [
+            ['rule_type' => 'state', 'state_id' => $this->geo['haryana']],
+            ['rule_type' => 'district_exclude', 'district_id' => $this->geo['faridabad_d']],
+        ]);
+
+        $this->assertSame(['122001', '122002'], $this->projection(1)->orderBy('pincode')->pluck('pincode')->all());
+    }
+
+    public function test_a_city_exclude_spares_the_districts_city_less_pins(): void
+    {
+        $this->coverage->syncRules(1, [
+            ['rule_type' => 'district', 'district_id' => $this->geo['gurgaon']],
+            ['rule_type' => 'city_exclude', 'city_id' => $this->geo['gurugram_c']],
+        ]);
+
+        // 122001 belongs to Gurugram and goes; 122002 has no city and stays.
+        $this->assertSame(['122002'], $this->projection(1)->pluck('pincode')->all());
+    }
+
+    /* ── the downstream refresh (previously untested) ─────────────────── */
+
+    public function test_every_sync_dispatches_the_availability_recompute(): void
+    {
+        \Illuminate\Support\Facades\Bus::fake();
+
+        $this->coverage->addCoverage(1, 'district', ['district_id' => $this->geo['gurgaon']]);
+
+        \Illuminate\Support\Facades\Bus::assertDispatched(
+            \Marvel\Jobs\RecomputeShopAvailabilityJob::class,
+            fn ($job) => $job->shopId === 1,
+        );
+    }
+
+    public function test_a_derived_city_is_switched_on_for_the_storefront_picker(): void
+    {
+        DB::table('cities')->where('id', $this->geo['gurugram_c'])->update(['is_serviceable' => false]);
+
+        $this->coverage->addCoverage(1, 'city', ['city_id' => $this->geo['gurugram_c']]);
+
+        $this->assertTrue((bool) DB::table('cities')->where('id', $this->geo['gurugram_c'])->value('is_serviceable'));
+    }
+
+    public function test_a_disabled_city_is_never_switched_back_on_by_a_coverage_rule(): void
+    {
+        // status=disabled is the ops kill switch; coverage must not override it.
+        DB::table('cities')->where('id', $this->geo['gurugram_c'])
+            ->update(['is_serviceable' => false, 'status' => 'disabled']);
+
+        $this->coverage->addCoverage(1, 'city', ['city_id' => $this->geo['gurugram_c']]);
+
+        $this->assertFalse((bool) DB::table('cities')->where('id', $this->geo['gurugram_c'])->value('is_serviceable'));
+    }
 }
