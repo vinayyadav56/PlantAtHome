@@ -302,6 +302,12 @@ Route::get('locations/cities', [LocationController::class, 'cities'])->middlewar
 // Delivery Coverage geo master — districts + postal-code lookups (coverage pickers).
 Route::get('locations/districts', [LocationController::class, 'districts'])->middleware('throttle:120,1');
 Route::get('locations/postal-codes', [LocationController::class, 'postalCodes'])->middleware('throttle:120,1');
+// Geographic hierarchy — one lazy level at a time, plus one search box over
+// every level and a per-node detail drawer. Public and read-only: the same
+// tree feeds the admin module and the coverage pickers.
+Route::get('locations/tree', [LocationController::class, 'tree'])->middleware('throttle:120,1');
+Route::get('locations/search', [LocationController::class, 'search'])->middleware('throttle:120,1');
+Route::get('locations/node', [LocationController::class, 'node'])->middleware('throttle:120,1');
 // City landing pages (/plants-in/{slug}) — active rows only; the storefront and
 // sitemap read these. show() resolves alias slugs to the canonical page.
 Route::get('locations/pages', [LocationPageController::class, 'index'])->middleware('throttle:120,1');
@@ -1505,6 +1511,8 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('coverage/audit', [DeliveryCoverageController::class, 'audit']);
     Route::get('coverage', [DeliveryCoverageController::class, 'index']);
     Route::post('coverage/preview', [DeliveryCoverageController::class, 'preview']);
+    // §17 — the admin's serviceability preview IS the checkout resolver's answer.
+    Route::get('coverage/resolve', [DeliveryCoverageController::class, 'resolve']);
     Route::post('coverage/import', [DeliveryCoverageController::class, 'import']);
     Route::post('coverage/{shop_id}/sync', [DeliveryCoverageController::class, 'sync'])->whereNumber('shop_id');
     Route::post('coverage', [DeliveryCoverageController::class, 'store']);

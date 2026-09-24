@@ -111,18 +111,27 @@ class DeliveryCoverageController extends CoreController
         );
     }
 
-    /** POST coverage {shop_id, rule_type, state_id|district_id|city_id|pincode} — add one rule + re-project. */
+    /**
+     * POST coverage {shop_id, rule_type, state_id|district_id|city_id|pincode,
+     * vertical?, fulfillment_mode?, eta_days?} — add one rule + re-project.
+     */
     public function store(Request $request)
     {
         $request->validate([
-            'shop_id'   => 'required|integer|min:1',
-            'rule_type' => 'required|string',
+            'shop_id'          => 'required|integer|min:1',
+            'rule_type'        => 'required|string',
+            'vertical'         => 'nullable|string|max:64',
+            'fulfillment_mode' => 'nullable|in:local,courier,both',
+            'eta_days'         => 'nullable|integer|min:0|max:365',
         ]);
         try {
             return $this->service()->addCoverage(
                 (int) $request->shop_id,
                 (string) $request->rule_type,
-                $request->only(['state_id', 'district_id', 'city_id', 'pincode']),
+                $request->only([
+                    'state_id', 'district_id', 'city_id', 'pincode',
+                    'vertical', 'fulfillment_mode', 'eta_days',
+                ]),
                 $request->user()?->id
             );
         } catch (\Throwable $e) {
@@ -133,12 +142,28 @@ class DeliveryCoverageController extends CoreController
     /** POST coverage/preview {rules:[...]} — dry-run the projection ladder, no writes. */
     public function preview(Request $request)
     {
-        $request->validate(['rules' => 'required|array']);
-        try {
-            return $this->service()->previewCoverage((array) $request->input('rules'));
-        } catch (\Throwable $e) {
-            return $this->domainError($e);
+        return $this->previewFor($request);
+    }
+
+    /** GET coverage/resolve?shop_id&pincode&vertical — §17: the admin preview IS the checkout answer. */
+    public function resolve(Request $request)
+    {
+        $request->validate([
+            'shop_id'  => 'required|integer|min:1',
+            'pincode'  => 'required|digits:6',
+            'vertical' => 'nullable|string|max:64',
+        ]);
+        $resolver = \Marvel\Services\CoverageBridge::resolver();
+        if ($resolver === null) {
+            return response()->json(['message' => 'Coverage module unavailable.'], 503);
         }
+
+        $verdict = $resolver->resolve((int) $request->shop_id, (string) $request->pincode, (string) ($request->vertical ?: '*'));
+
+        return $verdict + [
+            'pincode' => (string) $request->pincode,
+            'names'   => $this->geoNames($verdict),
+        ];
     }
 
     /** DELETE coverage/{id} — remove a rule (shop resolved from the rule) + re-project. */
@@ -313,16 +338,50 @@ class DeliveryCoverageController extends CoreController
         return ['shop_id' => $shopId, 'stats' => $stats];
     }
 
-    /** POST my-coverage/{shop_id}/preview {rules:[...]} */
+    /** POST my-coverage/{shop_id}/preview {rules:[...], vertical?, parent_type?, parent_id?} */
     public function myPreview(Request $request, $shop_id)
     {
         $this->assertOwnsShop($request, (int) $shop_id);
-        $request->validate(['rules' => 'required|array']);
+
+        return $this->previewFor($request);
+    }
+
+    /**
+     * Shared dry-run: "how many pincodes would these rules cover, and how does
+     * that split across the children of this node?" The node counts are what
+     * make the tree's tri-state checkboxes possible without the client ever
+     * loading a pincode list.
+     */
+    private function previewFor(Request $request)
+    {
+        $request->validate([
+            'rules'       => 'required|array',
+            'vertical'    => 'nullable|string|max:64',
+            'parent_type' => 'nullable|in:root,state,district,city',
+            'parent_id'   => 'nullable|integer|min:1',
+        ]);
         try {
-            return $this->service()->previewCoverage((array) $request->input('rules'));
+            return $this->service()->previewCoverage(
+                (array) $request->input('rules'),
+                $request->input('vertical'),
+                $request->input('parent_type'),
+                $request->filled('parent_id') ? (int) $request->input('parent_id') : null,
+            );
         } catch (\Throwable $e) {
             return $this->domainError($e);
         }
+    }
+
+    /** Human-readable state/district/city for a resolver verdict. */
+    private function geoNames(array $verdict): array
+    {
+        $pick = fn (string $table, $id) => $id === null ? null : DB::table($table)->where('id', $id)->value('name');
+
+        return [
+            'state'    => $pick('states', $verdict['state_id'] ?? null),
+            'district' => $pick('districts', $verdict['district_id'] ?? null),
+            'city'     => $pick('cities', $verdict['city_id'] ?? null),
+        ];
     }
 
     /* ── internals ─────────────────────────────────────────────────────── */

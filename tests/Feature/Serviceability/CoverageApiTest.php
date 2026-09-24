@@ -302,4 +302,81 @@ class CoverageApiTest extends ServiceabilityTestCase
         $missing = $location->postalCodeUpdate(Request::create('/postal-codes/0', 'PUT', []), 0);
         $this->assertSame(404, $missing->getStatusCode());
     }
+
+    /* ── The tree's own endpoints ─────────────────────────────────────── */
+
+    public function test_preview_returns_per_child_counts_and_a_tri_state(): void
+    {
+        // One rule covering Gurgaon, previewed against the children of Haryana.
+        $res = $this->controller->preview(Request::create('/coverage/preview', 'POST', [
+            'rules'       => [['rule_type' => 'district', 'district_id' => $this->geo['gurgaon']]],
+            'parent_type' => 'state',
+            'parent_id'   => $this->geo['haryana'],
+        ]));
+
+        $this->assertSame(2, $res['total']);
+        $this->assertSame(2, $res['excluded'], 'the two Faridabad pins are in scope and uncovered');
+
+        $nodes = collect($res['nodes'])->keyBy('id');
+        $gurgaon = $nodes[$this->geo['gurgaon']];
+        $this->assertSame(['all', 2, 2, 0], [$gurgaon['state'], $gurgaon['total'], $gurgaon['covered'], $gurgaon['excluded']]);
+        $faridabad = $nodes[$this->geo['faridabad_d']];
+        $this->assertSame(['none', 2, 0, 2], [$faridabad['state'], $faridabad['total'], $faridabad['covered'], $faridabad['excluded']]);
+    }
+
+    public function test_preview_marks_a_partly_covered_child_partial(): void
+    {
+        $res = $this->controller->preview(Request::create('/coverage/preview', 'POST', [
+            'rules'       => [['rule_type' => 'pincode_include', 'pincode' => '122001']],
+            'parent_type' => 'state',
+            'parent_id'   => $this->geo['haryana'],
+        ]));
+
+        $gurgaon = collect($res['nodes'])->firstWhere('id', $this->geo['gurgaon']);
+        $this->assertSame(['partial', 2, 1], [$gurgaon['state'], $gurgaon['total'], $gurgaon['covered']]);
+    }
+
+    public function test_preview_scoped_to_a_vertical_ignores_the_other_verticals_rules(): void
+    {
+        $rules = [
+            ['rule_type' => 'district', 'district_id' => $this->geo['gurgaon']],
+            ['rule_type' => 'district', 'district_id' => $this->geo['faridabad_d'], 'vertical' => 'tools'],
+        ];
+
+        $all = $this->controller->preview(Request::create('/coverage/preview', 'POST', ['rules' => $rules, 'vertical' => '*']));
+        $this->assertSame(2, $all['total'], 'the default scope sees only the * rule');
+
+        $tools = $this->controller->preview(Request::create('/coverage/preview', 'POST', ['rules' => $rules, 'vertical' => 'tools']));
+        $this->assertSame(2, $tools['total'], 'tools sees only its own rule');
+        $this->assertSame(['121001', '121002'], $tools['sample']);
+    }
+
+    public function test_resolve_is_the_checkout_verdict_with_names_attached(): void
+    {
+        $this->controller->store(Request::create('/coverage', 'POST', [
+            'shop_id' => 1, 'rule_type' => 'district', 'district_id' => $this->geo['gurgaon'],
+            'fulfillment_mode' => 'local', 'eta_days' => 1,
+        ]));
+
+        $hit = $this->controller->resolve(Request::create('/coverage/resolve', 'GET', [
+            'shop_id' => 1, 'pincode' => '122001',
+        ]));
+        $this->assertTrue($hit['serviceable']);
+        $this->assertSame(['local', 1, 'next_day'], [$hit['fulfillment_mode'], $hit['eta_days'], $hit['sla_bucket']]);
+        $this->assertSame(['Haryana', 'Gurgaon', 'Gurugram'], array_values($hit['names']));
+
+        $miss = $this->controller->resolve(Request::create('/coverage/resolve', 'GET', [
+            'shop_id' => 1, 'pincode' => '302001',
+        ]));
+        $this->assertFalse($miss['serviceable']);
+        $this->assertSame('not_covered', $miss['reason']);
+    }
+
+    public function test_the_tree_and_search_routes_are_registered_and_public(): void
+    {
+        $this->getJson('/api/locations/tree')->assertStatus(200)->assertJsonStructure(['children', 'stats']);
+        $this->getJson('/api/locations/search?q=Gurgaon')->assertStatus(200)->assertJsonStructure(['results']);
+        $this->getJson('/api/locations/node?type=state&id=' . $this->geo['haryana'])->assertStatus(200);
+        $this->getJson('/api/locations/node?type=state')->assertStatus(422);
+    }
 }

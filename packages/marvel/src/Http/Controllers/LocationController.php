@@ -38,6 +38,14 @@ class LocationController extends CoreController
             ->when($request->filled('state_id'), fn ($q) => $q->where('state_id', $request->state_id))
             ->when($request->filled('state'), fn ($q) => $q->where('state_name', $request->state))
             ->when($hasDistrict && $request->filled('district_id'), fn ($q) => $q->where('district_id', $request->district_id))
+            // Subdivisions are not destinations. Without this filter the
+            // customer city picker offered "Shahdara" and "Bengaluru
+            // (Bangalore) Urban" — rows that exist to model Delhi's districts,
+            // not places anyone ships to.
+            ->when(
+                \Illuminate\Support\Facades\Schema::hasColumn('cities', 'is_subdivision'),
+                fn ($q) => $q->where('is_subdivision', false),
+            )
             ->when($request->boolean('serviceable'), fn ($q) => $q->where('is_serviceable', true)->whereIn('status', [City::STATUS_ACTIVE, City::STATUS_MAINTENANCE]));
 
         $columns = ['id', 'name', 'state_id', 'state_name', 'status', 'is_serviceable', 'lat', 'lng'];
@@ -73,6 +81,423 @@ class LocationController extends CoreController
     }
 
     /**
+     * The geographic hierarchy, one level at a time: country → state →
+     * district → city → pincode. Children are lazy (19k pincodes never load
+     * at once) and every node carries the counts the admin tree shows without
+     * a second round trip.
+     *
+     * Two buckets exist because the master is not a clean tree: only a third
+     * of cities were ever rolled up under a district, and rural pincodes
+     * legitimately have no city. Hiding either would make a node look smaller
+     * than it is, so each state lists "Cities without a district" and each
+     * district lists "Pincodes without a city".
+     */
+    public function tree(Request $request)
+    {
+        if (!\Illuminate\Support\Facades\Schema::hasTable('postal_codes')) {
+            return ['parent' => null, 'children' => [], 'stats' => []];
+        }
+        $type = (string) $request->query('parent_type', 'root');
+        $id = (int) $request->query('parent_id', 0);
+        $ver = (int) \Illuminate\Support\Facades\Cache::get('geo:ver', 0);
+        $cov = (int) \Illuminate\Support\Facades\Cache::get('coverage:ver', 0);
+
+        return \Illuminate\Support\Facades\Cache::remember(
+            "locations:tree:v{$ver}.{$cov}:{$type}:{$id}",
+            600,
+            fn () => match ($type) {
+                'state'    => ['parent' => ['type' => 'state', 'id' => $id], 'children' => $this->treeDistricts($id)],
+                'district' => ['parent' => ['type' => 'district', 'id' => $id], 'children' => $this->treeCities($id)],
+                'city'     => ['parent' => ['type' => 'city', 'id' => $id], 'children' => $this->treePincodes($id)],
+                default    => ['parent' => null, 'children' => $this->treeStates(), 'stats' => $this->treeStats()],
+            },
+        );
+    }
+
+    /** Pincode + serviceable-vendor counts per state. */
+    private function treeStates(): array
+    {
+        $pins = DB::table('postal_codes')->where('status', 'active')
+            ->selectRaw('state_id, COUNT(*) as n')->groupBy('state_id')->pluck('n', 'state_id');
+        $covered = $this->coveredCountsBy('state_id');
+        $districts = DB::table('districts')->selectRaw('state_id, COUNT(*) as n')->groupBy('state_id')->pluck('n', 'state_id');
+
+        return DB::table('states')->orderBy('name')->get(['id', 'name', 'code', 'is_active'])
+            ->map(fn ($row) => [
+                'type'                 => 'state',
+                'id'                   => (int) $row->id,
+                'name'                 => $row->name,
+                'code'                 => $row->code,
+                'is_active'            => (bool) $row->is_active,
+                'children_count'       => (int) ($districts[$row->id] ?? 0),
+                'pincodes_total'       => (int) ($pins[$row->id] ?? 0),
+                'pincodes_serviceable' => (int) ($covered[$row->id] ?? 0),
+            ])->values()->all();
+    }
+
+    private function treeDistricts(int $stateId): array
+    {
+        $pins = DB::table('postal_codes')->where('status', 'active')->where('state_id', $stateId)
+            ->selectRaw('district_id, COUNT(*) as n')->groupBy('district_id')->pluck('n', 'district_id');
+        $covered = $this->coveredCountsBy('district_id', ['state_id' => $stateId]);
+        $cities = \Illuminate\Support\Facades\Schema::hasColumn('cities', 'district_id')
+            ? DB::table('cities')->whereNotNull('district_id')
+                ->selectRaw('district_id, COUNT(*) as n')->groupBy('district_id')->pluck('n', 'district_id')
+            : collect();
+
+        $out = DB::table('districts')->where('state_id', $stateId)->orderBy('name')
+            ->get(['id', 'name', 'code', 'is_active'])
+            ->map(fn ($row) => [
+                'type'                 => 'district',
+                'id'                   => (int) $row->id,
+                'name'                 => $row->name,
+                'code'                 => $row->code,
+                'is_active'            => (bool) $row->is_active,
+                'children_count'       => (int) ($cities[$row->id] ?? 0),
+                'pincodes_total'       => (int) ($pins[$row->id] ?? 0),
+                'pincodes_serviceable' => (int) ($covered[$row->id] ?? 0),
+            ])->values()->all();
+
+        // Cities the seeder never placed under a district (two thirds of them):
+        // without this bucket they are unreachable from the tree entirely.
+        if (\Illuminate\Support\Facades\Schema::hasColumn('cities', 'district_id')) {
+            $orphans = DB::table('cities')->where('state_id', $stateId)->whereNull('district_id')
+                ->when(
+                    \Illuminate\Support\Facades\Schema::hasColumn('cities', 'is_subdivision'),
+                    fn ($q) => $q->where('is_subdivision', false),
+                )->count();
+            if ($orphans > 0) {
+                $out[] = [
+                    'type'                 => 'district_unassigned',
+                    'id'                   => null,
+                    'name'                 => 'Cities without a district',
+                    'is_active'            => true,
+                    'children_count'       => $orphans,
+                    'pincodes_total'       => 0,
+                    'pincodes_serviceable' => 0,
+                    'note'                => 'Assign a district from the city detail panel to make these selectable as a region.',
+                ];
+            }
+        }
+
+        return $out;
+    }
+
+    private function treeCities(int $districtId): array
+    {
+        $pins = DB::table('postal_codes')->where('status', 'active')->where('district_id', $districtId)
+            ->selectRaw('city_id, COUNT(*) as n')->groupBy('city_id')->get();
+        $byCity = [];
+        $cityless = 0;
+        foreach ($pins as $row) {
+            if ($row->city_id === null) {
+                $cityless = (int) $row->n;
+                continue;
+            }
+            $byCity[(int) $row->city_id] = (int) $row->n;
+        }
+        $covered = $this->coveredCountsBy('city_id', ['district_id' => $districtId]);
+
+        $out = [];
+        if ($byCity !== []) {
+            $out = DB::table('cities')->whereIn('id', array_keys($byCity))->orderBy('name')
+                ->get(['id', 'name', 'status', 'is_serviceable'])
+                ->map(fn ($row) => [
+                    'type'                 => 'city',
+                    'id'                   => (int) $row->id,
+                    'name'                 => $row->name,
+                    'status'               => $row->status,
+                    'is_serviceable'       => (bool) $row->is_serviceable,
+                    'children_count'       => (int) ($byCity[(int) $row->id] ?? 0),
+                    'pincodes_total'       => (int) ($byCity[(int) $row->id] ?? 0),
+                    'pincodes_serviceable' => (int) ($covered[(int) $row->id] ?? 0),
+                ])->values()->all();
+        }
+
+        // Rural pins with no master city. A city-level rule can never reach
+        // these — only a district-level one — so the tree says so out loud.
+        if ($cityless > 0) {
+            $out[] = [
+                'type'                 => 'city_unassigned',
+                'id'                   => null,
+                'name'                 => 'Pincodes without a city',
+                'children_count'       => $cityless,
+                'pincodes_total'       => $cityless,
+                'pincodes_serviceable' => (int) ($covered[''] ?? 0),
+                'note'                => 'Only a district-level rule covers these.',
+            ];
+        }
+
+        return $out;
+    }
+
+    private function treePincodes(int $cityId): array
+    {
+        $covered = DB::table('vendor_covered_pincodes')->where('city_id', $cityId)
+            ->selectRaw('pincode, COUNT(DISTINCT shop_id) as n')->groupBy('pincode')->pluck('n', 'pincode');
+
+        return DB::table('postal_codes')->where('city_id', $cityId)->where('status', 'active')
+            ->orderBy('pincode')->get(['pincode', 'office_name', 'offices', 'latitude', 'longitude'])
+            ->map(fn ($row) => [
+                'type'        => 'pincode',
+                'id'          => (string) $row->pincode,
+                'name'        => (string) $row->pincode,
+                'office_name' => $row->office_name,
+                'localities'  => $this->localities($row->offices),
+                'vendors'     => (int) ($covered[$row->pincode] ?? 0),
+            ])->values()->all();
+    }
+
+    /** Root dashboard tiles (§2) — one source per number, so they cannot disagree. */
+    private function treeStats(): array
+    {
+        $pins = DB::table('postal_codes')->where('status', 'active');
+        $projection = DB::table('vendor_covered_pincodes');
+
+        return [
+            'states'               => DB::table('states')->count(),
+            'districts'            => DB::table('districts')->count(),
+            'cities'               => DB::table('cities')->count(),
+            'pincodes'             => (clone $pins)->count(),
+            // Both numbers come from the projection, never one from it and one
+            // from the legacy service areas — that is how the old dashboard
+            // managed to show two different "serviceable pincodes".
+            'pincodes_serviceable' => (clone $projection)->distinct()->count('pincode'),
+            'vendors_with_rules'   => DB::table('vendor_coverage_rules')->where('is_active', 1)->distinct()->count('shop_id'),
+        ];
+    }
+
+    /**
+     * Distinct serviceable pincodes grouped by a geo column, from the coverage
+     * projection (any vendor, any vertical).
+     *
+     * @return array<int|string,int>
+     */
+    private function coveredCountsBy(string $column, array $where = []): array
+    {
+        $q = DB::table('vendor_covered_pincodes')->selectRaw("{$column} as k, COUNT(DISTINCT pincode) as n");
+        foreach ($where as $col => $value) {
+            $q->where($col, $value);
+        }
+
+        $out = [];
+        foreach ($q->groupBy($column)->get() as $row) {
+            $out[$row->k === null ? '' : (int) $row->k] = (int) $row->n;
+        }
+
+        return $out;
+    }
+
+    /**
+     * Global multi-level search: one box over states, districts, cities,
+     * pincodes and India Post office names, each hit carrying the full path so
+     * the tree can open straight to it.
+     */
+    public function search(Request $request)
+    {
+        $q = trim((string) $request->query('q', ''));
+        if (strlen($q) < 2) {
+            return ['query' => $q, 'results' => []];
+        }
+        if (!\Illuminate\Support\Facades\Schema::hasTable('postal_codes')) {
+            return ['query' => $q, 'results' => []];
+        }
+        $limit = min(50, max(5, (int) $request->query('limit', 25)));
+        $like = '%' . $q . '%';
+        $results = [];
+
+        foreach (DB::table('states')->where('name', 'like', $like)->orderBy('name')->limit($limit)
+            ->get(['id', 'name']) as $row) {
+            $results[] = ['type' => 'state', 'id' => (int) $row->id, 'name' => $row->name, 'path' => ['India', $row->name]];
+        }
+
+        foreach (DB::table('districts')->join('states', 'states.id', '=', 'districts.state_id')
+            ->where('districts.name', 'like', $like)->orderBy('districts.name')->limit($limit)
+            ->get(['districts.id', 'districts.name', 'districts.state_id', 'states.name as state_name']) as $row) {
+            $results[] = [
+                'type' => 'district', 'id' => (int) $row->id, 'name' => $row->name,
+                'state_id' => (int) $row->state_id,
+                'path' => ['India', $row->state_name, $row->name],
+            ];
+        }
+
+        $cityCols = ['cities.id', 'cities.name', 'cities.state_id', 'states.name as state_name'];
+        $hasDistrict = \Illuminate\Support\Facades\Schema::hasColumn('cities', 'district_id');
+        $cityQuery = DB::table('cities')->leftJoin('states', 'states.id', '=', 'cities.state_id')
+            ->where('cities.name', 'like', $like);
+        if ($hasDistrict) {
+            $cityQuery->leftJoin('districts', 'districts.id', '=', 'cities.district_id');
+            $cityCols[] = 'cities.district_id';
+            $cityCols[] = 'districts.name as district_name';
+        }
+        if (\Illuminate\Support\Facades\Schema::hasColumn('cities', 'is_subdivision')) {
+            $cityQuery->where('cities.is_subdivision', false);
+        }
+        foreach ($cityQuery->orderBy('cities.name')->limit($limit)->get($cityCols) as $row) {
+            // The district hop is omitted, not faked, when the city was never
+            // rolled up — an invented parent would send the tree to a node
+            // that does not contain it.
+            $path = array_values(array_filter(['India', $row->state_name ?? null, $row->district_name ?? null, $row->name]));
+            $results[] = [
+                'type' => 'city', 'id' => (int) $row->id, 'name' => $row->name,
+                'state_id' => $row->state_id !== null ? (int) $row->state_id : null,
+                'district_id' => isset($row->district_id) && $row->district_id !== null ? (int) $row->district_id : null,
+                'path' => $path,
+            ];
+        }
+
+        $pinQuery = DB::table('postal_codes')
+            ->leftJoin('states', 'states.id', '=', 'postal_codes.state_id')
+            ->leftJoin('districts', 'districts.id', '=', 'postal_codes.district_id')
+            ->leftJoin('cities', 'cities.id', '=', 'postal_codes.city_id')
+            ->where('postal_codes.status', 'active')
+            ->where(fn ($w) => $w->where('postal_codes.pincode', 'like', $q . '%')
+                ->orWhere('postal_codes.office_name', 'like', $like));
+        foreach ($pinQuery->orderBy('postal_codes.pincode')->limit($limit)->get([
+            'postal_codes.pincode', 'postal_codes.office_name', 'postal_codes.state_id',
+            'postal_codes.district_id', 'postal_codes.city_id',
+            'states.name as state_name', 'districts.name as district_name', 'cities.name as city_name',
+        ]) as $row) {
+            $results[] = [
+                'type' => 'pincode', 'id' => (string) $row->pincode, 'name' => (string) $row->pincode,
+                'office_name' => $row->office_name,
+                'state_id' => $row->state_id !== null ? (int) $row->state_id : null,
+                'district_id' => $row->district_id !== null ? (int) $row->district_id : null,
+                'city_id' => $row->city_id !== null ? (int) $row->city_id : null,
+                'path' => array_values(array_filter([
+                    'India', $row->state_name, $row->district_name, $row->city_name, (string) $row->pincode,
+                ])),
+            ];
+        }
+
+        return ['query' => $q, 'results' => array_slice($results, 0, $limit)];
+    }
+
+    /**
+     * One node's detail drawer: where it sits, what it contains, and — for a
+     * pincode — who can actually deliver there, per vertical. The per-vertical
+     * table is composed HERE (coverage × Operations Control Center) rather
+     * than inside the resolver, which stays pure coverage.
+     */
+    public function node(Request $request)
+    {
+        $request->validate([
+            'type' => 'required|in:state,district,city,pincode',
+            'id'   => 'required|string|max:64',
+        ]);
+        $type = (string) $request->type;
+        $id = (string) $request->id;
+
+        if ($type !== 'pincode') {
+            $table = ['state' => 'states', 'district' => 'districts', 'city' => 'cities'][$type];
+            $row = DB::table($table)->where('id', (int) $id)->first();
+            if (!$row) {
+                return response()->json(['message' => ucfirst($type) . ' not found.'], 404);
+            }
+            $scope = DB::table('postal_codes')->where('status', 'active')->where($type . '_id', (int) $id);
+
+            return [
+                'type'                 => $type,
+                'node'                 => (array) $row,
+                'pincodes_total'       => (clone $scope)->count(),
+                'pincodes_serviceable' => DB::table('vendor_covered_pincodes')->where($type . '_id', (int) $id)
+                    ->distinct()->count('pincode'),
+                'vendors'              => DB::table('vendor_covered_pincodes')->where($type . '_id', (int) $id)
+                    ->distinct()->count('shop_id'),
+            ];
+        }
+
+        $pin = DB::table('postal_codes')
+            ->leftJoin('states', 'states.id', '=', 'postal_codes.state_id')
+            ->leftJoin('districts', 'districts.id', '=', 'postal_codes.district_id')
+            ->leftJoin('cities', 'cities.id', '=', 'postal_codes.city_id')
+            ->where('postal_codes.pincode', preg_replace('/\D/', '', $id))
+            ->first([
+                'postal_codes.pincode', 'postal_codes.office_name', 'postal_codes.offices',
+                'postal_codes.status', 'postal_codes.latitude', 'postal_codes.longitude',
+                'states.name as state_name', 'districts.name as district_name', 'cities.name as city_name',
+            ]);
+        if (!$pin) {
+            return response()->json(['message' => 'Pincode not found.'], 404);
+        }
+
+        return [
+            'type'       => 'pincode',
+            'node'       => [
+                'pincode'     => $pin->pincode,
+                'office_name' => $pin->office_name,
+                'status'      => $pin->status,
+                'state'       => $pin->state_name,
+                'district'    => $pin->district_name,
+                'city'        => $pin->city_name,
+                'latitude'    => $pin->latitude,
+                'longitude'   => $pin->longitude,
+            ],
+            // India Post office/taluk names — the only locality data that
+            // exists, and display-only: no rule is written at this level.
+            'localities' => $this->localities($pin->offices),
+            'verticals'  => $this->nodeVerticals((string) $pin->pincode, (string) ($pin->city_name ?? '')),
+            'vendors'    => DB::table('vendor_covered_pincodes')
+                ->join('shops', 'shops.id', '=', 'vendor_covered_pincodes.shop_id')
+                ->where('vendor_covered_pincodes.pincode', $pin->pincode)
+                ->where('shops.is_active', 1)
+                ->distinct()
+                ->get([
+                    'shops.id', 'shops.name', 'shops.slug',
+                    'vendor_covered_pincodes.vertical', 'vendor_covered_pincodes.source',
+                    'vendor_covered_pincodes.fulfillment_mode', 'vendor_covered_pincodes.eta_days',
+                ]),
+        ];
+    }
+
+    /**
+     * Per-vertical verdict for one pincode: coverage (who can deliver) AND the
+     * Operations Control Center switch for the city. Both must say yes.
+     *
+     * @return array<int, array>
+     */
+    private function nodeVerticals(string $pincode, string $cityName): array
+    {
+        if (!\Illuminate\Support\Facades\Schema::hasTable('types')) {
+            return [];
+        }
+        $resolver = \Marvel\Services\CoverageBridge::resolver();
+        $occ = app(\Marvel\Services\ServiceAvailabilityService::class);
+
+        $out = [];
+        foreach (DB::table('types')->orderBy('name')->get(['id', 'name', 'slug']) as $type) {
+            $vendors = $resolver === null ? [] : $resolver->vendorsFor($pincode, (string) $type->slug);
+            $switch = $cityName === '' ? ['available' => true, 'reason' => null]
+                : $occ->resolve((string) $type->slug, $cityName);
+            $out[] = [
+                'vertical'  => $type->slug,
+                'name'      => $type->name,
+                'vendors'   => count($vendors),
+                'shop_ids'  => array_keys($vendors),
+                'switch_on' => (bool) ($switch['available'] ?? true),
+                'reason'    => $switch['reason'] ?? null,
+                'orderable' => count($vendors) > 0 && (bool) ($switch['available'] ?? true),
+            ];
+        }
+
+        return $out;
+    }
+
+    /** India Post office names from the postal master's `offices` JSON column. */
+    private function localities($offices): array
+    {
+        $decoded = is_string($offices) ? json_decode($offices, true) : $offices;
+        if (!is_array($decoded)) {
+            return [];
+        }
+
+        return collect($decoded)->map(fn ($o) => is_array($o)
+            ? ['name' => $o['name'] ?? null, 'taluk' => $o['taluk'] ?? null]
+            : ['name' => (string) $o, 'taluk' => null])
+            ->filter(fn ($o) => !empty($o['name']))->values()->all();
+    }
+
+    /**
      * Public: postal-code lookup (paginated) by district, city or free-text
      * pincode/office search — powers the coverage pickers.
      */
@@ -84,14 +509,31 @@ class LocationController extends CoreController
         $search = trim((string) $request->query('search', ''));
 
         return \Illuminate\Support\Facades\DB::table('postal_codes')
-            ->where('status', 'active')
-            ->when($request->filled('district_id'), fn ($q) => $q->where('district_id', (int) $request->district_id))
-            ->when($request->filled('city_id'), fn ($q) => $q->where('city_id', (int) $request->city_id))
+            ->leftJoin('states', 'states.id', '=', 'postal_codes.state_id')
+            ->leftJoin('districts', 'districts.id', '=', 'postal_codes.district_id')
+            ->leftJoin('cities', 'cities.id', '=', 'postal_codes.city_id')
+            // `status` defaults to active-only, as every existing caller expects;
+            // pass status=all to audit the inactive rows from the admin tree.
+            ->when($request->query('status', 'active') !== 'all', fn ($q) => $q
+                ->where('postal_codes.status', (string) $request->query('status', 'active')))
+            ->when($request->filled('state_id'), fn ($q) => $q->where('postal_codes.state_id', (int) $request->state_id))
+            ->when($request->filled('district_id'), fn ($q) => $q->where('postal_codes.district_id', (int) $request->district_id))
+            ->when($request->filled('city_id'), fn ($q) => $q->where('postal_codes.city_id', (int) $request->city_id))
+            // Serviceable = some vendor projects this pin. Asking the projection
+            // keeps this list and the tree's counts on one source of truth.
+            ->when($request->boolean('serviceable'), fn ($q) => $q->whereExists(fn ($e) => $e
+                ->selectRaw('1')->from('vendor_covered_pincodes')
+                ->whereColumn('vendor_covered_pincodes.pincode', 'postal_codes.pincode')))
             ->when($search !== '', fn ($q) => $q->where(fn ($w) => $w
-                ->where('pincode', 'like', $search . '%')
-                ->orWhere('office_name', 'like', '%' . $search . '%')))
-            ->orderBy('pincode')
-            ->paginate(min(100, max(1, (int) ($request->limit ?? 50))));
+                ->where('postal_codes.pincode', 'like', $search . '%')
+                ->orWhere('postal_codes.office_name', 'like', '%' . $search . '%')))
+            ->orderBy('postal_codes.pincode')
+            ->paginate(min(100, max(1, (int) ($request->limit ?? 50))), [
+                'postal_codes.*',
+                'states.name as state_name',
+                'districts.name as district_name',
+                'cities.name as city_name',
+            ]);
     }
 
     // ── Admin: states ───────────────────────────────────────────────────────
