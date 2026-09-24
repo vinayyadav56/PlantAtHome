@@ -289,15 +289,46 @@ class VendorInventoryController extends CoreController
     {
         $shopId = $this->resolveShopId($request);
         $limit = min(100, max(1, (int) ($request->limit ?? 30)));
+        $status = trim((string) $request->input('status', ''));
+
+        // Applied to BOTH queries below, so the grouped page and its product-id lookup can never
+        // disagree about which rows are in scope.
+        $filters = function ($q) use ($request, $status) {
+            if ($request->filled('search')) {
+                $term = trim((string) $request->search);
+                $q->whereHas('product', fn ($p) => $p->where('name', 'like', "%{$term}%")->orWhere('sku', 'like', "%{$term}%"));
+            }
+            $this->applyInventoryStatus($q, $status);
+            return $q;
+        };
+
         // Ordered by product then variant so a plant's sizes are adjacent — id DESC
         // scattered them and the client could only build partial groups.
         $query = VendorProductPrice::with(['product:id,name,slug,sku,image'])
             ->where('shop_id', $shopId)->orderBy('product_id')->orderBy('variation_option_id');
-        if ($request->filled('search')) {
-            $term = trim((string) $request->search);
-            $query->whereHas('product', fn ($p) => $p->where('name', 'like', "%{$term}%")->orWhere('sku', 'like', "%{$term}%"));
+        $filters($query);
+
+        if ($request->input('group_by') === 'product') {
+            // Paginate PLANTS, then return every in-scope row of the plants on this page, so a
+            // plant's sizes are never split across a page boundary.
+            //
+            // OPT-IN on purpose: /[shop] renders the un-grouped paginator's `total` as the
+            // vendor's "Inventory" listings KPI. Making this the default would silently turn that
+            // tile into a count of plants.
+            $pageNo = max(1, (int) $request->input('page', 1));
+            $ids = VendorProductPrice::query()->where('shop_id', $shopId);
+            $filters($ids);
+            $total = (clone $ids)->distinct()->count('product_id');
+            $productIds = (clone $ids)->select('product_id')->distinct()
+                ->orderBy('product_id')->forPage($pageNo, $limit)->pluck('product_id')->all();
+            $rows = $productIds ? (clone $query)->whereIn('product_id', $productIds)->get() : collect();
+            $page = new \Illuminate\Pagination\LengthAwarePaginator($rows, $total, $limit, $pageNo, [
+                'path'  => \Illuminate\Pagination\Paginator::resolveCurrentPath(),
+                'query' => $request->query(),
+            ]);
+        } else {
+            $page = $query->paginate($limit);
         }
-        $page = $query->paginate($limit);
         // Variant titles — the row only carries variation_option_id, so without them a
         // 3-size plant renders three identical-looking rows.
         $variantIds = $page->getCollection()->pluck('variation_option_id')->filter()->unique()->values();
@@ -315,6 +346,55 @@ class VendorInventoryController extends CoreController
         });
 
         return $page;
+    }
+
+    /**
+     * Filter on the DERIVED listing status the My Inventory screen shows.
+     *
+     * There is no `status` column — the screen computes it in my-inventory.tsx from review_status,
+     * is_available, track_stock and (stock_qty - reserved_qty), with review state outranking
+     * operational state. This has to reproduce that derivation exactly, or the filter tells a
+     * vendor something untrue about their own stock. Two copies of one rule: change either and
+     * change both (VendorInventoryListTest pins every case).
+     *
+     * Unknown/blank status is a NO-OP rather than an empty result — a typo in a query string must
+     * never make a vendor believe their inventory is gone.
+     */
+    private function applyInventoryStatus($query, string $status): void
+    {
+        if ($status === '') {
+            return;
+        }
+        // The screen reads `review_status ?? 'approved'`, so legacy rows written before the review
+        // pipeline (NULL) are approved. A bare equality check silently hides them.
+        $approved = fn ($q) => $q->where(
+            fn ($w) => $w->where('review_status', VendorProductPrice::REVIEW_APPROVED)->orWhereNull('review_status')
+        );
+        $free = '(stock_qty - reserved_qty)';
+
+        switch ($status) {
+            case VendorProductPrice::REVIEW_PENDING:
+            case VendorProductPrice::REVIEW_CHANGES:
+            case VendorProductPrice::REVIEW_REJECTED:
+            case VendorProductPrice::REVIEW_SUSPENDED:
+                $query->where('review_status', $status);
+                break;
+            case 'paused':
+                $approved($query);
+                $query->where('is_available', false);
+                break;
+            case 'out_of_stock':
+                $approved($query);
+                $query->where('is_available', true)->where('track_stock', true)->whereRaw("{$free} <= 0");
+                break;
+            case 'live':
+                $approved($query);
+                $query->where('is_available', true)
+                    ->where(fn ($q) => $q->where('track_stock', false)->orWhereRaw("{$free} > 0"));
+                break;
+            default:
+                break;
+        }
     }
 
     /**
