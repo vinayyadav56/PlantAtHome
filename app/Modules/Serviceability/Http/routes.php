@@ -11,6 +11,15 @@ use Illuminate\Support\Facades\Route;
 |--------------------------------------------------------------------------
 | City lists + availability/delivery checks are public. City creation is admin;
 | vendor coverage is vendor-own or admin.
+|
+| NOTE: this is the RADIUS model (svc_cities / svc_pincodes /
+| svc_vendor_areas), which is NOT how the storefront answers "can this be
+| delivered here?" — that is VendorServiceabilityResolver over the pincode
+| rules (app/Modules/Serviceability/Application). No client calls these
+| endpoints, and the plan was to unroute them as a second serviceability
+| engine — but V2 search composes its `?city=` filter from this model, and
+| these are the only routes that populate it. Retiring it means retiring that
+| filter with it, deliberately, not unrouting half of it.
 */
 
 Route::prefix('serviceability')->group(function () {
