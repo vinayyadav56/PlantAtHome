@@ -80,9 +80,21 @@ class FulfillmentService
      * (local-in-city first, else courier), or null when no vendor can fulfil it. Used to
      * show delivery timing on the PDP. No vendor/seller identity is returned.
      */
-    public function fulfillmentFor(int $productId, ?int $variationOptionId, ?string $city, int $qty = 1): ?array
+    public function fulfillmentFor(int $productId, ?int $variationOptionId, ?string $city, int $qty = 1, ?string $pincode = null): ?array
     {
         $vendors = $this->availability->vendorsForProduct($productId, $variationOptionId);
+        // A pincode is a sharper question than the city ladder can answer. When
+        // the shopper gave one and the gate is on, the PDP's ETA comes from the
+        // vendors that actually cover that pin — otherwise the product page can
+        // promise a local next-day delivery the checkout then refuses.
+        $allowed = CoverageBridge::allowedShops(
+            array_map(fn ($v) => (int) $v['shop_id'], $vendors),
+            $pincode,
+            CoverageBridge::verticalOfProduct($productId),
+        );
+        if ($allowed !== null) {
+            $vendors = array_values(array_filter($vendors, fn ($v) => isset($allowed[(int) $v['shop_id']])));
+        }
         $pick = $this->chooseVendor($vendors, $this->norm($city), max(1, $qty));
         if ($pick === null) {
             return null;

@@ -430,11 +430,6 @@ class CheckoutRepository
             if ($zip === null || strlen($zip) < 6) {
                 return $none;
             }
-            $resolver = \Marvel\Services\CoverageBridge::resolver();
-            if ($resolver === null) {
-                return $none;
-            }
-
             $ids = collect($lines)->pluck('product_id')->filter()
                 ->map(fn ($id) => (int) $id)->unique()->values()->all();
             if ($ids === []) {
@@ -448,31 +443,23 @@ class CheckoutRepository
                 return $none;
             }
 
-            // Which vendors have opted in, per vertical scope.
-            $rules = \Illuminate\Support\Facades\DB::table('vendor_coverage_rules')
-                ->whereIn('shop_id', $allShops)->where('is_active', 1)
-                ->distinct()->get(['shop_id', 'vertical']);
-            $configured = [];
-            foreach ($rules as $rule) {
-                $configured[(int) $rule->shop_id][$rule->vertical ?? '*'] = true;
-            }
-
-            $coveredByVertical = [];
+            // One narrowing, shared with the PDP, the price ETA and the
+            // assignment engine — CoverageBridge::allowedShops also carries the
+            // per-vendor opt-in, so an unmigrated vendor still passes.
+            $allowedByVertical = [];
             $blocked = [];
             foreach ($supplyByProduct as $pid => $shops) {
                 $vertical = $verticalByProduct[$pid] ?? '*';
-                $coveredByVertical[$vertical] ??= $resolver->vendorsFor($zip, $vertical);
-                $covered = $coveredByVertical[$vertical];
-
-                $anyPasses = false;
-                foreach ($shops as $shopId) {
-                    $optedIn = isset($configured[$shopId]['*']) || isset($configured[$shopId][$vertical]);
-                    if (isset($covered[$shopId]) || !$optedIn) {
-                        $anyPasses = true;
-                        break;
-                    }
+                if (!array_key_exists($vertical, $allowedByVertical)) {
+                    $allowedByVertical[$vertical] = \Marvel\Services\CoverageBridge::allowedShops($allShops, $zip, $vertical);
                 }
-                if (!$anyPasses) {
+                $allowed = $allowedByVertical[$vertical];
+                if ($allowed === null) {
+                    return $none; // narrowing is off or unavailable → fail open
+                }
+
+                $passing = array_filter($shops, fn ($shopId) => isset($allowed[$shopId]));
+                if ($passing === []) {
                     $blocked[] = $pid;
                 }
             }

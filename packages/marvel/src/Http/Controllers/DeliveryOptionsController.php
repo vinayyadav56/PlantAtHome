@@ -67,7 +67,11 @@ class DeliveryOptionsController extends CoreController
             return response()->json($this->resolve($pincode, $productId) + ['_debug' => $this->debug]);
         }
 
-        $key = "delivery-options:v5:{$pincode}:{$productId}";
+        // The coverage version is part of the key: a vendor saving a rule has
+        // to change this answer, and a 10-minute stale "we deliver here" is
+        // exactly the promise the checkout would then refuse.
+        $cov = (int) Cache::get('coverage:ver', 0);
+        $key = "delivery-options:v6:{$cov}:{$pincode}:{$productId}";
 
         return response()->json(
             Cache::remember($key, self::TTL, fn () => $this->resolve($pincode, $productId))
@@ -146,6 +150,20 @@ class DeliveryOptionsController extends CoreController
                     ->select('shop_id')
             ))
             ->get();
+
+        // Delivery Coverage — the city ladder above is a city-level answer to a
+        // PINCODE question. When the gate is on, narrow the vendors to the ones
+        // the resolver says cover this exact pin, so the PDP badge and the
+        // checkout cannot disagree. Per-vendor opt-in: vendors without rules
+        // pass through untouched.
+        $allowed = \Marvel\Services\CoverageBridge::allowedShops(
+            $areas->pluck('shop_id')->map(fn ($s) => (int) $s)->all(),
+            $pincode,
+            $productId > 0 ? \Marvel\Services\CoverageBridge::verticalOfProduct($productId) : null,
+        );
+        if ($allowed !== null) {
+            $areas = $areas->filter(fn ($a) => isset($allowed[(int) $a->shop_id]))->values();
+        }
 
         if ($areas->isEmpty()) {
             $out['reason'] = 'no_supply';

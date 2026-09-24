@@ -36,13 +36,17 @@ class LocationPriceController extends CoreController
         $city    = $request->filled('city') ? (string) $request->input('city') : null;
         $result  = $service->sellingPrice($product, $variationOptionId, $this->latLng($request), $city);
 
-        // Delivery timing for the customer's city: local (same-city) vs courier ETA.
+        // Delivery timing for the customer's city: local (same-city) vs courier
+        // ETA. `pincode` is optional and narrows the vendors to the ones that
+        // actually cover it, so the PDP's promise matches the checkout's.
         $fulfillment = null;
         if ($request->filled('city')) {
             $fulfillment = (new FulfillmentService())->fulfillmentFor(
                 (int) $product->id,
                 $variationOptionId,
-                (string) $request->input('city')
+                (string) $request->input('city'),
+                1,
+                $request->filled('pincode') ? (string) $request->input('pincode') : null
             );
         }
         // SECURITY: this route is public. `max_vendor_rate` is the top vendor

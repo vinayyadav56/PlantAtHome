@@ -155,6 +155,24 @@ class ItemAssignmentService
             return [];
         }
 
+        // Delivery Coverage — when the shopper gave a pincode, that is a more
+        // precise question than matchArea's city ladder can answer, and the
+        // ladder's last rung ("any vendor with any courier area, anywhere")
+        // would otherwise let a vendor fulfil a pin it never claimed. Same
+        // flag and same resolver the checkout gate uses, so an estimate can no
+        // longer promise a delivery the order would refuse. Fails open.
+        $allowed = \Marvel\Services\CoverageBridge::allowedShops(
+            array_map(fn ($v) => (int) $v['shop_id'], $vendors),
+            $pincode,
+            $this->slugByProductMemo[$productId] ?? \Marvel\Services\CoverageBridge::verticalOfProduct($productId),
+        );
+        if ($allowed !== null) {
+            $vendors = array_values(array_filter($vendors, fn ($v) => isset($allowed[(int) $v['shop_id']])));
+        }
+        if (empty($vendors)) {
+            return [];
+        }
+
         // Memoized across lines of one request: a handful of vendors recur over a whole
         // cart, so we load each shop's rating / service areas / shipping rates ONCE.
         $shopIds = array_values(array_unique(array_map(fn ($v) => (int) $v['shop_id'], $vendors)));
