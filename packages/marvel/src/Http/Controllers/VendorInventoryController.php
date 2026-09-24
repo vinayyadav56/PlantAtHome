@@ -8,7 +8,6 @@ use Maatwebsite\Excel\Facades\Excel;
 use Marvel\Database\Models\PriceImportBatch;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\VendorProductPrice;
-use Marvel\Database\Models\VendorServiceArea;
 use Marvel\Enums\Permission;
 use Marvel\Enums\ProductStatus;
 use Marvel\Imports\VendorPriceSheetImport;
@@ -483,10 +482,41 @@ class VendorInventoryController extends CoreController
     public function serviceAreas(Request $request)
     {
         $shopId = $this->resolveShopId($request);
-        return VendorServiceArea::where('shop_id', $shopId)->orderBy('city')->get();
+
+        // The RULES, not the derived vendor_service_areas rows — the ids in
+        // this list are what DELETE /vendor/service-areas/{id} removes, and a
+        // derived row's id would 404. Shape unchanged (city / mode / eta) so
+        // app builds already in the wild keep rendering it.
+        $rules = \Illuminate\Support\Facades\DB::table('vendor_coverage_rules')
+            ->leftJoin('cities', 'cities.id', '=', 'vendor_coverage_rules.city_id')
+            ->leftJoin('districts', 'districts.id', '=', 'vendor_coverage_rules.district_id')
+            ->leftJoin('states', 'states.id', '=', 'vendor_coverage_rules.state_id')
+            ->where('vendor_coverage_rules.shop_id', $shopId)
+            ->where('vendor_coverage_rules.is_active', 1)
+            ->orderBy('vendor_coverage_rules.id')
+            ->get([
+                'vendor_coverage_rules.id',
+                'vendor_coverage_rules.rule_type',
+                'vendor_coverage_rules.vertical',
+                'vendor_coverage_rules.pincode',
+                'vendor_coverage_rules.fulfillment_mode',
+                'vendor_coverage_rules.eta_days',
+                'cities.name as city_name',
+                'districts.name as district_name',
+                'states.name as state_name',
+            ]);
+
+        return $rules->map(fn ($r) => [
+            'id'               => (int) $r->id,
+            'rule_type'        => $r->rule_type,
+            'vertical'         => $r->vertical,
+            'city'             => $r->city_name ?? $r->district_name ?? $r->state_name ?? $r->pincode,
+            'pincode'          => $r->pincode,
+            'fulfillment_mode' => $r->fulfillment_mode ?? 'both',
+            'eta_days'         => $r->eta_days !== null ? (int) $r->eta_days : null,
+        ])->values();
     }
 
-    /** POST /vendor/service-areas — add / update a served city. */
     /**
      * POST /vendor/service-areas — the nursery app's "I serve this city" write.
      *
