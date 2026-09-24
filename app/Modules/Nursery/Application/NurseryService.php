@@ -374,32 +374,51 @@ class NurseryService
         }
     }
 
-    /** Legacy vendor_service_areas rows, normalised like ShopRepository::syncServiceAreas. */
+    /**
+     * A projected nursery's service areas become COVERAGE RULES, not legacy
+     * vendor_service_areas rows — rules are the single writer, and the
+     * projector derives those rows from them. A city the master does not know
+     * is skipped: a free-text city can never project to a pincode, so writing
+     * it would only look like coverage.
+     */
     private function insertLegacyServiceAreas(int $shopId, array $areas, Carbon $now): void
     {
-        $seen = [];
+        $rules = [];
         foreach ($areas as $area) {
             $city = trim((string) ($area['city'] ?? ''));
             if ($city === '') {
                 continue;
             }
-            $pincode = isset($area['pincode']) && trim((string) $area['pincode']) !== '' ? trim((string) $area['pincode']) : null;
-            $key = strtolower($city).'|'.($pincode ?? '');
-            if (isset($seen[$key])) {
+            $mode = $area['fulfillment_mode'] ?? null;
+            $promise = [
+                'fulfillment_mode' => in_array($mode, ['local', 'courier', 'both'], true) ? $mode : null,
+                'eta_days'         => isset($area['eta_days']) && $area['eta_days'] !== '' ? (int) $area['eta_days'] : null,
+            ];
+
+            $pincode = preg_replace('/\D/', '', (string) ($area['pincode'] ?? ''));
+            if (preg_match('/^\d{6}$/', (string) $pincode)) {
+                $rules['pincode_include:'.$pincode] = $promise + ['rule_type' => 'pincode_include', 'pincode' => $pincode];
+            }
+
+            $cityId = $this->db->table('cities')->whereRaw('LOWER(name) = ?', [mb_strtolower($city)])
+                ->orderBy('id')->value('id');
+            if ($cityId === null) {
                 continue;
             }
-            $seen[$key] = true;
-            $mode = $area['fulfillment_mode'] ?? 'local';
+            $rules['city:'.(int) $cityId] = $promise + ['rule_type' => 'city', 'city_id' => (int) $cityId];
+        }
 
-            $this->db->table('vendor_service_areas')->insert([
-                'shop_id'          => $shopId,
-                'city'             => $city,
-                'pincode'          => $pincode,
-                'fulfillment_mode' => in_array($mode, ['local', 'courier', 'both'], true) ? $mode : 'local',
-                'eta_days'         => isset($area['eta_days']) && $area['eta_days'] !== '' ? (int) $area['eta_days'] : null,
-                'is_active'        => (bool) ($area['is_active'] ?? true),
-                'created_at'       => $now,
-                'updated_at'       => $now,
+        if ($rules === []) {
+            return;
+        }
+
+        try {
+            app(\App\Modules\Serviceability\Application\DeliveryCoverageService::class)
+                ->syncRules($shopId, array_values($rules));
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('nursery projection: service areas -> coverage rules failed', [
+                'shop_id' => $shopId,
+                'error'   => $e->getMessage(),
             ]);
         }
     }

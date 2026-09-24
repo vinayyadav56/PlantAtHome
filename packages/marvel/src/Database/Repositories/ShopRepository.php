@@ -74,60 +74,87 @@ class ShopRepository extends BaseRepository
      * payload. Only runs when `service_areas` is present, so a partial update that
      * omits it leaves the existing areas intact.
      */
+    /**
+     * The vendor form's `service_areas[]` now writes COVERAGE RULES, not legacy
+     * vendor_service_areas rows.
+     *
+     * Four places used to write that table — this form, the mobile nursery
+     * screen, V2 nursery onboarding and the coverage bridge — so a vendor's
+     * reach depended on which screen last touched it, and the coverage editor's
+     * own save could be silently undone by a form save on the next tab. Rules
+     * are the single writer; the projector derives the legacy rows from them.
+     *
+     * A city the master does not know is skipped and logged rather than
+     * written, because a free-text city cannot project to any pincode — it was
+     * exactly how vendors ended up with areas the availability engine could
+     * never match.
+     */
     private function syncServiceAreas(Shop $shop, $request): void
     {
         $areas = $request['service_areas'] ?? null;
         if (!is_array($areas)) {
             return;
         }
-        // Replace only the vendor's MANUAL rows (source NULL). Rows written by
-        // the Delivery Coverage bridge (source='coverage_sync') are derived from
-        // coverage rules and must survive an onboarding-form save — the
-        // projector owns their lifecycle. (Recreated rows below get source=NULL
-        // implicitly, keeping them in the manual bucket.)
-        VendorServiceArea::where('shop_id', $shop->id)
-            ->when(
-                \Illuminate\Support\Facades\Schema::hasColumn('vendor_service_areas', 'source'),
-                fn ($q) => $q->whereNull('source')
-            )
-            ->delete();
-        $seen = [];
+
+        $coverage = \Marvel\Services\CoverageBridge::service();
+        if ($coverage === null) {
+            \Illuminate\Support\Facades\Log::warning('service_areas ignored: coverage module unavailable', [
+                'shop_id' => $shop->id,
+            ]);
+
+            return;
+        }
+
+        $rules = [];
+        $unknown = [];
         foreach ($areas as $area) {
             $city = trim((string) ($area['city'] ?? ''));
             if ($city === '') {
                 continue;
             }
-            $pincode = isset($area['pincode']) && trim((string) $area['pincode']) !== '' ? trim((string) $area['pincode']) : null;
-            $key = strtolower($city) . '|' . ($pincode ?? '');
-            if (isset($seen[$key])) {
+            $mode = $area['fulfillment_mode'] ?? null;
+            $promise = [
+                'fulfillment_mode' => in_array($mode, ['local', 'courier', 'both'], true) ? $mode : null,
+                'eta_days'         => isset($area['eta_days']) && $area['eta_days'] !== '' ? (int) $area['eta_days'] : null,
+            ];
+
+            $pincode = preg_replace('/\D/', '', (string) ($area['pincode'] ?? ''));
+            if (preg_match('/^\d{6}$/', (string) $pincode)) {
+                $rules['pincode_include:' . $pincode] = $promise + ['rule_type' => 'pincode_include', 'pincode' => $pincode];
+            }
+
+            $cityId = \Marvel\Database\Models\City::whereRaw('LOWER(name) = ?', [mb_strtolower($city)])
+                ->orderBy('id')->value('id');
+            if ($cityId === null) {
+                $unknown[] = $city;
                 continue;
             }
-            $seen[$key] = true;
-            $mode = $area['fulfillment_mode'] ?? 'local';
-            VendorServiceArea::create([
-                'shop_id'          => $shop->id,
-                'city'             => $city,
-                'pincode'          => $pincode,
-                'fulfillment_mode' => in_array($mode, ['local', 'courier', 'both'], true) ? $mode : 'local',
-                'eta_days'         => isset($area['eta_days']) && $area['eta_days'] !== '' ? (int) $area['eta_days'] : null,
-                'is_active'        => $area['is_active'] ?? true,
+            $rules['city:' . (int) $cityId] = $promise + ['rule_type' => 'city', 'city_id' => (int) $cityId];
+        }
+
+        if ($unknown !== []) {
+            \Illuminate\Support\Facades\Log::warning('service_areas: city not in the master, skipped', [
+                'shop_id' => $shop->id,
+                'cities'  => array_values(array_unique($unknown)),
             ]);
         }
 
-        // The cities a vendor serves feed the city-availability projection — refresh
-        // every product this vendor supplies so the storefront reflects the change.
-        if (VendorProductPrice::where('shop_id', $shop->id)->exists()) {
-            // Queued + deduped: a shop save can touch hundreds of products.
-            \Marvel\Jobs\RecomputeShopAvailabilityJob::dispatch((int) $shop->id);
+        // Replace-all, one projection: syncRules re-projects, bridges the legacy
+        // rows, activates the served cities and dispatches the availability
+        // recompute itself — the work this method used to repeat by hand.
+        try {
+            $coverage->syncRules((int) $shop->id, array_values($rules));
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('service_areas -> coverage rules failed', [
+                'shop_id' => $shop->id,
+                'error'   => $e->getMessage(),
+            ]);
         }
 
-        // Onboarding a vendor in a city must surface that city in the storefront
-        // picker automatically ("create a vendor in Delhi → Delhi shows up") —
-        // include the vendor's own address city alongside the served areas.
-        $this->activateServedCities(array_merge(
-            array_map(fn ($k) => explode('|', (string) $k)[0], array_keys($seen)),
-            [(string) data_get($request, 'address.city', '')]
-        ));
+        // The vendor's own address city still surfaces in the storefront picker
+        // ("create a vendor in Delhi → Delhi shows up"); served cities are
+        // activated by the projector.
+        $this->activateServedCities([(string) data_get($request, 'address.city', '')]);
     }
 
     /**

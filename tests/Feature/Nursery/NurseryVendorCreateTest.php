@@ -125,9 +125,20 @@ class NurseryVendorCreateTest extends NurseryTestCase
         );
         $this->assertSame([1, 2], DB::table('category_shop')->where('shop_id', $shop->id)->orderBy('category_id')->pluck('category_id')->map(fn ($id) => (int) $id)->all());
 
+        // The declared areas are written as COVERAGE RULES — the single writer —
+        // and the legacy service-area row is DERIVED from them by the projector.
+        $rules = DB::table('vendor_coverage_rules')->where('shop_id', $shop->id)
+            ->orderBy('target_key')->get();
+        $this->assertSame(
+            ['city:1', 'pincode_include:110001'],
+            $rules->pluck('target_key')->all(),
+        );
+        $this->assertSame(['local', 'local'], $rules->pluck('fulfillment_mode')->all());
+        $this->assertSame([2, 2], $rules->pluck('eta_days')->map(fn ($d) => (int) $d)->all());
+
         $area = DB::table('vendor_service_areas')->where('shop_id', $shop->id)->first();
         $this->assertSame('Delhi', $area->city);
-        $this->assertSame('110001', $area->pincode);
+        $this->assertSame('coverage_sync', $area->source, 'derived, not hand-written');
         $this->assertSame('local', $area->fulfillment_mode);
         $this->assertSame(2, (int) $area->eta_days);
     }
@@ -238,5 +249,74 @@ class NurseryVendorCreateTest extends NurseryTestCase
             $t->boolean('is_active')->default(true);
             $t->timestamps();
         });
+
+        $this->createGeoAndCoverageTables();
+    }
+
+    /**
+     * A projected nursery's declared service areas are written as COVERAGE
+     * RULES, and the legacy vendor_service_areas rows are derived from them —
+     * so this test needs the geo master and the coverage tables for the
+     * projection to resolve "Delhi" and 110001 at all.
+     */
+    private function createGeoAndCoverageTables(): void
+    {
+        Schema::create('states', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->string('name')->unique();
+            $t->string('code', 8)->nullable();
+            $t->boolean('is_active')->default(true);
+            $t->timestamps();
+        });
+
+        Schema::create('cities', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->string('name');
+            $t->unsignedBigInteger('state_id')->nullable();
+            $t->string('state_name')->nullable();
+            $t->string('status', 16)->default('active');
+            $t->boolean('is_serviceable')->default(true);
+            $t->timestamps();
+        });
+
+        $dir = base_path('app/Modules/Serviceability/Database/Migrations');
+        foreach ([
+            '2026_07_15_100001_create_countries_table.php',
+            '2026_07_15_100002_add_country_id_to_states.php',
+            '2026_07_15_100003_create_districts_table.php',
+            '2026_07_15_100004_add_district_id_to_cities.php',
+            '2026_07_15_100005_create_postal_codes_table.php',
+            '2026_07_15_100006_create_vendor_coverage_rules_table.php',
+            '2026_07_15_100007_create_vendor_covered_pincodes_table.php',
+            '2026_07_15_100008_create_coverage_audit_logs_table.php',
+            '2026_07_15_100009_add_source_to_vendor_service_areas.php',
+            '2026_09_24_100001_add_vertical_and_delivery_to_coverage_rules.php',
+            '2026_09_24_100002_add_vertical_and_delivery_to_covered_pincodes.php',
+        ] as $file) {
+            (require $dir . '/' . $file)->up();
+        }
+
+        $now = now();
+        $country = DB::table('countries')->insertGetId([
+            'name' => 'India', 'iso2' => 'IN', 'iso3' => 'IND', 'phone_code' => '+91',
+            'is_active' => true, 'created_at' => $now, 'updated_at' => $now,
+        ]);
+        $state = DB::table('states')->insertGetId([
+            'name' => 'Delhi', 'country_id' => $country, 'is_active' => true,
+            'created_at' => $now, 'updated_at' => $now,
+        ]);
+        $district = DB::table('districts')->insertGetId([
+            'state_id' => $state, 'name' => 'Central Delhi', 'is_active' => true,
+            'created_at' => $now, 'updated_at' => $now,
+        ]);
+        $city = DB::table('cities')->insertGetId([
+            'name' => 'Delhi', 'state_id' => $state, 'district_id' => $district,
+            'status' => 'active', 'is_serviceable' => true, 'created_at' => $now, 'updated_at' => $now,
+        ]);
+        DB::table('postal_codes')->insert([
+            'country_id' => $country, 'state_id' => $state, 'district_id' => $district,
+            'city_id' => $city, 'pincode' => '110001', 'status' => 'active',
+            'created_at' => $now, 'updated_at' => $now,
+        ]);
     }
 }

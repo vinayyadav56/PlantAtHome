@@ -487,6 +487,16 @@ class VendorInventoryController extends CoreController
     }
 
     /** POST /vendor/service-areas — add / update a served city. */
+    /**
+     * POST /vendor/service-areas — the nursery app's "I serve this city" write.
+     *
+     * A SHIM: it resolves the city against the master and writes a coverage
+     * RULE, because rules are the single writer for a vendor's reach now. The
+     * free-text city it used to accept could never project to a pincode, so a
+     * nursery could declare a city the availability engine would never match.
+     * Kept for app builds already in the wild; the screen itself now posts
+     * coverage rules directly.
+     */
     public function addServiceArea(Request $request)
     {
         $shopId = $this->resolveShopId($request);
@@ -496,23 +506,60 @@ class VendorInventoryController extends CoreController
             'pincode'          => 'nullable|string|max:12',
             'eta_days'         => 'nullable|integer|min:0|max:60',
         ]);
-        $area = VendorServiceArea::updateOrCreate(
-            ['shop_id' => $shopId, 'city' => trim((string) $request->city), 'pincode' => $request->pincode],
-            ['fulfillment_mode' => $request->fulfillment_mode, 'eta_days' => $request->eta_days, 'is_active' => true]
-        );
-        // Whole-catalogue rebuild → queued (deduped per shop); the projection
-        // is a cache, seconds of staleness is fine.
-        \Marvel\Jobs\RecomputeShopAvailabilityJob::dispatch($shopId);
-        return $area;
+
+        $coverage = \Marvel\Services\CoverageBridge::service();
+        if ($coverage === null) {
+            return response()->json(['message' => 'Delivery coverage is unavailable right now.'], 503);
+        }
+
+        $city = trim((string) $request->city);
+        $cityId = \Marvel\Database\Models\City::whereRaw('LOWER(name) = ?', [mb_strtolower($city)])
+            ->orderBy('id')->value('id');
+        if ($cityId === null) {
+            return response()->json([
+                'message' => "We don't have \"{$city}\" on our map — pick a city from the list.",
+                'code'    => 'CITY_UNKNOWN',
+            ], 422);
+        }
+
+        $promise = [
+            'fulfillment_mode' => (string) $request->fulfillment_mode,
+            'eta_days'         => $request->eta_days !== null ? (int) $request->eta_days : null,
+        ];
+        $pincode = preg_replace('/\D/', '', (string) $request->pincode);
+
+        try {
+            $rule = preg_match('/^\d{6}$/', (string) $pincode)
+                ? $coverage->addCoverage($shopId, 'pincode_include', $promise + ['pincode' => $pincode], $request->user()?->id)
+                : $coverage->addCoverage($shopId, 'city', $promise + ['city_id' => (int) $cityId], $request->user()?->id);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => $e->getMessage()], 422);
+        }
+
+        // addCoverage re-projects, which bridges the legacy rows and dispatches
+        // the availability recompute — no second dispatch here.
+        return $rule;
     }
 
-    /** DELETE /vendor/service-areas/{id} — stop serving a city. */
+    /**
+     * DELETE /vendor/service-areas/{id} — stop serving a city. Takes a COVERAGE
+     * RULE id now; the legacy area rows are derived and deleting one would be
+     * undone by the next projection.
+     */
     public function deleteServiceArea(Request $request, $id)
     {
         $shopId = $this->resolveShopId($request);
-        $area = VendorServiceArea::where('shop_id', $shopId)->findOrFail($id);
-        $area->delete();
-        \Marvel\Jobs\RecomputeShopAvailabilityJob::dispatch($shopId);
+        $coverage = \Marvel\Services\CoverageBridge::service();
+        if ($coverage === null) {
+            return response()->json(['message' => 'Delivery coverage is unavailable right now.'], 503);
+        }
+
+        try {
+            $coverage->removeCoverage($shopId, (int) $id, $request->user()?->id);
+        } catch (\Throwable $e) {
+            return response()->json(['message' => $e->getMessage()], 404);
+        }
+
         return ['success' => true];
     }
 }

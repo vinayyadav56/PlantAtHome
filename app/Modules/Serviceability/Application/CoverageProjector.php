@@ -201,14 +201,29 @@ class CoverageProjector
             return [];
         }
 
+        // Per city: that it is covered, and the delivery promise its pins
+        // carry. The promise has to come from the projection now — the manual
+        // rows it used to be read from are being retired, and defaulting every
+        // rules-only vendor to 'both' made them silently courier-capable
+        // everywhere.
         $cityIds = [];
+        $promiseByCityId = [];
         foreach ($map as $hit) {
-            if ($hit['city_id'] !== null) {
-                $cityIds[$hit['city_id']] = true;
+            if ($hit['city_id'] === null) {
+                continue;
+            }
+            $cityId = $hit['city_id'];
+            $cityIds[$cityId] = true;
+            if (($hit['fulfillment_mode'] ?? null) !== null && !isset($promiseByCityId[$cityId]['fulfillment_mode'])) {
+                $promiseByCityId[$cityId]['fulfillment_mode'] = $hit['fulfillment_mode'];
+            }
+            if (($hit['eta_days'] ?? null) !== null && !isset($promiseByCityId[$cityId]['eta_days'])) {
+                $promiseByCityId[$cityId]['eta_days'] = $hit['eta_days'];
             }
         }
 
         $cityNames = [];
+        $promiseByName = [];
         if ($cityIds !== [] && $schema->hasTable('cities')) {
             // Project the CANONICAL city. A pincode's city row may be a subdivision, and writing
             // "South Delhi" into vendor_service_areas would make this vendor's coverage invisible
@@ -216,9 +231,15 @@ class CoverageProjector
             // canonical model exists to prevent.
             $rows = $this->db->table('cities')->whereIn('id', array_keys($cityIds))->get(['id', 'name']);
             $normalizer = new \Marvel\Services\LocationNormalizer();
-            $cityNames = $rows
-                ->map(fn ($r) => $normalizer->normalize(['city' => $r->name])['city'] ?: $r->name)
-                ->unique()->values()->all();
+            $promiseByName = [];
+            foreach ($rows as $r) {
+                $name = $normalizer->normalize(['city' => $r->name])['city'] ?: $r->name;
+                $cityNames[] = $name;
+                foreach ($promiseByCityId[(int) $r->id] ?? [] as $field => $value) {
+                    $promiseByName[$name][$field] ??= $value;
+                }
+            }
+            $cityNames = array_values(array_unique($cityNames));
         }
 
         $manual = [];
@@ -233,9 +254,13 @@ class CoverageProjector
             // Canonical key on both sides, so a vendor's hand-entered "Gurgaon" row still hands its
             // mode/ETA down to the bridge row the master calls "Gurugram".
             $inherit = $manual[\Marvel\Services\AvailabilityService::canonicalCityKey((string) $name)] ?? null;
+            // The rule's own promise wins; a manual row is the fallback while
+            // one still exists; 'both' is the last resort.
             $values = [
-                'fulfillment_mode' => $inherit->fulfillment_mode ?? 'both',
-                'eta_days'         => $inherit->eta_days ?? null,
+                'fulfillment_mode' => $promiseByName[$name]['fulfillment_mode']
+                    ?? $inherit->fulfillment_mode
+                    ?? 'both',
+                'eta_days'         => $promiseByName[$name]['eta_days'] ?? $inherit->eta_days ?? null,
                 'is_active'        => true,
                 'updated_at'       => $now,
             ];

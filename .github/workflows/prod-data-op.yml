@@ -55,6 +55,10 @@ on:
           - sku-gen
           - recompute-availability
           - cities-seed
+          - geo-master-seed
+          - coverage-backfill-dry
+          - coverage-backfill
+          - coverage-backfill-retire
           - taxonomy-seed
           - company-address
           - v2-backfill-dry
@@ -120,7 +124,7 @@ jobs:
             img-purge-rollback) ARGS="plantathome:purge-product-images --rollback --force" ;;
             # shipment-items-check is READ-ONLY and takes no artisan args; it rides the
             # empty-ARGS list below and runs its own inline script.
-            shipment-items-check|partner-caps-check|vendor-state|vendor-wipe|vpp-review-check|cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
+            shipment-items-check|partner-caps-check|vendor-state|vendor-wipe|vpp-review-check|cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|geo-master-seed|coverage-backfill-dry|coverage-backfill|coverage-backfill-retire|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             # Product STATE parity with staging (availability/listing/stock/prices/
@@ -291,6 +295,37 @@ jobs:
                 php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantCollectionSeeder" --force
                 php artisan cache:clear 2>/dev/null || true
                 echo "==> TAXONOMY-SEED COMPLETE"
+                ;;
+
+              geo-master-seed)
+                echo "==> Ensuring latest code on EC2..."
+                git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || true
+                composer reinstall marvel/shop --no-interaction 2>&1 | tail -3 || true
+                composer dump-autoload -o 2>/dev/null || true
+                echo "==> Geo master: countries/states -> districts -> postal codes."
+                echo "    ORDER MATTERS: GeoMasterSeeder needs LocationSeeder's states to have run."
+                php artisan db:seed --class="Marvel\\Database\\Seeders\\LocationSeeder" --force
+                php artisan db:seed --class="Marvel\\Database\\Seeders\\GeoMasterSeeder" --force
+                php artisan cache:clear 2>/dev/null || true
+                echo "==> GEO-MASTER-SEED COMPLETE — verify counts via GET /api/locations/tree"
+                ;;
+
+              coverage-backfill-dry|coverage-backfill|coverage-backfill-retire)
+                echo "==> Ensuring latest code on EC2..."
+                git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || true
+                composer reinstall marvel/shop --no-interaction 2>&1 | tail -3 || true
+                composer dump-autoload -o 2>/dev/null || true
+                echo "==> Legacy manual service areas -> coverage rules."
+                echo "    ALWAYS run coverage-backfill-dry first and read the plan: -retire"
+                echo "    deactivates the manual rows, and only a shop whose every manual"
+                echo "    city came back through the projection is retired."
+                case "$OP_MODE" in
+                  coverage-backfill-dry)    php artisan plantathome:coverage-backfill --dry-run ;;
+                  coverage-backfill)        php artisan plantathome:coverage-backfill ;;
+                  coverage-backfill-retire) php artisan plantathome:coverage-backfill --retire-manual ;;
+                esac
+                php artisan cache:clear 2>/dev/null || true
+                echo "==> COVERAGE-BACKFILL ($OP_MODE) COMPLETE"
                 ;;
 
               cities-seed)
