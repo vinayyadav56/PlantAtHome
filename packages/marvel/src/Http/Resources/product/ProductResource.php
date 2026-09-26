@@ -150,7 +150,12 @@ class ProductResource extends Resource
             else                                              $chips[] = 'Weekly';
         }
 
-        $chips[] = 'Easy';
+        // Real difficulty only — the old hardcoded 'Easy' invented a fact for
+        // every plant, including the hard ones.
+        $difficulty = strtolower((string) $pa->difficulty_level);
+        if ($difficulty !== '') {
+            $chips[] = ucfirst($difficulty);
+        }
 
         return array_values(array_filter(array_slice($chips, 0, 3)));
     }

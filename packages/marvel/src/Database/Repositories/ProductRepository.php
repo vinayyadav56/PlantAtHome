@@ -846,7 +846,9 @@ class ProductRepository extends BaseRepository
 
         $products_query = Product::leftJoin('order_product', 'order_product.product_id', 'products.id')
             ->leftJoin('orders', 'order_product.order_id', '=', 'orders.id')
-            ->with(['type', 'shop'])
+            // plantAttribute: the storefront card renders scientific name + fact
+            // chips from it — without the eager-load this feed sent bare rows.
+            ->with(['type', 'shop', 'plantAttribute'])
             ->selectRaw('products.*, sum(order_product.order_quantity) total_sales')
             ->where('orders.parent_id', null)
             ->where('orders.order_status', 'order-completed')

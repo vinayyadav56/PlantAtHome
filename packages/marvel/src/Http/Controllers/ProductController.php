@@ -1860,7 +1860,7 @@ class ProductController extends CoreController
         // existing bustResponseCache('products') on any product write already invalidates it.
         $city = $request->filled('city') ? (string) $request->city : null;
         $build = function () use ($request, $limit, $language, $range, $type_id, $city) {
-            $products_query = $this->repository->withCount('orders')->with(['type', 'shop'])->orderBy('orders_count', 'desc')->where('language', DEFAULT_LANGUAGE);
+            $products_query = $this->repository->withCount('orders')->with(['type', 'shop', 'plantAttribute'])->orderBy('orders_count', 'desc')->where('language', DEFAULT_LANGUAGE);
             if (isset($request->shop_id)) {
                 $products_query = $products_query->where('shop_id', "=", $request->shop_id);
             }
@@ -1912,7 +1912,7 @@ class ProductController extends CoreController
         $city = $request->filled('city') ? (string) $request->city : null;
         $build = function () use ($request, $limit, $language, $type_id, $city) {
             $products_query = $this->repository
-                ->with(['type', 'shop'])
+                ->with(['type', 'shop', 'plantAttribute'])
                 ->withAvg('reviews', 'rating')
                 ->whereHas('reviews')
                 ->where('language', DEFAULT_LANGUAGE)
