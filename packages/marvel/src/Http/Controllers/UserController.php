@@ -415,7 +415,18 @@ class UserController extends CoreController
     public function show($id)
     {
         try {
-            return $this->repository->with(['profile', 'address', 'shops', 'managed_shop', 'orders', 'providers', 'wallet'])->findOrFail($id);
+            return $this->repository->with([
+                'profile', 'address', 'shops', 'managed_shop', 'permissions', 'providers', 'wallet',
+                // The orders() relation bakes in products.variation_options +
+                // reviews (heavy) and returns child vendor sub-orders too,
+                // which double-counted "total orders"/"total spent" on the
+                // admin user page. Parents only, slim columns.
+                'orders' => fn ($q) => $q
+                    ->without(['products.variation_options', 'reviews'])
+                    ->whereNull('parent_id')
+                    ->select(['id', 'customer_id', 'parent_id', 'tracking_number', 'order_status', 'payment_gateway', 'paid_total', 'total', 'created_at'])
+                    ->latest('created_at'),
+            ])->findOrFail($id);
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
         }
