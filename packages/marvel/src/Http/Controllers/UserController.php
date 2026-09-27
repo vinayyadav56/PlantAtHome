@@ -443,6 +443,13 @@ class UserController extends CoreController
     {
         if ($request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
             $user = $this->repository->findOrFail($id);
+            if ((int) $id !== (int) $request->user()->id) {
+                // Email and phone are LOGIN IDENTIFIERS (email/password, phone
+                // OTP). An admin typo — or a compromised admin session — must
+                // not silently repoint someone's account, so a change requires
+                // proof of ownership: a code delivered to the NEW address/number.
+                $this->assertSensitiveChangesVerified($request, $user);
+            }
             return $this->repository->updateUser($request, $user);
         } elseif ($request->user()->id == $id) {
             $user = $request->user();
@@ -1015,6 +1022,71 @@ class UserController extends CoreController
             throw new \RuntimeException("OTP gateway '{$gateway}' is not configured.");
         }
         return new OtpGateway(new $gateWayClass());
+    }
+
+    /**
+     * Admin branch of update(): a changed email requires a valid email_code
+     * (sent to the NEW address via users/email-otp/send), a changed phone
+     * requires otp_id/otp_code/otp_channel from send-otp-code against the NEW
+     * number. Unchanged fields require nothing. 422 via HttpResponseException
+     * so the field-keyed body survives the exception handler.
+     */
+    private function assertSensitiveChangesVerified(UserUpdateRequest $request, $user): void
+    {
+        $fail = function (string $field, string $message): void {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(
+                response()->json([$field => [$message]], 422)
+            );
+        };
+
+        $newEmail = strtolower(trim((string) $request->input('email', '')));
+        if ($newEmail !== '' && $newEmail !== strtolower((string) $user->email)) {
+            $code = (string) $request->input('email_code', '');
+            $otp = \Marvel\Database\Models\EmailOtp::where('email', $newEmail)
+                ->where('expires_at', '>', now())
+                ->latest('id')
+                ->first();
+            if ($code === '' || !$otp || !\Illuminate\Support\Facades\Hash::check($code, $otp->code_hash)) {
+                $fail('email', 'Changing the email requires the verification code sent to the new address.');
+            }
+            \Marvel\Database\Models\EmailOtp::where('email', $newEmail)->delete(); // single-use
+        }
+
+        $newContact = trim((string) data_get((array) $request->input('profile', []), 'contact', ''));
+        if ($newContact !== '') {
+            $normalized = \Marvel\Http\Rules\UniquePhone::normalize($newContact);
+            $currentClean = optional($user->profile)->contact_clean
+                ?: \Marvel\Http\Rules\UniquePhone::normalize((string) optional($user->profile)->contact);
+            if ($normalized && $normalized !== $currentClean) {
+                if (!preg_match('/^(\+?91)?[6-9][0-9]{9}$/', preg_replace('/[\s()-]+/', '', $newContact))) {
+                    $fail('profile.contact', 'Enter a valid 10-digit Indian mobile number.');
+                }
+                // Contact drives phone-OTP login — same uniqueness rule as updateContact().
+                $taken = Profile::where('contact_clean', $normalized)
+                    ->where('customer_id', '!=', $user->id)
+                    ->exists();
+                if ($taken) {
+                    $fail('profile.contact', 'This phone number is already linked to another account.');
+                }
+                $guard = app(\Marvel\Otp\OtpAbuseGuard::class);
+                $guard->guardVerify($newContact);
+                $verified = false;
+                if ($request->filled('otp_id') && $request->filled('otp_code')) {
+                    try {
+                        $verified = $this->getOtpGateway($request->input('otp_channel'))
+                            ->checkVerification($request->input('otp_id'), $request->input('otp_code'), $newContact)
+                            ->isValid();
+                    } catch (\Throwable $e) {
+                        $verified = false;
+                    }
+                }
+                if (!$verified) {
+                    $guard->registerFailure($newContact);
+                    $fail('profile.contact', 'Changing the phone requires the OTP sent to the new number.');
+                }
+                $guard->registerSuccess($newContact);
+            }
+        }
     }
 
     protected function verifyOtp(Request $request)

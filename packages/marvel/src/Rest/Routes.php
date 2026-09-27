@@ -1397,6 +1397,9 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
         'only' => ['store'],
     ]);
     Route::apiResource('users', UserController::class);
+    // Ownership code for admin email changes on the user edit page — emailed
+    // to the NEW address; UserController::update demands it when email differs.
+    Route::post('users/email-otp/send', [ContactController::class, 'sendEmailOtpAdmin'])->middleware('throttle:6,1');
     Route::apiResource('authors', AuthorController::class, [
         'only' => ['update', 'destroy'],
     ]);

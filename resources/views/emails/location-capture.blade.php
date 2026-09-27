@@ -27,7 +27,7 @@ If the button doesn't work, copy this link into your browser:
 {{ $captureUrl }}
 
 Thanks,<br>
-{{ config('app.name') }}
+{{ rescue(fn () => app(\Marvel\Services\EmailService::class)->globalVars()['company_name'], null, false) ?: config('app.name') }}
 
 <img src="{{ $openPixelUrl }}" width="1" height="1" alt="" style="display:none;">
 @endcomponent

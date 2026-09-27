@@ -57,6 +57,18 @@ class ContactController extends CoreController
             return $slot;
         }
 
+        self::issueEmailCode($email);
+
+        return response()->json(['data' => ['sent' => true, 'slot' => $slot]]);
+    }
+
+    /**
+     * Store a hashed 6-digit code for the address and mail it. Shared by the
+     * self-serve verify flow above and the admin user-edit flow (which proves
+     * ownership of a NEW email before an admin may repoint an account to it).
+     */
+    public static function issueEmailCode(string $email): void
+    {
         $code = str_pad((string) random_int(0, 999999), 6, '0', STR_PAD_LEFT);
         EmailOtp::where('email', $email)->delete();
         EmailOtp::create([
@@ -71,8 +83,19 @@ class ContactController extends CoreController
         app(\Marvel\Services\EmailService::class)->send('auth.otp', $email, ['otp' => $code], [
             'fallback' => fn () => Mail::to($email)->queue(new EmailOtpMail($code)),
         ]);
+    }
 
-        return response()->json(['data' => ['sent' => true, 'slot' => $slot]]);
+    /**
+     * POST users/email-otp/send { email } — super-admin only (route group).
+     * No slot logic: the code just proves the operator controls the address
+     * they are about to set on someone's account.
+     */
+    public function sendEmailOtpAdmin(Request $request): JsonResponse
+    {
+        $data = $request->validate(['email' => 'required|email']);
+        self::issueEmailCode(strtolower(trim($data['email'])));
+
+        return response()->json(['data' => ['sent' => true]]);
     }
 
     /** POST me/email-otp/verify { email, code } — verify + attach the email. */

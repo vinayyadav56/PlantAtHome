@@ -65,6 +65,10 @@ abstract class ServiceabilityTestCase extends CatalogTestCase
             $t->string('state_name')->nullable();
             $t->string('status', 16)->default('active');
             $t->boolean('is_serviceable')->default(true);
+            // Districts modelled as city rows (Delhi's, Bengaluru Urban/Rural).
+            // Never delivery destinations — the bridge refuses to write them and
+            // the backfill refuses to point a rule at one.
+            $t->boolean('is_subdivision')->default(false);
             $t->timestamps();
         });
 

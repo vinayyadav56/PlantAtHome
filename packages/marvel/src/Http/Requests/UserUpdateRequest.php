@@ -39,6 +39,13 @@ class UserUpdateRequest extends FormRequest
             'profile' => ['array'],
             'address' => ['array'],
             // 'shop' => ['array'],
+            // Ownership proof for admin-side changes of login identifiers:
+            // a code emailed to the NEW address / an SMS OTP sent to the NEW
+            // phone (enforced in UserController::update, admin branch).
+            'email_code'  => ['sometimes', 'nullable', 'string', 'max:10'],
+            'otp_id'      => ['sometimes', 'nullable', 'string', 'max:191'],
+            'otp_code'    => ['sometimes', 'nullable', 'string', 'max:10'],
+            'otp_channel' => ['sometimes', 'nullable', 'string', 'max:30'],
         ];
     }
 

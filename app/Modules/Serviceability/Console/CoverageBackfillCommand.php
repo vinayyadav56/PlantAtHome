@@ -80,8 +80,12 @@ class CoverageBackfillCommand extends Command
                 ->where('shop_id', $shopId)->whereNull('source')
                 ->get(['city', 'pincode', 'fulfillment_mode', 'eta_days']);
 
+            // CANONICAL keys on both sides of the invariant. The master models
+            // Delhi's districts as city rows, so a manual "New Delhi" is
+            // re-derived as "Delhi" — the same place under the name everyone
+            // ships to. Comparing raw names called that a lost city.
             $manualCities = $areas->pluck('city')
-                ->map(fn ($c) => mb_strtolower(trim((string) $c)))
+                ->map(fn ($c) => \Marvel\Services\AvailabilityService::canonicalCityKey((string) $c))
                 ->filter()->unique()->values();
 
             // ── plan the rules ────────────────────────────────────────────
@@ -106,17 +110,11 @@ class CoverageBackfillCommand extends Command
                 if ($cityName === '') {
                     continue;
                 }
-                $matches = DB::table('cities')
-                    ->whereRaw('LOWER(name) = ?', [mb_strtolower($cityName)])
-                    ->orderBy('id')->pluck('id');
-                if ($matches->isEmpty()) {
-                    $unresolved[] = "city '{$cityName}' not found in cities master";
+                $cityId = $this->resolveCityId($cityName, $shopId);
+                if ($cityId === null) {
+                    $unresolved[] = "city '{$cityName}' has no master row that owns postal codes";
                     continue;
                 }
-                if ($matches->count() > 1) {
-                    $this->warn("  shop {$shopId}: city '{$cityName}' is ambiguous (" . $matches->count() . ' matches) — using id ' . $matches->first());
-                }
-                $cityId = (int) $matches->first();
                 $key = VendorCoverageRule::targetKey(VendorCoverageRule::TYPE_CITY, $cityId);
                 $rules[$key] = $this->promiseOf($area) + ['rule_type' => VendorCoverageRule::TYPE_CITY, 'city_id' => $cityId];
             }
@@ -198,7 +196,7 @@ class CoverageBackfillCommand extends Command
             $derivedCities = DB::table('vendor_service_areas')
                 ->where('shop_id', $shopId)->where('source', 'coverage_sync')
                 ->pluck('city')
-                ->map(fn ($c) => mb_strtolower(trim((string) $c)))
+                ->map(fn ($c) => \Marvel\Services\AvailabilityService::canonicalCityKey((string) $c))
                 ->flip();
             $missing = $manualCities->reject(fn ($c) => isset($derivedCities[$c]))->values();
 
@@ -239,6 +237,60 @@ class CoverageBackfillCommand extends Command
         }
 
         return $fail > 0 && !$dryRun ? self::FAILURE : self::SUCCESS;
+    }
+
+    /**
+     * A manual city name → the city row a rule can actually project from.
+     *
+     * Three traps, all hit on real staging data with one row saying
+     * "New Delhi":
+     *
+     *  1. The name needs CANONICALISING first. The master models Delhi's
+     *     districts as city rows, so "New Delhi" matches a row that is not the
+     *     city anyone ships to.
+     *  2. `is_subdivision` rows exist precisely to model districts and are
+     *     never delivery destinations — the bridge already refuses to write
+     *     them, so a rule pointing at one is coverage that goes nowhere.
+     *  3. A row can own NO postal codes (only a third of master cities were
+     *     ever rolled up). "New Delhi" owns zero while "Delhi" owns all 98, so
+     *     matching by name alone produced a rule covering nothing at all —
+     *     which the superset invariant then correctly failed.
+     *
+     * So: search the canonical name and its alias spellings, skip
+     * subdivisions, and prefer the row that actually holds pincodes.
+     */
+    private function resolveCityId(string $cityName, int $shopId): ?int
+    {
+        $schema = DB::getSchemaBuilder();
+        $key = \Marvel\Services\AvailabilityService::canonicalCityKey($cityName);
+        $names = \Marvel\Services\AvailabilityService::canonicalCityVariants($key);
+        if (! in_array(mb_strtolower(trim($cityName)), $names, true)) {
+            $names[] = mb_strtolower(trim($cityName));
+        }
+
+        $pins = DB::table('postal_codes')->selectRaw('city_id, COUNT(*) as n')
+            ->whereNotNull('city_id')->groupBy('city_id');
+
+        $candidates = DB::table('cities')
+            ->leftJoinSub($pins, 'pc', 'pc.city_id', '=', 'cities.id')
+            ->whereIn(DB::raw('LOWER(cities.name)'), $names)
+            ->when(
+                $schema->hasColumn('cities', 'is_subdivision'),
+                fn ($q) => $q->orderBy('cities.is_subdivision'), // real cities first
+            )
+            ->orderByRaw('COALESCE(pc.n, 0) DESC')
+            ->orderBy('cities.id')
+            ->get(['cities.id', 'cities.name', DB::raw('COALESCE(pc.n, 0) as pincodes')]);
+
+        $usable = $candidates->firstWhere('pincodes', '>', 0);
+        if (! $usable) {
+            return null;
+        }
+        if (mb_strtolower($usable->name) !== mb_strtolower(trim($cityName))) {
+            $this->line("    shop {$shopId}: '{$cityName}' → '{$usable->name}' ({$usable->pincodes} pincode(s))");
+        }
+
+        return (int) $usable->id;
     }
 
     /**

@@ -202,4 +202,47 @@ class CoverageBackfillCommandTest extends ServiceabilityTestCase
         $this->assertNull($row->source, 'a failed shop keeps its manual rows');
         $this->assertTrue((bool) $row->is_active);
     }
+
+    public function test_a_subdivision_row_that_owns_no_pincodes_is_never_chosen(): void
+    {
+        // The real shape of the Delhi problem: the master models districts as
+        // city rows, so "New Delhi" matched a subdivision owning ZERO pincodes
+        // while the city everyone ships to owned all of them. The rule that
+        // produced covered nothing at all.
+        $subdivision = DB::table('cities')->insertGetId([
+            'name' => 'New Delhi', 'state_id' => $this->geo['haryana'], 'district_id' => null,
+            'status' => 'active', 'is_serviceable' => false, 'is_subdivision' => true,
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+        // The canonical city, which owns the pins (via the Gurgaon fixture).
+        DB::table('cities')->where('id', $this->geo['gurugram_c'])->update(['name' => 'Delhi']);
+
+        $this->manualArea(1, 'New Delhi');
+
+        $this->artisan('plantathome:coverage-backfill', ['--shop' => 1])
+            ->expectsOutputToContain('INVARIANT PASS')
+            ->assertExitCode(0);
+
+        $rule = DB::table('vendor_coverage_rules')->where('shop_id', 1)->first();
+        $this->assertSame($this->geo['gurugram_c'], (int) $rule->city_id, 'the pin-owning city, not the subdivision');
+        $this->assertNotSame($subdivision, (int) $rule->city_id);
+        $this->assertGreaterThan(0, DB::table('vendor_covered_pincodes')->where('shop_id', 1)->count());
+    }
+
+    public function test_a_city_that_owns_no_pincodes_is_reported_not_written(): void
+    {
+        // Every city in the fixture owns pins except one we add here.
+        DB::table('cities')->insert([
+            'name' => 'Hodal', 'state_id' => $this->geo['haryana'], 'district_id' => null,
+            'status' => 'active', 'is_serviceable' => true, 'created_at' => now(), 'updated_at' => now(),
+        ]);
+        $this->manualArea(1, 'Hodal');
+
+        $this->artisan('plantathome:coverage-backfill', ['--shop' => 1])
+            ->expectsOutputToContain('no master row that owns postal codes')
+            ->expectsOutputToContain('INVARIANT FAIL')
+            ->assertExitCode(1);
+
+        $this->assertSame(0, DB::table('vendor_coverage_rules')->where('shop_id', 1)->count());
+    }
 }
