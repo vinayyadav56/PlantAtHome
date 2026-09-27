@@ -21,6 +21,9 @@ class CheckoutVerifyRequest extends FormRequest
             'amount'           => 'required|numeric',
             'customer_id'      => 'nullable|exists:Marvel\Database\Models\User,id',
             'products'         => 'required|array',
+            // Admin preview overrides — applied only for SUPER_ADMIN callers.
+            'delivery_fee_override' => 'nullable|numeric|min:0',
+            'manual_discount'       => 'nullable|numeric|min:0',
             'billing_address'  => 'array',
             'shipping_address' => 'array',
         ];

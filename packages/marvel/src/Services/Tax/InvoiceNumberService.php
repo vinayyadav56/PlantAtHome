@@ -26,6 +26,10 @@ class InvoiceNumberService
     private const PAYABLE = [
         'payment-success',
         'payment-cash-on-delivery',
+        // The stored status for a CASH order is 'payment-cash' (PaymentStatus::CASH)
+        // — the bare 'cash' below never matched, so CASH orders were never
+        // invoice-numbered. Legacy spellings kept for old rows.
+        'payment-cash',
         'cash-on-delivery',
         'cash',
         'wallet',

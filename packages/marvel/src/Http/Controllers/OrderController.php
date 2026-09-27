@@ -221,7 +221,11 @@ class OrderController extends CoreController
             // Pre-check for the fast path; the unique index on orders.idempotency_key
             // is the authoritative guard when two requests race past it.
             $idempotencyKey = substr(trim((string) $request->header('Idempotency-Key', '')), 0, 80);
-            $customerId = $request->user()?->id;
+            // The order row is stored under the EFFECTIVE customer (an admin
+            // creating for a customer stores the customer's id) — the pre-check
+            // and the race re-lookup must key the same way or an admin retry
+            // misses both, hits the unique index, and 500s.
+            $customerId = \Marvel\Database\Repositories\OrderRepository::effectiveCustomerId($request);
             if ($idempotencyKey !== '') {
                 $existing = $this->repository->findByIdempotencyKey($idempotencyKey, $customerId);
                 if ($existing) {

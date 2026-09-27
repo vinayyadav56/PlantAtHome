@@ -81,6 +81,9 @@ class OrderRepository extends BaseRepository
         'paid_total',
         'total',
         'delivery_time',
+        // Requested delivery method (admin custom orders) — intent only;
+        // fulfillment lanes are still set at assignment.
+        'delivery_method',
         'payment_gateway',
         'altered_payment_gateway',
         'discount',
@@ -295,11 +298,7 @@ class OrderRepository extends BaseRepository
         }
 
         $useWalletPoints = isset($request->use_wallet_points) ? $request->use_wallet_points : false;
-        if ($request->user() && $request->user()->hasPermissionTo(Permission::SUPER_ADMIN) && isset($request['customer_id'])) {
-            $request['customer_id'] =  $request['customer_id'];
-        } else {
-            $request['customer_id'] = $request->user()->id ?? null;
-        }
+        $request['customer_id'] = self::effectiveCustomerId($request);
         try {
             $user = User::findOrFail($request['customer_id']);
             if ($user) {
@@ -307,6 +306,12 @@ class OrderRepository extends BaseRepository
             }
         } catch (Exception $e) {
             $user = null;
+        }
+        // Admin-created orders often omit the contact; it must fall back to the
+        // CUSTOMER's phone, never the caller's (the admin's phone was ending up
+        // on child orders and courier bookings).
+        if (empty($request['customer_contact']) && $user) {
+            $request['customer_contact'] = optional($user->profile)->contact;
         }
 
         if (!$user) {
@@ -327,7 +332,7 @@ class OrderRepository extends BaseRepository
         // trusted from the client). Products without vendor inventory are untouched.
         $custLatLng = $this->customerLatLngFromRequest($request);
         $custCity   = $this->customerCityFromRequest($request);
-        $request['products'] = (new PricingService())->repriceLines((array) $request['products'], $custLatLng, $custCity);
+        $request['products'] = (new PricingService())->repriceLines((array) $request['products'], $custLatLng, $custCity, catalogFallback: true);
         $request['amount'] = $this->calculateSubtotal($request['products'], $custCity);
 
         // Snapshot the expected vendor payout (lowest covering rate) for true-profit
@@ -380,6 +385,25 @@ class OrderRepository extends BaseRepository
             $request['discount'] = min((float) $this->calculateDiscount($coupon, $subtotal), $subtotal);
         }
 
+        // Admin manual discount — super-admin only (same trust rule as
+        // customer_id), joins the coupon discount under the same clamp, and is
+        // recorded as an explicit audited override, never a silent reprice.
+        // The audit stash is SERVER-OWNED: null it unconditionally first so a
+        // crafted request can't plant fake override rows in the finance audit.
+        $request['_pricing_override_audit'] = null;
+        $isSuperAdminCaller = (bool) ($request->user()?->hasPermissionTo(Permission::SUPER_ADMIN));
+        if (!$isSuperAdminCaller) {
+            // delivery_method is admin-recorded intent — never customer-set.
+            $request['delivery_method'] = null;
+        }
+        $calculatedDiscount = (float) $request['discount'];
+        if ($isSuperAdminCaller && $request->filled('manual_discount')) {
+            $request['discount'] = min(
+                $calculatedDiscount + max(0, (float) $request['manual_discount']),
+                (float) $request['amount']
+            );
+        }
+
         // Server-authoritative delivery_fee + sales_tax — NEVER trust the client's figures
         // (a crafted request could send sales_tax=0/delivery_fee=0 and be charged only the
         // product subtotal, evading tax + shipping). Recompute with the EXACT same logic the
@@ -403,6 +427,26 @@ class OrderRepository extends BaseRepository
             : ($optimizerFee !== null
                 ? $optimizerFee
                 : (float) $checkout->calculateShippingCharge($request, $request['amount']));
+
+        // Admin delivery-fee override — MUST land before calculateTax/gstBreakdown
+        // so GST (incl. follow_principal delivery tax) computes on the fee that is
+        // actually charged. Super-admin only; the original is kept for the audit row.
+        $calculatedDeliveryFee = (float) $request['delivery_fee'];
+        if ($isSuperAdminCaller && $request->filled('delivery_fee_override')) {
+            $request['delivery_fee'] = round(max(0, (float) $request['delivery_fee_override']), 2);
+        }
+        if (
+            (float) $request['delivery_fee'] !== $calculatedDeliveryFee
+            || (float) $request['discount'] !== $calculatedDiscount
+        ) {
+            $request['_pricing_override_audit'] = [
+                'calculated_delivery_fee' => $calculatedDeliveryFee,
+                'final_delivery_fee' => (float) $request['delivery_fee'],
+                'calculated_discount' => $calculatedDiscount,
+                'final_discount' => (float) $request['discount'],
+                'reason' => (string) ($request['override_reason'] ?? ''),
+            ];
+        }
         $request['sales_tax'] = (float) $checkout->calculateTax($request, $request['delivery_fee'], $request['amount']);
 
         // Floor at 0 — a payable total must never be negative (C3 defense-in-depth).
@@ -648,6 +692,7 @@ class OrderRepository extends BaseRepository
                     'place_of_supply', 'place_of_supply_code', 'is_inter_state', 'taxable_amount',
                     'cgst_amount', 'sgst_amount', 'igst_amount', 'total_tax', 'delivery_tax_treatment',
                     'delivery_taxable', 'delivery_tax_amount', 'seller_gstin', 'seller_state', 'seller_state_code', 'tax_calc_version',
+                    'delivery_method',
                 ] as $gstCol) {
                     if (array_key_exists($gstCol, $orderInput) && !\Illuminate\Support\Facades\Schema::hasColumn('orders', $gstCol)) {
                         unset($orderInput[$gstCol]);
@@ -657,6 +702,38 @@ class OrderRepository extends BaseRepository
                 unset($orderInput['customer_email']);
             }
             $order = $this->create($orderInput);
+            // Pricing override audit — one site so the normal and full-wallet
+            // paths both record it. Never fatal: the order stands regardless.
+            if (!empty($request['_pricing_override_audit']) && $order?->id) {
+                try {
+                    $audit = (array) $request['_pricing_override_audit'];
+                    \Marvel\Database\Models\Accounting\AccountingAuditLog::record(
+                        'order_pricing',
+                        (string) $order->id,
+                        'override',
+                        [
+                            'delivery_fee' => $audit['calculated_delivery_fee'] ?? null,
+                            'discount' => $audit['calculated_discount'] ?? null,
+                        ],
+                        [
+                            'delivery_fee' => $audit['final_delivery_fee'] ?? null,
+                            'discount' => $audit['final_discount'] ?? null,
+                        ],
+                        $audit['reason'] ?? null,
+                        'order:' . $order->id,
+                    );
+                    \Marvel\Database\Models\OrderEvent::record(
+                        (int) $order->id,
+                        'order.pricing_override',
+                        $audit,
+                        'Pricing overridden'
+                    );
+                } catch (\Throwable $e) {
+                    \Illuminate\Support\Facades\Log::warning('order pricing override audit failed', [
+                        'order_id' => $order->id, 'error' => $e->getMessage(),
+                    ]);
+                }
+            }
             $products = $this->processProducts($request['products'], $request['customer_id'], $order);
             // The GST line snapshot rides on each line for order_items, but the
             // order_product pivot has no tax columns — attach() writes EVERY key as
@@ -904,6 +981,22 @@ class OrderRepository extends BaseRepository
      * would otherwise be written by attach() as a pivot column and fail the INSERT on MySQL.
      * Column list is read once per process (deploys migrate in the background).
      */
+    /**
+     * The ONE rule for whose order this is: a SUPER_ADMIN caller may name a
+     * customer_id; everyone else orders as themselves (null = guest). Shared
+     * by storeOrder, the idempotency pre-check, and verify's wallet lookup so
+     * they can never disagree.
+     */
+    public static function effectiveCustomerId($request): ?int
+    {
+        if ($request->user()
+            && $request->user()->hasPermissionTo(Permission::SUPER_ADMIN)
+            && !empty($request['customer_id'])) {
+            return (int) $request['customer_id'];
+        }
+        return $request->user()->id ?? null;
+    }
+
     public static function pivotRows(array $products): array
     {
         static $cols = null;
@@ -1112,8 +1205,9 @@ class OrderRepository extends BaseRepository
                 'customer_id'      => $request->customer_id,
                 'shipping_address' => $request->shipping_address,
                 'billing_address'  => $request->billing_address,
-                'customer_contact' => $request->customer_contact
-                    ?: optional(optional($request->user())->profile)->contact,
+                // Already customer-backfilled in storeOrder — never the caller's
+                // (an admin's phone was landing on child orders + courier bookings).
+                'customer_contact' => $request->customer_contact,
                 'customer_name'    => $request->customer_name,
                 'delivery_time'    => $request->delivery_time,
                 'delivery_fee'     => $delivery,

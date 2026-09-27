@@ -28,6 +28,8 @@ class UserRepository extends BaseRepository
     protected $fieldSearchable = [
         'name' => 'like',
         'email' => 'like',
+        // Admin customer search by phone (customers/list + users).
+        'profile.contact' => 'like',
     ];
 
     /**

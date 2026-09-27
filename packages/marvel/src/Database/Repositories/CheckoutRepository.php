@@ -21,9 +21,14 @@ class CheckoutRepository
 
     public function verify($request)
     {
-        if ($request['customer_id']) {
+        // Whose wallet does the preview show? Same trust rule as order
+        // creation: only a SUPER_ADMIN may name another customer. Anyone else
+        // (including anonymous callers) sees only their own wallet — an
+        // unauthenticated customer_id used to leak any user's balance.
+        $effectiveCustomerId = \Marvel\Database\Repositories\OrderRepository::effectiveCustomerId($request);
+        if ($effectiveCustomerId) {
             try {
-                $user = User::findOrFail($request->customer_id);
+                $user = User::findOrFail($effectiveCustomerId);
             } catch (\Throwable $th) {
                 throw new ModelNotFoundException(NOT_FOUND);
             }
@@ -151,7 +156,7 @@ class CheckoutRepository
         // matches what the order will charge (products without vendor inventory are
         // untouched). $shipCity threads the city into the margin resolution.
         $request['products'] = (new \Marvel\Services\PricingService())
-            ->repriceLines((array) $request['products'], $this->customerLatLng($request), $shipCity ? (string) $shipCity : null);
+            ->repriceLines((array) $request['products'], $this->customerLatLng($request), $shipCity ? (string) $shipCity : null, catalogFallback: true);
         $request['amount'] = collect($request['products'])->sum('subtotal');
 
         $amount = $this->getOrderAmount($request, $unavailable_products);
@@ -162,6 +167,22 @@ class CheckoutRepository
         $optimizerFee = $this->optimizerFlatFee((float) $amount);
         if ($optimizerFee !== null) {
             $shipping_charge = $optimizerFee;
+        }
+        // Admin overrides in the PREVIEW — same super-admin gate as order
+        // creation, applied before tax so the preview equals the order.
+        $appliedOverrides = [];
+        $isSuperAdminCaller = (bool) ($request->user()?->hasPermissionTo(\Marvel\Enums\Permission::SUPER_ADMIN));
+        if ($isSuperAdminCaller && $request->filled('delivery_fee_override')) {
+            $shipping_charge = round(max(0, (float) $request['delivery_fee_override']), 2);
+            $appliedOverrides['delivery_fee'] = $shipping_charge;
+        }
+        $manualDiscount = 0.0;
+        if ($isSuperAdminCaller && $request->filled('manual_discount')) {
+            // Clamp to the cart amount — storeOrder clamps the same way, and
+            // the preview must equal the order (an over-large discount would
+            // otherwise show ₹0 while the order still charges fee+tax).
+            $manualDiscount = min(max(0, (float) $request['manual_discount']), (float) $amount);
+            $appliedOverrides['manual_discount'] = $manualDiscount;
         }
         $tax = $this->calculateTax($request, $shipping_charge, $amount);
         $total = $amount + $tax + $shipping_charge;
@@ -211,7 +232,11 @@ class CheckoutRepository
             'tax_calc_version'       => $gst['tax_calc_version'] ?? null,
             // What the customer pays. The server has always computed this and
             // thrown it away, leaving each client to re-add the three parts.
-            'grand_total'            => round((float) $total, 2),
+            // manual_discount only ever shifts this when a super-admin sent it
+            // (additive-safe for every storefront caller).
+            'grand_total'            => round(max(0, (float) $total - $manualDiscount), 2),
+            'applied_overrides'      => $appliedOverrides ?: null,
+            'delivery_methods'       => $this->deliveryMethods($request, (array) $unavailable_products),
             'tax_unconfigured_products' => $tax_unconfigured_products,
             // Delivery Optimizer (additive, flag-gated): FIRM consolidated shipments at
             // checkout. Metadata only for now — `shipping_charge` above is unchanged until
@@ -299,6 +324,95 @@ class CheckoutRepository
     }
 
     /** Shipping pincode from the verify payload (zip | pincode | postal_code, possibly nested under address). */
+    /**
+     * Delivery methods available for THIS cart+address, derived from data that
+     * already exists — no hardcoded state names. Local = cart fully available
+     * with a known ship city; Standard Interstate = any supplying vendor's
+     * origin state differs from the destination state (origin resolution:
+     * shop address state → default pickup location state → the business
+     * registration state). Recorded intent only — fulfillment lanes are still
+     * chosen at assignment. Returns null (key omitted) when underivable.
+     */
+    public function deliveryMethods($request, array $unavailableProducts): ?array
+    {
+        try {
+            $zip = $this->shippingZip($request);
+            $ids = collect($request['products'] ?? [])->pluck('product_id')
+                ->filter()->map(fn ($i) => (int) $i)->unique()->values()->all();
+            if (!$zip || strlen($zip) !== 6 || empty($ids)) {
+                return null;
+            }
+            $dest = \Illuminate\Support\Facades\DB::table('postal_codes')
+                ->leftJoin('states', 'states.id', '=', 'postal_codes.state_id')
+                ->leftJoin('cities', 'cities.id', '=', 'postal_codes.city_id')
+                ->leftJoin('districts', 'districts.id', '=', 'postal_codes.district_id')
+                ->where('postal_codes.pincode', $zip)
+                ->first(['states.name as state_name', 'cities.name as city_name', 'districts.name as district_name']);
+            if (!$dest || empty($dest->state_name)) {
+                return null;
+            }
+            $norm = fn ($v) => mb_strtolower(trim((string) $v));
+            $destState = $norm($dest->state_name);
+
+            // Origin states of every supplying vendor for these products.
+            $shopIds = [];
+            foreach ($this->supplyingShops($ids) as $perProduct) {
+                foreach ((array) $perProduct as $sid) {
+                    $shopIds[(int) $sid] = true;
+                }
+            }
+            $originStates = [];
+            if ($shopIds) {
+                foreach (\Marvel\Database\Models\Shop::whereIn('id', array_keys($shopIds))->get(['id', 'address']) as $shop) {
+                    $state = $norm(data_get($shop->address, 'state'));
+                    if ($state === '') {
+                        $pickup = \Illuminate\Support\Facades\DB::table('vendor_pickup_locations')
+                            ->where('shop_id', $shop->id)
+                            ->orderByDesc('is_default')
+                            ->value('state');
+                        $state = $norm($pickup);
+                    }
+                    if ($state !== '') {
+                        $originStates[$state] = true;
+                    }
+                }
+            }
+            if (!$originStates) {
+                // Single-origin business fallback: the GST registration state.
+                $reg = $norm(app(\Marvel\Services\Tax\BusinessTaxConfig::class)->registrationState());
+                if ($reg !== '') {
+                    $originStates[$reg] = true;
+                }
+            }
+            if (!$originStates) {
+                return null;
+            }
+
+            $anyInterstate = (bool) array_filter(array_keys($originStates), fn ($s) => $s !== $destState);
+            $shipCityKnown = !empty($dest->city_name) || !empty($dest->district_name);
+            $localAvailable = empty($unavailableProducts) && $shipCityKnown;
+
+            return [
+                [
+                    'slug' => 'local',
+                    'label' => 'Local Delivery',
+                    'available' => $localAvailable,
+                    'eta_text' => $localAvailable ? 'Delivered locally' : null,
+                    'reason' => $localAvailable ? null : 'no_local_supply',
+                ],
+                [
+                    'slug' => 'standard_interstate',
+                    'label' => 'Standard Interstate',
+                    'available' => $anyInterstate || !$localAvailable,
+                    'eta_text' => 'Usually 3–7 days',
+                    'reason' => ($anyInterstate || !$localAvailable) ? null : 'same_state_origin',
+                ],
+            ];
+        } catch (\Throwable $e) {
+            return null; // additive key — never fail verify over it
+        }
+    }
+
     public function shippingZip($request): ?string
     {
         $ship = is_array($request['shipping_address'] ?? null) ? $request['shipping_address'] : [];

@@ -118,6 +118,8 @@ class AccountingReconciliationController extends CoreController
         'product_tax',
         'pricing_margin',
         'variant_delivery_charge',
+        // Admin custom-order pricing overrides (delivery fee / manual discount).
+        'order_pricing',
         'tax_settings',
         'pricing_settings',
     ];

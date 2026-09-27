@@ -51,6 +51,13 @@ class OrderCreateRequest extends FormRequest
             'billing_address'         => 'array',
             'note'                    => 'nullable|string',
             'is_non_serviceable_order' => 'nullable|boolean',
+            // Admin custom-order fields — honored ONLY for SUPER_ADMIN callers
+            // (OrderRepository mirrors the customer_id trust rule); silently
+            // ignored for everyone else.
+            'delivery_fee_override'   => 'nullable|numeric|min:0',
+            'manual_discount'         => 'nullable|numeric|min:0',
+            'override_reason'         => 'nullable|string|max:500|required_with:delivery_fee_override,manual_discount',
+            'delivery_method'         => ['nullable', 'string', 'max:40', 'regex:/^[a-z0-9_]+$/'],
             'detected_city'           => 'nullable|string',
             'serviceable_city'        => 'nullable|string',
         ];

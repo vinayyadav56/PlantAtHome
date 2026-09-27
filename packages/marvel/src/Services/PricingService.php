@@ -166,7 +166,7 @@ class PricingService
      * exactly as the client sent them. Tamper-proof — the price is computed here,
      * never trusted from the client — and consistent with the displayed location price.
      */
-    public function repriceLines(array $products, ?array $latLng = null, ?string $city = null): array
+    public function repriceLines(array $products, ?array $latLng = null, ?string $city = null, bool $catalogFallback = false): array
     {
         foreach ($products as &$line) {
             $pid = $line['product_id'] ?? null;
@@ -177,17 +177,39 @@ class PricingService
             if (!$product) {
                 continue;
             }
+            $qty = max((int) ($line['order_quantity'] ?? 1), 1);
             // A bundle carries a stored offer price (BundlePricingService) and has
-            // no vendor cost sheet — never reprice it from vendor rates.
+            // no vendor cost sheet — never reprice it from vendor rates. Its
+            // catalog price is the product row's own price.
             if ($product->product_type === \Marvel\Enums\ProductType::BUNDLE) {
+                if ($catalogFallback) {
+                    $unit = (float) ($product->sale_price ?: $product->price);
+                    $line['unit_price'] = $unit;
+                    $line['subtotal'] = round($unit * $qty, 2);
+                }
                 continue;
             }
             $vo = $line['variation_option_id'] ?? null;
             $r = $this->sellingPrice($product, $vo !== null ? (int) $vo : null, $latLng, $city);
             if (!empty($r['has_vendor_cost']) && !empty($r['available'])) {
-                $qty = (int) ($line['order_quantity'] ?? 1);
                 $line['unit_price'] = $r['price'];
-                $line['subtotal']   = round($r['price'] * max($qty, 1), 2);
+                $line['subtotal']   = round($r['price'] * $qty, 2);
+            } elseif ($catalogFallback) {
+                // Checkout paths must never carry CLIENT prices into tax/split
+                // math: a line without vendor pricing gets the same catalog
+                // resolution calculateSubtotal charges (variation sale→price,
+                // else product sale→price). CartController keeps the default
+                // (false) — its unit_price ?? null contract is unchanged.
+                $unit = null;
+                if (!empty($vo)) {
+                    $v = \Marvel\Database\Models\Variation::find((int) $vo);
+                    $unit = $v ? (float) ($v->sale_price ?: $v->price) : null;
+                }
+                if ($unit === null) {
+                    $unit = (float) ($product->sale_price ?: $product->price);
+                }
+                $line['unit_price'] = $unit;
+                $line['subtotal'] = round($unit * $qty, 2);
             }
         }
         return $products;
