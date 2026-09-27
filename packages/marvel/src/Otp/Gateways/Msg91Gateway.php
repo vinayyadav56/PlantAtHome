@@ -75,7 +75,9 @@ class Msg91Gateway implements OtpInterface
                     'template_id' => $otpTemplateId,
                     'mobile' => $mobile,
                     'sender' => $this->sender,
-                    'otp_expiry' => 5,
+                    // Minutes. The validity WORDING the customer reads lives in
+                    // MSG91's template text — keep the two in agreement.
+                    'otp_expiry' => (int) config('services.msg91.otp_expiry', 5),
                 ]));
             $data = $resp->json();
             if ($resp->ok() && (($data['type'] ?? '') === 'success')) {

@@ -121,6 +121,20 @@ class EmailAdminController extends CoreController
             'subject' => $snap->subject, 'html_body' => $snap->html_body,
             'text_body' => $snap->text_body, 'variables' => $snap->variables,
         ];
+        // An old snapshot can predate the current MSG91 flow's slot layout —
+        // restoring it unchecked would swap values into the wrong {#var#}
+        // slots while keeping the same flow id. Same rule as save.
+        if (($row->channel ?? 'email') === 'sms') {
+            $mismatch = \Marvel\Services\SmsTemplateService::validateBodyAgainstDeclaration(
+                (string) $snap->text_body,
+                json_decode((string) $snap->variables, true) ?: [],
+            );
+            if ($mismatch !== null) {
+                return response()->json([
+                    'message' => "Version {$version} can't be restored — DLT slot alignment: {$mismatch}",
+                ], 422);
+            }
+        }
         DB::table('email_templates')->where('id', $row->id)->update($data + [
             'version' => $next, 'updated_by' => $request->user()?->id, 'updated_at' => now(),
         ]);
@@ -343,6 +357,16 @@ class EmailAdminController extends CoreController
         }
         if ($offenders !== []) {
             abort(response()->json(['message' => 'DLT rules: no URLs or {#var#} allowed (' . implode('; ', $offenders) . ').'], 422));
+        }
+
+        // Slot alignment: the declared order is what maps values onto Airtel's
+        // positional {#var#} — a drifted body would deliver swapped values.
+        $mismatch = \Marvel\Services\SmsTemplateService::validateBodyAgainstDeclaration(
+            (string) $data['text_body'],
+            $data['variables'] ?? [],
+        );
+        if ($mismatch !== null) {
+            abort(response()->json(['message' => "DLT slot alignment: {$mismatch}"], 422));
         }
 
         $data['variables'] = json_encode(array_values($data['variables'] ?? []));

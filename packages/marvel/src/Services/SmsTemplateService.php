@@ -48,6 +48,14 @@ class SmsTemplateService
 
         $declared = json_decode((string) $row->variables, true) ?: [];
         $body = (string) $row->text_body;
+        // The declared ORDER is the only thing mapping values onto Airtel's
+        // positional {#var#} slots (via MSG91's ##varN##). A body whose
+        // placeholder order drifted from the declaration would deliver values
+        // in the WRONG slots — refuse and let the legacy fallback carry it.
+        if ($mismatch = self::validateBodyAgainstDeclaration($body, $declared)) {
+            Log::warning('sms.template.slot_mismatch', ['code' => $code, 'reason' => $mismatch]);
+            return false;
+        }
         $ordered = [];
         foreach (array_values($declared) as $i => $def) {
             $name = $def['name'] ?? null;
@@ -78,6 +86,72 @@ class SmsTemplateService
             return false;
         }
         return true;
+    }
+
+    /**
+     * Every {{name}} occurrence in body order, REPEATS INCLUDED — the extract
+     * helpers dedupe, which is exactly what hides slot mismatches.
+     */
+    public static function placeholdersInOrder(string $body): array
+    {
+        preg_match_all('/\{\{\s*([A-Za-z0-9_]+)\s*\}\}/', $body, $m);
+        return $m[1] ?? [];
+    }
+
+    /**
+     * The alignment rule in one place: the body's placeholder sequence must
+     * EQUAL the declared variable-name sequence. That is what guarantees
+     * value N lands in Airtel's N-th {#var#} (via MSG91's ##varN##).
+     * Returns a human-readable reason, or null when aligned.
+     */
+    public static function validateBodyAgainstDeclaration(string $body, array $declared): ?string
+    {
+        $names = [];
+        foreach (array_values($declared) as $def) {
+            $names[] = (string) ($def['name'] ?? '');
+        }
+        if (in_array('', $names, true)) {
+            return 'A declared variable has no name.';
+        }
+        if (count($names) !== count(array_unique($names))) {
+            return 'Duplicate variable names in the declaration.';
+        }
+        $inBody = self::placeholdersInOrder($body);
+        if (count($inBody) !== count(array_unique($inBody))) {
+            return 'A placeholder repeats in the body — Airtel DLT slots are positional, each {#var#} needs its own variable.';
+        }
+        $undeclared = array_diff($inBody, $names);
+        if ($undeclared) {
+            return 'Body uses undeclared variable(s): ' . implode(', ', array_unique($undeclared)) . '.';
+        }
+        $unused = array_diff($names, $inBody);
+        if ($unused) {
+            return 'Declared variable(s) never appear in the body: ' . implode(', ', $unused) . ' — they would shift every later {#var#} slot.';
+        }
+        if ($inBody !== $names) {
+            return 'Variable ORDER differs between the body and the declaration — values would land in the wrong {#var#} slots.';
+        }
+        return null;
+    }
+
+    /** The body as Airtel DLT sees it: every {{name}} → {#var#}. */
+    public static function toDltFormat(string $body): string
+    {
+        return preg_replace('/\{\{\s*[A-Za-z0-9_]+\s*\}\}/', '{#var#}', $body);
+    }
+
+    /** The body as the MSG91 flow needs it: i-th placeholder → ##var{i}##. */
+    public static function toFlowFormat(string $body): string
+    {
+        $i = 0;
+        return preg_replace_callback(
+            '/\{\{\s*[A-Za-z0-9_]+\s*\}\}/',
+            function () use (&$i) {
+                $i++;
+                return "##var{$i}##";
+            },
+            $body,
+        );
     }
 
     /** MSG91 Flow/Template id of an ACTIVE registry row (OTP path). */
