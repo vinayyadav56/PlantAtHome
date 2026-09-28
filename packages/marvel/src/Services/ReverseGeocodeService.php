@@ -5,6 +5,7 @@ namespace Marvel\Services;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\City;
 use Marvel\Services\LocationNormalizer;
 
@@ -28,11 +29,26 @@ class ReverseGeocodeService
         $cacheKey = sprintf('geo_rev:%.4f:%.4f', $lat, $lng);
 
         return Cache::remember($cacheKey, now()->addHour(), function () use ($lat, $lng) {
-            $out = ['city' => null, 'district' => null, 'state' => null, 'pincode' => null];
+            // Must declare EVERY key the return shape reads: extractComponents() is merged in only
+            // when a key is configured, so on the keyless path these would otherwise be undefined.
+            $out = [
+                'city' => null, 'district' => null, 'state' => null, 'pincode' => null,
+                'country' => null, 'country_code' => null, 'area' => null,
+            ];
             $formatted = null; // Google's full street-level formatted_address (best result).
 
-            // config first so a key managed in Settings → Integrations overlays the env var.
-            $key = config('location.google_maps_key') ?: env('GOOGLE_MAP_API_KEY');
+            // config/location.php is the ONE resolution point — it reads both env spellings and
+            // Settings → Integrations overlays it at boot. The `?: env('GOOGLE_MAP_API_KEY')` that
+            // used to sit here was dead code in production: config:cache makes env() return null,
+            // so this silently skipped Google and fell through to the 50km guess below.
+            $key = config('location.google_maps_key');
+            if (!$key) {
+                // Without this the degradation is invisible: the response still looks like a real
+                // answer (city + state), just with pincode and formatted_address permanently null.
+                Log::warning('geo.reverse.no_server_key', [
+                    'hint' => 'Set Settings → Integrations → Google Maps → Server API Key. Falling back to nearest-city.',
+                ]);
+            }
             if ($key) {
                 try {
                     $json = Http::timeout(8)->get('https://maps.googleapis.com/maps/api/geocode/json', [
@@ -94,14 +110,38 @@ class ReverseGeocodeService
                 'normalized_city'   => $normalized,
                 'city_id'           => $canon?->id,
                 'is_serviceable'    => $canon ? (bool) $canon->acceptsOrders() : false,
+
+                // Added for the address form, which previously had to leave Country and Area for
+                // the shopper to type. Both are additive — existing consumers keep their keys.
+                'country'           => $out['country'],
+                'country_code'      => $out['country_code'],
+                'area'              => $out['area'],
+
+                // Lets a caller tell "no server key, this is a nearest-city guess" from "Google
+                // answered and had nothing". Without it the two are indistinguishable, which is
+                // precisely how a missing key went unnoticed in production.
+                'source'            => $key ? 'google' : 'nearest_city',
             ];
         });
     }
 
-    /** Pull city/district/state/pincode out of Google reverse-geocode results (best result wins per field). */
+    /**
+     * Area/locality candidates in descending specificity. Google does NOT guarantee component
+     * order within a result, so collect every candidate and choose by this priority afterwards
+     * rather than letting whichever appeared first win — `route` beating `sublocality_level_1`
+     * would put a street name in the Area field.
+     */
+    private const AREA_TYPES = ['sublocality_level_1', 'sublocality', 'neighborhood', 'route', 'premise'];
+
+    /** Pull country/city/district/state/pincode/area out of Google results (best result wins per field). */
     private function extractComponents(array $results): array
     {
-        $out = ['city' => null, 'district' => null, 'state' => null, 'pincode' => null];
+        $out = [
+            'city' => null, 'district' => null, 'state' => null, 'pincode' => null,
+            'country' => null, 'country_code' => null, 'area' => null,
+        ];
+        $areaByType = [];
+
         foreach ($results as $result) {
             foreach ((array) ($result['address_components'] ?? []) as $c) {
                 $types = (array) ($c['types'] ?? []);
@@ -121,10 +161,31 @@ class ReverseGeocodeService
                 if (!$out['pincode'] && in_array('postal_code', $types)) {
                     $out['pincode'] = preg_replace('/\D/', '', $name);
                 }
+                if (!$out['country'] && in_array('country', $types)) {
+                    $out['country'] = $name;
+                    $out['country_code'] = (string) ($c['short_name'] ?? '') ?: null;
+                }
+                foreach (self::AREA_TYPES as $t) {
+                    if (!isset($areaByType[$t]) && in_array($t, $types)) {
+                        $areaByType[$t] = $name;
+                    }
+                }
             }
             if ($out['city'] && $out['state'] && $out['pincode']) {
                 break;
             }
+        }
+
+        foreach (self::AREA_TYPES as $t) {
+            if (!empty($areaByType[$t])) {
+                $out['area'] = $areaByType[$t];
+                break;
+            }
+        }
+        // The area must not simply restate the city ("Bengaluru, Bengaluru") — that reads as a
+        // filled field to the shopper while carrying no extra information.
+        if ($out['area'] && $out['city'] && mb_strtolower($out['area']) === mb_strtolower($out['city'])) {
+            $out['area'] = null;
         }
         // Urban India often labels the city at admin level 3/2 while `locality` is a
         // neighbourhood — surface the district as the city fallback.

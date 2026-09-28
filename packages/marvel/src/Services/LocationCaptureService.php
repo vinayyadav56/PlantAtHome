@@ -269,7 +269,9 @@ class LocationCaptureService
             'place_id'          => null,
         ];
 
-        $key = config('location.google_maps_key') ?: env('GOOGLE_MAP_API_KEY');
+        // One resolution point: config/location.php (both env spellings + the Integrations
+        // overlay). The inline env() fallback that used to be here is null under config:cache.
+        $key = config('location.google_maps_key');
         if ($key) {
             try {
                 $json = Http::timeout(8)->get('https://maps.googleapis.com/maps/api/geocode/json', [

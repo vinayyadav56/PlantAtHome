@@ -63,7 +63,8 @@ class LegacyBridge
                 default             => '',
             },
             'google_maps' => match ($field) {
-                'server_key' => config('location.google_maps_key') ?? env('GOOGLE_MAPS_SERVER_KEY'),
+                // config/location.php already reads GOOGLE_MAPS_SERVER_KEY (and GOOGLE_MAP_API_KEY).
+                'server_key' => config('location.google_maps_key'),
                 default      => '',
             },
             'openai' => match ($field) {

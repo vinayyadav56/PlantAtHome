@@ -26,6 +26,22 @@ return [
     // Admin UI shows warnings either way.
     'require_verified_for_dispatch' => (bool) env('LOCATION_REQUIRE_VERIFIED_DISPATCH', false),
 
-    // Google reverse-geocoding key (reuses the existing server key).
-    'google_maps_key' => env('GOOGLE_MAPS_SERVER_KEY'),
+    /*
+     * Google server key for reverse geocoding and distance.
+     *
+     * THIS IS THE ONE RESOLUTION POINT. Settings → Integrations → Google Maps
+     * stores its `server_key` credential against this exact config key
+     * (ProviderRegistry), and ConfigOverlay writes it in at boot — so the admin
+     * panel overlays whatever is here without a deploy.
+     *
+     * Both env spellings are honoured because both were already in use: this
+     * file read GOOGLE_MAPS_SERVER_KEY while ReverseGeocodeService,
+     * GeoMatchService and LocationCaptureService each fell back to
+     * `env('GOOGLE_MAP_API_KEY')` INLINE. Those inline fallbacks could never
+     * fire — production runs config:cache, under which env() returns null — so
+     * a key set under the second name was silently ignored and every pin fell
+     * through to a 50km nearest-city guess that returned no pincode at all.
+     * env() belongs in a config file, and only here.
+     */
+    'google_maps_key' => env('GOOGLE_MAPS_SERVER_KEY') ?: env('GOOGLE_MAP_API_KEY'),
 ];
