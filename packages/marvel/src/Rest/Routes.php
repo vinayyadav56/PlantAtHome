@@ -102,6 +102,7 @@ use Marvel\Http\Controllers\ServiceAvailabilityController;
 use Marvel\Http\Controllers\BundleController;
 use Marvel\Http\Controllers\LocationPriceController;
 use Marvel\Http\Controllers\GeoController;
+use Marvel\Http\Controllers\ClientErrorController;
 use Marvel\Http\Controllers\OrderAssignmentController;
 use Marvel\Http\Controllers\DeliveryPartnerWithdrawController;
 use Marvel\Http\Controllers\DeliveryPartnerEarningsController;
@@ -124,6 +125,9 @@ Route::get('/email/verify/{id}/{hash}', [UserController::class, 'verifyEmail'])-
 // Auth/OTP/password endpoints carry TIGHT per-route throttles (on top of the group-wide
 // throttle:api) to blunt credential stuffing, OTP/SMS bombing, brute force and email flooding.
 Route::post('/register', [UserController::class, 'register'])->middleware('throttle:5,1');
+// Browser-side crash reports from the storefront's error boundaries. Public by necessity
+// (the shopper may be logged out, and the auth layer may be what broke), throttled per IP.
+Route::post('/client-errors', [ClientErrorController::class, 'store'])->middleware('throttle:20,1');
 Route::post('/token', [UserController::class, 'token'])->middleware('throttle:10,1');
 Route::post('/logout', [UserController::class, 'logout'])->middleware('throttle:10,1');
 // Revokes every token for the caller — the remedy for a stolen session. `logout` above only
