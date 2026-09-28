@@ -452,13 +452,31 @@ class IntegrationController extends CoreController
         // WhatsApp posts to OUR api directly (not through the shipping service), and its panel
         // answers a different question — the callback URL + verify token to paste into Meta.
         if ($def->slug === 'whatsapp') {
-            $base = rtrim((string) config('app.url'), '/');
             return [
-                'url'         => $base === '' ? null : "{$base}/api/webhooks/whatsapp",
+                // url() resolves against the host actually serving this request, so it is right on
+                // staging and production without APP_URL having to be correct on either.
+                'url'         => url('/api/webhooks/whatsapp'),
                 'secret_set'  => $this->integrations->credentialsSet('whatsapp')['webhook_verify_token'] ?? false,
                 'auth_header' => 'X-Hub-Signature-256',
                 'token_field' => 'webhook_verify_token',
                 'note' => 'Optional. Register in Meta → your app → WhatsApp → Configuration, subscribing to "messages". Without it OTP and order updates still send; you simply do not receive delivery receipts or customer replies.',
+            ];
+        }
+
+        // Razorpay posts to OUR api too. Without this block the form asked for a "Webhook Secret"
+        // while never saying which URL that secret signs — so the endpoint can sit live and
+        // correctly configured with nothing ever calling it, and a captured payment then relies
+        // entirely on the browser surviving long enough to confirm it.
+        if ($def->slug === 'razorpay') {
+            return [
+                'url'         => url('/api/webhooks/razorpay'),
+                'secret_set'  => $this->integrations->credentialsSet('razorpay')['webhook_secret'] ?? false,
+                'auth_header' => 'X-Razorpay-Signature',
+                'token_field' => 'webhook_secret',
+                // Razorpay keeps SEPARATE webhook config per mode, and the secret is whatever you
+                // typed when creating it there — it is not derived from the API key, so a live-mode
+                // webhook registered against the test-mode secret fails signature checks silently.
+                'note' => 'Register in Razorpay → Account & Settings → Webhooks, in the SAME mode as your API key (live keys need a LIVE-mode webhook), subscribing to payment.captured and payment.failed. The secret is the one you type there — paste the identical value above. Without it an order still confirms from the browser and the 10-minute reconcile sweeps up the rest; the webhook is what covers a customer who closes the tab mid-payment.',
             ];
         }
 
@@ -475,8 +493,13 @@ class IntegrationController extends CoreController
 
         $base = rtrim((string) $this->integrations->config('shipping_service', 'url', ''), '/');
 
+        // Shiprocket REFUSES to save any callback URL containing "shiprocket", "kartrocket", "sr"
+        // or "kr" ("address not allowed"), so the service exposes a neutral alias for it. Telling
+        // an operator to register /webhooks/shiprocket hands them a URL the partner rejects.
+        $path = $def->slug === 'shiprocket' ? 'parcel-updates' : $def->slug;
+
         return [
-            'url'        => $base === '' ? null : "{$base}/webhooks/{$def->slug}",
+            'url'        => $base === '' ? null : "{$base}/webhooks/{$path}",
             'secret_set' => $this->integrations->credentialsSet($def->slug)[$tokenField] ?? false,
             // The header name the partner must send the shared token under.
             'auth_header' => 'X-Api-Key',
