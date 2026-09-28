@@ -173,4 +173,43 @@ final class GeoReverseTest extends TestCase
         $res->assertOk();
         $this->assertNull($res->json('area'));
     }
+
+    /**
+     * A key that is PRESENT but rejected still falls through to the nearest-city guess, and must
+     * say so. Stamping the source from "was a key configured?" reported `google` while handing
+     * back a 50km guess — which is exactly the failure a restricted key produces, and exactly the
+     * thing `source` exists to make visible.
+     */
+    public function test_a_rejected_key_is_reported_as_a_guess_not_as_google(): void
+    {
+        config(['location.google_maps_key' => 'restricted-key-that-google-refuses']);
+        \Illuminate\Support\Facades\Http::fake([
+            'maps.googleapis.com/*' => \Illuminate\Support\Facades\Http::response([
+                'status'        => 'REQUEST_DENIED',
+                'error_message' => 'This IP is not authorized to use this API key.',
+                'results'       => [],   // byte-identical to a genuine ZERO_RESULTS
+            ], 200),
+        ]);
+
+        $res = $this->getJson('/api/geo/reverse?lat=28.46&lng=77.03');
+        $res->assertOk();
+
+        $this->assertSame('nearest_city', $res->json('source'));
+        $this->assertSame('Gurugram', $res->json('city'), 'must still fail OPEN, never block checkout');
+        $this->assertNull($res->json('pincode'));
+    }
+
+    /** A Google timeout must not escape, and must not masquerade as a Google answer either. */
+    public function test_a_google_timeout_fails_open_and_is_labelled_a_guess(): void
+    {
+        config(['location.google_maps_key' => 'test-key']);
+        \Illuminate\Support\Facades\Http::fake(function () {
+            throw new \Illuminate\Http\Client\ConnectionException('cURL error 28: Operation timed out');
+        });
+
+        $res = $this->getJson('/api/geo/reverse?lat=28.46&lng=77.03');
+        $res->assertOk();
+        $this->assertSame('nearest_city', $res->json('source'));
+        $this->assertSame('Gurugram', $res->json('city'));
+    }
 }

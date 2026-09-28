@@ -49,17 +49,35 @@ class ReverseGeocodeService
                     'hint' => 'Set Settings → Integrations → Google Maps → Server API Key. Falling back to nearest-city.',
                 ]);
             }
+            $source = $key ? 'google' : 'nearest_city';
+
             if ($key) {
                 try {
-                    $json = Http::timeout(8)->get('https://maps.googleapis.com/maps/api/geocode/json', [
+                    // 8s was a checkout-path hazard: a Google incident became an 8s "Locating..."
+                    // hang on every pin drag. Geocode answers well inside a second in practice.
+                    $json = Http::timeout(4)->get('https://maps.googleapis.com/maps/api/geocode/json', [
                         'latlng' => $lat . ',' . $lng,
                         'key'    => $key,
                     ])->json();
+
+                    // A rejected or throttled key returns `results: []` - byte-identical to a
+                    // genuine ZERO_RESULTS. Without reading `status` the two are indistinguishable
+                    // and both fall silently through to the nearest-city guess, which is precisely
+                    // how a key problem hides. This is the line that makes a bad key visible.
+                    $status = (string) ($json['status'] ?? '');
+                    if ($status !== '' && $status !== 'OK' && $status !== 'ZERO_RESULTS') {
+                        Log::warning('geo.reverse.google_rejected', [
+                            'status' => $status,
+                            'error'  => $json['error_message'] ?? null,
+                        ]);
+                    }
+
                     $results = (array) ($json['results'] ?? []);
                     $out = array_merge($out, $this->extractComponents($results));
                     $formatted = $results[0]['formatted_address'] ?? null;
                 } catch (\Throwable $e) {
                     // fail-open to the fallbacks below
+                    Log::warning('geo.reverse.google_failed', ['error' => $e->getMessage()]);
                 }
             }
 
@@ -73,6 +91,10 @@ class ReverseGeocodeService
             }
 
             if (empty($out['city'])) {
+                // Reached whenever Google produced no city - which includes a key that is present
+                // but rejected, throttled or timing out, NOT only the keyless case. Stamping the
+                // source from `$key` alone would report 'google' while handing back a 50km guess.
+                $source = 'nearest_city';
                 $nearest = $this->nearestCity($lat, $lng, 50.0);
                 if ($nearest) {
                     $out['city'] = $nearest->name;
@@ -117,10 +139,10 @@ class ReverseGeocodeService
                 'country_code'      => $out['country_code'],
                 'area'              => $out['area'],
 
-                // Lets a caller tell "no server key, this is a nearest-city guess" from "Google
-                // answered and had nothing". Without it the two are indistinguishable, which is
-                // precisely how a missing key went unnoticed in production.
-                'source'            => $key ? 'google' : 'nearest_city',
+                // Lets a caller tell a real Google answer from a 50km nearest-city guess. Set
+                // where the fallback actually runs, not from `$key` - a present-but-rejected key
+                // still falls back, and reporting 'google' for that would defeat the point.
+                'source'            => $source,
             ];
         });
     }
