@@ -125,6 +125,26 @@ class DeliveryCoverageService
                     default                           => $rule->pincode,
                 },
                 'is_active' => (bool) $rule->is_active,
+
+                // The coverage editor loads this payload and writes it straight back — it is the
+                // ONLY source for the rules it holds. Emitting just a display name and a
+                // `target_key` meant the editor had no id to send: `toInput()` produced
+                // `city_id: undefined`, JSON.stringify dropped the key, and the write path's
+                // `(int) ($target['city_id'] ?? 0)` answered TARGET_NOT_FOUND — "City not found."
+                // for a city that plainly exists. Every vendor that already HAD a rule was stuck:
+                // preview 422'd on mount and saving was impossible. It failed closed, so nothing
+                // was ever corrupted, which is also why it looked like a UI glitch.
+                //
+                // vertical / fulfillment_mode / eta_days are here for the same reason: the editor
+                // reads them, and defaulting them silently would rewrite a rule's delivery promise
+                // on the next save.
+                'state_id'         => $rule->state_id,
+                'district_id'      => $rule->district_id,
+                'city_id'          => $rule->city_id,
+                'pincode'          => $rule->pincode,
+                'vertical'         => $rule->vertical,
+                'fulfillment_mode' => $rule->fulfillment_mode,
+                'eta_days'         => $rule->eta_days,
             ];
         }
 

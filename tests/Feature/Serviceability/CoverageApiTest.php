@@ -405,4 +405,48 @@ class CoverageApiTest extends ServiceabilityTestCase
         $this->getJson('/api/locations/node?type=state&id=' . $this->geo['haryana'])->assertStatus(200);
         $this->getJson('/api/locations/node?type=state')->assertStatus(422);
     }
+
+    /**
+     * The editor loads the summary and writes it straight back, so the summary must carry
+     * everything the write path requires. It used to emit only a display name and a target_key:
+     * the client then sent `city_id: undefined`, JSON dropped the key, and the server answered
+     * "City not found." for a city that plainly existed — every vendor that already had a rule
+     * was locked out of its own coverage editor.
+     *
+     * This asserts the ROUND TRIP, not the payload shape, so it stays honest if the field names
+     * ever move.
+     */
+    public function test_summary_carries_enough_to_write_the_same_rule_back(): void
+    {
+        $this->controller->store(Request::create('/coverage', 'POST', [
+            'shop_id' => 1, 'rule_type' => 'city', 'city_id' => $this->geo['gurugram_c'],
+            'vertical' => '*', 'fulfillment_mode' => 'local', 'eta_days' => 2,
+        ]));
+
+        $summary = $this->controller->summary(Request::create('/coverage/summary', 'GET', ['shop_id' => 1]));
+        $row = $summary['rules']['city'][0];
+
+        // What the editor needs in order to send a write at all.
+        $this->assertSame($this->geo['gurugram_c'], $row['city_id']);
+        $this->assertSame('*', $row['vertical']);
+        $this->assertSame('local', $row['fulfillment_mode']);
+        $this->assertSame(2, (int) $row['eta_days']);
+
+        // Now actually write it back the way the editor does — this is the assertion that
+        // would have caught the bug; a shape-only check would not.
+        $replay = $this->controller->mySyncRules(
+            tap(Request::create('/my-coverage/1/rules', 'PUT', ['rules' => [[
+                'rule_type'        => 'city',
+                'city_id'          => $row['city_id'],
+                'vertical'         => $row['vertical'],
+                'fulfillment_mode' => $row['fulfillment_mode'],
+                'eta_days'         => $row['eta_days'],
+            ]]]), fn ($r) => $r->setUserResolver(fn () => $this->actingUser([1]))),
+            1
+        );
+
+        $this->assertNotEmpty($replay);
+        $again = $this->controller->summary(Request::create('/coverage/summary', 'GET', ['shop_id' => 1]));
+        $this->assertSame($this->geo['gurugram_c'], $again['rules']['city'][0]['city_id']);
+    }
 }
