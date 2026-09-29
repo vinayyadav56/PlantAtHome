@@ -179,8 +179,21 @@ trait PaymentTrait
      */
     public function createPaymentIntent(Order $order, Request $request, string $payment_gateway): array
     {
+        // The wallet credit already recorded against this order, subtracted from what the PSP
+        // is asked to charge.
+        //
+        // This read `$order?->wallet?->amount`, and Order has no `wallet()` relation — it is
+        // `wallet_point()`. So the expression was ALWAYS `paid_total - intval(null)`, i.e. the
+        // full total: the customer was charged in full AND had their points debited on top.
+        // Reported on production order 2026092890205948. Nothing about `?->` flags this; a
+        // mistyped relation is simply null, and `intval(null)` is a perfectly valid 0.
+        //
+        // intval() was wrong a second way: currencyToWalletRatio is 3 on production, so wallet
+        // credit is routinely fractional (100 points = ₹33.33) and truncation billed the
+        // difference. round() to paise, and never ask a gateway for a negative amount.
+        $walletCredit = (float) ($order->wallet_point->amount ?? 0);
         $created_intent = [
-            "amount"                => $order->paid_total - intval($order?->wallet?->amount),
+            "amount"                => max(0, round(((float) $order->paid_total) - $walletCredit, 2)),
             "order_tracking_number" => $order->tracking_number,
         ];
         if ($request->user() !== null) {
