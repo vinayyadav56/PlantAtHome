@@ -27,7 +27,12 @@ return [
 
     'exposed_headers' => [],
 
-    'max_age' => 0,
+    // Cache preflight verdicts for a day. At 0, every browser request that carries an
+    // Authorization or Accept-Language header pays a full OPTIONS round trip before the
+    // real request — twice the latency on every authenticated storefront call.
+    // NOTE: THIS file is the live cors config — ShopServiceProvider:308 overwrites the
+    // app-level config/cors.php with it wholesale.
+    'max_age' => 86400,
 
     'supports_credentials' => false,
 
