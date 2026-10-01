@@ -65,7 +65,31 @@ class VisitorMetricsService
             ->get(['type', 'url', 'label', 'value', 'created_at'])
             ->reverse()->values();
 
-        return ['visitor' => $visitor, 'events' => $events];
+        // "Maximum data" (live-visitors annotation): when the visitor is signed in, the
+        // dossier should say WHO — identity plus their relationship with the store. All
+        // cheap indexed lookups; a guest simply gets user: null.
+        $user = null;
+        if ($visitor?->user_id) {
+            $u = \Marvel\Database\Models\User::with('profile')->find($visitor->user_id);
+            if ($u) {
+                $orders = DB::table('orders')
+                    ->whereNull('parent_id')->whereNull('deleted_at')
+                    ->where('customer_id', $u->id)
+                    ->whereNotIn('order_status', ['order-cancelled', 'order-failed']);
+                $user = [
+                    'id'            => $u->id,
+                    'name'          => $u->name,
+                    'email'         => $u->email,
+                    'contact'       => optional($u->profile)->contact,
+                    'orders_count'  => (int) (clone $orders)->count(),
+                    'total_spent'   => (float) (clone $orders)->sum('paid_total'),
+                    'last_order_at' => (clone $orders)->max('created_at'),
+                    'member_since'  => optional($u->created_at)->toDateString(),
+                ];
+            }
+        }
+
+        return ['visitor' => $visitor, 'user' => $user, 'events' => $events];
     }
 
     /** Conversion funnel (distinct visitors per step) over the window. */
