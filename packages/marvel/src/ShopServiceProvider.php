@@ -102,6 +102,7 @@ class ShopServiceProvider extends ServiceProvider
         \Marvel\Console\SyncProductStateCommand::class,
         \Marvel\Console\ReconcileRazorpayPendingCommand::class,
         \Marvel\Console\BackfillGatewayPaymentIdCommand::class,
+        \Marvel\Console\AccountingPreflightCommand::class,
         \Marvel\Console\SeedLocationPagesCommand::class,
         \Marvel\Console\SweepImageBatchesCommand::class,
         \Marvel\Console\PruneImageBatchesCommand::class,
