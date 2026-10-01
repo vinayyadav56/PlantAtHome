@@ -2051,6 +2051,17 @@ class ProductController extends CoreController
         // keep matching for pre-migration data).
         switch ($user) {
             case $user->hasPermissionTo(Permission::SUPER_ADMIN):
+                // An admin opening a VENDOR's "My submitted products" page passes shop_id —
+                // honour it exactly like the store-owner branch does. Returning the raw query
+                // here put the ENTIRE platform review queue (thousands of import drafts) on
+                // every vendor page an admin viewed. No shop_id = the global review queue,
+                // unchanged.
+                if (isset($request->shop_id)) {
+                    $sid = (int) $request->shop_id;
+                    return $products_query->where(function ($q) use ($sid) {
+                        $q->where('proposed_by_shop_id', $sid)->orWhere('shop_id', $sid);
+                    });
+                }
                 return $products_query;
                 break;
 
