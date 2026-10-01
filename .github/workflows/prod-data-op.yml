@@ -45,6 +45,7 @@ on:
           - vendor-state
           - coverage-state
           - accounting-preflight
+          - accounting-seed-chart
           - vendor-wipe
           - vpp-review-check
           - cat-backup
@@ -126,7 +127,7 @@ jobs:
             img-purge-rollback) ARGS="plantathome:purge-product-images --rollback --force" ;;
             # shipment-items-check is READ-ONLY and takes no artisan args; it rides the
             # empty-ARGS list below and runs its own inline script.
-            shipment-items-check|partner-caps-check|vendor-state|coverage-state|accounting-preflight|vendor-wipe|vpp-review-check|cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|geo-master-seed|coverage-backfill-dry|coverage-backfill|coverage-backfill-retire|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
+            shipment-items-check|partner-caps-check|vendor-state|coverage-state|accounting-preflight|accounting-seed-chart|vendor-wipe|vpp-review-check|cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|geo-master-seed|coverage-backfill-dry|coverage-backfill|coverage-backfill-retire|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             # Product STATE parity with staging (availability/listing/stock/prices/
@@ -203,6 +204,20 @@ jobs:
                 # Deliberately NO git reset: this must describe what is ACTUALLY deployed and
                 # running right now, not what main would install.
                 php artisan plantathome:accounting-preflight
+                ;;
+
+              accounting-seed-chart)
+                echo "==> Seeding the chart of accounts (idempotent upsert by code)..."
+                echo "    AccountingSeeder::run upserts the ~40 account rows and opens the"
+                echo "    current month's period. It posts NO journals and touches NO balances"
+                echo "    — its own docblock: 'upserts by code, never deactivates, never"
+                echo "    touches balances'. Without these rows accountCode() throws, and with"
+                echo "    strict mode on that rolls back ORDER COMPLETION, not just the posting."
+                # No git reset: AccountingSeeder is long-deployed code and a data op should not
+                # ship a release as a side effect.
+                php artisan db:seed --class="Marvel\\Database\\Seeders\\AccountingSeeder" --force
+                echo "==> Verifying with the read-only pre-flight:"
+                php artisan plantathome:accounting-preflight || true
                 ;;
 
               vendor-wipe)
