@@ -1003,7 +1003,7 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     Route::put('accounting/commission-rules/{id}', [CommissionRuleController::class, 'update'])->whereNumber('id')->middleware('permission:accounting.edit');
     Route::delete('accounting/commission-rules/{id}', [CommissionRuleController::class, 'destroy'])->whereNumber('id')->middleware('permission:accounting.edit');
     Route::put('accounting/shops/{id}/modes', [CommissionRuleController::class, 'updateShopModes'])->whereNumber('id')->middleware('permission:accounting.edit');
-    Route::post('accounting/refunds/{id}/payout', [\Marvel\Http\Controllers\RefundController::class, 'payout'])->whereNumber('id')->middleware('permission:accounting.approve');
+    Route::post('accounting/refunds/{id}/payout', [\Marvel\Http\Controllers\RefundController::class, 'payout'])->whereNumber('id')->middleware('permission:refunds.payout|accounting.approve');
     // Reconciliation / periods / opening balances / audit (spec §37-40, §46, §32).
     Route::get('accounting/reconciliation/runs', [AccountingReconciliationController::class, 'runs'])->middleware('permission:accounting.view');
     Route::post('accounting/reconciliation/run', [AccountingReconciliationController::class, 'run'])->middleware('permission:accounting.edit');
@@ -1021,9 +1021,9 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     // accounting: whoever sets a GST rate must be able to see who changed it last.
     Route::get('settings/change-history', [AccountingReconciliationController::class, 'financialConfigHistory'])->middleware('permission:settings.view');
     // Returns lifecycle (spec §27): customers open against their own lines; admins decide.
-    Route::get('return-requests', [ReturnRequestController::class, 'index'])->middleware('permission:orders.view');
+    Route::get('return-requests', [ReturnRequestController::class, 'index'])->middleware('permission:refunds.returns.view|orders.view');
     Route::post('return-requests', [ReturnRequestController::class, 'store']);
-    Route::post('return-requests/{id}/{action}', [ReturnRequestController::class, 'transition'])->whereNumber('id')->whereIn('action', ['approve', 'reject', 'receive', 'refund'])->middleware('permission:orders.edit');
+    Route::post('return-requests/{id}/{action}', [ReturnRequestController::class, 'transition'])->whereNumber('id')->whereIn('action', ['approve', 'reject', 'receive', 'refund'])->middleware('permission:refunds.returns.approve|orders.edit');
 });
 
 Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sanctum']], function () {
@@ -1442,13 +1442,15 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::post('approve-withdraw', [WithdrawController::class, 'approveWithdraw']);
     Route::post('add-points', [UserController::class, 'addPoints']);
     Route::post('users/make-admin', [UserController::class, 'makeOrRevokeAdmin']);
+    // `update` IS the approval — it moves money (wallet credit, gateway payout, vendor reversal).
+    // It carried no permission of its own; super_admin on the enclosing group was the only gate.
     Route::apiResource(
         'refunds',
         RefundController::class,
         [
             'only' => ['destroy', 'update'],
         ]
-    );
+    )->middleware('permission:refunds.approve|super_admin');
     Route::apiResource('notify-logs', NotifyLogsController::class, [
         'only' => ['destroy'],
     ]);

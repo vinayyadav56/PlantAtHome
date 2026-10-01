@@ -37,6 +37,18 @@ final class ModuleCatalog
                 'assignment' => ['view', 'assign', 'reassign'],
                 'tracking'   => ['view', 'update'],
             ],
+            // Money leaving the business deserves its own permissions. Until now approving a
+            // refund rode on the apiResource's bare auth, paying one out on accounting.approve
+            // (which also governs journals and settlements), and the whole returns lifecycle on
+            // orders.edit — so anyone who could edit an order could receive and refund a return.
+            //
+            // `approve` and `payout` are separate on purpose: deciding a refund is owed and
+            // moving the money are different acts, and the second is the irreversible one.
+            'refunds' => [
+                'refunds' => array_merge(self::CRUD, ['approve', 'payout', 'export']),
+                'returns' => ['view', 'approve', 'receive', 'refund'],
+                'policies' => self::CRUD,
+            ],
             'customers' => [
                 'customers' => self::CRUD,        // Customer List
                 'addresses' => self::CRUD,
