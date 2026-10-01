@@ -169,19 +169,27 @@ class AccountingPreflightCommand extends Command
         }
     }
 
-    /** Pre-cutover orders are never posted, so the ledger opens mid-stream without these. */
+    /**
+     * Pre-cutover orders are never posted, so without opening balances the ledger opens
+     * mid-stream and vendor balances start at zero against real outstanding payables.
+     *
+     * These are JOURNAL ENTRIES (source_type OPENING_BALANCE, one per shop), not a table —
+     * an earlier version of this check looked for an `acc_opening_balances` table that has
+     * never existed in this codebase, and reported "missing — skipped" forever.
+     */
     private function openingBalances(): void
     {
         $this->line('');
         $this->line('<comment>Opening balances</comment>');
-        if (!Schema::hasTable('acc_opening_balances')) {
-            $this->line('  acc_opening_balances missing — skipped');
+        if (!Schema::hasTable('acc_journal_entries')) {
+            $this->line('  acc_journal_entries missing — skipped');
             return;
         }
-        $n = DB::table('acc_opening_balances')->count();
-        $this->line(sprintf('  rows: %d', $n));
-        if ($n === 0) {
-            $this->warnings[] = 'No opening balances. Vendor balances will open at zero against real outstanding payables.';
+        $posted = DB::table('acc_journal_entries')->where('source_type', 'OPENING_BALANCE')->count();
+        $vendors = Schema::hasTable('shops') ? DB::table('shops')->count() : 0;
+        $this->line(sprintf('  OPENING_BALANCE entries: %d · shops: %d', $posted, $vendors));
+        if ($posted === 0 && $vendors > 0) {
+            $this->warnings[] = 'No OPENING_BALANCE entries. Vendor balances will open at zero against real outstanding payables — run OpeningBalanceService for the cutover date.';
         }
     }
 
