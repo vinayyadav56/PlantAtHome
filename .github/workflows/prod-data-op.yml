@@ -44,6 +44,7 @@ on:
           - partner-caps-check
           - vendor-state
           - coverage-state
+          - accounting-preflight
           - vendor-wipe
           - vpp-review-check
           - cat-backup
@@ -125,7 +126,7 @@ jobs:
             img-purge-rollback) ARGS="plantathome:purge-product-images --rollback --force" ;;
             # shipment-items-check is READ-ONLY and takes no artisan args; it rides the
             # empty-ARGS list below and runs its own inline script.
-            shipment-items-check|partner-caps-check|vendor-state|coverage-state|vendor-wipe|vpp-review-check|cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|geo-master-seed|coverage-backfill-dry|coverage-backfill|coverage-backfill-retire|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
+            shipment-items-check|partner-caps-check|vendor-state|coverage-state|accounting-preflight|vendor-wipe|vpp-review-check|cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|geo-master-seed|coverage-backfill-dry|coverage-backfill|coverage-backfill-retire|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             # Product STATE parity with staging (availability/listing/stock/prices/
@@ -192,6 +193,16 @@ jobs:
                 echo "==> Delivery Coverage state as PRODUCTION sees it (read-only, no git reset)..."
                 echo "ZWNobyAiPT09IFNDSEVNQSA9PT1cbiI7CmVjaG8gIiAgcnVsZXMudmVydGljYWwgY29sdW1uICAgICA6ICIsIHZhcl9leHBvcnQoU2NoZW1hOjpoYXNDb2x1bW4oJ3ZlbmRvcl9jb3ZlcmFnZV9ydWxlcycsJ3ZlcnRpY2FsJyksIHRydWUpLCAiICA8LSBmYWxzZSA9IG5ldyBjb2RlIE5PVCBkZXBsb3llZFxuIjsKZWNobyAiXG49PT0gQ09WRVJBR0UgUlVMRVMgPT09XG4iOwplY2hvICIgIHJ1bGVzIChhY3RpdmUvdG90YWwpICAgICAgOiAiLCBEQjo6dGFibGUoJ3ZlbmRvcl9jb3ZlcmFnZV9ydWxlcycpLT53aGVyZSgnaXNfYWN0aXZlJywxKS0+Y291bnQoKSwgIiAvICIsIERCOjp0YWJsZSgndmVuZG9yX2NvdmVyYWdlX3J1bGVzJyktPmNvdW50KCksICJcbiI7CmVjaG8gIiAgYnkgc2hvcCAgICAgICAgICAgICAgICAgICA6ICIsIGpzb25fZW5jb2RlKERCOjp0YWJsZSgndmVuZG9yX2NvdmVyYWdlX3J1bGVzJyktPndoZXJlKCdpc19hY3RpdmUnLDEpLT5zZWxlY3RSYXcoJ3Nob3BfaWQsIENPVU5UKCopIG4nKS0+Z3JvdXBCeSgnc2hvcF9pZCcpLT5wbHVjaygnbicsJ3Nob3BfaWQnKSksICJcbiI7CmVjaG8gIiAgcHJvamVjdGVkIHBpbmNvZGVzICAgICAgICA6ICIsIERCOjp0YWJsZSgndmVuZG9yX2NvdmVyZWRfcGluY29kZXMnKS0+Y291bnQoKSwgIlxuIjsKZWNobyAiICBwcm9qZWN0ZWQgYnkgc2hvcCAgICAgICAgIDogIiwganNvbl9lbmNvZGUoREI6OnRhYmxlKCd2ZW5kb3JfY292ZXJlZF9waW5jb2RlcycpLT5zZWxlY3RSYXcoJ3Nob3BfaWQsIENPVU5UKCopIG4nKS0+Z3JvdXBCeSgnc2hvcF9pZCcpLT5wbHVjaygnbicsJ3Nob3BfaWQnKSksICJcbiI7CmVjaG8gIlxuPT09IExFR0FDWSBTRVJWSUNFIEFSRUFTIChiYWNrZmlsbCBpbnB1dCkgPT09XG4iOwplY2hvICIgIGJ5IHNvdXJjZSAgICAgICAgICAgICAgICAgOiAiLCBqc29uX2VuY29kZShEQjo6dGFibGUoJ3ZlbmRvcl9zZXJ2aWNlX2FyZWFzJyktPnNlbGVjdFJhdygiQ09BTEVTQ0Uoc291cmNlLCdNQU5VQUwnKSBzLCBDT1VOVCgqKSBuIiktPmdyb3VwQnkoJ3MnKS0+cGx1Y2soJ24nLCdzJykpLCAiXG4iOwpmb3JlYWNoIChEQjo6dGFibGUoJ3ZlbmRvcl9zZXJ2aWNlX2FyZWFzJyktPndoZXJlTnVsbCgnc291cmNlJyktPmdldChbJ3Nob3BfaWQnLCdjaXR5JywncGluY29kZScsJ2Z1bGZpbGxtZW50X21vZGUnLCdldGFfZGF5cycsJ2lzX2FjdGl2ZSddKSBhcyAkYSkgewogICAgcHJpbnRmKCIgICAgTUFOVUFMIHNob3A9JS00cyBjaXR5PSUtMjJzIHBpbj0lLThzIG1vZGU9JS04cyBldGE9JS00cyBhY3RpdmU9JXNcbiIsICRhLT5zaG9wX2lkLCAkYS0+Y2l0eSwgJGEtPnBpbmNvZGUgPz8gJy0nLCAkYS0+ZnVsZmlsbG1lbnRfbW9kZSwgJGEtPmV0YV9kYXlzID8/ICctJywgJGEtPmlzX2FjdGl2ZSk7Cn0KZWNobyAiXG49PT0gR0FURVMgLyBTVVBQTFkgPT09XG4iOwokbyA9IGpzb25fZGVjb2RlKERCOjp0YWJsZSgnc2V0dGluZ3MnKS0+dmFsdWUoJ29wdGlvbnMnKSA/PyAne30nLCB0cnVlKTsKZWNobyAiICBjb3ZlcmFnZUNoZWNrb3V0R2F0ZSAgICAgIDogIiwgdmFyX2V4cG9ydCgkb1snY292ZXJhZ2VDaGVja291dEdhdGUnXSA/PyBudWxsLCB0cnVlKSwgIlxuIjsKZWNobyAiICBsZWdhY3kgYWxsb3ctbGlzdCBhY3RpdmUgIDogIiwgREI6OnRhYmxlKCdkZWxpdmVyeV9waW5jb2RlcycpLT53aGVyZSgnaXNfYWN0aXZlJywxKS0+Y291bnQoKSwgIlxuIjsKZWNobyAiICB2ZW5kb3JfcHJvZHVjdF9wcmljZXMgICAgIDogIiwgREI6OnRhYmxlKCd2ZW5kb3JfcHJvZHVjdF9wcmljZXMnKS0+Y291bnQoKSwgIiAgIDwtIDAgPSBub3RoaW5nIHNlbGxhYmxlIHJlZ2FyZGxlc3Mgb2YgY292ZXJhZ2VcbiI7CmVjaG8gIiAgcHJvZHVjdF9jaXR5X2F2YWlsYWJpbGl0eSA6ICIsIERCOjp0YWJsZSgncHJvZHVjdF9jaXR5X2F2YWlsYWJpbGl0eScpLT5jb3VudCgpLCAiXG4iOwo=" | base64 -d > /tmp/covstate.php
                 php artisan tinker --execute="$(cat /tmp/covstate.php)"
+                ;;
+
+              accounting-preflight)
+                echo "==> Can accounting be safely enabled on PRODUCTION? (read-only, no git reset)"
+                echo "    Reports the switch state, chart-of-accounts coverage, the pre-cutover"
+                echo "    order population, gateway refundability, opening balances and open"
+                echo "    settlements. Exits non-zero only on a BLOCKER."
+                # Deliberately NO git reset: this must describe what is ACTUALLY deployed and
+                # running right now, not what main would install.
+                php artisan plantathome:accounting-preflight
                 ;;
 
               vendor-wipe)
