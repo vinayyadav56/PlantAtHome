@@ -142,28 +142,43 @@ class Razorpay extends Base implements PaymentInterface
 
         $event = (string) $request->event;
 
-        // Refund events are settled asynchronously by Razorpay, minutes to days after our payout
-        // ran, and they are the ONLY way we learn a gateway refund did not actually complete.
-        // Handled before the payment switch below because that switch strips the `payment.`
-        // prefix only — `refund.processed` would fall through it untouched.
-        if (str_starts_with($event, 'refund.')) {
-            $this->handleRefundWebhook($event, (array) $request->input('payload.refund.entity', []));
-            return;
-        }
+        // SIGNATURE-VERIFIED from here down. A processing failure must answer 200, not
+        // 5xx: Razorpay counts failed deliveries and DEACTIVATES the webhook after enough
+        // of them (it did, 2026-10-01 — the email that prompted this). Losing one event
+        // costs only latency, because the browser confirm and the 10-minute
+        // reconcile-razorpay-pending cron both mark orders paid independently; losing the
+        // webhook subscription silently costs every future event. 400 stays reserved for
+        // signature failures above. (Concrete 500 this guards: updatePaymentOrderStatus
+        // reads payload['payment']['entity'] — a dispute payload without it threw.)
+        try {
+            // Refund events are settled asynchronously by Razorpay, minutes to days after our
+            // payout ran, and they are the ONLY way we learn a gateway refund did not actually
+            // complete. Handled before the payment switch below because that switch strips the
+            // `payment.` prefix only — `refund.processed` would fall through it untouched.
+            if (str_starts_with($event, 'refund.')) {
+                $this->handleRefundWebhook($event, (array) $request->input('payload.refund.entity', []));
+                return;
+            }
 
-        $eventStatus = (string) Str::of($event)->replace('payment.', '', $event);
+            $eventStatus = (string) Str::of($event)->replace('payment.', '', $event);
 
-        switch ($eventStatus) {
-            case 'dispute.won':
-            case 'dispute.created':
-            case 'authorized':
-                $this->updatePaymentOrderStatus($request, OrderStatus::PENDING, PaymentStatus::PROCESSING);
-                break;
-            case 'captured':
-                $this->updatePaymentOrderStatus($request, OrderStatus::PROCESSING, PaymentStatus::SUCCESS);
-                break;
-            case 'failed':
-                $this->updatePaymentOrderStatus($request, OrderStatus::PENDING, PaymentStatus::FAILED);
+            switch ($eventStatus) {
+                case 'dispute.won':
+                case 'dispute.created':
+                case 'authorized':
+                    $this->updatePaymentOrderStatus($request, OrderStatus::PENDING, PaymentStatus::PROCESSING);
+                    break;
+                case 'captured':
+                    $this->updatePaymentOrderStatus($request, OrderStatus::PROCESSING, PaymentStatus::SUCCESS);
+                    break;
+                case 'failed':
+                    $this->updatePaymentOrderStatus($request, OrderStatus::PENDING, PaymentStatus::FAILED);
+            }
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::error('razorpay webhook processing failed (answered 200; reconciler will catch up)', [
+                'event' => $event,
+                'error' => $e->getMessage(),
+            ]);
         }
 
         // Returning normally yields the 200 the gateway needs — it must never

@@ -356,11 +356,16 @@ class GardenController extends CoreController
     public function razorpayWebhook(Request $request): JsonResponse
     {
         $secret = config('shop.razorpay.webhook_secret');
-        if ($secret) {
-            $expected = hash_hmac('sha256', $request->getContent(), $secret);
-            if (!hash_equals($expected, (string) $request->header('X-Razorpay-Signature'))) {
-                return response()->json(['message' => 'invalid signature'], 400);
-            }
+        // Same policy as WebHookController::gateWebhook: no secret configured means this
+        // is a dead surface, not an open one. The old `if ($secret)` skipped verification
+        // entirely when the secret was empty — on staging that let an unsigned POST mark
+        // garden packages paid.
+        if (!$secret) {
+            abort(404);
+        }
+        $expected = hash_hmac('sha256', $request->getContent(), $secret);
+        if (!hash_equals($expected, (string) $request->header('X-Razorpay-Signature'))) {
+            return response()->json(['message' => 'invalid signature'], 400);
         }
         $event = $request->input('event');
         $entity = $request->input('payload.payment_link.entity', []);
