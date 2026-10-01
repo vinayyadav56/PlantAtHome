@@ -36,7 +36,10 @@ return [
 
     'exposed_headers' => [],
 
-    'max_age' => 0,
+    // Cache preflight verdicts for a day. At 0, every browser request that carries an
+    // Authorization header paid a full OPTIONS round trip (~300-500ms through Cloudflare)
+    // before the real request — twice the latency on every authenticated call.
+    'max_age' => 86400,
 
     'supports_credentials' => false,
 

@@ -53,7 +53,15 @@ class LocationController extends CoreController
             $columns[] = 'district_id';
         }
 
-        return $query->orderBy('name')->get($columns);
+        $rows = $query->orderBy('name')->get($columns);
+        // The storefront city picker requests this on every page load, and it was the one
+        // hot public read still sent with `no-cache, private`. Anonymous responses are
+        // edge/browser cacheable; a real Bearer token (admin coverage pickers) stays fresh.
+        if (empty($request->bearerToken())) {
+            return response()->json($rows)
+                ->header('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600');
+        }
+        return $rows;
     }
 
     /**

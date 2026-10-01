@@ -17,11 +17,18 @@ class LocationPageController extends CoreController
 {
     /* ── public (storefront + sitemap) ────────────────────────────── */
 
-    public function index()
+    public function index(Request $request)
     {
-        return LocationPage::where('is_active', true)
+        $rows = LocationPage::where('is_active', true)
             ->orderBy('city_name')
             ->get(['slug', 'city_name', 'state_name', 'is_indexable']);
+        // Footer "Plants in <city>" links — fetched on every storefront page, changes
+        // only when a landing page is published. Cache anonymous reads at the edge.
+        if (empty($request->bearerToken())) {
+            return response()->json($rows)
+                ->header('Cache-Control', 'public, max-age=60, s-maxage=300, stale-while-revalidate=600');
+        }
+        return $rows;
     }
 
     public function show(string $slug)
