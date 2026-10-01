@@ -51,8 +51,13 @@ final class RevenueRecognitionTest extends TestCase
         });
     }
 
-    private function order(string $orderStatus, string $paymentStatus, float $total): void
+    private function order(string $orderStatus, string $paymentStatus, float $total, $at = null): void
     {
+        // Default "yesterday" keeps the 30-day-window tests honest; a test that
+        // asserts on THIS CALENDAR MONTH must pass its own timestamp — on the 1st
+        // of a month, yesterday is last month and this suite failed the deploy
+        // gate (seen 2026-10-01: this_month revenue 0.0 vs 1500.0).
+        $when = $at ?? now()->subDay();
         DB::table('orders')->insert([
             'tracking_number' => 'T' . random_int(10000000, 99999999),
             'parent_id'       => null,
@@ -60,8 +65,8 @@ final class RevenueRecognitionTest extends TestCase
             'order_status'    => $orderStatus,
             'payment_status'  => $paymentStatus,
             'paid_total'      => $total,
-            'created_at'      => now()->subDay(),
-            'updated_at'      => now()->subDay(),
+            'created_at'      => $when,
+            'updated_at'      => $when,
         ]);
     }
 
@@ -126,8 +131,8 @@ final class RevenueRecognitionTest extends TestCase
         // dash. That is exactly how a stale closure capture shipped: the time-series was right
         // while compares and AOV came back empty. Assert the sections are populated, not just
         // that the call did not throw.
-        $this->order(OrderStatus::PROCESSING, PaymentStatus::SUCCESS, 1000.00);
-        $this->order(OrderStatus::COMPLETED, PaymentStatus::CASH, 500.00);
+        $this->order(OrderStatus::PROCESSING, PaymentStatus::SUCCESS, 1000.00, now());
+        $this->order(OrderStatus::COMPLETED, PaymentStatus::CASH, 500.00, now());
 
         \Illuminate\Support\Facades\Cache::flush();
         $out = (new MetricsService())->executive();
