@@ -190,6 +190,50 @@ class RefundPolicyTest extends OrdersTestCase
         $this->assertFalse($d['allowed'], "the shop's 1-day window should govern, not the platform's 365");
     }
 
+    /**
+     * The policy governs what a CUSTOMER may self-serve. A goodwill refund outside the window
+     * is exactly what manual approval exists for, so staff are evaluated but not refused —
+     * otherwise support cannot resolve a complaint the business has decided to resolve.
+     */
+    public function test_staff_can_refund_outside_the_window_but_a_customer_cannot(): void
+    {
+        $order = $this->s68Order();
+        $this->policy(['return_window_days' => 7]);
+        $this->delivered($order, now()->subDays(30)->toDateTimeString());
+
+        // storeRefund creates the row, which fires RefundRequested → the notification listeners.
+        // Those need tables this suite does not stub, and they are not what is under test.
+        \Illuminate\Support\Facades\Event::fake([
+            \Marvel\Events\RefundRequested::class,
+            \Marvel\Events\RefundUpdate::class,
+        ]);
+
+        $repo = app(\Marvel\Database\Repositories\RefundRepository::class);
+
+        $customer = new class {
+            public $id = 5;
+            public function hasPermissionTo($p): bool { return false; }
+        };
+        $req = \Illuminate\Http\Request::create('/refunds', 'POST', ['order_id' => $order->id, 'title' => 'late']);
+        $req->setUserResolver(fn () => $customer);
+        try {
+            $repo->storeRefund($req);
+            $this->fail('a customer refunded outside the return window');
+        } catch (\Throwable $e) {
+            $this->assertStringContainsString('return window', $e->getMessage());
+        }
+
+        $staff = new class {
+            public $id = 1;
+            public function hasPermissionTo($p): bool { return true; }
+        };
+        $req2 = \Illuminate\Http\Request::create('/refunds', 'POST', ['order_id' => $order->id, 'title' => 'goodwill']);
+        $req2->setUserResolver(fn () => $staff);
+        $refund = $repo->storeRefund($req2);
+
+        $this->assertNotNull($refund, 'staff must be able to override the window');
+    }
+
     /** A policy still awaiting approval is not yet a rule. */
     public function test_a_pending_policy_is_ignored(): void
     {

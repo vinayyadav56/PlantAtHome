@@ -107,11 +107,19 @@ class RefundRepository extends BaseRepository
                 $items[(int) $line['order_item_id']] = (int) ($line['quantity'] ?? 1);
             }
         }
-        \Marvel\Services\Accounting\RefundPolicyService::make()->assertAllowed(
+        $decision = \Marvel\Services\Accounting\RefundPolicyService::make()->evaluate(
             $order,
             $items,
             $request->input('requested_amount') !== null ? (float) $request->input('requested_amount') : null
         );
+        // The policy governs what a CUSTOMER may self-serve. Staff are not bound by it: a
+        // goodwill refund outside the return window is exactly the case manual approval exists
+        // for, and a hard block here would mean support cannot resolve a complaint the business
+        // has decided to resolve. The decision is still evaluated, so it can be surfaced and
+        // audited — it simply does not refuse someone with the authority to override it.
+        if (!$decision['allowed'] && !$staff) {
+            throw new MarvelException((string) $decision['reason'], SOMETHING_WENT_WRONG);
+        }
 
         return $this->createSliced($order, $data, $scope, (array) $request->input('items', []), $request->input('requested_amount'), $staff ? $request->input('method') : null, $request->input('idempotency_key'));
     }
