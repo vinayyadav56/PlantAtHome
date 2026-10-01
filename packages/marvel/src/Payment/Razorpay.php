@@ -140,7 +140,18 @@ class Razorpay extends Base implements PaymentInterface
             abort(400, 'Invalid webhook signature');
         }
 
-        $eventStatus = (string) Str::of($request->event)->replace('payment.', '', $request->event);
+        $event = (string) $request->event;
+
+        // Refund events are settled asynchronously by Razorpay, minutes to days after our payout
+        // ran, and they are the ONLY way we learn a gateway refund did not actually complete.
+        // Handled before the payment switch below because that switch strips the `payment.`
+        // prefix only — `refund.processed` would fall through it untouched.
+        if (str_starts_with($event, 'refund.')) {
+            $this->handleRefundWebhook($event, (array) $request->input('payload.refund.entity', []));
+            return;
+        }
+
+        $eventStatus = (string) Str::of($event)->replace('payment.', '', $event);
 
         switch ($eventStatus) {
             case 'dispute.won':
@@ -159,6 +170,68 @@ class Razorpay extends Base implements PaymentInterface
         // re-loop a verified delivery (idempotent replays are handled
         // downstream in webhookSuccessResponse). No exit()/send(): the kernel
         // emits the response so the terminate stack still runs.
+    }
+
+    /**
+     * Record what Razorpay says about a refund we already issued.
+     *
+     * Deliberately records rather than reacts. `refunded_at` means "our payout ran"; this sets
+     * the separate gateway axis so the two can disagree visibly instead of silently.
+     *
+     * A `refund.failed` does NOT auto-retry and does NOT reverse anything. By the time it
+     * arrives we have posted REFUND_PAID, and RefundService::payout() short-circuits on that
+     * journal's source_key — so a "retry" would return the existing entry without ever calling
+     * Razorpay again, while the books still claim the customer was paid. Correcting that is a
+     * reversing entry an operator makes knowingly, not something a webhook should do on its own.
+     * Surfacing it is this method's whole job.
+     *
+     * Idempotent: replays write the same values and emit no second event.
+     */
+    protected function handleRefundWebhook(string $event, array $entity): void
+    {
+        $refundId = (string) ($entity['id'] ?? '');
+        if ($refundId === '') {
+            return;
+        }
+
+        $refund = \Marvel\Database\Models\Refund::where('gateway_refund_id', $refundId)->first();
+        if (!$refund) {
+            // Not ours, or ours but recorded under a different id. Worth a line in the log; not
+            // worth a 4xx — Razorpay would retry a delivery we can never satisfy.
+            \Illuminate\Support\Facades\Log::info('razorpay refund webhook for an unknown refund', [
+                'event' => $event, 'gateway_refund_id' => $refundId,
+            ]);
+            return;
+        }
+
+        $status = $event === 'refund.failed' ? 'failed' : (string) ($entity['status'] ?? 'processed');
+        if ((string) $refund->gateway_status === $status) {
+            return; // replay
+        }
+
+        $refund->forceFill([
+            'gateway_status'  => $status,
+            'failure_reason'  => $status === 'failed'
+                ? trim((string) ($entity['error_description'] ?? $entity['error_reason'] ?? 'Gateway reported the refund failed'))
+                : null,
+        ])->saveQuietly();
+
+        try {
+            \Marvel\Database\Models\OrderEvent::record(
+                (int) $refund->order_id,
+                $status === 'failed' ? 'refund.gateway_failed' : 'refund.gateway_processed',
+                ['refund_id' => $refund->id, 'gateway_refund_id' => $refundId, 'event' => $event],
+                $status === 'failed' ? 'Gateway refund FAILED' : 'Gateway confirmed the refund'
+            );
+        } catch (\Throwable $e) {
+            // the timeline is never allowed to break the webhook's 200
+        }
+
+        if ($status === 'failed') {
+            \Illuminate\Support\Facades\Log::error('razorpay reported a refund FAILED after payout', [
+                'refund_id' => $refund->id, 'order_id' => $refund->order_id, 'gateway_refund_id' => $refundId,
+            ]);
+        }
     }
 
     /**

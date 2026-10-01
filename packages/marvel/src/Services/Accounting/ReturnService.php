@@ -86,7 +86,7 @@ class ReturnService
             $order = Order::findOrFail($r->order_id);
             $refund = app(RefundRepository::class)->createSliced($order, [
                 'order_id' => $order->id, 'customer_id' => $order->customer_id, 'title' => 'Return #' . $returnId, 'description' => $r->reason,
-            ], 'items', [['order_item_id' => $r->order_item_id, 'quantity' => $r->quantity]], null, $method);
+            ], 'items', [['order_item_id' => $r->order_item_id, 'quantity' => $r->quantity]], null, $method, 'return:' . $returnId);
             DB::table('return_requests')->where('id', $returnId)->update(['refund_id' => $refund->id, 'updated_at' => now()]);
             OrderEvent::record($order->id, 'return.refund_requested', ['return_id' => $returnId, 'refund_id' => $refund->id], 'Return refund requested');
             return $this->find($returnId);

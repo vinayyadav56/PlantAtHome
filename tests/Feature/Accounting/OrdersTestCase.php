@@ -61,6 +61,7 @@ abstract class OrdersTestCase extends AccountingTestCase
             'packages/marvel/database/migrations/2026_09_14_000500_accounting_p12_reconciliation.php',
             'packages/marvel/database/migrations/2026_09_14_000600_accounting_p5_commission_rules.php',
             'packages/marvel/database/migrations/2026_09_14_000700_accounting_p11_inventory.php',
+            'packages/marvel/database/migrations/2026_10_01_000100_add_gateway_status_to_refunds.php',
         ] as $file) {
             $m = require base_path($file);
             $m->up();

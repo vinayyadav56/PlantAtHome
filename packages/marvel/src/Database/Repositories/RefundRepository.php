@@ -50,6 +50,23 @@ class RefundRepository extends BaseRepository
         }
     }
 
+    /**
+     * Migrations run in the BACKGROUND of a deploy on Railway/EC2, so the column can lag the
+     * code. Guard the write rather than let refund creation fail on an unknown column.
+     */
+    protected function refundsSupportIdempotencyKey(): bool
+    {
+        static $has = null;
+        if ($has === null) {
+            try {
+                $has = \Illuminate\Support\Facades\Schema::hasColumn('refunds', 'idempotency_key');
+            } catch (\Throwable $e) {
+                $has = false;
+            }
+        }
+        return $has;
+    }
+
     public function storeRefund($request)
     {
         $user = $request->user();
@@ -81,7 +98,7 @@ class RefundRepository extends BaseRepository
         $data['customer_id'] = $order->customer_id;
         // The payout method is an admin decision at approval; a customer's hint is ignored.
         $staff = $user->hasPermissionTo(Permission::SUPER_ADMIN) || $user->hasPermissionTo(Permission::STAFF);
-        return $this->createSliced($order, $data, $scope, (array) $request->input('items', []), $request->input('requested_amount'), $staff ? $request->input('method') : null);
+        return $this->createSliced($order, $data, $scope, (array) $request->input('items', []), $request->input('requested_amount'), $staff ? $request->input('method') : null, $request->input('idempotency_key'));
     }
 
     /**
@@ -90,8 +107,23 @@ class RefundRepository extends BaseRepository
      * amount allocated across lines. Writes refund_items for item refunds. Never trusts a
      * client amount. Also used by the returns flow.
      */
-    public function createSliced(Order $order, array $data, string $scope = 'full', array $items = [], $requestedAmount = null, ?string $method = null)
+    public function createSliced(Order $order, array $data, string $scope = 'full', array $items = [], $requestedAmount = null, ?string $method = null, ?string $idempotencyKey = null)
     {
+        // Replay protection for the CREATE. Deliberately caller-supplied rather than derived
+        // from the contents: two identical ₹500 partial refunds on one order are legitimate
+        // (PRD §21 — multiple partials against one payment), so a content hash would block
+        // real work. Same shape as orders (OrderRepository::storeOrder).
+        //
+        // The column is UNIQUE and has existed since the P10 migration without anything ever
+        // writing to it; until now a retried POST after a settled refund created a second row.
+        if ($idempotencyKey !== null && $idempotencyKey !== '' && $this->refundsSupportIdempotencyKey()) {
+            $existing = $this->where('idempotency_key', $idempotencyKey)->first();
+            if ($existing) {
+                return $existing;
+            }
+            $data['idempotency_key'] = $idempotencyKey;
+        }
+
         $accounting = \Marvel\Services\Accounting\AccountingPostingService::enabled();
 
         // Without the accounting module there is no slicer, so `amount` below stays at the FULL

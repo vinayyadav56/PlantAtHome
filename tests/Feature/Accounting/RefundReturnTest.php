@@ -119,6 +119,113 @@ class RefundReturnTest extends OrdersTestCase
         );
     }
 
+    /** Invoke the protected webhook handler directly — the signed-delivery path is covered by RazorpayWebhookTest. */
+    private function refundWebhook(string $event, array $entity): void
+    {
+        // Without the constructor: Base::__construct reads settings.options['currency'] and builds
+        // a Razorpay API client, neither of which handleRefundWebhook touches. This keeps the test
+        // on the handler instead of on gateway bootstrapping.
+        $gw = (new \ReflectionClass(\Marvel\Payments\Razorpay::class))->newInstanceWithoutConstructor();
+        $m = new \ReflectionMethod($gw, 'handleRefundWebhook');
+        $m->setAccessible(true);
+        $m->invoke($gw, $event, $entity);
+    }
+
+    /**
+     * Razorpay settles a refund asynchronously and is the only source of truth for whether the
+     * money actually left. Nothing consumed refund.* events before, so a gateway refund that
+     * later failed was indistinguishable from one that completed.
+     */
+    public function test_a_gateway_refund_webhook_records_its_outcome_and_replays_cleanly(): void
+    {
+        $order = $this->recognized();
+        $refund = $this->approvedRefund($order, 'full');
+        $refund->forceFill(['gateway_refund_id' => 'rfnd_TEST1', 'refunded_at' => now()])->saveQuietly();
+
+        $this->refundWebhook('refund.processed', ['id' => 'rfnd_TEST1', 'status' => 'processed']);
+        $this->assertSame('processed', $refund->fresh()->gateway_status);
+        $this->assertSame(1, DB::table('order_events')->where('order_id', $order->id)->where('type', 'refund.gateway_processed')->count());
+
+        // replay — same values, no second timeline entry
+        $this->refundWebhook('refund.processed', ['id' => 'rfnd_TEST1', 'status' => 'processed']);
+        $this->assertSame(1, DB::table('order_events')->where('order_id', $order->id)->where('type', 'refund.gateway_processed')->count());
+    }
+
+    public function test_a_failed_gateway_refund_is_recorded_with_its_reason_and_does_not_touch_the_books(): void
+    {
+        $order = $this->recognized();
+        $refund = $this->approvedRefund($order, 'full');
+        RefundService::make()->post($refund, 'admin:1');
+        RefundService::make()->payout($refund->fresh(), 'wallet', 'admin:1');
+        $refund = $refund->fresh();
+        $refund->forceFill(['gateway_refund_id' => 'rfnd_FAIL1'])->saveQuietly();
+
+        $journalsBefore = JournalEntry::count();
+
+        $this->refundWebhook('refund.failed', ['id' => 'rfnd_FAIL1', 'status' => 'failed', 'error_description' => 'Insufficient balance']);
+
+        $after = $refund->fresh();
+        $this->assertSame('failed', $after->gateway_status);
+        $this->assertStringContainsString('Insufficient balance', (string) $after->failure_reason);
+        // refunded_at is OUR payout timestamp and must survive — the two axes are allowed to disagree
+        $this->assertNotNull($after->refunded_at);
+        // and nothing was reversed: correcting a posted REFUND_PAID is an operator decision
+        $this->assertSame($journalsBefore, JournalEntry::count());
+        $this->assertSame(1, DB::table('order_events')->where('order_id', $order->id)->where('type', 'refund.gateway_failed')->count());
+    }
+
+    /** A webhook for a refund we do not know about must not 500 or invent a row. */
+    public function test_an_unknown_gateway_refund_id_is_ignored(): void
+    {
+        $this->refundWebhook('refund.processed', ['id' => 'rfnd_NOT_OURS', 'status' => 'processed']);
+        $this->assertSame(0, Refund::where('gateway_refund_id', 'rfnd_NOT_OURS')->count());
+    }
+
+    /**
+     * refunds.idempotency_key has been UNIQUE since the P10 migration with nothing writing to
+     * it, so a retried POST after a settled refund created a second row.
+     */
+    public function test_a_replayed_refund_request_returns_the_same_refund(): void
+    {
+        $order = $this->recognized();
+        $repo = app(\Marvel\Database\Repositories\RefundRepository::class);
+        $data = ['order_id' => $order->id, 'customer_id' => $order->customer_id, 'title' => 'dupe'];
+
+        $first  = $repo->createSliced($order, $data, 'full', [], null, 'wallet', 'client-key-1');
+        $second = $repo->createSliced($order, $data, 'full', [], null, 'wallet', 'client-key-1');
+
+        $this->assertSame($first->id, $second->id);
+        $this->assertSame(1, Refund::where('order_id', $order->id)->count());
+    }
+
+    /**
+     * Two identical partial refunds on one order are LEGITIMATE (PRD §21 — multiple partials
+     * against one payment), so dedupe must key on the caller's token, never on the contents.
+     */
+    public function test_two_identical_partial_refunds_are_allowed_without_a_key(): void
+    {
+        $order = $this->recognized();
+        $repo = app(\Marvel\Database\Repositories\RefundRepository::class);
+        $data = ['order_id' => $order->id, 'customer_id' => $order->customer_id, 'title' => 'partial'];
+
+        $a = $repo->createSliced($order, $data, 'partial', [], '100.00', 'wallet');
+        $b = $repo->createSliced($order, $data, 'partial', [], '100.00', 'wallet');
+
+        $this->assertNotSame($a->id, $b->id);
+        $this->assertSame(2, Refund::where('order_id', $order->id)->count());
+    }
+
+    /**
+     * The default gateway closure is the ONE line the suite otherwise cannot see — every other
+     * test injects via withGatewayRefunder(). It named a class that does not exist
+     * (Marvel\Payment\Razorpay, singular) so every real gateway refund fataled.
+     */
+    public function test_the_default_gateway_refunder_resolves_a_real_class(): void
+    {
+        $this->assertTrue(class_exists(\Marvel\Payments\Razorpay::class));
+        $this->assertFalse(class_exists('Marvel\\Payment\\Razorpay'), 'the singular namespace must not come back');
+    }
+
     // 11 — refund ONE item (the ₹500 pot): its tax and its vendor payable are reversed, nothing else.
     public function test_item_refund_reverses_exactly_that_lines_components(): void
     {
