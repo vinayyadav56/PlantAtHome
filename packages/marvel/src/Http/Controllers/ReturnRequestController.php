@@ -18,13 +18,34 @@ class ReturnRequestController extends CoreController
 
     public function index(Request $request)
     {
-        $q = DB::table('return_requests')->orderByDesc('id');
+        // Joined rather than raw rows: a bare return_requests row is order_id 412 / item 918,
+        // which no operator can act on. The list needs the order number, what was sent back and
+        // who sent it. Left joins throughout so a return survives a deleted product or customer.
+        $q = DB::table('return_requests as rr')
+            ->leftJoin('orders as o', 'o.id', '=', 'rr.order_id')
+            ->leftJoin('order_items as oi', 'oi.id', '=', 'rr.order_item_id')
+            ->leftJoin('users as u', 'u.id', '=', 'rr.customer_id')
+            ->select([
+                'rr.*',
+                'o.tracking_number',
+                'o.paid_total as order_total',
+                'oi.product_name',
+                'oi.unit_price',
+                'u.name as customer_name',
+                'u.email as customer_email',
+            ])
+            ->orderByDesc('rr.id');
+
         if ($request->filled('order_id')) {
-            $q->where('order_id', (int) $request->order_id);
+            $q->where('rr.order_id', (int) $request->order_id);
         }
         if ($request->filled('status')) {
-            $q->where('status', $request->status);
+            $q->where('rr.status', $request->status);
         }
+        if ($request->filled('tracking_number')) {
+            $q->where('o.tracking_number', 'like', '%' . $request->tracking_number . '%');
+        }
+
         return $q->paginate((int) ($request->limit ?? 30));
     }
 
@@ -47,7 +68,15 @@ class ReturnRequestController extends CoreController
     public function transition(Request $request, $id, string $action)
     {
         $u = $request->user();
-        if (!$u || !($u->hasPermissionTo(\Marvel\Enums\Permission::SUPER_ADMIN) || $u->hasPermissionTo(\Marvel\Enums\Permission::STAFF))) {
+        // The route middleware accepts refunds.returns.approve; this second gate has to accept it
+        // too, or the new permission grants a route you still cannot use. Roles stay as a
+        // fallback so existing staff keep working before roles are reassigned.
+        $allowed = $u && (
+            $u->hasPermissionTo(\Marvel\Enums\Permission::SUPER_ADMIN)
+            || $u->hasPermissionTo(\Marvel\Enums\Permission::STAFF)
+            || (method_exists($u, 'can') && $u->can('refunds.returns.' . ($action === 'refund' ? 'refund' : ($action === 'receive' ? 'receive' : 'approve'))))
+        );
+        if (!$allowed) {
             abort(403, 'Return decisions are for platform staff.');
         }
         try {
