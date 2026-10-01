@@ -392,6 +392,14 @@ class RefundService
             ], ['source_type' => 'REFUND_PAID', 'source_id' => $refund->id, 'source_key' => $key, 'reference_type' => 'order', 'reference_id' => $order->id, 'description' => 'Refund #' . $refund->id . ' paid (' . $method . ')', 'actor' => $actor]);
             $refund->forceFill(['method' => $method, 'gateway_refund_id' => $gatewayRefundId, 'refunded_at' => Carbon::now(), 'paid_journal_entry_id' => $je->id])->saveQuietly();
             AccountingAuditLog::record('refund', $refund->id, 'paid', null, ['journal' => $je->entry_number, 'method' => $method, 'gateway_refund_id' => $gatewayRefundId], null, $key, $actor);
+            // Also on the order timeline: acc_audit_log is where an accountant looks, order_events
+            // is where everyone else does. Inside the transaction, so it cannot outlive the posting.
+            \Marvel\Database\Models\OrderEvent::record(
+                (int) $order->id,
+                'refund.paid',
+                ['refund_id' => $refund->id, 'method' => $method, 'amount' => $amount->toDecimal(), 'gateway_refund_id' => $gatewayRefundId ?: null],
+                'Refund paid via ' . $method
+            );
             return $je;
         });
     }

@@ -28,6 +28,11 @@ class ReturnService
         if (!in_array((string) $order->order_status, ['order-completed', 'order-refunded'], true) && (string) $item->item_status !== 'delivered') {
             throw new \InvalidArgumentException('Only delivered items can be returned.');
         }
+        // "Only delivered items" above is a physical precondition; the WINDOW is a business
+        // rule and lives in the policy. Until now the 7-day return policy existed only as prose
+        // on the refund-policies page and was enforced nowhere.
+        RefundPolicyService::make()->assertAllowed($order, [$item->id => $quantity]);
+
         $openQty = (int) DB::table('return_requests')->where('order_item_id', $item->id)->whereIn('status', ['requested', 'approved', 'received'])->sum('quantity');
         if ($openQty + $quantity > (int) $item->order_quantity) {
             throw new \InvalidArgumentException('A return is already open for these units.');

@@ -183,6 +183,14 @@ class RefundController extends CoreController
         // Non-approval transitions (REJECTED / PROCESSING / …) carry no money side effects.
         if ($request->status != RefundStatus::APPROVED) {
             $this->repository->updateRefund($request, $refund);
+            // …but they are not invisible. A rejection used to write to no audit trail at all,
+            // so "why was my refund refused, and by whom" had no answer anywhere in the system.
+            \Marvel\Database\Models\OrderEvent::record(
+                (int) $refund->order_id,
+                'refund.' . strtolower((string) $request->status),
+                ['refund_id' => $refund->id, 'status' => (string) $request->status],
+                'Refund ' . strtolower((string) $request->status)
+            );
             return $refund;
         }
 
@@ -307,6 +315,14 @@ class RefundController extends CoreController
 
             return $locked;
         });
+
+        // After commit: a rolled-back approval must not leave an "approved" line on the timeline.
+        \Marvel\Database\Models\OrderEvent::record(
+            (int) $approved->order_id,
+            'refund.approved',
+            ['refund_id' => $approved->id, 'method' => $approved->method, 'amount' => (string) $approved->amount],
+            'Refund approved'
+        );
         if ($deferredGatewayPayout) {
             // Approval is committed; now move the money. A failure here leaves the refund approved with
             // refunded_at NULL — retried via POST accounting/refunds/{id}/payout (audited), never re-approved.

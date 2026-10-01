@@ -287,6 +287,46 @@ class RefundReturnTest extends OrdersTestCase
         );
     }
 
+    /**
+     * The refund timeline is order_events, not a refund_events table. These four types plus the
+     * gateway pair are the whole arc, and `GET orders/{id}/events` already serves them.
+     *
+     * A rejection in particular used to write to NO audit trail anywhere — "why was my refund
+     * refused and by whom" was unanswerable.
+     */
+    public function test_the_refund_arc_is_visible_on_the_order_timeline(): void
+    {
+        $order = $this->recognized();
+        $refund = $this->approvedRefund($order, 'full');
+        $this->assertSame(1, DB::table('order_events')->where('order_id', $order->id)->where('type', 'refund.requested')->count());
+
+        RefundService::make()->post($refund, 'admin:1');
+        RefundService::make()->payout($refund->fresh(), 'wallet', 'admin:1');
+
+        $types = DB::table('order_events')->where('order_id', $order->id)->pluck('type')->all();
+        foreach (['refund.requested', 'accounting.refund_posted', 'refund.paid'] as $expected) {
+            $this->assertContains($expected, $types);
+        }
+    }
+
+    public function test_a_rejected_refund_is_recorded(): void
+    {
+        $order = $this->recognized();
+        $refund = $this->approvedRefund($order, 'full');
+        $refund->forceFill(['status' => 'pending'])->saveQuietly();
+
+        Event::fake([\App\Events\RefundApproved::class, RefundRequested::class, RefundUpdate::class]);
+        $super = new class {
+            public $id = 1;
+            public function hasPermissionTo($p): bool { return true; }
+        };
+        $request = \Illuminate\Http\Request::create('/x', 'PUT', ['id' => $refund->id, 'status' => 'rejected']);
+        $request->setUserResolver(fn () => $super);
+        app(\Marvel\Http\Controllers\RefundController::class)->updateRefund($request);
+
+        $this->assertSame(1, DB::table('order_events')->where('order_id', $order->id)->where('type', 'refund.rejected')->count());
+    }
+
     // 11 — refund ONE item (the ₹500 pot): its tax and its vendor payable are reversed, nothing else.
     public function test_item_refund_reverses_exactly_that_lines_components(): void
     {

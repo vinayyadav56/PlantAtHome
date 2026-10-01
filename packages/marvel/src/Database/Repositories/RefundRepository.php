@@ -98,6 +98,21 @@ class RefundRepository extends BaseRepository
         $data['customer_id'] = $order->customer_id;
         // The payout method is an admin decision at approval; a customer's hint is ignored.
         $staff = $user->hasPermissionTo(Permission::SUPER_ADMIN) || $user->hasPermissionTo(Permission::STAFF);
+        // Is this refund ALLOWED? Separate question from what it is worth, and deliberately
+        // answered before any money is computed. Default-permissive: with no configured policy
+        // this is a no-op, so existing behaviour is unchanged until rules are filled in.
+        $items = [];
+        foreach ((array) $request->input('items', []) as $line) {
+            if (!empty($line['order_item_id'])) {
+                $items[(int) $line['order_item_id']] = (int) ($line['quantity'] ?? 1);
+            }
+        }
+        \Marvel\Services\Accounting\RefundPolicyService::make()->assertAllowed(
+            $order,
+            $items,
+            $request->input('requested_amount') !== null ? (float) $request->input('requested_amount') : null
+        );
+
         return $this->createSliced($order, $data, $scope, (array) $request->input('items', []), $request->input('requested_amount'), $staff ? $request->input('method') : null, $request->input('idempotency_key'));
     }
 
@@ -166,6 +181,21 @@ class RefundRepository extends BaseRepository
         if ($scope === 'full') {
             $this->createChildOrderRefund($order->children, $data);
         }
+
+        // The refund timeline lives in order_events, NOT a separate refund_events table: this is
+        // already the order's audit trail, it is already served by GET orders/{id}/events, and the
+        // admin already renders it. A third audit store alongside order_events and acc_audit_log
+        // would be one more place to look and one more to keep in step.
+        //
+        // Emitted here rather than in createChildOrderRefund, which mirrors the refund onto each
+        // suborder — a shopper made ONE request and the timeline should say so once.
+        \Marvel\Database\Models\OrderEvent::record(
+            (int) $order->id,
+            'refund.requested',
+            ['refund_id' => $refund->id, 'scope' => $scope, 'amount' => (string) $refund->amount],
+            'Refund requested'
+        );
+
         return $this->find($refund->id);
     }
 
