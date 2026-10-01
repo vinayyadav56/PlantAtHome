@@ -223,7 +223,19 @@ class RefundController extends CoreController
                 $refundSvc = \Marvel\Services\Accounting\RefundService::make();
                 $refundSvc->post($locked, (string) ($request->user()?->id ?? 'system'));
                 $locked->refresh();
-                $refundable = (float) $refundSvc->postedAmount($locked)->toDecimal(); // pay what was posted
+                // Normally: pay exactly what was posted. But post() returns null — and leaves
+                // journal_entry_id NULL — when the order has nothing on the books to reverse.
+                // That is every order placed BEFORE the accounting module was switched on: their
+                // capture was never posted, because recordPaymentCaptured no-ops while disabled.
+                //
+                // postedAmount() is then 0, and a 0 refund still flips the order to REFUNDED,
+                // restores stock and deducts the vendor balance — while crediting the customer
+                // nothing. So the day accounting is enabled, every refund on the existing order
+                // book would silently pay ₹0. Fall back to the pre-accounting figure for exactly
+                // that case; orders that ARE on the books are unaffected.
+                $refundable = $locked->journal_entry_id === null
+                    ? $refundable
+                    : (float) $refundSvc->postedAmount($locked)->toDecimal();
                 $method = $wasPaidOnline ? $method : 'manual';
                 if ($method === 'gateway') {
                     $deferredGatewayPayout = [$locked->id, (string) ($request->user()?->id ?? 'system')]; // after commit: the PSP call is not rollback-able

@@ -226,6 +226,67 @@ class RefundReturnTest extends OrdersTestCase
         $this->assertFalse(class_exists('Marvel\\Payment\\Razorpay'), 'the singular namespace must not come back');
     }
 
+    /**
+     * THE CUTOVER LANDMINE.
+     *
+     * Every order placed before the accounting module is switched on has no PAYMENT_CAPTURED
+     * journal, because recordPaymentCaptured no-ops while the module is off. For those orders
+     * RefundService::post() correctly returns null — there is nothing on the books to reverse —
+     * and postedAmount() is therefore 0.
+     *
+     * The controller used to overwrite the refundable figure with that 0 unconditionally, so
+     * approving a refund flipped the order to REFUNDED, restored stock and deducted the vendor
+     * balance while crediting the customer nothing. On the hour accounting was enabled, that
+     * would have applied to the entire existing order book.
+     */
+    public function test_a_pre_cutover_order_still_refunds_the_customer_in_full(): void
+    {
+        // deliberately NOT $this->recognized(): no capture, no recognition — i.e. an order from
+        // before the module was switched on.
+        $order = $this->s68Order();
+        $order->forceFill(['payment_status' => 'payment-success'])->saveQuietly();
+
+        if (!\Illuminate\Support\Facades\Schema::hasTable('wallets')) {
+            \Illuminate\Support\Facades\Schema::create('wallets', function ($t) {
+                $t->id();
+                $t->unsignedBigInteger('customer_id');
+                $t->double('total_points')->default(0);
+                $t->double('points_used')->default(0);
+                $t->double('available_points')->default(0);
+                $t->timestamps();
+            });
+        }
+
+        $refund = $this->approvedRefund($order, 'full');
+        $refund->forceFill(['status' => 'pending'])->saveQuietly(); // the controller flips it
+        $this->assertNull(RefundService::make()->post($refund->fresh(), 'test'), 'precondition: nothing on the books');
+
+        // RefundApproved's listeners remove ratings and send SMS — neither is what this test is
+        // about, and `reviews` is not in the accounting stub set. (Note the class lives in
+        // App\Events despite shipping inside the marvel package.)
+        // All three: Event::fake REPLACES the dispatcher, so listing only RefundApproved would
+        // un-fake the two the setUp already faked and fire their notification listeners.
+        Event::fake([\App\Events\RefundApproved::class, RefundRequested::class, RefundUpdate::class]);
+
+        $super = new class {
+            public $id = 1;
+            public function hasPermissionTo($p): bool { return true; }
+        };
+        $request = \Illuminate\Http\Request::create('/x', 'PUT', ['id' => $refund->id, 'status' => 'approved', 'method' => 'wallet']);
+        $request->setUserResolver(fn () => $super);
+
+        app(\Marvel\Http\Controllers\RefundController::class)->updateRefund($request);
+
+        $credited = (float) DB::table('wallets')->where('customer_id', $order->customer_id)->value('available_points');
+        $this->assertGreaterThan(0.0, $credited, 'a pre-cutover refund paid the customer nothing');
+        // currencyToWalletRatio is unset in the test settings, so 1 point = ₹1.
+        $this->assertSame(
+            round((float) $order->paid_total, 2),
+            round($credited, 2),
+            'a pre-cutover refund must still pay what the customer actually paid'
+        );
+    }
+
     // 11 — refund ONE item (the ₹500 pot): its tax and its vendor payable are reversed, nothing else.
     public function test_item_refund_reverses_exactly_that_lines_components(): void
     {
