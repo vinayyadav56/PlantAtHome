@@ -101,7 +101,7 @@ class ReconcileRazorpayPendingCommand extends Command
                     try {
                         // Record the capture for accounting with the gateway's own figures
                         // (idempotent — a webhook that already landed makes this a no-op).
-                        if ($captured = (new \Marvel\Payment\Razorpay())->fetchCapturedPayment($paymentId)) {
+                        if ($captured = (new \Marvel\Payments\Razorpay())->fetchCapturedPayment($paymentId)) {
                             \Marvel\Services\Accounting\AccountingPostingService::make()->recordPaymentCaptured(
                                 $order, 'razorpay', (string) $captured['id'], (int) $captured['amount'], (int) $captured['fee'], (int) $captured['tax'], $captured, 'system:razorpay-reconcile'
                             );

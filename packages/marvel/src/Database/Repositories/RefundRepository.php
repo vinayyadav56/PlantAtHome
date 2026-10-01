@@ -55,9 +55,8 @@ class RefundRepository extends BaseRepository
         $user = $request->user();
         $scope = (string) ($request->input('scope') ?: 'full');
         $accounting = \Marvel\Services\Accounting\AccountingPostingService::enabled();
-        if ($scope !== 'full' && !$accounting) {
-            throw new MarvelException(SOMETHING_WENT_WRONG, 'Partial and item refunds require the accounting module.');
-        }
+        // NB: the "partial/item needs accounting" guard is NOT here any more — it lives in
+        // createSliced(), which is the chokepoint BOTH callers reach. See the note there.
         // One open refund at a time; and with accounting on, several settled refunds may exist
         // as long as they never exceed what the customer paid (checked in slices()).
         $open = $this->where('order_id', $request->order_id)->whereNull('shop_id')->whereIn('status', [RefundStatus::PENDING, RefundStatus::PROCESSING])->exists();
@@ -94,6 +93,22 @@ class RefundRepository extends BaseRepository
     public function createSliced(Order $order, array $data, string $scope = 'full', array $items = [], $requestedAmount = null, ?string $method = null)
     {
         $accounting = \Marvel\Services\Accounting\AccountingPostingService::enabled();
+
+        // Without the accounting module there is no slicer, so `amount` below stays at the FULL
+        // paid_total and `scope` stays at the DB default 'full' — approving it then refunds the
+        // whole order. That is survivable for a deliberate full refund and catastrophic for a
+        // sliced one: returning one ₹500 plant from a ₹5,000 order would refund ₹5,000.
+        //
+        // This guard used to live in storeRefund(), the caller. ReturnService::refund() calls
+        // THIS method directly and so walked straight past it. The guard belongs at the
+        // chokepoint, which is here.
+        if ($scope !== 'full' && !$accounting) {
+            // Message first, constant second: MarvelException renders `reason` only into the
+            // GraphQL extensions block, so over REST — which is what the admin uses — the
+            // second argument is invisible. The explanation has to BE the message.
+            throw new MarvelException('Partial and item refunds require the accounting module.', SOMETHING_WENT_WRONG);
+        }
+
         // Snapshot what the customer actually PAID (paid_total = subtotal + tax + delivery −
         // discount), not the bare product subtotal — otherwise refunds under-pay by tax+delivery.
         $data['amount'] = $order->paid_total;

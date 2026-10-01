@@ -23,6 +23,15 @@ class SendRefundRequestedNotification implements ShouldQueue
     public function handle(RefundRequested $event)
     {
         $refund = $event->refund;
+
+        // Child (per-vendor) refund rows are an internal mirror of the parent — createChildOrderRefund
+        // writes one per suborder, and the model fires `created` for each. Without this the customer
+        // got one email AND one DLT SMS per vendor for a single refund request. The parent row
+        // (shop_id === null) is the one the customer asked for.
+        if ($refund->shop_id !== null) {
+            return;
+        }
+
         $customer = $refund->customer;
         $order = $refund->order;
         $emailReceiver = $this->getWhichUserWillGetEmail(EventType::ORDER_REFUND, $order->language);

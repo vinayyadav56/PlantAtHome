@@ -36,7 +36,7 @@ class RefundService
 
     public function __construct(private readonly AccountingConfig $config, private readonly JournalService $journal, ?callable $gatewayRefunder = null)
     {
-        $this->gatewayRefunder = $gatewayRefunder ?: fn (string $pid, int $paise, string $receipt) => (new \Marvel\Payment\Razorpay())->refund($pid, $paise, $receipt);
+        $this->gatewayRefunder = $gatewayRefunder ?: fn (string $pid, int $paise, string $receipt) => (new \Marvel\Payments\Razorpay())->refund($pid, $paise, $receipt);
     }
 
     public static function make(): self

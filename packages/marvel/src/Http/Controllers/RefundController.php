@@ -111,7 +111,10 @@ class RefundController extends CoreController
             }
             return $this->repository->storeRefund($request);
         } catch (MarvelException $th) {
-            throw new MarvelException(COULD_NOT_CREATE_THE_RESOURCE);
+            // Rethrow as-is. A MarvelException is already a deliberate, user-facing message
+            // ("Partial and item refunds require the accounting module."); re-wrapping it into
+            // COULD_NOT_CREATE_THE_RESOURCE threw away the only explanation the admin gets.
+            throw $th;
         }
     }
 
@@ -155,7 +158,7 @@ class RefundController extends CoreController
             $request->merge(['id' => $id]);
             return $this->updateRefund($request);
         } catch (MarvelException $th) {
-            throw new MarvelException(COULD_NOT_UPDATE_THE_RESOURCE);
+            throw $th; // see store() — keep the real reason
         }
     }
 
@@ -314,8 +317,12 @@ class RefundController extends CoreController
             return response()->json(['message' => 'Only an approved refund can be paid out.'], 422);
         }
         $svc = \Marvel\Services\Accounting\RefundService::make();
+        // Read this BEFORE payout(): payout() forceFills refunded_at onto THIS SAME instance, so
+        // testing $refund->refunded_at afterwards is always false and the wallet credit below
+        // never ran. The books said the customer had been paid while their balance never moved.
+        $alreadyPaid = (bool) $refund->refunded_at;
         $je = $svc->payout($refund, $request->input('method'), (string) ($request->user()?->id ?? 'system'));
-        if ($je && $request->input('method') === 'wallet' && !$refund->refunded_at) {
+        if ($je && $request->input('method') === 'wallet' && !$alreadyPaid) {
             $points = $this->currencyToWalletPoints((float) $svc->postedAmount($refund)->toDecimal());
             $wallet = Wallet::firstOrCreate(['customer_id' => $refund->customer_id]);
             $wallet->total_points = (float) $wallet->total_points + $points;

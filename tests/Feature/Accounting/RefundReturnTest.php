@@ -41,6 +41,84 @@ class RefundReturnTest extends OrdersTestCase
         return $refund->fresh();
     }
 
+    /**
+     * With accounting OFF there is no slicer, so createSliced leaves `amount` at the FULL
+     * paid_total and `scope` at the DB default 'full'. Returning one ₹500 pot from a ₹1,060
+     * order therefore used to mint a refund for the whole order, which on approval flips the
+     * entire order to REFUNDED.
+     *
+     * The guard that prevents this used to live in storeRefund() — the HTTP caller — while
+     * ReturnService::refund() calls createSliced() directly and walked straight past it.
+     */
+    public function test_a_return_cannot_mint_an_order_sized_refund_when_accounting_is_off(): void
+    {
+        $order = $this->recognized();
+        $pot = DB::table('order_items')->where('order_id', $order->id)->where('product_id', 102)->value('id');
+
+        $returnId = DB::table('return_requests')->insertGetId([
+            'order_id' => $order->id, 'order_item_id' => $pot, 'customer_id' => $order->customer_id,
+            'quantity' => 1, 'status' => 'received', 'reason' => 'damaged',
+            'created_at' => now(), 'updated_at' => now(),
+        ]);
+
+        DB::table('settings')->update(['options' => json_encode(['accounting' => ['enabled' => false]])]);
+
+        try {
+            (new ReturnService())->refund($returnId, 'wallet', 'test');
+            $this->fail('a sliced refund was created with the accounting module off');
+        } catch (\Throwable $e) {
+            $this->assertStringContainsString('accounting module', $e->getMessage());
+        }
+
+        // and nothing was written — in particular no refund for the whole ₹1,060 order
+        $this->assertSame(0, Refund::where('order_id', $order->id)->count());
+        $this->assertNull(DB::table('return_requests')->where('id', $returnId)->value('refund_id'));
+    }
+
+    /**
+     * payout() forceFills refunded_at onto the instance it is handed, so the controller's
+     * `!$refund->refunded_at` guard — evaluated AFTER the call — was always false and the
+     * wallet credit never ran. The ledger recorded the customer as paid while their balance
+     * never moved. The controller now samples refunded_at before the call.
+     */
+    public function test_retry_payout_to_wallet_actually_credits_the_wallet(): void
+    {
+        $order = $this->recognized();
+        $refund = $this->approvedRefund($order, 'full');
+        RefundService::make()->post($refund, 'admin:1');
+        $refund = $refund->fresh();
+        $this->assertNull($refund->refunded_at, 'precondition: money has not moved yet');
+
+        // `wallets` is not in the shared accounting stub set; this is the only test that needs it.
+        if (!\Illuminate\Support\Facades\Schema::hasTable('wallets')) {
+            \Illuminate\Support\Facades\Schema::create('wallets', function ($t) {
+                $t->id();
+                $t->unsignedBigInteger('customer_id');
+                $t->double('total_points')->default(0);
+                $t->double('points_used')->default(0);
+                $t->double('available_points')->default(0);
+                $t->timestamps();
+            });
+        }
+
+        $before = (float) (DB::table('wallets')->where('customer_id', $order->customer_id)->value('available_points') ?? 0);
+
+        $request = \Illuminate\Http\Request::create('/x', 'POST', ['method' => 'wallet']);
+        $request->setUserResolver(fn () => (object) ['id' => 1]);
+        app(\Marvel\Http\Controllers\RefundController::class)->payout($request, $refund->id);
+
+        $after = (float) DB::table('wallets')->where('customer_id', $order->customer_id)->value('available_points');
+        $expected = (float) RefundService::make()->postedAmount($refund->fresh())->toDecimal();
+
+        $this->assertGreaterThan($before, $after, 'the wallet was never credited');
+        // currencyToWalletRatio is unset in the test settings, so 1 point = ₹1.
+        $this->assertSame(
+            round($expected, 4),
+            round($after - $before, 4),
+            'wallet credit must equal the posted refund amount'
+        );
+    }
+
     // 11 — refund ONE item (the ₹500 pot): its tax and its vendor payable are reversed, nothing else.
     public function test_item_refund_reverses_exactly_that_lines_components(): void
     {
