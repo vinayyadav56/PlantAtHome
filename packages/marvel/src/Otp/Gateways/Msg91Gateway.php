@@ -78,6 +78,12 @@ class Msg91Gateway implements OtpInterface
                     // Minutes. The validity WORDING the customer reads lives in
                     // MSG91's template text — keep the two in agreement.
                     'otp_expiry' => (int) config('services.msg91.otp_expiry', 5),
+                    // MSG91 defaults to a 4-DIGIT OTP when this is omitted — discovered live
+                    // on 2026-10-02: the SMS carried 4 digits while the storefront renders six
+                    // boxes, validates ^\d{6}$ and auto-submits on the 6th digit, so a customer
+                    // could never even enter what they received. Everything client-side is
+                    // built around 6; this must match it.
+                    'otp_length' => (int) config('services.msg91.otp_length', 6),
                 ]));
             $data = $resp->json();
             if ($resp->ok() && (($data['type'] ?? '') === 'success')) {

@@ -81,6 +81,8 @@ return [
         'sender' => env('MSG91_SENDER'),
         // optional non-OTP SMS flow id
         'flow_id' => env('MSG91_FLOW_ID'),
+        // Digits in the generated OTP. The storefront's entry UI is hard-built around 6.
+        'otp_length' => env('MSG91_OTP_LENGTH', 6),
         // OTP validity in minutes — must agree with the wording in MSG91's OTP template text
         'otp_expiry' => env('MSG91_OTP_EXPIRY', 5),
     ],
