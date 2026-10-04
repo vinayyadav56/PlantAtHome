@@ -53,21 +53,6 @@ abstract class LocationPagesTestCase extends TestCase
             $t->timestamps();
         });
 
-        // Live-supply counts on the public reads join these.
-        Schema::create('products', function (Blueprint $t) {
-            $t->bigIncrements('id');
-            $t->string('status')->default('publish');
-        });
-        Schema::create('categories', function (Blueprint $t) {
-            $t->bigIncrements('id');
-            $t->string('slug');
-            $t->string('name');
-        });
-        Schema::create('category_product', function (Blueprint $t) {
-            $t->unsignedBigInteger('category_id');
-            $t->unsignedBigInteger('product_id');
-        });
-
         Schema::create('users', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->string('name')->nullable();

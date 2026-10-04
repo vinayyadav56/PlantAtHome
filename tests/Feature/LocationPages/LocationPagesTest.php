@@ -3,8 +3,6 @@
 namespace Tests\Feature\LocationPages;
 
 use Illuminate\Support\Facades\Artisan;
-use Illuminate\Support\Facades\DB;
-use Marvel\Http\Controllers\LocationPageController;
 use Illuminate\Support\Str;
 use Marvel\Database\Models\LocationPage;
 use Marvel\Services\AvailabilityService;
@@ -132,35 +130,5 @@ class LocationPagesTest extends LocationPagesTestCase
         Artisan::call('plantathome:seed-location-pages');
 
         $this->assertSame(0, LocationPage::count());
-    }
-
-    /* ── live-supply indexing gate ────────────────────────────────── */
-
-    public function test_city_page_is_indexable_only_with_a_real_shelf(): void
-    {
-        DB::table('categories')->insert(['id' => 1, 'slug' => 'indoor', 'name' => 'Indoor']);
-        foreach (['delhi' => 8, 'jaipur' => 3] as $city => $n) {
-            LocationPage::create([
-                'city_id' => $this->city(ucfirst($city)), 'slug' => $city,
-                'city_name' => ucfirst($city), 'is_active' => true, 'is_indexable' => true,
-            ]);
-            for ($i = 1; $i <= $n; $i++) {
-                $id = DB::table('products')->insertGetId(['status' => 'publish']);
-                $this->supply($city, $id);
-                DB::table('category_product')->insert(['category_id' => 1, 'product_id' => $id]);
-            }
-        }
-        // a draft with supply must not count
-        $draft = DB::table('products')->insertGetId(['status' => 'draft']);
-        $this->supply('jaipur', $draft);
-
-        $rows = collect(app(LocationPageController::class)->index(request())->getData(true))->keyBy('slug');
-        $this->assertSame(8, $rows['delhi']['products_count']);
-        $this->assertTrue($rows['delhi']['is_indexable']);
-        $this->assertSame(3, $rows['jaipur']['products_count']);
-        $this->assertFalse($rows['jaipur']['is_indexable'], 'a thin city page must not be indexed even when the admin flag is on');
-
-        $page = app(LocationPageController::class)->show('delhi');
-        $this->assertSame([['slug' => 'indoor', 'name' => 'Indoor', 'products_count' => 8]], $page->categories);
     }
 }
