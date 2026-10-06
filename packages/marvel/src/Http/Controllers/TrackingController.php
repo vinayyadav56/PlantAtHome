@@ -42,6 +42,10 @@ class TrackingController extends CoreController
     /** The crawler leg (proxy.ts). UA arrives as the request header, ip + geo in the body. */
     public function ingestCrawl(Request $request)
     {
+        $secret = (string) config('tracking.crawl_secret', '');
+        if ($secret !== '' && !hash_equals($secret, (string) $request->header('X-Track-Key'))) {
+            return response()->noContent(); // wrong/missing key: dropped, never an error
+        }
         return $this->handle($request, 'server');
     }
 

@@ -126,6 +126,21 @@ final class TrackingIngestTest extends TrackingTestCase
         $this->assertSame(2, (int) DB::table('visitors')->value('page_views'));
     }
 
+    public function test_the_crawl_leg_requires_the_shared_key_once_one_is_configured(): void
+    {
+        config(['tracking.crawl_secret' => 'proxy-key-123']);
+        $body = ['page' => '/', 'ip' => '66.249.66.1', 'events' => [['type' => 'page_view']]];
+
+        $this->ping($body, ['User-Agent' => self::GPTBOT], crawl: true)->assertNoContent();
+        $this->assertSame(0, DB::table('visitors')->count(), 'no key → dropped silently');
+
+        $this->ping($body, ['User-Agent' => self::GPTBOT, 'X-Track-Key' => 'wrong'], crawl: true)->assertNoContent();
+        $this->assertSame(0, DB::table('visitors')->count(), 'wrong key → dropped silently');
+
+        $this->ping($body, ['User-Agent' => self::GPTBOT, 'X-Track-Key' => 'proxy-key-123'], crawl: true)->assertNoContent();
+        $this->assertSame(1, DB::table('visitors')->where('traffic_type', 'bot')->count());
+    }
+
     public function test_a_human_user_agent_on_the_crawl_leg_is_not_counted_as_a_page_view(): void
     {
         $this->ping(['page' => '/', 'ip' => '1.2.3.4', 'events' => [['type' => 'page_view']]], ['User-Agent' => self::CHROME], crawl: true)->assertNoContent();

@@ -45,6 +45,12 @@ return [
     'max_body_bytes' => 16384,
     'max_events'     => 20,
 
+    // Shared secret for the crawler leg (POST /track/crawl). When set, a ping must carry
+    // `X-Track-Key: <secret>` or it is dropped (still 204). The storefront's proxy.ts sends
+    // it from TRACKING_CRAWL_SECRET. Unset = open, like the public SDK route: the fields
+    // it carries (ip, coarse geo) are analytics-only and never authorise anything.
+    'crawl_secret' => env('TRACKING_CRAWL_SECRET'),
+
     /*
     | Named crawlers: regex fragment (case-insensitive, matched against the
     | User-Agent) => [display name, type]. First match wins, so put the
