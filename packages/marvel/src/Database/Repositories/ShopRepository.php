@@ -333,6 +333,15 @@ class ShopRepository extends BaseRepository
                 $data['updated_by'] = $request->user()->id ?? null;
                 $shop->update($data);
                 $this->syncServiceAreas($shop, $request);
+                // The admin wizard no longer sends `service_areas` on update — those rows
+                // are the coverage projector's OUTPUT, and echoing them back replaced every
+                // rule the Delivery Coverage editor had saved. syncServiceAreas therefore
+                // returns early on update, which would also have dropped the one side
+                // effect that lived after its guard: surfacing the vendor's own address
+                // city in the storefront picker. Keep that on its own feet.
+                if (isset($request['address']) && data_get($request, 'address.city')) {
+                    $this->activateServedCities([(string) data_get($request, 'address.city')]);
+                }
 
                 // Keep the KYC clock honest on every settings write: uploading
                 // the last missing document clears the deadline (and releases a
