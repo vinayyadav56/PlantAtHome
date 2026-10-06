@@ -157,8 +157,8 @@ class ActivityStreamService
                 ->orderByDesc('id')->limit(40)->get()
                 ->each(function ($e) use ($push) {
                     $sev = match ($e->type) {
-                        'checkout_start', 'payment_complete' => 'low',
-                        'non_serviceable_order', 'location_denied' => 'medium',
+                        'begin_checkout', 'payment_success', 'order_created', 'order_success' => 'low',
+                        'non_serviceable_order', 'location_denied', 'payment_failed', 'checkout_failed' => 'medium',
                         default => 'info',
                     };
                     $push("ae:{$e->id}", $e->created_at, 'behaviour', $sev, 'storefront',
