@@ -72,6 +72,18 @@ class ProductResource extends Resource
             'sold_quantity'        => $this->sold_quantity,
             'in_flash_sale'        => $this->in_flash_sale,
             'visibility'           => $this->visibility,
+            // PlantAtHome — the listing card's rating row. ONLY when the list was
+            // loaded with the review aggregates (fetchProducts: withAvg/withCount);
+            // the accessors fall back to a query per row otherwise, and this
+            // resource is reused by FlashSaleResource without those aggregates.
+            'ratings'              => $this->when(
+                array_key_exists('reviews_avg_rating', $this->resource->getAttributes()),
+                fn () => $this->ratings
+            ),
+            'total_reviews'        => $this->when(
+                array_key_exists('reviews_count', $this->resource->getAttributes()),
+                fn () => $this->total_reviews
+            ),
             // PlantAtHome — botanical name + short care chips for the storefront card
             'scientific_name'      => optional($this->plantAttribute)->scientific_name,
             'care'                 => $this->plantCareChips(),
