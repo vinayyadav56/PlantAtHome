@@ -331,11 +331,8 @@ class ActivityStreamService
             $latency = $grab(fn () => DB::table('request_logs')->where('created_at', '>=', $from)
                 ->selectRaw("$bucket t, COALESCE(AVG(duration_ms),0) v")->groupBy('t')->pluck('v', 't')->all());
 
-            $online = 0;
-            try {
-                $online = DB::table('visitors')->where('last_seen', '>=', now()->subMinutes(5))->count();
-            } catch (\Throwable) {
-            }
+            // Humans online, by the ONE definition (VisitorMetricsService).
+            $online = app(VisitorMetricsService::class)->onlineCounts()['human'];
 
             $sum = fn (array $s, int $fromIdx, int $len) => array_sum(array_slice($s, $fromIdx, $len));
             $insights = [];

@@ -72,11 +72,12 @@ class CustomerMetricsService
         if (!Schema::hasTable('analytics_events')) {
             return ['carted' => 0, 'paid' => 0, 'rate' => 0];
         }
+        // Humans only, and the order step is order_created: the old payment_complete
+        // was derived from a thank-you page nothing navigates to, so this read 100%.
         $since = Carbon::now()->subDays(7);
-        $carted = (int) DB::table('analytics_events')->where('type', 'add_to_cart')
-            ->where('created_at', '>=', $since)->distinct()->count('visitor_id');
-        $paid = (int) DB::table('analytics_events')->where('type', 'payment_complete')
-            ->where('created_at', '>=', $since)->distinct()->count('visitor_id');
+        $human = fn () => DB::table('analytics_events')->where('traffic_type', 'human')->where('created_at', '>=', $since);
+        $carted = (int) $human()->where('type', 'add_to_cart')->distinct()->count('visitor_id');
+        $paid = (int) $human()->whereIn('type', ['order_created', 'payment_success'])->distinct()->count('visitor_id');
         $rate = $carted > 0 ? round((max(0, $carted - $paid) / $carted) * 100, 1) : 0;
 
         return ['carted' => $carted, 'paid' => $paid, 'rate' => $rate];

@@ -180,5 +180,6 @@ final class IntegrationRevealTest extends TestCase
         $skip = $ref->getConstant('SKIP_CONTAINS');
 
         $this->assertContains('/reveal', $skip, 'a reveal response must never reach request_logs');
+        $this->assertContains('api/track', $skip, 'tracking beacons are volume with their own tables — never request_logs');
     }
 }

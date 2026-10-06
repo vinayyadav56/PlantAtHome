@@ -317,9 +317,13 @@ Route::get('locations/node', [LocationController::class, 'node'])->middleware('t
 Route::get('locations/pages', [LocationPageController::class, 'index'])->middleware('throttle:120,1');
 Route::get('locations/pages/{slug}', [LocationPageController::class, 'show'])->middleware('throttle:120,1');
 
-// Visitor / Live Activity NOC (Phase 3) — public, fire-and-forget storefront
-// event ingest. Fail-safe (always 204); generous throttle for active browsing.
-Route::post('track', [TrackingController::class, 'ingest'])->middleware('throttle:300,1');
+// Visitor / Live Activity NOC — public, fire-and-forget storefront event ingest.
+// Fail-safe (always 204). NAMED limiters: a numeric throttle:N,1 shares one
+// per-IP counter with every other numeric-throttle route, so beacons were
+// competing with locations/* for the same bucket. `track/crawl` is the
+// storefront proxy's server-to-server leg for non-JS crawlers (one source IP).
+Route::post('track', [TrackingController::class, 'ingest'])->middleware('throttle:track');
+Route::post('track/crawl', [TrackingController::class, 'ingestCrawl'])->middleware('throttle:track-crawl');
 
 // Garden service — logged-in customer: their packages + visit tracking + pay.
 Route::middleware('auth:sanctum')->group(function () {
@@ -1285,6 +1289,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('command-center/live-visitors', [CommandCenterController::class, 'liveVisitors']);
     Route::get('command-center/visitor-journey', [CommandCenterController::class, 'visitorJourney']);
     Route::get('command-center/funnel', [CommandCenterController::class, 'funnel']);
+    Route::get('command-center/traffic-report', [CommandCenterController::class, 'trafficReport']);
     Route::get('command-center/activity-feed', [CommandCenterController::class, 'activityFeed']);
     // Phase 4 — Inventory + Customer Intelligence.
     Route::get('command-center/inventory', [CommandCenterController::class, 'inventory']);

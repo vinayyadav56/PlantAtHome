@@ -39,7 +39,20 @@ class EnrichIpLocationsCommand extends Command
             ->where('created_at', '>=', now()->subMinutes($window))
             ->whereNotNull('ip')
             ->distinct()
-            ->pluck('ip')
+            ->pluck('ip');
+        // Storefront visitors too (their beacons are not in request_logs). This is the
+        // geo FALLBACK for visitors — Cloudflare's cf-ipcity header is the primary source.
+        if (Schema::hasTable('visitors') && Schema::hasColumn('visitors', 'country_code')) {
+            $ips = $ips->merge(
+                DB::table('visitors')
+                    ->where('last_seen', '>=', now()->subMinutes($window))
+                    ->whereNull('country_code')
+                    ->whereNotNull('ip')
+                    ->distinct()
+                    ->pluck('ip')
+            );
+        }
+        $ips = $ips->unique()
             ->reject(fn ($ip) => DB::table('ip_locations')->where('ip', $ip)->exists())
             ->values();
 

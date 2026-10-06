@@ -99,6 +99,21 @@ class RouteServiceProvider extends ServiceProvider
 
             return self::otpLimits($request);
         });
+
+        // Storefront tracking beacons. Keyed on Cloudflare's CF-Connecting-IP (rewritten
+        // on every proxied request, so not spoofable through the edge) rather than
+        // $request->ip(). 1200/min, not 300: CGNAT puts hundreds of Jio users behind one
+        // address at two heartbeats a minute each, and a 429 fires BEFORE the controller's
+        // always-204 guard — a limit that is too tight silently loses real visitors.
+        RateLimiter::for('track', function (Request $request) {
+            return Limit::perMinute(1200)->by('track:'.($request->header('CF-Connecting-IP') ?: $request->ip()));
+        });
+
+        // The crawler leg: one caller (the storefront's proxy.ts), bursts when a
+        // search engine crawls. One shared bucket, generous.
+        RateLimiter::for('track-crawl', function () {
+            return Limit::perMinute(3000)->by('track-crawl');
+        });
     }
 
     /**

@@ -90,9 +90,17 @@ class CommandCenterController extends CoreController
     }
 
     // ── Visitor / Live Activity NOC (Phase 3) ───────────────────────────────
+    /** ?type=human|bot|unknown filters the row list; the counts always carry the full split. */
     public function liveVisitors(Request $request)
     {
-        return $this->visitors->liveVisitors();
+        $type = trim((string) $request->get('type', ''));
+        return $this->visitors->live($type !== '' && $type !== 'all' ? $type : null);
+    }
+
+    /** Historical human + bot traffic. ?days=1|7|30 (1 = today). */
+    public function trafficReport(Request $request)
+    {
+        return $this->visitors->report((int) ($request->get('days', 7)));
     }
 
     public function visitorJourney(Request $request)

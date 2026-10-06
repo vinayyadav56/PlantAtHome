@@ -32,7 +32,10 @@ class PruneLogTablesCommand extends Command
     private const TABLES = [
         'request_logs'              => ['days' => null, 'col' => 'created_at'], // null = admin setting
         'request_log_exceptions'    => ['days' => 30, 'col' => 'created_at'],
-        'analytics_events'          => ['days' => 30, 'col' => 'created_at'],
+        // Tracking tables: config/tracking.php owns these numbers (resolved in handle()).
+        'analytics_events'          => ['days' => 'tracking.retention.events_days', 'col' => 'created_at'],
+        'analytics_sessions'        => ['days' => 'tracking.retention.sessions_days', 'col' => 'last_seen_at'],
+        'visitors'                  => ['days' => 'tracking.retention.visitors_days', 'col' => 'last_seen'],
         'voice_search_logs'         => ['days' => 30, 'col' => 'created_at'],
         'plant_doctor_logs'         => ['days' => 30, 'col' => 'created_at'],
         'notify_logs'               => ['days' => 30, 'col' => 'created_at'],
@@ -59,7 +62,9 @@ class PruneLogTablesCommand extends Command
                 continue;
             }
 
-            $days = $cfg['days'] ?? $this->requestLogRetentionDays();
+            $days = is_string($cfg['days'])
+                ? (int) config($cfg['days'], 30)
+                : ($cfg['days'] ?? $this->requestLogRetentionDays());
             $cutoff = now()->subDays(max(1, $days));
 
             $base = DB::table($table)->where($cfg['col'], '<', $cutoff);

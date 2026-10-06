@@ -25,9 +25,8 @@ use Marvel\Enums\Permission;
  */
 class MetricsService
 {
-    /** Minutes a courier's GPS ping stays "fresh" / a session stays "live". */
+    /** Minutes a courier's GPS ping stays "fresh". */
     private const COURIER_FRESH_MIN = 10;
-    private const VISITOR_WINDOW_MIN = 15;
     /** A processing order older than this is flagged "delayed". */
     private const DELAYED_AFTER_HOURS = 24;
 
@@ -43,6 +42,7 @@ class MetricsService
         $prevCustomers = $this->customersCreatedBetween($d60, $d30);
         $newVendors = $this->vendorsCreatedSince($d30);
         $prevVendors = $this->vendorsCreatedBetween($d60, $d30);
+        $live = app(VisitorMetricsService::class)->onlineCounts();
 
         return [
             'revenue_today'        => $this->revenueSince($todayStart),
@@ -56,7 +56,11 @@ class MetricsService
             'vendor_growth_pct'    => $this->growthPct($newVendors, $prevVendors),
             'cities_active'        => $this->activeCitiesCount($d30),
             'active_couriers'      => $this->activeCouriersCount(),
-            'live_visitors'        => $this->liveVisitorsApprox(),  // approx — request_logs (GET skipped)
+            // ONE definition of "online" (VisitorMetricsService): humans only here,
+            // the full human/bot/unknown split alongside. The old request_logs
+            // distinct-IP approximation disagreed with every other live number.
+            'live_visitors'        => $live['human'],
+            'live_traffic'         => $live,
             'generated_at'         => Carbon::now()->toIso8601String(),
         ];
     }
@@ -437,6 +441,7 @@ class MetricsService
             try {
                 $out['top_referrers'] = DB::table('visitors')
                     ->where('last_seen', '>=', now()->subDays(30))
+                    ->where('traffic_type', 'human')
                     ->whereNotNull('referrer')->where('referrer', '!=', '')
                     ->pluck('referrer')
                     ->map(fn ($r) => strtolower(parse_url((string) $r, PHP_URL_HOST) ?: (string) $r))
@@ -505,7 +510,7 @@ class MetricsService
      * Delivery-based metrics (fulfilment time, DP performance) still key off COMPLETED; this is
      * only for sums of money.
      */
-    private function applyRevenueFilter($query)
+    public static function applyRevenueFilter($query)
     {
         return $query
             ->whereNotIn('order_status', [
@@ -623,19 +628,6 @@ class MetricsService
             ->where('is_online', true)
             ->where('location_updated_at', '>=', Carbon::now()->subMinutes(self::COURIER_FRESH_MIN))
             ->count();
-    }
-
-    /** Approximate "active now": distinct request_log IPs in the last window (GET is not logged). */
-    private function liveVisitorsApprox(): int
-    {
-        if (!Schema::hasTable('request_logs')) {
-            return 0;
-        }
-        return (int) DB::table('request_logs')
-            ->where('created_at', '>=', Carbon::now()->subMinutes(self::VISITOR_WINDOW_MIN))
-            ->whereNotNull('ip')
-            ->distinct()
-            ->count('ip');
     }
 
     /** SQL expr: the customer city from an order's shipping_address JSON (with fallbacks). */

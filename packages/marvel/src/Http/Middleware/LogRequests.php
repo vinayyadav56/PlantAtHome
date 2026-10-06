@@ -59,7 +59,9 @@ class LogRequests
     // RETURNS A CREDENTIAL. Error responses always keep their body (see below) and
     // store_response_bodies can opt success bodies in too, so without this entry an operator
     // flipping that setting would start writing live third-party secrets into request_logs.
-    private const SKIP_CONTAINS = ['request-logs', 'admin-tasks', '/health', '/reveal'];
+    // 'api/track' is the storefront tracking beacon (every page view + a heartbeat every
+    // 30 s per open tab): pure volume with its own tables, so it never lands here.
+    private const SKIP_CONTAINS = ['request-logs', 'admin-tasks', '/health', '/reveal', 'api/track'];
 
     // Headers worth keeping, allowlisted — never the Authorization/Cookie family.
     private const HEADER_ALLOWLIST = ['referer', 'origin', 'accept-language', 'content-type'];
@@ -76,15 +78,16 @@ class LogRequests
     public function terminate(Request $request, $response): void
     {
         try {
-            $settings = $this->settings();
-            if (!$settings['enabled']) {
-                return;
-            }
+            // Path skip FIRST: the beacon routes must cost zero cache/DB reads here.
             $path = '/' . ltrim($request->path(), '/');
             foreach (self::SKIP_CONTAINS as $skip) {
                 if (str_contains($path, $skip)) {
                     return;
                 }
+            }
+            $settings = $this->settings();
+            if (!$settings['enabled']) {
+                return;
             }
             $method = $request->method();
             $status = method_exists($response, 'getStatusCode') ? $response->getStatusCode() : null;
