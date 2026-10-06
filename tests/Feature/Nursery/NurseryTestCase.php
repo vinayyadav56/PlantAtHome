@@ -17,5 +17,6 @@ abstract class NurseryTestCase extends IdentityTestCase
 
         (require base_path('app/Modules/Nursery/Database/Migrations/2026_07_29_000100_create_nursery_tables.php'))->up();
         (require base_path('app/Modules/Nursery/Database/Migrations/2026_07_29_000200_add_vendor_fields_to_nursery_tables.php'))->up();
+        (require base_path('app/Modules/Nursery/Database/Migrations/2026_10_06_000100_add_delivery_mode_to_nursery_nurseries.php'))->up();
     }
 }

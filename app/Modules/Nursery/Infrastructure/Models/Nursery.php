@@ -32,7 +32,7 @@ class Nursery extends Model
         'uuid', 'legacy_id', 'owner_user_uuid', 'name', 'slug', 'description',
         'logo', 'cover_image', 'address', 'status', 'commission_rate', 'settings',
         'contact_person', 'mobile', 'upi', 'lat', 'lng', 'category_ids',
-        'service_areas', 'gst_number',
+        'service_areas', 'gst_number', 'delivery_mode', 'self_delivery',
     ];
 
     protected $casts = [
@@ -42,6 +42,7 @@ class Nursery extends Model
         'settings'      => 'array',
         'category_ids'  => 'array',
         'service_areas' => 'array',
+        'self_delivery'  => 'array',
     ];
 
     public function balance(): HasOne

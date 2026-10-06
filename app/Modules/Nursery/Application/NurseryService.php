@@ -121,6 +121,29 @@ class NurseryService
 
             $nursery->fill($data)->save();
 
+            // Mirror the fulfilment choice onto the legacy `shops` row. The consumers of
+            // delivery_mode — MatchingService, OrderItemService, MetricsService — all read
+            // shops.delivery_mode, not the nursery row, so a V2-only write would be invisible
+            // to the fulfilment engine. Guarded on the columns existing (deploy lag).
+            //
+            // ponytail: V2 update mirrors NOTHING else to legacy today — a name or address
+            // edit on a V2-backed env never reaches `shops` either. That is a wider strangler
+            // gap; this closes only the two fields with a live consumer behind them.
+            if ($nursery->legacy_id !== null
+                && (array_key_exists('delivery_mode', $data) || array_key_exists('self_delivery', $data))) {
+                $schema = $this->db->getSchemaBuilder();
+                $mirror = [];
+                if (array_key_exists('delivery_mode', $data) && $schema->hasColumn('shops', 'delivery_mode')) {
+                    $mirror['delivery_mode'] = $data['delivery_mode'];
+                }
+                if (array_key_exists('self_delivery', $data) && $schema->hasColumn('shops', 'self_delivery')) {
+                    $mirror['self_delivery'] = $data['self_delivery'] === null ? null : json_encode($data['self_delivery']);
+                }
+                if ($mirror) {
+                    $this->db->table('shops')->where('id', $nursery->legacy_id)->update($mirror);
+                }
+            }
+
             // Only the operator-editable payment_info — never balance amounts.
             if (isset($data['balance']['payment_info']) && $nursery->balance) {
                 $nursery->balance->payment_info = $data['balance']['payment_info'];
@@ -300,10 +323,13 @@ class NurseryService
             'created_at'  => $now,
             'updated_at'  => $now,
         ];
-        foreach (['contact_person', 'mobile', 'upi', 'lat', 'lng', 'gst_number'] as $column) {
+        foreach (['contact_person', 'mobile', 'upi', 'lat', 'lng', 'gst_number', 'delivery_mode'] as $column) {
             if ($schema->hasColumn('shops', $column)) {
                 $shop[$column] = $nursery->{$column};
             }
+        }
+        if ($schema->hasColumn('shops', 'self_delivery')) {
+            $shop['self_delivery'] = $json($nursery->self_delivery);
         }
         $shopId = $this->db->table('shops')->insertGetId($shop);
 

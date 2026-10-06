@@ -37,6 +37,8 @@ final class NurseryResource
             'categories'      => $nursery->category_ids ?? [],
             'service_areas'   => $nursery->service_areas ?? [],
             'gst_number'      => $nursery->gst_number,
+            'delivery_mode'   => $nursery->delivery_mode ?? 'platform',
+            'self_delivery'   => $nursery->self_delivery,
             'owner'           => self::owner($nursery),
             'balance'         => $balance ? [
                 'total_earnings'   => (float) $balance->total_earnings,

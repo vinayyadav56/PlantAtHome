@@ -41,6 +41,19 @@ class UpsertNurseryRequest extends FormRequest
             'categories'           => ['nullable', 'array'],
             'categories.*'         => ['integer'],
             'service_areas'        => ['nullable', 'array'],
+            // Fulfilment — identical rules to the legacy ShopUpdateRequest. Without these the
+            // whole "Delivery & fulfilment" step was silently dropped on every V2-backed update:
+            // validated() never carried the keys, so fill() never saw them.
+            'delivery_mode'               => ['sometimes', 'in:platform,self'],
+            'self_delivery'               => ['nullable', 'array'],
+            'self_delivery.contact_name'  => ['nullable', 'string', 'max:120'],
+            'self_delivery.contact_phone' => ['nullable', 'string', 'max:20'],
+            'self_delivery.radius_km'     => ['nullable', 'numeric', 'min:0', 'max:500'],
+            'self_delivery.same_day'      => ['nullable', 'boolean'],
+            'self_delivery.cod'           => ['nullable', 'boolean'],
+            'self_delivery.days'          => ['nullable', 'string', 'max:255'],
+            'self_delivery.hours'         => ['nullable', 'string', 'max:255'],
+            'self_delivery.notes'         => ['nullable', 'string', 'max:500'],
             'balance'              => ['nullable', 'array'],
             'balance.payment_info' => ['nullable', 'array'],
             'owner_email'          => ['nullable', 'email'],
