@@ -149,7 +149,7 @@ class ProductController extends CoreController
             $all = \Marvel\Database\Models\ProductCityAvailability::whereIn('product_id', $ids)
                 ->where('city', $key)
                 ->whereNotNull('display_price')
-                ->get(['product_id', 'variation_option_id', 'min_price', 'display_price', 'stock', 'stock_override', 'vendor_count']);
+                ->get(['product_id', 'variation_option_id', 'min_price', 'display_price', 'stock', 'stock_override', 'vendor_count', 'has_local']);
             if ($all->isEmpty()) {
                 return;
             }
@@ -180,6 +180,10 @@ class ProductController extends CoreController
                 // the leak `a959daf` closed.
                 $p->vendor_count = (int) $row->vendor_count;
                 $p->city_stock = $row->effectiveStock(); // null = untracked = unlimited
+                // Local supply in THIS city (the rollup is written per city, so the
+                // flag is already city-scoped). Set only on priced rows, like the rest:
+                // an unpriced product keeps null = unknown, never "courier".
+                $p->city_local = (bool) $row->has_local;
             }
         } catch (\Throwable $e) {
             // overlay is best-effort — never break the listing
@@ -214,7 +218,9 @@ class ProductController extends CoreController
             'categories'    => (string) $request->input('categories', ''),
             'hide_unpriced' => $request->boolean('hide_unpriced') ? 1 : 0,
         ];
-        $key = 'products:facets:v' . $this->cacheVersion('products') . ':' . $language . ':' . md5(json_encode($keyParams));
+        // `facets2`: the payload shape changed (categories/sizes/air_purifying) and the
+        // key carried no code version, so a live 300 s entry would have lacked them.
+        $key = 'products:facets2:v' . $this->cacheVersion('products') . ':' . $language . ':' . md5(json_encode($keyParams));
         $data = Cache::remember($key, 300, fn () => $this->computeFilterFacets($request));
 
         return response()->json($data)->header('Cache-Control', $this->cacheControl());
@@ -402,7 +408,10 @@ class ProductController extends CoreController
         // ── plant-attribute value facets (distinct non-empty values + counts) ──
         $valueColumns = ['sunlight', 'water_requirement', 'indoor_outdoor', 'growth_rate', 'difficulty_level'];
         $facets = array_fill_keys($valueColumns, []);
-        $petFriendly = ['true' => 0, 'false' => 0];
+        // tinyint columns: {true, false} counts (null = unknown, not counted)
+        $booleans = array_fill_keys(['pet_friendly', 'air_purifying'], ['true' => 0, 'false' => 0]);
+        $categories = [];
+        $sizes = [];
 
         if ($total > 0) {
             foreach ($valueColumns as $col) {
@@ -423,16 +432,53 @@ class ProductController extends CoreController
                     ->all();
             }
 
-            foreach (
-                \Marvel\Database\Models\PlantAttribute::query()
-                    ->whereIn('product_id', $ids)
-                    ->whereNotNull('pet_friendly')
-                    ->selectRaw('pet_friendly as value, COUNT(*) as cnt')
-                    ->groupBy('pet_friendly')
-                    ->get() as $row
-            ) {
-                $petFriendly[$row->value ? 'true' : 'false'] = (int) $row->cnt;
+            foreach (array_keys($booleans) as $col) {
+                foreach (
+                    \Marvel\Database\Models\PlantAttribute::query()
+                        ->whereIn('product_id', $ids)
+                        ->whereNotNull($col)
+                        ->selectRaw("$col as value, COUNT(*) as cnt")
+                        ->groupBy($col)
+                        ->get() as $row
+                ) {
+                    $booleans[$col][$row->value ? 'true' : 'false'] = (int) $row->cnt;
+                }
             }
+
+            // ── category facet over the SAME in-scope ids ──────────────────────
+            // Category.products_count is null in the index, so the rail counts come
+            // from here. is_active only (retired categories keep their product links
+            // but must not be offered); DISTINCT because a product can sit in a
+            // category twice through legacy duplicate pivots.
+            $categories = DB::table('category_product')
+                ->join('categories', 'categories.id', '=', 'category_product.category_id')
+                ->whereIn('category_product.product_id', $ids)
+                ->where('categories.is_active', true)
+                ->whereNull('categories.deleted_at')
+                ->selectRaw('categories.id, categories.slug, categories.name, COUNT(DISTINCT category_product.product_id) as cnt')
+                ->groupBy('categories.id', 'categories.slug', 'categories.name')
+                ->orderByDesc('cnt')
+                ->orderBy('categories.name')
+                ->get()
+                ->map(fn ($r) => ['id' => (int) $r->id, 'slug' => (string) $r->slug, 'name' => (string) $r->name, 'count' => (int) $r->cnt])
+                ->all();
+
+            // ── sizes: the Size attribute's ladder (same source as sizeNames()) ──
+            // No counts on purpose: every listed plant carries every size, so each
+            // would equal `total`. `meta` is the admin-editable descriptor ("0–1 ft")
+            // and is null until filled. Column check per call, as sizeNames() does
+            // (deploys migrate after the new code is serving).
+            $sizeQuery = \Marvel\Database\Models\AttributeValue::query()
+                ->whereHas('attribute', fn ($a) => $a->where('slug', 'size')->where('language', DEFAULT_LANGUAGE));
+            if (\Illuminate\Support\Facades\Schema::hasColumn('attribute_values', 'sort_order')) {
+                $sizeQuery->orderBy('sort_order');
+            }
+            $sizes = $sizeQuery->orderBy('id')->get(['id', 'value', 'meta'])
+                ->map(fn ($v) => ['value' => trim((string) $v->value), 'meta' => trim((string) $v->meta) ?: null])
+                ->filter(fn ($s) => $s['value'] !== '')
+                ->unique('value')
+                ->values()
+                ->all();
         }
 
         // ── price facet: {min, max, histogram[~12]} over the card "from" price ──
@@ -508,7 +554,10 @@ class ProductController extends CoreController
                 'indoor_outdoor'    => $facets['indoor_outdoor'],
                 'growth_rate'       => $facets['growth_rate'],
                 'difficulty_level'  => $facets['difficulty_level'],
-                'pet_friendly'      => $petFriendly,
+                'pet_friendly'      => $booleans['pet_friendly'],
+                'air_purifying'     => $booleans['air_purifying'],
+                'categories'        => $categories,
+                'sizes'             => $sizes,
                 'price'             => $price,
                 'dynamic'           => $dynamic,
             ],
@@ -554,8 +603,12 @@ class ProductController extends CoreController
         // blockedAvailabilities relations feed the histogram and blocked-date accessors from
         // memory. The accessors fall back to per-row queries when these aren't loaded, so
         // the PDP/admin paths are unchanged.
+        //
+        // tags/categories (slim columns; Eloquent qualifies them and adds the pivot keys
+        // itself) feed the card badges — two queries per page, emitted by the resource
+        // only because they are loaded here.
         $products_query = $this->repository
-            ->with(['type', 'shop', 'plantAttribute', 'bundleItems', 'reviews:id,product_id,rating', 'blockedAvailabilities'])
+            ->with(['type', 'shop', 'plantAttribute', 'bundleItems', 'reviews:id,product_id,rating', 'blockedAvailabilities', 'tags:id,name,slug', 'categories:id,name,slug'])
             ->withCount('reviews')
             ->withAvg('reviews', 'rating')
             ->where('language', DEFAULT_LANGUAGE);

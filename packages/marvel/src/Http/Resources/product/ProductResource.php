@@ -91,6 +91,12 @@ class ProductResource extends Resource
             // feature grid (sunlight / water / height / pet-friendly). Already
             // eager-loaded in fetchProducts(), so no extra query.
             'plant_attribute'      => $this->plantAttribute,
+            // PlantAtHome — slim {id, name, slug} tags/categories for the card badges
+            // ("Bestseller", "Succulent"). ONLY when eager-loaded (fetchProducts does):
+            // FlashSaleResource reuses this resource without them, and a lazy load
+            // there would be a query per row.
+            'tags'                 => $this->whenLoaded('tags', fn () => getResourceCollection($this->tags)),
+            'categories'           => $this->whenLoaded('categories', fn () => getResourceCollection($this->categories)),
             // PlantAtHome — bundle support (only meaningful for product_type=bundle)
             'bundle_items'         => $this->whenLoaded('bundleItems', fn () => static::mapInclusions($this->bundleItems)),
             'bundle_total_value'   => $this->relationLoaded('bundleItems') ? $this->bundle_total_value : null,
@@ -102,6 +108,11 @@ class ProductResource extends Resource
             // a public endpoint is the leak a959daf closed.
             'vendor_count'         => $this->vendor_count ?? null,
             'city_stock'           => $this->city_stock ?? null,
+            // true = a vendor IN the city stocks it (the "Delivery by Tomorrow" signal);
+            // false = courier only; null = unknown (no city, or the city never priced
+            // it) — never to be read as "courier". city_stock above is ALL-vendor
+            // stock, which is why it could not carry this.
+            'city_local'           => $this->city_local ?? null,
         ];
     }
 

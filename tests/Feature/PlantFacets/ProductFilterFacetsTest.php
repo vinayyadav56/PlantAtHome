@@ -78,7 +78,32 @@ class ProductFilterFacetsTest extends TestCase
             $t->string('slug')->nullable();
             $t->unsignedBigInteger('attribute_id');
             $t->string('value');
+            $t->string('meta')->nullable();
+            $t->integer('sort_order')->default(0);
             $t->timestamps();
+        });
+        // The sizes facet resolves the Size attribute the way sizeNames() does.
+        Schema::create('attributes', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->string('slug');
+            $t->string('name');
+            $t->string('language')->default('en');
+            $t->timestamps();
+        });
+        // The category facet joins category_product ⋈ categories (is_active, not deleted).
+        Schema::create('categories', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->string('name');
+            $t->string('slug');
+            $t->string('language')->default('en');
+            $t->boolean('is_active')->default(true);
+            $t->timestamps();
+            $t->softDeletes();
+        });
+        Schema::create('category_product', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('category_id');
+            $t->unsignedBigInteger('product_id');
         });
         Schema::create('attribute_product', function (Blueprint $t) {
             $t->bigIncrements('id');
@@ -108,6 +133,7 @@ class ProductFilterFacetsTest extends TestCase
             $t->string('difficulty_level')->nullable();
             $t->string('height_range')->nullable();
             $t->boolean('pet_friendly')->nullable();
+            $t->boolean('air_purifying')->nullable();
             $t->timestamps();
         });
 
@@ -282,6 +308,23 @@ class ProductFilterFacetsTest extends TestCase
         $this->assertCount(1, $ids);
     }
 
+    public function test_air_purifying_filters_like_pet_friendly(): void
+    {
+        // Prettus drops a field that is not in $fieldSearchable SILENTLY — this
+        // filter used to return the whole list. Same 0/1 coercion as pet_friendly.
+        $purifier = $this->plant('Snake Plant', ['air_purifying' => true]);
+        $this->plant('Monstera', ['air_purifying' => false]);
+        $this->plant('Mystery', []);
+
+        $ids = $this->repoIds(['search' => 'plantAttribute.air_purifying:true', 'searchJoin' => 'and']);
+        $this->assertSame([$purifier->id], $ids);
+        $this->assertStringContainsString('plantAttribute.air_purifying:1', $this->app['request']->get('search'));
+
+        $ids = $this->repoIds(['search' => 'plantAttribute.air_purifying:maybe', 'searchJoin' => 'and']);
+        $this->assertStringNotContainsString('air_purifying', (string) $this->app['request']->get('search'));
+        $this->assertCount(3, $ids, 'an unparseable boolean drops the term, never a string-vs-tinyint compare');
+    }
+
     public function test_in_stock_and_is_rental_values_are_coerced_or_dropped(): void
     {
         $stocked = $this->plant('Monstera', [], ['in_stock' => true]);
@@ -349,6 +392,58 @@ class ProductFilterFacetsTest extends TestCase
         // Histogram covers every priced, published product (draft excluded).
         // Monstera, Pothos, ZZ carry prices; Fern/Palm inherit the seed default.
         $this->assertSame(5, array_sum(array_column($price['histogram'], 'count')));
+    }
+
+    public function test_filter_facets_emit_categories_sizes_and_air_purifying(): void
+    {
+        $a = $this->plant('Monstera', ['air_purifying' => true]);
+        $b = $this->plant('Snake Plant', ['air_purifying' => true]);
+        $c = $this->plant('Pothos', ['air_purifying' => false]);
+        $this->plant('Fern', []); // unknown → counted on neither side
+        $draft = $this->plant('Draft-only', ['air_purifying' => true], ['status' => 'draft']);
+
+        DB::table('categories')->insert([
+            ['id' => 1, 'name' => 'Indoor Plants', 'slug' => 'indoor', 'is_active' => true, 'deleted_at' => null],
+            ['id' => 2, 'name' => 'Succulents', 'slug' => 'succulents-cacti', 'is_active' => true, 'deleted_at' => null],
+            ['id' => 3, 'name' => 'Pet Friendly', 'slug' => 'pet-friendly', 'is_active' => false, 'deleted_at' => null], // retired, links kept
+            ['id' => 4, 'name' => 'Gone', 'slug' => 'gone', 'is_active' => true, 'deleted_at' => now()],
+        ]);
+        DB::table('category_product')->insert([
+            ['category_id' => 1, 'product_id' => $a->id],
+            ['category_id' => 1, 'product_id' => $a->id], // legacy duplicate pivot → one product
+            ['category_id' => 1, 'product_id' => $b->id],
+            ['category_id' => 1, 'product_id' => $draft->id], // out of scope
+            ['category_id' => 2, 'product_id' => $c->id],
+            ['category_id' => 3, 'product_id' => $a->id],
+            ['category_id' => 4, 'product_id' => $a->id],
+        ]);
+
+        DB::table('attributes')->insert([
+            ['id' => 1, 'slug' => 'size', 'name' => 'Size', 'language' => 'en'],
+            ['id' => 2, 'slug' => 'colour', 'name' => 'Colour', 'language' => 'en'],
+        ]);
+        DB::table('attribute_values')->insert([
+            // ids deliberately out of ladder order: sort_order must win, blank meta → null
+            ['id' => 1, 'attribute_id' => 1, 'value' => 'Large', 'meta' => null, 'sort_order' => 3],
+            ['id' => 2, 'attribute_id' => 1, 'value' => 'Small', 'meta' => '0–1 ft', 'sort_order' => 1],
+            ['id' => 3, 'attribute_id' => 1, 'value' => 'Medium', 'meta' => '  ', 'sort_order' => 2],
+            ['id' => 4, 'attribute_id' => 2, 'value' => 'Green', 'meta' => null, 'sort_order' => 1],
+        ]);
+
+        $res = $this->getJson('/api/products/filter-facets')->assertOk();
+
+        $this->assertSame([
+            ['id' => 1, 'slug' => 'indoor', 'name' => 'Indoor Plants', 'count' => 2],
+            ['id' => 2, 'slug' => 'succulents-cacti', 'name' => 'Succulents', 'count' => 1],
+        ], $res->json('facets.categories'), 'active, not deleted, distinct products, in-scope only, count desc');
+
+        $this->assertSame([
+            ['value' => 'Small', 'meta' => '0–1 ft'],
+            ['value' => 'Medium', 'meta' => null],
+            ['value' => 'Large', 'meta' => null],
+        ], $res->json('facets.sizes'));
+
+        $this->assertSame(['true' => 2, 'false' => 1], $res->json('facets.air_purifying'));
     }
 
     public function test_filter_facets_hide_unpriced_gate_matches_the_list(): void

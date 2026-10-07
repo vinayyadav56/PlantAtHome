@@ -75,6 +75,9 @@ class ProductRepository extends BaseRepository
         'plantAttribute.height_range' => 'in',
         'plantTerms.slug'                  => 'in',
         'plantAttribute.pet_friendly',
+        // Same tinyint shape as pet_friendly. It was never listed, so the Air
+        // Purifying collection/filter was a silent no-op (Prettus drops unknown fields).
+        'plantAttribute.air_purifying',
         // Size chips filter through the variations axis (Small/Medium/Large);
         // in_stock backs the "in stock only" toggle — the storefronts used to
         // send both as PLAIN query params, which RequestCriteria ignores, so
@@ -96,6 +99,7 @@ class ProductRepository extends BaseRepository
      */
     private const BOOLEAN_SEARCH_FIELDS = [
         'plantAttribute.pet_friendly',
+        'plantAttribute.air_purifying',
         'in_stock',
         'is_rental',
         'is_available_product',

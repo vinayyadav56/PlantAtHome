@@ -9,6 +9,7 @@ use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\Product;
+use Marvel\Http\Controllers\ProductController;
 use Marvel\Http\Resources\ProductResource;
 use Tests\TestCase;
 
@@ -86,12 +87,59 @@ final class ProductListRatingsPayloadTest extends TestCase
             $t->text('value')->nullable();
             $t->timestamps();
         });
+        // Slim tags/categories on the list payload (card badges) — BelongsToMany pivots.
+        foreach (['tags', 'categories'] as $table) {
+            Schema::create($table, function (Blueprint $t) {
+                $t->bigIncrements('id');
+                $t->string('name');
+                $t->string('slug');
+                $t->string('language')->default('en');
+                $t->timestamps();
+                $t->softDeletes();
+            });
+        }
+        Schema::create('product_tag', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('product_id');
+            $t->unsignedBigInteger('tag_id');
+        });
+        Schema::create('category_product', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('product_id');
+            $t->unsignedBigInteger('category_id');
+        });
+        // The city rollup rows overlayCityPrices reads (variation_option_id 0).
+        Schema::create('product_city_availability', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('product_id');
+            $t->string('city');
+            $t->unsignedBigInteger('variation_option_id')->default(0);
+            $t->decimal('min_price')->nullable();
+            $t->decimal('display_price')->nullable();
+            $t->integer('stock')->nullable();
+            $t->integer('stock_override')->nullable();
+            $t->integer('vendor_count')->default(0);
+            $t->boolean('has_local')->default(false);
+            $t->boolean('has_courier')->default(false);
+        });
+        // The overlay news up AvailabilityService → PricingService, which reads
+        // settings in its constructor; empty = no vendorPricing options.
+        Schema::create('settings', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->json('options')->nullable();
+            $t->string('language')->default('en');
+            $t->timestamps();
+        });
 
         DB::table('products')->insert(['id' => 1, 'name' => 'Monstera', 'slug' => 'monstera', 'price' => 899, 'created_at' => now(), 'updated_at' => now()]);
         DB::table('reviews')->insert([
             ['product_id' => 1, 'rating' => 5, 'created_at' => now(), 'updated_at' => now()],
             ['product_id' => 1, 'rating' => 4, 'created_at' => now(), 'updated_at' => now()],
         ]);
+        DB::table('tags')->insert(['id' => 1, 'name' => 'Bestseller', 'slug' => 'bestseller']);
+        DB::table('product_tag')->insert(['product_id' => 1, 'tag_id' => 1]);
+        DB::table('categories')->insert(['id' => 1, 'name' => 'Indoor Plants', 'slug' => 'indoor-plants']);
+        DB::table('category_product')->insert(['product_id' => 1, 'category_id' => 1]);
     }
 
     private function payload(Product $product): array
@@ -99,6 +147,67 @@ final class ProductListRatingsPayloadTest extends TestCase
         // resolve(), not toArray(): `when(false)` leaves a MissingValue that only the
         // resource's resolve/filter step strips — the same step every response goes through.
         return (new ProductResource($product))->resolve(Request::create('/products', 'GET'));
+    }
+
+    /** The real listing overlay (private on the controller), on an already-loaded page. */
+    private function overlay($products, string $city): void
+    {
+        $controller = $this->app->make(ProductController::class);
+        $method = new \ReflectionMethod($controller, 'overlayCityPrices');
+        $method->setAccessible(true);
+        $method->invoke($controller, $products, $city);
+    }
+
+    public function test_tags_and_categories_are_emitted_slim_only_when_loaded(): void
+    {
+        $product = Product::query()
+            ->with(['type', 'shop', 'plantAttribute', 'tags:id,name,slug', 'categories:id,name,slug'])
+            ->findOrFail(1);
+
+        DB::enableQueryLog();
+        $data = $this->payload($product);
+        $queries = collect(DB::getQueryLog())->pluck('query')
+            ->filter(fn ($q) => str_contains($q, 'tags') || str_contains($q, 'categor'));
+
+        $this->assertSame([['id' => 1, 'name' => 'Bestseller', 'slug' => 'bestseller']], $data['tags']);
+        $this->assertSame([['id' => 1, 'name' => 'Indoor Plants', 'slug' => 'indoor-plants']], $data['categories']);
+        $this->assertCount(0, $queries, 'slim relations come from the page eager load, never a per-row query');
+
+        $bare = Product::query()->with(['type', 'shop', 'plantAttribute'])->findOrFail(1);
+        DB::flushQueryLog();
+        $data = $this->payload($bare);
+        $queries = collect(DB::getQueryLog())->pluck('query')
+            ->filter(fn ($q) => str_contains($q, 'tags') || str_contains($q, 'categor'));
+
+        $this->assertArrayNotHasKey('tags', $data);
+        $this->assertArrayNotHasKey('categories', $data);
+        $this->assertCount(0, $queries, 'FlashSaleResource reuses this resource without them — it must not fan out');
+    }
+
+    public function test_city_local_is_null_without_the_overlay_and_follows_has_local_with_it(): void
+    {
+        DB::table('products')->insert([
+            ['id' => 2, 'name' => 'Unpriced', 'slug' => 'unpriced', 'price' => 0, 'created_at' => now(), 'updated_at' => now()],
+            ['id' => 3, 'name' => 'Courier only', 'slug' => 'courier-only', 'price' => 599, 'created_at' => now(), 'updated_at' => now()],
+        ]);
+        DB::table('product_city_availability')->insert([
+            ['product_id' => 1, 'city' => 'bengaluru', 'variation_option_id' => 0, 'min_price' => 499, 'display_price' => 499, 'vendor_count' => 2, 'has_local' => true],
+            // priced at 0 → the overlay skips the row, so "unknown" must survive, never "courier"
+            ['product_id' => 2, 'city' => 'bengaluru', 'variation_option_id' => 0, 'min_price' => 0, 'display_price' => 0, 'vendor_count' => 1, 'has_local' => true],
+            ['product_id' => 3, 'city' => 'bengaluru', 'variation_option_id' => 0, 'min_price' => 599, 'display_price' => 599, 'vendor_count' => 1, 'has_local' => false],
+        ]);
+        $page = Product::query()->with(['type', 'shop', 'plantAttribute'])->whereIn('id', [1, 2, 3])->orderBy('id')->get();
+
+        $before = $this->payload($page[0]);
+        $this->assertArrayHasKey('city_local', $before);
+        $this->assertNull($before['city_local'], 'no city in scope = unknown');
+
+        $this->overlay($page, 'Bangalore'); // alias → the bengaluru rollup rows
+
+        $this->assertTrue($this->payload($page[0])['city_local']);
+        $this->assertNull($this->payload($page[1])['city_local']);
+        $this->assertFalse($this->payload($page[2])['city_local']);
+        $this->assertSame(499.0, (float) $this->payload($page[0])['price'], 'the overlay that set city_local also priced the card');
     }
 
     public function test_the_list_emits_ratings_from_the_loaded_aggregates(): void
