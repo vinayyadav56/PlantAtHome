@@ -64,6 +64,12 @@ class NurseryService
                 'category_ids'    => $data['categories'] ?? null,
                 'service_areas'   => $data['service_areas'] ?? null,
                 'gst_number'      => $this->gstFromSettings($data),
+                // The fulfilment step's values. Update already wrote them (908d014) but
+                // create did not, so a new nursery carried delivery_mode = NULL into the
+                // legacy projection below — and shops.delivery_mode is NOT NULL, so EVERY
+                // V2 vendor create 500'd (SQLSTATE 1048) with no message in the admin.
+                'delivery_mode'   => $data['delivery_mode'] ?? 'platform',
+                'self_delivery'   => $data['self_delivery'] ?? null,
             ]);
 
             NurseryBalance::create([
@@ -324,7 +330,9 @@ class NurseryService
             'updated_at'  => $now,
         ];
         foreach (['contact_person', 'mobile', 'upi', 'lat', 'lng', 'gst_number', 'delivery_mode'] as $column) {
-            if ($schema->hasColumn('shops', $column)) {
+            // Never write an explicit NULL: it overrides the column's own default, and
+            // shops.delivery_mode is NOT NULL DEFAULT 'platform'.
+            if ($schema->hasColumn('shops', $column) && $nursery->{$column} !== null) {
                 $shop[$column] = $nursery->{$column};
             }
         }

@@ -143,6 +143,45 @@ class NurseryVendorCreateTest extends NurseryTestCase
         $this->assertSame(2, (int) $area->eta_days);
     }
 
+    public function test_create_without_delivery_mode_defaults_to_platform_everywhere(): void
+    {
+        // What the admin's Add Vendor wizard sends when the Fulfilment step is untouched.
+        $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
+        $res = $this->postJson('/api/v1/nurseries', [
+            'name'    => 'Wizard Default Nursery',
+            'address' => ['city' => 'Delhi', 'zip' => '110017', 'state' => 'Delhi', 'street_address' => 'E-512, Test Street'],
+            // The wizard always provisions the owner (super-admin create); the legacy
+            // projection — where the NULL used to land — only runs with one.
+            'owner_email'    => 'wizard.owner@example.test',
+            'owner_name'     => 'Wizard Owner',
+            'owner_password' => 'Secret#123',
+        ], $admin);
+
+        $res->assertStatus(201)->assertJsonPath('data.delivery_mode', 'platform');
+        $uuid = $res->json('data.uuid');
+        $this->assertSame('platform', DB::table('nursery_nurseries')->where('uuid', $uuid)->value('delivery_mode'));
+        $this->assertSame('platform', DB::table('shops')->where('slug', 'wizard-default-nursery')->value('delivery_mode'));
+    }
+
+    public function test_create_keeps_self_delivery_in_both_models(): void
+    {
+        $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
+        $res = $this->postJson('/api/v1/nurseries', [
+            'name'          => 'Own Fleet Nursery',
+            'address'       => ['city' => 'Delhi', 'zip' => '110017'],
+            'delivery_mode' => 'self',
+            'self_delivery' => ['contact_name' => 'Fleet Lead'],
+            'owner_email'   => 'fleet.owner@example.test',
+            'owner_name'    => 'Fleet Owner',
+            'owner_password' => 'Secret#123',
+        ], $admin);
+
+        $res->assertStatus(201)->assertJsonPath('data.delivery_mode', 'self');
+        $shop = DB::table('shops')->where('slug', 'own-fleet-nursery')->first();
+        $this->assertSame('self', $shop->delivery_mode);
+        $this->assertSame('Fleet Lead', json_decode($shop->self_delivery, true)['contact_name'] ?? null);
+    }
+
     public function test_duplicate_name_gets_suffixed_slug(): void
     {
         $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
@@ -219,6 +258,11 @@ class NurseryVendorCreateTest extends NurseryTestCase
             $t->decimal('lat', 10, 7)->nullable();
             $t->decimal('lng', 10, 7)->nullable();
             $t->string('gst_number')->nullable();
+            // Mirrors production (2026_08_11_000400): NOT NULL with a default. Without it
+            // here, the projection writing NULL into it — a 500 on every real create —
+            // was invisible to this suite.
+            $t->string('delivery_mode', 16)->default('platform');
+            $t->json('self_delivery')->nullable();
             $t->timestamps();
         });
 
