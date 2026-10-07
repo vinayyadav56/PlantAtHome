@@ -585,6 +585,63 @@ class ProductController extends CoreController
         return str_contains($search, 'status:');
     }
 
+    /**
+     * Data for the printable vendor price-collection sheet.
+     *
+     * Deliberately NOT served by fetchProducts(): that builder eager-loads reviews, ratings,
+     * bundle items, tags, categories and plant attributes for the storefront grid, and the
+     * public index clamps `limit` to 100. A sheet needs four columns and up to two thousand
+     * rows, so pulling it through the storefront path would be both far heavier and capped at a
+     * fraction of the catalogue.
+     *
+     * Read-only by construction. The sheet exists to COLLECT prices on paper; nothing here
+     * touches catalogue pricing, inventory, variants or vendor records.
+     */
+    public function priceSheet(Request $request)
+    {
+        $query = Product::query()->where('language', DEFAULT_LANGUAGE);
+
+        // An explicit selection wins over every filter: the admin ticked those rows on purpose.
+        $ids = array_filter(array_map('intval', (array) $request->input('ids', [])));
+        if ($ids !== []) {
+            $query->whereIn('products.id', $ids);
+        } else {
+            if ($request->filled('type')) {
+                $type = (string) $request->input('type');
+                $query->whereHas('type', fn ($q) => $q->where('slug', $type)->orWhere('id', $type));
+            }
+            if ($request->filled('categories')) {
+                $cats = array_filter(array_map('trim', explode(',', (string) $request->input('categories'))));
+                if ($cats !== []) {
+                    $query->whereHas('categories', fn ($q) => $q->whereIn('slug', $cats)->orWhereIn('categories.id', $cats));
+                }
+            }
+            if ($request->filled('status')) {
+                $query->where('status', (string) $request->input('status'));
+            }
+            if ($request->filled('shop_id')) {
+                $query->where('shop_id', (int) $request->input('shop_id'));
+            }
+            $term = trim((string) ($request->input('text') ?: $request->input('name') ?: ''));
+            if ($term !== '') {
+                $query->where('products.name', 'like', '%' . $term . '%');
+            }
+        }
+
+        // Follow the listing's ordering so the paper matches the screen the admin generated it
+        // from. Allow-listed rather than passed through: this string reaches an ORDER BY.
+        $sortable = ['name', 'created_at', 'updated_at', 'id'];
+        $orderBy  = in_array((string) $request->input('orderBy'), $sortable, true)
+            ? (string) $request->input('orderBy')
+            : 'name';
+        $sortedBy = strtolower((string) $request->input('sortedBy')) === 'desc' ? 'desc' : 'asc';
+        $query->orderBy($orderBy, $sortedBy);
+
+        return response()->json(
+            app(\Marvel\Services\VendorPriceSheetService::class)->build($query)
+        );
+    }
+
     public function fetchProducts(Request $request)
     {
         $unavailableProducts = [];

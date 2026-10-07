@@ -933,6 +933,20 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
     Route::post('orders/{id}/merge-shipments', [OrderAssignmentController::class, 'mergeShipments'])
         ->middleware('permission:' . Permission::SUPER_ADMIN);
 
+    /*
+     * Vendor price-collection sheet — the printable form an admin hands a nursery so they can
+     * write their own prices against our catalogue.
+     *
+     * A top-level path rather than `products/price-sheet`: `apiResource('products')` registers
+     * `products/{product}` for show, so any sibling path declared after it is swallowed as a
+     * product slug. Sidestepping that is cheaper than depending on declaration order.
+     *
+     * Gated on products.view, not products.edit: generating a blank form reads the catalogue
+     * and changes nothing.
+     */
+    Route::get('vendor-price-sheet', [ProductController::class, 'priceSheet'])
+        ->middleware('permission:products.view');
+
     Route::get('integrations', [IntegrationController::class, 'index'])
         ->middleware('permission:settings.integrations.view');
     Route::get('integrations/{slug}', [IntegrationController::class, 'show'])
