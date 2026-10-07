@@ -51,7 +51,15 @@ class VendorPriceSheetService
     public function build($query): array
     {
         $products = $query
-            ->with(['type:id,name,slug', 'variation_options:id,product_id,title,options,is_disable'])
+            ->with([
+                'type:id,name,slug',
+                'variation_options:id,product_id,title,options,is_disable',
+                // The product's ATTRIBUTE values, not just the generated combinations. A product
+                // can carry an attribute value that never became a variation_option, and the
+                // vendor still needs a box for it -- so columns are the union of both.
+                'variations:id,attribute_id,value',
+                'variations.attribute:id,name',
+            ])
             ->limit(self::MAX_ROWS + 1)
             ->get(['id', 'name', 'sku', 'product_type', 'type_id']);
 
@@ -85,11 +93,14 @@ class VendorPriceSheetService
 
             $cells = [];
             if ($labels === []) {
-                $groups[$key]['columns'][self::PRICE_ONLY] = true;
+                $groups[$key]['columns'][self::PRICE_ONLY] = '';
                 $cells[self::PRICE_ONLY] = true;
             } else {
-                foreach ($labels as $label) {
-                    $groups[$key]['columns'][$label] = true;
+                foreach ($labels as $label => $attribute) {
+                    // Remember which attribute a column came from, so a group carrying more than
+                    // one can say so in the header instead of printing a row of bare values the
+                    // vendor has to guess the meaning of.
+                    $groups[$key]['columns'][$label] = $attribute;
                     $cells[$label] = true;
                 }
             }
@@ -121,11 +132,25 @@ class VendorPriceSheetService
                 return $ra <=> $rb;
             });
 
+            // Only qualify the headers when the group genuinely mixes attributes. With one
+            // attribute (every product on production today) `Small` beats `Size: Small` and
+            // costs less width; with Size AND Material, bare values are ambiguous.
+            $attributes = array_values(array_unique(array_filter($group['columns'])));
+            $qualify = count($attributes) > 1;
+
             $group['columns'] = array_map(
-                fn (string $c) => [
-                    'key'   => $c,
-                    'label' => $c === self::PRICE_ONLY ? 'Price' : $c,
-                ],
+                function (string $c) use ($group, $qualify) {
+                    if ($c === self::PRICE_ONLY) {
+                        return ['key' => $c, 'label' => 'Price', 'attribute' => null];
+                    }
+                    $attribute = $group['columns'][$c] ?? '';
+
+                    return [
+                        'key'       => $c,
+                        'label'     => $qualify && $attribute !== '' ? $attribute . ': ' . $c : $c,
+                        'attribute' => $attribute !== '' ? $attribute : null,
+                    ];
+                },
                 $columns
             );
             $out[] = $group;
@@ -154,34 +179,62 @@ class VendorPriceSheetService
      */
     private function variantLabels(Product $product): array
     {
+        /** @var array<string, string> label => attribute name ('' when unknown) */
         $labels = [];
 
+        $add = function (string $label, string $attribute) use (&$labels): void {
+            $label = trim($label);
+            if ($label === '') {
+                return;
+            }
+            foreach (array_keys($labels) as $seen) {
+                if (mb_strtolower($seen) === mb_strtolower($label)) {
+                    return; // already have it, under whatever casing arrived first
+                }
+            }
+            $labels[$label] = $attribute;
+        };
+
+        // The sellable combinations first: these are what the vendor is really quoting, and
+        // their order is the product's own.
         foreach ($product->variation_options as $option) {
             if ((bool) ($option->is_disable ?? false)) {
                 continue; // a disabled variant is not for sale, so it is not for pricing
             }
 
             $parts = [];
+            $names = [];
             $options = $option->options;
             if (is_string($options)) {
                 $options = json_decode($options, true);
             }
-
             if (is_array($options)) {
                 foreach ($options as $pair) {
-                    $value = is_array($pair) ? ($pair['value'] ?? null) : null;
+                    if (!is_array($pair)) {
+                        continue;
+                    }
+                    $value = $pair['value'] ?? null;
                     if (is_scalar($value) && trim((string) $value) !== '') {
                         $parts[] = trim((string) $value);
+                        $name = $pair['name'] ?? null;
+                        if (is_scalar($name) && trim((string) $name) !== '') {
+                            $names[] = trim((string) $name);
+                        }
                     }
                 }
             }
 
-            // Fall back to the option's own title: CLI-built rows and anything with an empty or
-            // malformed options blob still have one, and a blank column header is useless.
-            $label = $parts !== [] ? implode(' / ', $parts) : trim((string) $option->title);
-            if ($label !== '' && !in_array($label, $labels, true)) {
-                $labels[] = $label;
-            }
+            $add(
+                $parts !== [] ? implode(' / ', $parts) : (string) $option->title,
+                count(array_unique($names)) === 1 ? $names[0] : ''
+            );
+        }
+
+        // Then any attribute value attached to the product that no variation_option covered.
+        // Without this a product whose attributes were never expanded into options prints with
+        // no boxes at all, and "all the attributes" quietly means "only the generated ones".
+        foreach ($product->variations as $value) {
+            $add((string) $value->value, (string) ($value->attribute->name ?? ''));
         }
 
         return $labels;

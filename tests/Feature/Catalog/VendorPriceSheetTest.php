@@ -34,6 +34,8 @@ final class VendorPriceSheetTest extends TestCase
             'name' => $name, 'slug' => \Illuminate\Support\Str::slug($name),
             'type_id' => $typeId, 'product_type' => $productType,
             'language' => DEFAULT_LANGUAGE, 'status' => 'publish', 'price' => 100, 'quantity' => 5,
+            // The sheet only covers what the storefront actually sells.
+            'is_available_product' => true, 'listing_enabled' => true,
         ]);
         foreach ($variants as $i => $pairs) {
             $p->variation_options()->create([
@@ -232,6 +234,59 @@ final class VendorPriceSheetTest extends TestCase
         // VendorPriceSheetImport keys on `sku | product_id`; the size-pricing commands null the
         // parent sku, so without the #id fallback a filled-in sheet cannot be typed back in.
         $this->assertSame('#' . $p->id, $row['code']);
+    }
+
+    /** A vendor cannot quote something the storefront does not sell. */
+    public function test_a_product_that_is_not_listed_never_reaches_the_sheet(): void
+    {
+        $plants = $this->type('plants-t', 'Plants');
+        $this->product('Listed', $plants, [[['name' => 'Size', 'value' => 'Small']]]);
+        $hidden = $this->product('Not Listed', $plants, [[['name' => 'Size', 'value' => 'Small']]]);
+        $hidden->forceFill(['listing_enabled' => false])->save();
+
+        $names = [];
+        foreach ($this->endpoint([])['groups'] as $g) {
+            foreach ($g['rows'] as $r) {
+                $names[] = $r['name'];
+            }
+        }
+        $this->assertSame(['Listed'], $names);
+    }
+
+    /**
+     * The button sits on "All Products", which deliberately shows uncurated rows, so a ticked
+     * product can be unlistable. Dropping it silently would hand the vendor a short sheet with
+     * no explanation.
+     */
+    public function test_a_ticked_but_unlisted_product_is_reported_not_silently_dropped(): void
+    {
+        $plants = $this->type('plants-t', 'Plants');
+        $ok = $this->product('Listed', $plants, [[['name' => 'Size', 'value' => 'Small']]]);
+        $no = $this->product('Not Listed', $plants, [[['name' => 'Size', 'value' => 'Small']]]);
+        $no->forceFill(['is_available_product' => false])->save();
+
+        $sheet = $this->endpoint(['ids' => [$ok->id, $no->id]]);
+
+        $this->assertSame(1, $sheet['meta']['total']);
+        $this->assertSame(1, $sheet['meta']['excluded_unlisted']);
+    }
+
+    /** "All the attributes should come" -- including ones never expanded into variations. */
+    public function test_an_attached_attribute_with_no_variation_option_still_gets_a_box(): void
+    {
+        $plants = $this->type('plants-t', 'Plants');
+        $p = $this->product('Monstera', $plants, [[['name' => 'Size', 'value' => 'Small']]]);
+
+        $attr = DB::table('attributes')->insertGetId(['name' => 'Material', 'slug' => 'material-t', 'language' => DEFAULT_LANGUAGE]);
+        $valueId = DB::table('attribute_values')->insertGetId([
+            'attribute_id' => $attr, 'value' => 'Ceramic', 'slug' => 'ceramic-t', 'language' => DEFAULT_LANGUAGE,
+        ]);
+        DB::table('attribute_product')->insert(['product_id' => $p->id, 'attribute_value_id' => $valueId]);
+
+        $labels = array_column($this->group($this->sheet(), 'Plants')['columns'], 'label');
+        // Two attributes in one group, so the headers qualify themselves.
+        $this->assertContains('Material: Ceramic', $labels);
+        $this->assertContains('Size: Small', $labels);
     }
 
     public function test_the_route_is_registered_and_gated_on_read_permission(): void

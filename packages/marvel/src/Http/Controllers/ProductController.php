@@ -601,10 +601,21 @@ class ProductController extends CoreController
     {
         $query = Product::query()->where('language', DEFAULT_LANGUAGE);
 
-        // An explicit selection wins over every filter: the admin ticked those rows on purpose.
+        // AVAILABLE PRODUCTS ONLY. A vendor cannot be asked to price something the storefront
+        // does not sell, and "All Products" is the uncurated repository -- 4,268 rows against
+        // 906 that are actually listed. Same two columns the storefront gate uses
+        // (applyCatalogGate), so the sheet and the shop can never disagree about what is live.
+        $query->where('products.is_available_product', true)
+              ->where('products.listing_enabled', true);
+
+        // An explicit selection wins over every FILTER -- but not over the gate above. A ticked
+        // row that is not listed is reported back rather than silently dropped, because the
+        // listing this button sits on deliberately shows uncurated products too.
         $ids = array_filter(array_map('intval', (array) $request->input('ids', [])));
+        $excluded = 0;
         if ($ids !== []) {
             $query->whereIn('products.id', $ids);
+            $excluded = count($ids) - (clone $query)->count();
         } else {
             if ($request->filled('type')) {
                 $type = (string) $request->input('type');
@@ -637,9 +648,10 @@ class ProductController extends CoreController
         $sortedBy = strtolower((string) $request->input('sortedBy')) === 'desc' ? 'desc' : 'asc';
         $query->orderBy($orderBy, $sortedBy);
 
-        return response()->json(
-            app(\Marvel\Services\VendorPriceSheetService::class)->build($query)
-        );
+        $sheet = app(\Marvel\Services\VendorPriceSheetService::class)->build($query);
+        $sheet['meta']['excluded_unlisted'] = max(0, $excluded);
+
+        return response()->json($sheet);
     }
 
     public function fetchProducts(Request $request)
