@@ -3,6 +3,7 @@
 namespace Marvel\Console;
 
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Marvel\Database\Models\Category;
 use Marvel\Database\Models\Product;
@@ -47,15 +48,13 @@ class CategorizePlantsCommand extends Command
         // 1. Ensure the curated type categories exist; collect name → id.
         $ids = [];
         foreach ($this->types as $name => $img) {
-            $cat = Category::updateOrCreate(
-                ['slug' => Str::slug($name), 'language' => 'en'],
-                [
-                    'name'    => $name,
-                    'type_id' => $type->id,
-                    'image'   => ['original' => "https://images.unsplash.com/photo-{$img}?auto=format&fit=crop&w=800&q=80"],
-                    'parent'  => null,
-                ]
-            );
+            // Name and image only when the category is new: both are edited in the admin,
+            // and this runs on every staging boot — it kept resetting the owner's photos.
+            $cat = Category::firstOrNew(['slug' => Str::slug($name), 'language' => 'en']);
+            if (!$cat->exists) {
+                $cat->fill(['name' => $name, 'image' => ['original' => "https://images.unsplash.com/photo-{$img}?auto=format&fit=crop&w=800&q=80"]]);
+            }
+            $cat->fill(['type_id' => $type->id, 'parent' => null])->save();
             $ids[$name] = $cat->id;
         }
         $curatedIds = array_values($ids);
@@ -81,8 +80,12 @@ class CategorizePlantsCommand extends Command
             }
         });
 
-        // 4. Delete the old granular plant categories (keep only the curated set).
-        $deleted = Category::where('type_id', $type->id)->whereNotIn('id', $curatedIds)->delete();
+        // 4. Delete the old granular plant categories (keep only the curated set) — but
+        //    never one an operator flagged for the homepage: the owner's Bonsai / Palms /
+        //    Rare & Exotic tiles are not in the list above and were deleted every boot.
+        $deleted = Category::where('type_id', $type->id)->whereNotIn('id', $curatedIds)
+            ->when(Schema::hasColumn('categories', 'show_on_homepage'), fn ($q) => $q->where('show_on_homepage', false))
+            ->delete();
 
         // 5. Bust the categories cache so the filter refreshes immediately.
         $ver = (int) \Illuminate\Support\Facades\Cache::get('categories:ver', 1);

@@ -67,18 +67,15 @@ class PlantAtHomeCategorySeeder extends Seeder
             }
 
             foreach ($cats as $cat) {
-                Category::updateOrCreate(
-                    ['slug' => $cat['slug'], 'language' => 'en'],
-                    [
-                        'name'     => $cat['name'],
-                        'icon'     => $cat['icon'],
-                        'details'  => $cat['details'],
-                        'type_id'  => $type->id,
-                        'language' => 'en',
-                        'parent'   => null,
-                        'image'    => $this->img(++$imgId, $cat['photo']),
-                    ]
-                );
+                $image = $this->img(++$imgId, $cat['photo']);
+                // Seed data CREATES a category; it never re-dresses one. Name, icon, copy
+                // and image are edited in the admin, and this runs on every staging boot
+                // (and in prod-data-op modes): re-applying them reset the owner's photos.
+                $category = Category::firstOrNew(['slug' => $cat['slug'], 'language' => 'en']);
+                if (!$category->exists) {
+                    $category->fill(['name' => $cat['name'], 'icon' => $cat['icon'], 'details' => $cat['details'], 'image' => $image]);
+                }
+                $category->fill(['type_id' => $type->id, 'parent' => null])->save();
                 $total++;
             }
         }

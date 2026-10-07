@@ -173,19 +173,15 @@ class PlantAtHomeCategoryBulkSeeder extends Seeder
         $total = 0;
 
         foreach ($this->categories as $name) {
-            $slug = Str::slug($name);
-            Category::updateOrCreate(
-                ['slug' => $slug, 'language' => 'en'],
-                [
-                    'name'     => $name,
-                    'icon'     => 'Leaf',
-                    'details'  => null,
-                    'type_id'  => $type->id,
-                    'language' => 'en',
-                    'parent'   => null,
-                    'image'    => $this->img(++$imgId, $this->unsplashForCategory($name)),
-                ]
-            );
+            $image = $this->img(++$imgId, $this->unsplashForCategory($name));
+            // Create-only for name / icon / copy / image (see PlantAtHomeCategorySeeder):
+            // `bonsai` is in this list, and re-applying the stock photo every boot
+            // replaced the owner's.
+            $category = Category::firstOrNew(['slug' => Str::slug($name), 'language' => 'en']);
+            if (!$category->exists) {
+                $category->fill(['name' => $name, 'icon' => 'Leaf', 'details' => null, 'image' => $image]);
+            }
+            $category->fill(['type_id' => $type->id, 'parent' => null])->save();
             $total++;
         }
 
