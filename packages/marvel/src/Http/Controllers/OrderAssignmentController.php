@@ -453,10 +453,16 @@ class OrderAssignmentController extends CoreController
         } catch (\Throwable $e) {
             return ['shipments' => []];
         }
+        $riders = $this->ridersFor($rows);
         return [
             'shipments' => $rows->map(fn ($s) => [
                 'fulfillment_mode'     => $s->fulfillment_mode,
                 'courier_name'         => $s->courier_name,
+                // The partner's own rider for the CURRENT booking (Porter sends driver details,
+                // stored on the partner-order ledger). Name + vehicle only — the rider's phone
+                // is personal data and stays off this public endpoint, like the DP mobile.
+                'rider_name'           => $riders[trim((string) $s->provider_order_id)]['name'] ?? null,
+                'vehicle_number'       => $riders[trim((string) $s->provider_order_id)]['vehicle'] ?? null,
                 'awb_number'           => $s->awb_number,
                 'tracking_url'         => $s->tracking_url,
                 'status'               => $s->status,
@@ -477,6 +483,33 @@ class OrderAssignmentController extends CoreController
                 ])->values(),
             ])->values(),
         ];
+    }
+
+    /**
+     * Rider details from the partner API, keyed by the shipment's CURRENT provider_order_id.
+     * A shipments row is reused across booking attempts, so only that id points at the live
+     * booking — a cancelled attempt's rider must never show. Fail-soft: the ledger is optional
+     * (local deliveries never have one), so any error means "no rider yet".
+     *
+     * @return array<string, array{name: ?string, vehicle: ?string}>
+     */
+    private function ridersFor($shipments): array
+    {
+        $ids = collect($shipments)->map(fn ($s) => trim((string) $s->provider_order_id))
+            ->filter()->unique()->values()->all();
+        if (!$ids) {
+            return [];
+        }
+        try {
+            return \App\Models\PartnerConsoleOrder::whereIn('provider_order_id', $ids)
+                ->get(['provider_order_id', 'driver_name', 'vehicle_number'])
+                ->mapWithKeys(fn ($r) => [trim((string) $r->provider_order_id) => [
+                    'name'    => trim((string) $r->driver_name) ?: null,
+                    'vehicle' => trim((string) $r->vehicle_number) ?: null,
+                ]])->all();
+        } catch (\Throwable $e) {
+            return [];
+        }
     }
 
     /**

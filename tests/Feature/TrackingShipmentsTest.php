@@ -274,4 +274,38 @@ final class TrackingShipmentsTest extends TestCase
         $this->assertNotNull($route);
         $this->assertContains('throttle:60,1', $route->gatherMiddleware());
     }
+
+    public function test_partner_rider_comes_from_the_current_booking_without_phone(): void
+    {
+        Schema::create('partner_console_orders', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->string('provider_order_id')->nullable();
+            $t->string('driver_name', 120)->nullable();
+            $t->string('driver_phone', 32)->nullable();
+            $t->string('vehicle_number', 32)->nullable();
+            $t->timestamps();
+        });
+        // An earlier, cancelled attempt on the same shipment row — its rider must not show.
+        DB::table('partner_console_orders')->insert([
+            ['provider_order_id' => 'CRN-OLD', 'driver_name' => 'Old Rider', 'driver_phone' => '919000000001', 'vehicle_number' => 'DL1AA0001'],
+            ['provider_order_id' => 'CRN-SECRET', 'driver_name' => 'Ramesh Kumar', 'driver_phone' => '919876543210', 'vehicle_number' => 'DL3CB1234'],
+        ]);
+        $orderId = $this->makeOrder(['tracking_token' => str_repeat('t', 48)]);
+        $this->makeShipment($orderId);                                        // provider_order_id CRN-SECRET
+        $local = $this->makeOrder(['tracking_token' => str_repeat('u', 48)]);
+        $this->makeShipment($local, ['courier_name' => null, 'provider_order_id' => null]); // own-fleet parcel
+
+        $s = $this->getJson('/api/orders/' . $this->tracking($orderId) . '/shipments?token=' . str_repeat('t', 48))
+            ->assertOk()->json('shipments.0');
+        $this->assertSame('Porter', $s['courier_name']);
+        $this->assertSame('Ramesh Kumar', $s['rider_name']);
+        $this->assertSame('DL3CB1234', $s['vehicle_number']);
+        $this->assertStringNotContainsString('9876543210', json_encode($s), 'rider phone must not leak');
+        $this->assertArrayNotHasKey('provider_order_id', $s);
+
+        $l = $this->getJson('/api/orders/' . $this->tracking($local) . '/shipments?token=' . str_repeat('u', 48))
+            ->assertOk()->json('shipments.0');
+        $this->assertNull($l['rider_name']);
+        $this->assertNull($l['vehicle_number']);
+    }
 }
