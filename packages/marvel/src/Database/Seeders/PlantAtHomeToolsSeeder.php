@@ -9,16 +9,19 @@ use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Type;
 
 /**
- * Tier 2 — safe for all environments (updateOrCreate on slug).
+ * Tier 2 — safe for all environments.
  *
  * Seeds the Tools vertical from packages/marvel/data/tools.json into the
  * products table + category_product pivot. Unlike plants, tools are simple,
  * fixed-price products (price/sale_price/quantity set here), with no
  * plant_attributes row.
  *
- * IDEMPOTENT: re-running updates existing tools by slug (no TRUNCATE), so it is
- * safe on production. Images are left null and sourced separately (admin upload
- * or an image pass) — the storefront card shows an elegant branded fallback.
+ * CREATE-ONLY: a tool is created listable (status publish + the Master Catalog
+ * flags) and never re-dressed afterwards. This runs on every staging boot and in
+ * prod-data-op modes; re-applying name/copy/price/stock/type here used to undo
+ * every admin edit (a price change, a bundle conversion) on the next boot.
+ * Images are left null and sourced separately (admin upload or an image pass) —
+ * the storefront card shows an elegant branded fallback.
  *
  * Run:  php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeToolsSeeder" --force
  */
@@ -71,33 +74,41 @@ class PlantAtHomeToolsSeeder extends Seeder
                 $sale     = isset($t['sale_price']) ? (float) $t['sale_price'] : null;
                 $quantity = (int) ($t['quantity'] ?? 0);
 
-                $product = Product::updateOrCreate(
-                    ['slug' => $slug, 'language' => 'en'],
-                    [
-                        'name'         => $name,
-                        'description'  => $t['description'] ?? null,
-                        'type_id'      => $type->id,
-                        'language'     => 'en',
-                        'status'       => 'publish',
-                        'visibility'   => 'visibility_public',
-                        'product_type' => 'simple',
-                        'in_stock'     => $quantity > 0,
-                        'is_taxable'   => false,
-                        'unit'         => $t['unit'] ?? '1 Piece',
-                        'price'        => $price,
-                        'sale_price'   => $sale,
-                        'min_price'    => $price,
-                        'max_price'    => $price,
-                        'quantity'     => $quantity,
+                $product = Product::firstOrNew(['slug' => $slug, 'language' => 'en']);
+                if (!$product->exists) {
+                    $product->fill([
+                        'name'                 => $name,
+                        'description'          => $t['description'] ?? null,
+                        'status'               => 'publish',
+                        'visibility'           => 'visibility_public',
+                        'product_type'         => 'simple',
+                        'in_stock'             => $quantity > 0,
+                        'is_taxable'           => false,
+                        'unit'                 => $t['unit'] ?? '1 Piece',
+                        'price'                => $price,
+                        'sale_price'           => $sale,
+                        'min_price'            => $price,
+                        'max_price'            => $price,
+                        'quantity'             => $quantity,
+                        // Master Catalog membership: listable from the start (the gate
+                        // defaults to hidden and nothing else would ever switch it on).
+                        'is_available_product' => true,
+                        'listing_enabled'      => true,
+                        'available_at'         => now(),
                         // images sourced separately; card shows branded fallback meanwhile
-                    ]
-                );
+                    ]);
+                }
+                $product->fill(['type_id' => $type->id])->save();
 
                 $product->wasRecentlyCreated ? $created++ : $updated++;
 
+                // Category only for a tool that has none (new, or seeded before its
+                // category existed) — an admin re-categorisation is never overwritten.
                 $catSlug = isset($t['category']) ? Str::slug($t['category']) : null;
                 if ($catSlug && isset($categoryIndex[$catSlug])) {
-                    $product->categories()->sync([$categoryIndex[$catSlug]]);
+                    if (!$product->categories()->exists()) {
+                        $product->categories()->sync([$categoryIndex[$catSlug]]);
+                    }
                 } elseif ($catSlug) {
                     $this->command->warn("[Tools] Category not found: {$catSlug} for tool: {$name}");
                 }
@@ -108,7 +119,7 @@ class PlantAtHomeToolsSeeder extends Seeder
         }
 
         $this->command->info(
-            "[Tools] PlantAtHome tools seeded — created: {$created}, updated: {$updated}, errors: {$errors} (total: " . count($tools) . ")"
+            "[Tools] PlantAtHome tools seeded — created: {$created}, kept: {$updated}, errors: {$errors} (total: " . count($tools) . ")"
         );
     }
 }
