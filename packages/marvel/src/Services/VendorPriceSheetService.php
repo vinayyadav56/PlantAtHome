@@ -80,12 +80,26 @@ class VendorPriceSheetService
             // because a price-only row under a Small/Medium/Large header is a lie.
             $typeKey   = $product->type->slug ?? 'other';
             $typeLabel = $product->type->name ?? 'Other';
-            $key       = $labels === [] ? $typeKey . ':price-only' : $typeKey;
+
+            // Group by the ATTRIBUTE AXIS as well as the type. Grouping on type alone unioned
+            // every variant any product of that type had ever carried: on production that gave
+            // the Plants sheet 25 columns -- Small/Medium/Large plus two dozen Pickbazar demo
+            // combinations like `Picture Book / English`, because a handful of demo rows are
+            // typed as plants. Every real plant then printed 22 grey cells. Products priced on
+            // Size now sit together, and anything priced on another axis gets its own short
+            // table instead of widening everyone else's.
+            $axis = array_values(array_unique(array_filter($labels)));
+            sort($axis);
+            $axisKey = implode(' + ', $axis);
+            $key     = $labels === []
+                ? $typeKey . ':price-only'
+                : $typeKey . ':' . ($axisKey !== '' ? $axisKey : 'unclassified');
 
             if (!isset($groups[$key])) {
                 $groups[$key] = [
                     'key'     => $key,
                     'label'   => $typeLabel,
+                    'axis'    => $axisKey ?? '',
                     'columns' => [],
                     'rows'    => [],
                 ];
@@ -115,8 +129,18 @@ class VendorPriceSheetService
             ];
         }
 
+        // A type can now yield several groups, so a bare "Plants" heading twice over different
+        // columns would be unreadable on paper. Only qualify where it is actually ambiguous.
+        $labelCounts = [];
+        foreach ($groups as $group) {
+            $labelCounts[$group['label']] = ($labelCounts[$group['label']] ?? 0) + 1;
+        }
+
         $out = [];
         foreach ($groups as $group) {
+            if (($labelCounts[$group['label']] ?? 0) > 1) {
+                $group['label'] .= ' — ' . ($group['axis'] !== '' ? $group['axis'] : 'single price');
+            }
             $columns = array_keys($group['columns']);
             // Known attribute values sort by their declared sort_order, so a sheet reads
             // Small -> Medium -> Large rather than in whatever order the rows arrived.
@@ -153,6 +177,7 @@ class VendorPriceSheetService
                 },
                 $columns
             );
+            unset($group['axis']);
             $out[] = $group;
         }
 
@@ -224,9 +249,14 @@ class VendorPriceSheetService
                 }
             }
 
+            // The whole attribute signature, not just the single-attribute case: a variant
+            // spanning Aurora Pope + Language must be recognisable as a different axis from one
+            // spanning Size, or the two end up sharing a header.
+            $names = array_values(array_unique($names));
+            sort($names);
             $add(
                 $parts !== [] ? implode(' / ', $parts) : (string) $option->title,
-                count(array_unique($names)) === 1 ? $names[0] : ''
+                implode(' + ', $names)
             );
         }
 

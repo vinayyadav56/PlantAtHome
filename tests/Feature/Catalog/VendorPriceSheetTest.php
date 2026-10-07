@@ -289,6 +289,44 @@ final class VendorPriceSheetTest extends TestCase
         $this->assertContains('Size: Small', $labels);
     }
 
+    /**
+     * The regression that reached production. Grouping on product type alone unioned every
+     * variant any product of that type had ever carried, so a handful of Pickbazar demo rows
+     * typed as plants gave the live Plants sheet 25 columns -- Small/Medium/Large plus two dozen
+     * `Picture Book / English` style combinations -- and every real plant printed 22 grey cells.
+     */
+    public function test_a_product_on_a_different_attribute_axis_does_not_widen_the_main_table(): void
+    {
+        $plants = $this->type('plants-t', 'Plants');
+        $this->product('Monstera', $plants, [
+            [['name' => 'Size', 'value' => 'Small']],
+            [['name' => 'Size', 'value' => 'Medium']],
+            [['name' => 'Size', 'value' => 'Large']],
+        ]);
+        // Same TYPE, completely unrelated attributes -- exactly the production demo rows.
+        $this->product('Demo Oddity', $plants, [
+            [['name' => 'Aurora Pope', 'value' => 'Magni voluptas eum e'], ['name' => 'Language', 'value' => 'Spanish']],
+            [['name' => 'Aurora Pope', 'value' => 'Sunt voluptas animi'], ['name' => 'Language', 'value' => 'French']],
+        ]);
+
+        $sheet = $this->sheet();
+
+        $sized = null;
+        foreach ($sheet['groups'] as $g) {
+            if (in_array('Small', array_column($g['columns'], 'label'), true)) {
+                $sized = $g;
+            }
+        }
+        $this->assertNotNull($sized);
+        $this->assertCount(3, $sized['columns'], 'the size table must stay three columns wide');
+        $this->assertCount(1, $sized['rows'], 'and must not pick up the odd product');
+
+        // The odd product still gets its own boxes, in its own short table.
+        $this->assertGreaterThanOrEqual(2, count($sheet['groups']));
+        $labels = array_map(fn ($g) => $g['label'], $sheet['groups']);
+        $this->assertSame(count($labels), count(array_unique($labels)), 'two tables must never share a heading');
+    }
+
     public function test_the_route_is_registered_and_gated_on_read_permission(): void
     {
         $route = collect(Route::getRoutes()->getRoutes())->first(
