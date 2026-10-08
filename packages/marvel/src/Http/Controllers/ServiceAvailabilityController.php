@@ -9,7 +9,11 @@ use Illuminate\Validation\ValidationException;
 use Marvel\Database\Models\City;
 use Marvel\Database\Models\CityVerticalServiceSetting as CVS;
 use Marvel\Database\Models\GlobalVerticalSetting as GVS;
+use Marvel\Database\Models\Product;
 use Marvel\Database\Models\ServiceAvailabilityLog;
+use Marvel\Database\Models\Shop;
+use Marvel\Database\Models\Type;
+use Marvel\Database\Models\VendorProductPrice;
 use Marvel\Events\ServiceAvailabilityChanged;
 use Marvel\Services\AvailabilityService;
 use Marvel\Services\ServiceAvailabilityService;
@@ -344,6 +348,104 @@ class ServiceAvailabilityController extends CoreController
 
         $this->audit($request, 'platform', $data['flag'], $old, ['settings' => $settings, 'message' => $row->maintenance_message], $data['reason'] ?? null);
         return $row->fresh();
+    }
+
+    // ── Seller model per vertical (single vendor = one seller nationwide, e.g. Tools) ──
+
+    /** One row per catalogue vertical. */
+    public function sellerModels()
+    {
+        return array_map(
+            fn ($slug) => $this->sellerModel($slug),
+            Type::query()->whereNotNull('slug')->distinct()->pluck('slug')->all(),
+        );
+    }
+
+    public function showSellerModel(string $slug)
+    {
+        abort_unless(Type::where('slug', $slug)->exists(), 404, 'Unknown vertical.');
+        return $this->sellerModel($slug);
+    }
+
+    /**
+     * Switch a vertical between multi-vendor (city-based) and one seller nationwide.
+     * Merged into `settings` (other keys survive). Multi → single is refused while other
+     * shops still supply the vertical; a seller change is allowed and reports the old
+     * seller's rows, which go inert (every read filters to the seller).
+     */
+    public function setSellerModel(Request $request, string $slug)
+    {
+        abort_unless(Type::where('slug', $slug)->exists(), 404, 'Unknown vertical.');
+        $data = $request->validate([
+            'seller_model'   => ['required', Rule::in(['single_vendor', 'multi_vendor'])],
+            'seller_shop_id' => ['nullable', 'integer', 'required_if:seller_model,single_vendor'],
+            'reason'         => ['nullable', 'string', 'max:500'],
+        ]);
+        $oldSeller = $this->availability->singleSellerShopId($slug);
+        $newSeller = $data['seller_model'] === 'single_vendor' ? (int) $data['seller_shop_id'] : null;
+
+        $products = Product::query()->select('id')->whereIn('type_id', Type::where('slug', $slug)->pluck('id'))
+            ->where(fn ($q) => $q->whereNull('product_type')->orWhere('product_type', '!=', \Marvel\Enums\ProductType::BUNDLE));
+        $warnings = [];
+        $inert = 0;
+        if ($newSeller !== null) {
+            $shop = Shop::find($newSeller);
+            if (!$shop || !$shop->is_active || $shop->approval_status === Shop::STATUS_ON_HOLD) {
+                throw ValidationException::withMessages(['seller_shop_id' => ['The seller must be an active shop that is not on hold.']]);
+            }
+            $others = VendorProductPrice::whereIn('product_id', $products)->where('shop_id', '!=', $newSeller)->count();
+            if ($oldSeller === null && $others > 0) {
+                throw ValidationException::withMessages(['seller_model' => [
+                    "{$others} inventory rows from other shops supply this vertical. Remove them before giving it a single seller.",
+                ]]);
+            }
+            if ($others > 0) {
+                $inert = $others;
+                $warnings[] = "{$others} inventory rows from other shops (the previous seller) no longer sell anything.";
+            }
+            if (!VendorProductPrice::approved()->whereIn('product_id', $products)->where('shop_id', $newSeller)->exists()) {
+                $warnings[] = 'The seller has no approved rates for this vertical yet, so its products show as out of stock.';
+            }
+        }
+
+        $row = GVS::firstOrNew(['vertical_slug' => $slug]);
+        $old = $row->exists ? ['settings' => $row->settings] : null;
+        $row->settings = array_merge((array) ($row->settings ?? []), [
+            'seller_model'   => $data['seller_model'],
+            'seller_shop_id' => $newSeller,
+        ]);
+        if (!$row->exists) {
+            $row->is_active = true;
+            $row->status = GVS::STATUS_ACTIVE;
+            $row->created_by = optional($request->user())->id;
+        }
+        $row->updated_by = optional($request->user())->id;
+        $row->save();
+        // Audit + bust() + products:ver, then re-mirror / re-project under the new model.
+        $this->audit($request, 'global_vertical', $slug, $old, ['settings' => $row->settings], $data['reason'] ?? null);
+        if ($oldSeller !== $newSeller) {
+            $svc = new AvailabilityService();
+            foreach ($products->pluck('id') as $pid) {
+                $svc->recomputeForProduct((int) $pid);
+            }
+            AvailabilityService::bustCatalogCache();
+        }
+
+        return $this->sellerModel($slug) + ['warnings' => $warnings, 'inert_rows' => $inert];
+    }
+
+    /** @return array{vertical:string,seller_model:string,seller_shop_id:?int,seller:?array,city_based:bool} */
+    private function sellerModel(string $slug): array
+    {
+        $sellerId = $this->availability->singleSellerShopId($slug);
+        $shop = $sellerId ? Shop::find($sellerId, ['id', 'name', 'slug']) : null;
+        return [
+            'vertical'       => $slug,
+            'seller_model'   => $sellerId ? 'single_vendor' : 'multi_vendor',
+            'seller_shop_id' => $sellerId,
+            'seller'         => $shop ? ['id' => (int) $shop->id, 'name' => $shop->name, 'slug' => $shop->slug] : null,
+            'city_based'     => $sellerId === null,
+        ];
     }
 
     // ── helpers ──────────────────────────────────────────────────────────────

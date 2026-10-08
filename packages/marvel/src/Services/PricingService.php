@@ -42,7 +42,10 @@ class PricingService
     public function sellingPrice(Product $product, ?int $variationOptionId = null, ?array $latLng = null, ?string $city = null): array
     {
         $basePrice = (float) ($product->sale_price ?: $product->price ?: $product->min_price ?: 0);
-        $cityKey = $this->cityKey($city);
+        // A single-seller product (Tools) has one nationwide price: the seller's rate + the
+        // vertical margin with NO city, so a city rule can never move it.
+        $single = app(ServiceAvailabilityService::class)->singleSellerFor($product) !== null;
+        $cityKey = $single ? null : $this->cityKey($city);
 
         $rows = $this->coveredRows($product->id, $variationOptionId, $cityKey);
         if ($rows->isNotEmpty()) {
@@ -53,6 +56,11 @@ class PricingService
             $price   = $this->margins->apply($maxRate, $cityKey, $typeId);
             $margin  = $this->margins->effectivePercent($maxRate, $cityKey, $typeId);
             return $this->result($price, true, null, $basePrice, true, $maxRate, $margin);
+        }
+        if ($single) {
+            // No usable seller row (none, unapproved, unavailable, sold out): not for sale —
+            // never the catalogue-price fallback below.
+            return $this->result($basePrice, false, null, $basePrice, false);
         }
 
         // Nothing available. Is there any effective row at all (priced but unavailable)?
@@ -93,6 +101,16 @@ class PricingService
      */
     public function coveredRows(int $productId, ?int $variationOptionId, ?string $cityKey)
     {
+        // Single-seller product: only the seller's rows count, wherever the customer is — and
+        // none while the seller is on hold, exactly as assignment and checkStock see it (the
+        // mirror would otherwise list a tool as in stock that checkout then refuses).
+        $seller = app(ServiceAvailabilityService::class)->singleSellerFor($productId);
+        if ($seller !== null) {
+            return $this->availableRowsQuery($productId, $variationOptionId)
+                ->where('shop_id', $seller)
+                ->whereDoesntHave('shop', fn ($s) => $s->where('approval_status', \Marvel\Database\Models\Shop::STATUS_ON_HOLD))
+                ->get();
+        }
         $rows = $this->availableRowsQuery($productId, $variationOptionId)->get();
         if ($rows->isEmpty() || !$cityKey) {
             return $rows;

@@ -124,6 +124,7 @@ final class CatalogMembershipTest extends TestCase
         $stub = \Mockery::mock(ServiceAvailabilityService::class);
         $stub->shouldReceive('availableVerticalsForCity')->andReturn([]);
         $stub->shouldReceive('allVerticals')->andReturn([]);
+        $stub->shouldReceive('verticalFilterForCity')->andReturn(null);
         $this->app->instance(ServiceAvailabilityService::class, $stub);
 
         // All three are `publish`. Status is orthogonal to membership — that is the point.

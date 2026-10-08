@@ -70,8 +70,10 @@ class DeliveryOptionsController extends CoreController
         // The coverage version is part of the key: a vendor saving a rule has
         // to change this answer, and a 10-minute stale "we deliver here" is
         // exactly the promise the checkout would then refuse.
+        // The availability version too: a seller-model (Tools) or city-status change moves it.
         $cov = (int) Cache::get('coverage:ver', 0);
-        $key = "delivery-options:v6:{$cov}:{$pincode}:{$productId}";
+        $sav = (int) Cache::get('service_availability:ver', 1);
+        $key = "delivery-options:v7:{$cov}:{$sav}:{$pincode}:{$productId}";
 
         return response()->json(
             Cache::remember($key, self::TTL, fn () => $this->resolve($pincode, $productId))
@@ -119,6 +121,25 @@ class DeliveryOptionsController extends CoreController
             // city the customer picked and the price they were quoted.
             $cityName = $city->name;
             $out['city'] = $cityName;
+        }
+
+        // A single-seller product (Tools) ships nationwide from its seller by courier: city
+        // status and service areas don't apply — only coverage and the courier's pincode can.
+        $seller = $productId > 0 ? app(\Marvel\Services\ServiceAvailabilityService::class)->singleSellerFor($productId) : null;
+        if ($seller !== null) {
+            $allowed = \Marvel\Services\CoverageBridge::allowedShops([$seller], $pincode, \Marvel\Services\CoverageBridge::verticalOfProduct($productId));
+            if ($allowed !== null && !isset($allowed[$seller])) {
+                $out['reason'] = 'no_supply';
+                $out['message'] = "We can't deliver this to {$pincode} yet.";
+                return $out;
+            }
+            if (empty($geo['lat']) && $city) {
+                $geo['lat'] = $city->lat;
+                $geo['lng'] = $city->lng;
+            }
+            $out['serviceable'] = true;
+            $out['options'][] = $this->courierOption([$seller], $geo, $productId);
+            return $out;
         }
 
         // A paused/maintenance city answers before anything else — quoting a

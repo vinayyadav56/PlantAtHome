@@ -24,6 +24,7 @@ class GetSingleProductResource extends Resource
             'language'                     => $this->language,
             'translated_languages'         => $this->translated_languages,
             'product_type'                 => $this->product_type,
+            'city_based'                   => $this->city_based,
             'categories'                   => getResourceCollection($this->categories, []), // if you need extra data then pass key in array by second parameter
             'tags'                         => getResourceCollection($this->tags, []), // if you need extra data then pass key in array by second parameter
             'metas'                        => $this->metas,

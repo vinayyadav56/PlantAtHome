@@ -64,6 +64,7 @@ class Product extends Model
         'in_wishlist',
         'blocked_dates',
         'translated_languages',
+        'city_based',
     ];
 
     /**
@@ -629,6 +630,22 @@ class Product extends Model
             return $this->reviews()->where('user_id', auth()->user()->id)->get();
         }
         return null;
+    }
+
+    /**
+     * False for a single-seller product (Tools): one nationwide price and stock, never
+     * gated by the shopping city. The storefront skips every city gate on false.
+     */
+    public function getCityBasedAttribute(): bool
+    {
+        // A partial select (e.g. `product:id,name`) lacks the columns — look them up by id.
+        $loaded = array_key_exists('type_id', $this->attributes) && array_key_exists('product_type', $this->attributes);
+        try {
+            return app(\Marvel\Services\ServiceAvailabilityService::class)
+                ->singleSellerFor($loaded ? $this : (int) $this->getKey()) === null;
+        } catch (\Throwable $e) {
+            return true; // fail open: city-based, today's behaviour
+        }
     }
 
     public function getInWishlistAttribute()

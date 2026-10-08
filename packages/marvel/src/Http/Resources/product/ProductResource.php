@@ -23,6 +23,8 @@ class ProductResource extends Resource
             'language'             => $this->language,
             'translated_languages' => $this->translated_languages,
             'product_type'         => $this->product_type,
+            'city_based'           => $this->city_based,
+            'in_stock'             => $this->in_stock,
             'shop'                 => getResourceData($this->shop, []), // if you need extra data then pass key in array by second parameter
             'sale_price'           => $this->sale_price,
             'max_price'            => $this->max_price,

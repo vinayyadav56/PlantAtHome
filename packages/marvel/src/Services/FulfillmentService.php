@@ -36,7 +36,7 @@ class FulfillmentService
         foreach ($order->products as $product) {
             $qty = (int) ($product->pivot->order_quantity ?? 1);
             $variationOptionId = $product->pivot->variation_option_id ? (int) $product->pivot->variation_option_id : null;
-            $vendors = $this->availability->vendorsForProduct((int) $product->id, $variationOptionId);
+            $vendors = $this->nationwide((int) $product->id, $this->availability->vendorsForProduct((int) $product->id, $variationOptionId));
 
             $pick = $this->chooseVendor($vendors, $cityN, $qty);
             if ($pick === null) {
@@ -82,7 +82,7 @@ class FulfillmentService
      */
     public function fulfillmentFor(int $productId, ?int $variationOptionId, ?string $city, int $qty = 1, ?string $pincode = null): ?array
     {
-        $vendors = $this->availability->vendorsForProduct($productId, $variationOptionId);
+        $vendors = $this->nationwide($productId, $this->availability->vendorsForProduct($productId, $variationOptionId));
         // A pincode is a sharper question than the city ladder can answer. When
         // the shopper gave one and the gate is on, the PDP's ETA comes from the
         // vendors that actually cover that pin — otherwise the product page can
@@ -103,6 +103,18 @@ class FulfillmentService
             'fulfillment_mode' => $pick['fulfillment_mode'],
             'eta_days'         => $pick['eta_days'],
         ];
+    }
+
+    /**
+     * A single seller (Tools) ships nationwide by courier from its own door: drop its service
+     * areas so chooseVendor() lands on courier + DEFAULT_COURIER_ETA wherever the customer is.
+     */
+    private function nationwide(int $productId, array $vendors): array
+    {
+        if (app(ServiceAvailabilityService::class)->singleSellerFor($productId) === null) {
+            return $vendors;
+        }
+        return array_map(fn ($v) => ['cities' => [], 'fulfillment_mode' => 'courier'] + $v, $vendors);
     }
 
     /** Pick the best vendor for one line: local-in-city first, then courier, cheapest within tier. */

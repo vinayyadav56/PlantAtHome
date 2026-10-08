@@ -103,7 +103,7 @@ class PriceSheetController extends CoreController
     public function prices(Request $request)
     {
         $limit = (int) ($request->limit ?? 30);
-        $query = VendorProductPrice::with(['shop:id,name,slug', 'product:id,name,slug,sku'])
+        $query = VendorProductPrice::with(['shop:id,name,slug', 'product:id,name,slug,sku,type_id,product_type'])
             ->orderByDesc('id');
         foreach (['shop_id', 'product_id', 'period_type'] as $f) {
             if ($request->filled($f)) {

@@ -390,9 +390,8 @@ class ProductController extends CoreController
         // Operations Control Center — vertical kill-switch parity with fetchProducts.
         $availSvc = app(\Marvel\Services\ServiceAvailabilityService::class);
         $availCity = $request->filled('city') ? (string) $request->city : null;
-        $availableVerticals = $availSvc->availableVerticalsForCity($availCity);
-        $allVerticals = $availSvc->allVerticals();
-        if (count($availableVerticals) > 0 && count($availableVerticals) < count($allVerticals)) {
+        $availableVerticals = $availSvc->verticalFilterForCity($availCity);
+        if ($availableVerticals !== null) {
             $query->whereHas('type', fn ($q) => $q->whereIn('slug', $availableVerticals));
         }
 
@@ -748,9 +747,8 @@ class ProductController extends CoreController
         // empties the whole catalog (an all-off is the platform kill-switch).
         $availSvc = app(\Marvel\Services\ServiceAvailabilityService::class);
         $availCity = $request->filled('city') ? (string) $request->city : null;
-        $availableVerticals = $availSvc->availableVerticalsForCity($availCity);
-        $allVerticals = $availSvc->allVerticals();
-        if (count($availableVerticals) > 0 && count($availableVerticals) < count($allVerticals)) {
+        $availableVerticals = $availSvc->verticalFilterForCity($availCity);
+        if ($availableVerticals !== null) {
             $products_query = $products_query->whereHas('type', function ($q) use ($availableVerticals) {
                 $q->whereIn('slug', $availableVerticals);
             });
@@ -1284,6 +1282,16 @@ class ProductController extends CoreController
             }
             $id = $request->id;
             $product = $this->repository->updateProduct($request, $id, $setting);
+            // The form writes price/in_stock straight onto the row; a single-seller product
+            // (Tools) takes them from its seller's rate + margin, so re-mirror.
+            try {
+                if (app(\Marvel\Services\ServiceAvailabilityService::class)->singleSellerFor($product) !== null) {
+                    (new \Marvel\Services\AvailabilityService())->recomputeForProduct((int) $product->id);
+                    $product->refresh();
+                }
+            } catch (\Throwable $e) {
+                \Illuminate\Support\Facades\Log::warning('single-seller re-mirror failed', ['product_id' => $product->id, 'error' => $e->getMessage()]);
+            }
             $this->bustResponseCache('products'); // refresh storefront list/PDP caches (incl. bundle/add-on edits)
             return $product;
         } else {

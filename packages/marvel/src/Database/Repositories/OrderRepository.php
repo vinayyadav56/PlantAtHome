@@ -762,6 +762,9 @@ class OrderRepository extends BaseRepository
                 // anything. Gating it there would break checkout.
                 if (\Marvel\Services\OrderItemService::autoAssignEnabled()) {
                     $itemService->assignAndGroup($order);
+                } else {
+                    // ...except single-seller lines (Tools), which have only one vendor.
+                    $itemService->assignSingleSellerLines($order);
                 }
             } catch (\Throwable $e) {
                 Log::warning('order auto-assignment failed (order kept; assign from admin)', [

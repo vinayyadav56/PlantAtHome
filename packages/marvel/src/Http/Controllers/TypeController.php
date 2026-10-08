@@ -95,9 +95,8 @@ class TypeController extends CoreController
      */
     private function availableOnly($types, $availSvc, ?string $city)
     {
-        $available = $availSvc->availableVerticalsForCity($city);
-        $all = $availSvc->allVerticals();
-        if (count($available) > 0 && count($available) < count($all)) {
+        $available = $availSvc->verticalFilterForCity($city);
+        if ($available !== null) {
             return $types->filter(fn ($t) => in_array($t->slug, $available, true))->values();
         }
         return $types;

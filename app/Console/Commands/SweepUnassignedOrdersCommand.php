@@ -47,11 +47,22 @@ class SweepUnassignedOrdersCommand extends Command
                 $q->where('payment_status', PaymentStatus::SUCCESS)
                     ->orWhereIn('payment_gateway', ['CASH_ON_DELIVERY', 'CASH', 'COD']);
             })
-            ->whereNotExists(function ($sub) {
-                $sub->selectRaw('1')
-                    ->from('order_items')
-                    ->whereColumn('order_items.order_id', 'orders.id')
-                    ->whereNotNull('order_items.assigned_shop_id');
+            // No line has a vendor, OR some live line still lacks one. The second arm matters
+            // since Tools (single-seller) lines are assigned at creation: a mixed order then has
+            // an assigned line while its plant lines wait, and must still raise the alarm.
+            ->where(function ($q) {
+                $q->whereNotExists(function ($sub) {
+                    $sub->selectRaw('1')
+                        ->from('order_items')
+                        ->whereColumn('order_items.order_id', 'orders.id')
+                        ->whereNotNull('order_items.assigned_shop_id');
+                })->orWhereExists(function ($sub) {
+                    $sub->selectRaw('1')
+                        ->from('order_items')
+                        ->whereColumn('order_items.order_id', 'orders.id')
+                        ->whereNull('order_items.assigned_shop_id')
+                        ->where(fn ($s) => $s->whereNull('order_items.item_status')->orWhere('order_items.item_status', '!=', 'cancelled'));
+                });
             })
             ->get(['id', 'tracking_number', 'created_at']);
 

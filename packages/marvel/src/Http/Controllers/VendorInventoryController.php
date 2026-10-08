@@ -129,6 +129,14 @@ class VendorInventoryController extends CoreController
             $cid = (int) $request->category_id;
             $query->whereHas('categories', fn ($c) => $c->where('categories.id', $cid));
         }
+        // A single-seller vertical (Tools) takes supply from its seller only — never offer its
+        // products to another shop (VendorProductPrice's saving hook would refuse the row anyway).
+        $foreignTypes = collect(app(\Marvel\Services\ServiceAvailabilityService::class)->singleSellerTypeIds())
+            ->reject(fn ($seller) => $seller === $shopId)->keys()->all();
+        if ($foreignTypes) {
+            $query->where(fn ($w) => $w->whereNotIn('type_id', $foreignTypes)->orWhereNull('type_id')
+                ->orWhere('product_type', \Marvel\Enums\ProductType::BUNDLE));
+        }
 
         // ── Vendor-specific availability ─────────────────────────────────────────────────
         // The catalogue this vendor sees is: master variants − variants they already sell.
@@ -196,6 +204,7 @@ class VendorInventoryController extends CoreController
                 'image'              => $p->image,
                 'type_id'            => $p->type_id,
                 'product_type'       => $p->product_type,
+                'city_based'         => $p->city_based,
                 'price'              => $p->price,
                 'status'             => $p->status,
                 'already_attached'   => $rows->isNotEmpty(),
@@ -304,7 +313,7 @@ class VendorInventoryController extends CoreController
 
         // Ordered by product then variant so a plant's sizes are adjacent — id DESC
         // scattered them and the client could only build partial groups.
-        $query = VendorProductPrice::with(['product:id,name,slug,sku,image'])
+        $query = VendorProductPrice::with(['product:id,name,slug,sku,image,type_id,product_type'])
             ->where('shop_id', $shopId)->orderBy('product_id')->orderBy('variation_option_id');
         $filters($query);
 
@@ -406,7 +415,7 @@ class VendorInventoryController extends CoreController
         $shopId = $this->resolveShopId($request);
         $threshold = max(0, (int) ($request->threshold ?? 5));
         $limit = min(100, max(1, (int) ($request->limit ?? 50)));
-        return VendorProductPrice::with(['product:id,name,slug,sku,image'])
+        return VendorProductPrice::with(['product:id,name,slug,sku,image,type_id,product_type'])
             ->where('shop_id', $shopId)
             ->where('stock_qty', '>', 0)
             ->whereRaw('(stock_qty - reserved_qty) <= ?', [$threshold])

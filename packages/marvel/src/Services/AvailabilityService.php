@@ -82,6 +82,12 @@ class AvailabilityService
         // build its candidate list — so this single filter covers both the
         // admin supply view and live order assignment.
         $rows = $this->effective($this->excludeHeldVendors($q))->get();
+        // A single-seller product (Tools) is supplied by its seller only; other shops' rows
+        // (a previous seller's) are inert.
+        $seller = app(ServiceAvailabilityService::class)->singleSellerFor($productId);
+        if ($seller !== null) {
+            $rows = $rows->where('shop_id', $seller)->values();
+        }
 
         $shopIds = $rows->pluck('shop_id')->unique()->values()->all();
         $areas = VendorServiceArea::whereIn('shop_id', $shopIds)->where('is_active', true)->get()->groupBy('shop_id');
@@ -178,6 +184,12 @@ class AvailabilityService
      */
     public function recomputeForProduct(int $productId): void
     {
+        $product = Product::with('categories:id')->find($productId);
+        if ($product && app(ServiceAvailabilityService::class)->singleSellerFor($product) !== null) {
+            $this->mirrorSingleSeller($product);
+            return;
+        }
+
         // Available in a city = a vendor has a current, priced, in-stock-OR-untracked row.
         // track_stock = 0 means "stock not tracked" (the common price-only sheet) → always
         // sellable. When track_stock = 1 the vendor IS managing stock, so a row with no free
@@ -191,7 +203,6 @@ class AvailabilityService
             )
         )->get();
 
-        $product = Product::with('categories:id')->find($productId);
         $cities = [];
         if ($rows->isNotEmpty() && $product) {
             // Each row's vendor RATE, computed once (rate = vendor quote, or legacy
@@ -338,6 +349,31 @@ class AvailabilityService
                 ->where('city', $city)
                 ->whereNotIn('variation_option_id', $keepVariants)
                 ->delete();
+        }
+    }
+
+    /**
+     * Single-seller products (Tools) have no city dimension: the seller's rate + the vertical's
+     * margin is ONE nationwide price, mirrored onto the product row so listing, price filter,
+     * sort, cart, PDP and checkout's catalogue fallback all read it with no city lookup. No
+     * usable seller row ⇒ out of stock with the price untouched — never a null/0 price, which
+     * ApplySizePricingCommand would then "fix" with an invented one. Simple products only:
+     * variation prices are not mirrored.
+     */
+    private function mirrorSingleSeller(Product $product): void
+    {
+        ProductCityAvailability::where('product_id', $product->id)->delete();
+
+        $r = $this->pricing->sellingPrice($product);
+        $update = (!empty($r['has_vendor_cost']) && !empty($r['available']) && $r['price'] > 0)
+            ? ['price' => $r['price'], 'min_price' => $r['price'], 'max_price' => $r['price'], 'sale_price' => null, 'in_stock' => true]
+            : ['in_stock' => false];
+        // Write only what changed, through the query builder: no model observers, and the
+        // daily recompute doesn't churn a row that already matches.
+        $update = array_filter($update, fn ($v, $k) => $product->getAttribute($k) != $v, ARRAY_FILTER_USE_BOTH);
+        if ($update) {
+            DB::table('products')->where('id', $product->id)->update($update);
+            self::bustCatalogCache();
         }
     }
 
@@ -540,6 +576,9 @@ class AvailabilityService
      *      ever exposes another city's catalog.
      * Defensive: any fault returns NULL (full catalog) so a DB hiccup never empties
      * the storefront.
+     *
+     * Single-seller products (Tools) ship nationwide, so a restricted set (1 or 3) always
+     * includes them — except under `availability=local`, which they never satisfy.
      */
     public function cityScopeProductIds(string $city, bool $localOnly = false)
     {
@@ -550,15 +589,27 @@ class AvailabilityService
             }
             $vendorSub = $this->availabilityProductIdQuery($key, $localOnly);
             if ((clone $vendorSub)->exists()) {
-                return $vendorSub; // (1) marketplace live here — strict
+                return $this->withSingleSeller($vendorSub, $localOnly); // (1) marketplace live here — strict
             }
             if ($this->cityIsServiceable($key)) {
                 return null;        // (2) serviceable + unmapped — full catalog
             }
-            return $vendorSub;      // (3) not serviceable — empty -> empty state
+            return $this->withSingleSeller($vendorSub, $localOnly); // (3) not serviceable — empty -> empty state
         } catch (\Throwable $e) {
             return null;            // never empty the store on a fault
         }
+    }
+
+    /** The city's product-id set ∪ every single-seller product (a `product_id` query either way). */
+    private function withSingleSeller($vendorSub, bool $localOnly)
+    {
+        $typeIds = $localOnly ? [] : array_keys(app(ServiceAvailabilityService::class)->singleSellerTypeIds());
+        if (!$typeIds) {
+            return $vendorSub;
+        }
+        $sellerProducts = Product::query()->select('id as product_id')->whereIn('type_id', $typeIds)
+            ->where(fn ($q) => $q->whereNull('product_type')->orWhere('product_type', '!=', \Marvel\Enums\ProductType::BUNDLE));
+        return DB::query()->fromSub($vendorSub->toBase()->union($sellerProducts->toBase()), 'cs')->select('product_id');
     }
 
     /**

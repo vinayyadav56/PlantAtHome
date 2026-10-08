@@ -345,6 +345,11 @@ class ShopServiceProvider extends ServiceProvider
             return new \Marvel\Translation\TranslationContext();
         });
 
+        // One availability map per request: Product::city_based asks it for every row of a
+        // listing. It reads the cache version once per instance; bust() moves it, and the next
+        // request or queue job starts fresh.
+        $this->app->scoped(\Marvel\Services\ServiceAvailabilityService::class);
+
         // scoped(), not singleton(): queue workers reset scoped instances
         // BETWEEN jobs, so a defaultPaymentGateway/defaultAi settings change
         // reaches long-lived workers without queue:restart. Within one FPM web

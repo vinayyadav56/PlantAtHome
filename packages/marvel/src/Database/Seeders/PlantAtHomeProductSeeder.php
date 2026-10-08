@@ -58,10 +58,11 @@ class PlantAtHomeProductSeeder extends Seeder
 
     public function run(): void
     {
-        // NON-destructive (idempotent updateOrCreate). NEVER truncates — the real
-        // plant catalog (PlantAtHomePlantBulkSeeder) owns the products table.
-        // This only seeds the tools + farmbox demo products so the staging
-        // vertical switcher has products to show for those two demo verticals.
+        // CREATE-ONLY. NEVER truncates — the real plant catalog (PlantAtHomePlantBulkSeeder)
+        // owns the products table. This only seeds the tools + farmbox demo products so the
+        // staging vertical switcher has products to show for those two demo verticals. It runs
+        // on every staging boot, so an existing row is never re-dressed: re-applying price /
+        // stock here undid admin edits and the Tools seller-rate mirror (in_stock, price).
         $categoryIndex = Category::where('language', 'en')->pluck('id', 'slug');
 
         $now   = now();
@@ -81,22 +82,23 @@ class PlantAtHomeProductSeeder extends Seeder
                 $slug     = $p['slug'];
                 unset($p['cats'], $p['photo']);
 
-                $product = Product::updateOrCreate(
-                    ['slug' => $slug, 'language' => 'en'],
-                    array_merge($p, [
-                        'type_id'      => $type->id,
-                        'language'     => 'en',
-                        'status'       => 'publish',
-                        'visibility'   => 'visibility_public',
-                        'product_type' => 'simple',
-                        'in_stock'     => true,
-                        'is_taxable'   => false,
-                        'image'        => $this->img(++$imgId, $photo),
-                        'min_price'    => $p['sale_price'],
-                        'max_price'    => $p['price'],
-                        'updated_at'   => $now,
-                    ])
-                );
+                $product = Product::firstOrNew(['slug' => $slug, 'language' => 'en']);
+                if ($product->exists) {
+                    continue;
+                }
+                $product->fill(array_merge($p, [
+                    'type_id'      => $type->id,
+                    'language'     => 'en',
+                    'status'       => 'publish',
+                    'visibility'   => 'visibility_public',
+                    'product_type' => 'simple',
+                    'in_stock'     => true,
+                    'is_taxable'   => false,
+                    'image'        => $this->img(++$imgId, $photo),
+                    'min_price'    => $p['sale_price'],
+                    'max_price'    => $p['price'],
+                    'updated_at'   => $now,
+                ]))->save();
 
                 $catIds = array_filter(array_map(fn($s) => $categoryIndex[$s] ?? null, $catSlugs));
                 if ($catIds) {

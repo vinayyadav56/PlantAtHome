@@ -121,19 +121,21 @@ class CheckoutRepository
         // show the choose-another-address / change-city dialog; storeOrder() hard-blocks.
         $city_mismatch = $this->shoppingCityMismatch($request);
         // Display-only policy: shopping city declared but NO nursery supplies it →
-        // the whole cart is unavailable (browse-only city). Structured payload for
-        // the storefront's out-of-stock banner. Old clients (no shopping_city) skip.
+        // the cart's city-based lines are unavailable (browse-only city). Structured
+        // payload for the storefront's out-of-stock banner. Old clients (no
+        // shopping_city) skip. Both gates flag only city-based lines: a single-seller
+        // line (Tools) ships anywhere.
         $city_stock = $this->shoppingCityOutOfStock($request);
         if ($city_stock !== null) {
             $unavailable_products = array_values(array_unique(array_merge(
                 array_map('intval', (array) $unavailable_products),
-                collect($request['products'])->pluck('product_id')->filter()->map(fn ($i) => (int) $i)->all()
+                $this->cityBasedProductIds($request)
             )));
         }
         if ($city_mismatch !== null) {
             $unavailable_products = array_values(array_unique(array_merge(
                 array_map('intval', $unavailable_products),
-                collect($request['products'])->pluck('product_id')->filter()->map(fn ($i) => (int) $i)->all()
+                $this->cityBasedProductIds($request)
             )));
         }
 
@@ -390,7 +392,8 @@ class CheckoutRepository
 
             $anyInterstate = (bool) array_filter(array_keys($originStates), fn ($s) => $s !== $destState);
             $shipCityKnown = !empty($dest->city_name) || !empty($dest->district_name);
-            $localAvailable = empty($unavailableProducts) && $shipCityKnown;
+            // A Tools-only cart ships by courier from its seller — never "local".
+            $localAvailable = empty($unavailableProducts) && $shipCityKnown && $this->cityBasedProductIds($request);
 
             return [
                 [
@@ -447,6 +450,12 @@ class CheckoutRepository
             if ($city === '') {
                 return null;
             }
+            // A cart of single-seller lines only (Tools) never depends on the city.
+            $lines = collect($request['products'] ?? [])->pluck('product_id')->filter()->unique();
+            $cityLines = $this->cityBasedProductIds($request);
+            if ($lines->isNotEmpty() && !$cityLines) {
+                return null;
+            }
             $availability = app(\Marvel\Services\AvailabilityService::class);
             if ($availability->cityHasSupply($city)) {
                 return null;
@@ -454,10 +463,12 @@ class CheckoutRepository
             return [
                 'code'    => 'CITY_OUT_OF_STOCK',
                 'city'    => $city,
-                'message' => sprintf(
-                    'All products are currently out of stock in %s. You can browse the catalog, but orders cannot be placed in this city yet.',
-                    $city
-                ),
+                'message' => count($cityLines) < $lines->count()
+                    ? sprintf("Plants aren't available in %s yet. Remove them to order the rest of your cart.", $city)
+                    : sprintf(
+                        'All products are currently out of stock in %s. You can browse the catalog, but orders cannot be placed in this city yet.',
+                        $city
+                    ),
             ];
         } catch (\Throwable $e) {
             return null; // never break checkout on a gate fault
@@ -470,6 +481,9 @@ class CheckoutRepository
             $shoppingCity = trim((string) ($request['shopping_city'] ?? ''));
             if ($shoppingCity === '') {
                 return null; // gate applies only when the client declares a shopping city
+            }
+            if (!empty($request['products'] ?? null) && !$this->cityBasedProductIds($request)) {
+                return null; // single-seller lines only (Tools): any address in the country
             }
             $ship = (array) ($request['shipping_address'] ?? []);
 
@@ -509,6 +523,21 @@ class CheckoutRepository
         } catch (\Throwable $e) {
             return null; // never break checkout on a gate fault
         }
+    }
+
+    /**
+     * Product ids of the cart lines that depend on the shopping city: all of them except
+     * single-seller products (Tools), which ship nationwide from their seller.
+     *
+     * @return int[]
+     */
+    public function cityBasedProductIds($request): array
+    {
+        $svc = app(\Marvel\Services\ServiceAvailabilityService::class);
+        return collect($request['products'] ?? [])->pluck('product_id')->filter()
+            ->map(fn ($i) => (int) $i)->unique()
+            ->reject(fn ($pid) => $svc->singleSellerFor($pid) !== null)
+            ->values()->all();
     }
 
     /**
@@ -673,8 +702,17 @@ class CheckoutRepository
         foreach ($db->get(['vendor_product_prices.product_id', 'vendor_product_prices.shop_id']) as $row) {
             $out[(int) $row->product_id][(int) $row->shop_id] = true;
         }
+        // A single-seller product (Tools) is supplied by its seller only; a product left
+        // with no supplier drops out, exactly as if it had no rows.
+        $svc = app(\Marvel\Services\ServiceAvailabilityService::class);
+        foreach ($out as $pid => $shops) {
+            $seller = $svc->singleSellerFor($pid);
+            if ($seller !== null) {
+                $out[$pid] = array_intersect_key($shops, [$seller => true]);
+            }
+        }
 
-        return array_map('array_keys', $out);
+        return array_map('array_keys', array_filter($out));
     }
 
     /**
@@ -944,7 +982,7 @@ class CheckoutRepository
         $unavailable_products = [];
         foreach ($products as $product) {
             if (isset($product['variation_option_id'])) {
-                $is_not_in_stock = $this->isVariationInStock($product['variation_option_id'], $product['order_quantity']);
+                $is_not_in_stock = $this->isVariationInStock($product['variation_option_id'], $product['order_quantity'], $product['product_id'] ?? null);
             } else {
                 $is_not_in_stock = $this->isInStock($product['product_id'], $product['order_quantity']);
             }
@@ -965,15 +1003,35 @@ class CheckoutRepository
      * isVariationInStock therefore always report "in stock" so checkStock()
      * returns [] and the 422 "Some items in your cart are out of stock" can
      * never fire for a city-available item.
+     *
+     * The one exception is a single-seller product (Tools): no city gate ever applies to
+     * it, so it is out of stock unless its seller can fill the line.
      */
     protected function isInStock($id, $order_quantity)
     {
-        return false; // never out of stock — city is the only gate
+        return $this->singleSellerOutOfStock((int) $id, null, (int) $order_quantity);
     }
 
-    protected function isVariationInStock($variation_id, $order_quantity)
+    protected function isVariationInStock($variation_id, $order_quantity, $product_id = null)
     {
-        return false; // never out of stock — city is the only gate
+        return $product_id
+            ? $this->singleSellerOutOfStock((int) $product_id, (int) $variation_id, (int) $order_quantity)
+            : false;
+    }
+
+    /** The product id when a single-seller product's seller can't fill the line, else false. Fail-open. */
+    private function singleSellerOutOfStock(int $productId, ?int $variationOptionId, int $qty)
+    {
+        try {
+            if (app(\Marvel\Services\ServiceAvailabilityService::class)->singleSellerFor($productId) === null) {
+                return false; // city is the only gate
+            }
+            return (new \Marvel\Services\ItemAssignmentService())->bestFor($productId, $variationOptionId, max(1, $qty), null) === null
+                ? $productId
+                : false;
+        } catch (\Throwable $e) {
+            return false;
+        }
     }
 
     protected function getShippingCharge($shipping_class, $amount)

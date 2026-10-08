@@ -151,6 +151,12 @@ class ItemAssignmentService
         }
 
         $vendors = $this->availability->vendorsForProduct($productId, $variationOptionId);
+        // Single-seller product (Tools): its seller is the only candidate, wherever the
+        // customer is — courier from its door, priced with no city (see below).
+        $seller = app(\Marvel\Services\ServiceAvailabilityService::class)->singleSellerFor($productId);
+        if ($seller !== null) {
+            $vendors = array_values(array_filter($vendors, fn ($v) => (int) $v['shop_id'] === $seller));
+        }
         if (empty($vendors)) {
             return [];
         }
@@ -202,7 +208,10 @@ class ItemAssignmentService
             }
 
             // Hard filter 2 — serves the city (local first, then courier, then national courier).
-            $area = $this->matchArea($areas[$shopId] ?? collect(), $cityN, $pincode);
+            // A single seller needs no service area: it ships nationwide by courier.
+            $area = $seller !== null
+                ? ['mode' => 'courier', 'eta_days' => null, 'pincode_covered' => false, 'city_matched' => true]
+                : $this->matchArea($areas[$shopId] ?? collect(), $cityN, $pincode);
             if ($area['mode'] === null) {
                 continue; // cannot reach this customer
             }
@@ -284,7 +293,7 @@ class ItemAssignmentService
         if (!empty($rates)) {
             $typeId = \Marvel\Database\Models\Product::where('id', $productId)->value('type_id');
             $resolver = new MarginResolver();
-            $cityArg = $cityN !== '' ? $cityN : null;
+            $cityArg = ($cityN !== '' && $seller === null) ? $cityN : null;
             $typeArg = $typeId ? (int) $typeId : null;
             $topRate = (float) max($rates);
             // The margin formula (percent OR flat-₹) lives in MarginResolver::apply.

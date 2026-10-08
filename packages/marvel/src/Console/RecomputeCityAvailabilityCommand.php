@@ -38,8 +38,12 @@ class RecomputeCityAvailabilityCommand extends Command
         // projection: a product whose vendor inventory was removed entirely (vendor
         // deleted / wiped) leaves ORPHANED projection rows that would otherwise never
         // be flushed — recomputing such a product deletes its stale rows.
+        // Plus every single-seller product (Tools), rate or not: its nationwide price is
+        // mirrored onto the product row, so a margin edit or a lapsed rate must reach it.
+        $sellerTypes = array_keys(app(\Marvel\Services\ServiceAvailabilityService::class)->singleSellerTypeIds());
         $pids = VendorProductPrice::query()->distinct()->pluck('product_id')
             ->merge(\Marvel\Database\Models\ProductCityAvailability::query()->distinct()->pluck('product_id'))
+            ->merge($sellerTypes ? \Marvel\Database\Models\Product::whereIn('type_id', $sellerTypes)->pluck('id') : [])
             ->map(fn ($id) => (int) $id)
             ->unique()
             ->values();

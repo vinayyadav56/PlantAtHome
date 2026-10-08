@@ -1685,6 +1685,14 @@ Route::group(['middleware' => ['auth:sanctum', 'email.verified']], function () {
         ->middleware('permission:operations.manage');
     Route::post('operations/availability/emergency', [ServiceAvailabilityController::class, 'emergency'])
         ->middleware('permission:operations.manage');
+    // Seller model per vertical (Tools = one seller nationwide). Any staff/vendor login may
+    // read it (the admin hides single-seller verticals from other shops); super-admin writes.
+    Route::get('verticals/seller-models', [ServiceAvailabilityController::class, 'sellerModels'])
+        ->middleware('permission:' . Permission::STAFF . '|' . Permission::STORE_OWNER);
+    Route::get('verticals/{slug}/seller-model', [ServiceAvailabilityController::class, 'showSellerModel'])
+        ->middleware('permission:' . Permission::STAFF . '|' . Permission::STORE_OWNER);
+    Route::put('verticals/{slug}/seller-model', [ServiceAvailabilityController::class, 'setSellerModel'])
+        ->middleware('permission:' . Permission::SUPER_ADMIN);
 });
 
 

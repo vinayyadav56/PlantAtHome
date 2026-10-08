@@ -1005,7 +1005,28 @@ class OrderItemService
         return ['order_id' => $order->id, 'applied' => count($applied), 'rejected' => $rejected];
     }
 
-    public function assignItems(Order $order, array $assignments): array
+    /**
+     * With auto-assign OFF every line waits for an operator — except single-seller lines
+     * (Tools): there is exactly one vendor to choose, so they go to their seller now, on its
+     * own shipment. Every other line stays unassigned (regroup skips it).
+     */
+    public function assignSingleSellerLines(Order $order): array
+    {
+        $sellers = app(ServiceAvailabilityService::class);
+        $items = OrderItem::where('order_id', $order->id)->get(['id', 'product_id']);
+        $toSeller = $items
+            ->map(fn ($i) => ['order_item_id' => (int) $i->id, 'shop_id' => $sellers->singleSellerFor((int) $i->product_id)])
+            ->filter(fn ($a) => $a['shop_id'] !== null)->values()->all();
+
+        // Stamp the order-level vendor only when the seller has the WHOLE order: on a mixed
+        // order the plant lines are still unassigned, and stamping the Tools seller there would
+        // prefill it as "the" vendor in the match panel and DP lists.
+        return $toSeller
+            ? $this->assignItems($order, $toSeller, count($toSeller) === $items->count())
+            : ['order_id' => $order->id, 'applied' => 0, 'rejected' => []];
+    }
+
+    public function assignItems(Order $order, array $assignments, bool $stampOrderVendor = true): array
     {
         [$city, $pincode] = $this->location($order);
         $byItem = [];
@@ -1074,7 +1095,9 @@ class OrderItemService
         });
 
         if (count($applied) > 0) {
-            $this->syncOrderLevelVendor($order);
+            if ($stampOrderVendor) {
+                $this->syncOrderLevelVendor($order);
+            }
             \Marvel\Database\Models\OrderEvent::record($order->id, 'items.assigned', [
                 'applied'  => count($applied),
                 'rejected' => count($rejected),

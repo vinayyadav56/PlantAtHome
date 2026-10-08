@@ -148,6 +148,23 @@ class VendorProductPrice extends Model
             ]);
         });
 
+        // ── Single-seller verticals (Tools): only the configured seller may supply ──────
+        // Every model write passes here (writer, updateInventory, price-sheet import). A
+        // 422, not a silent skip: the writer and the import report it per row. Query-builder
+        // writes skip this, which is why the read side also filters to the seller.
+        static::saving(function (VendorProductPrice $row) {
+            if ($row->deleted_at !== null) {
+                return;
+            }
+            $seller = app(\Marvel\Services\ServiceAvailabilityService::class)->singleSellerFor((int) $row->product_id);
+            if ($seller !== null && $seller !== (int) $row->shop_id) {
+                throw new \Symfony\Component\HttpKernel\Exception\HttpException(
+                    422,
+                    'This product is sold by one seller only — it cannot be added to another shop.'
+                );
+            }
+        });
+
         // ── Review-state machine ─────────────────────────────────────────────────────
         // ONE transition point for every write path (VendorInventoryWriter, the vendor
         // updateInventory fill-and-save, and the Excel import's direct upsert) — a hook

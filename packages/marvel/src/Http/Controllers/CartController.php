@@ -140,10 +140,15 @@ class CartController extends CoreController
             : array_map('intval', $scope->pluck('product_id')->all());
 
         // Display-only policy: a serviceable city with NO nursery supply shows the
-        // catalog but cannot hold an orderable cart — every line is unavailable.
+        // catalog but cannot hold an orderable cart — every city-based line is
+        // unavailable; single-seller lines (Tools) ship anywhere and stay.
         // (cityHasSupply fails open TRUE, so a fault keeps today's keep-all behavior.)
         if ($allowed === null && !$availability->cityHasSupply($city)) {
-            $allowed = [];
+            $sellers = app(\Marvel\Services\ServiceAvailabilityService::class);
+            $allowed = array_values(array_filter(
+                array_map(fn ($l) => (int) $l['product_id'], $data['items']),
+                fn ($pid) => $sellers->singleSellerFor($pid) !== null
+            ));
         }
 
         // Reprice the kept lines to the target city's uniform selling price.
