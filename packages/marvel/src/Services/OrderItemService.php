@@ -1022,11 +1022,11 @@ class OrderItemService
         // order the plant lines are still unassigned, and stamping the Tools seller there would
         // prefill it as "the" vendor in the match panel and DP lists.
         return $toSeller
-            ? $this->assignItems($order, $toSeller, count($toSeller) === $items->count())
+            ? $this->assignItems($order, $toSeller, stampOrderVendor: count($toSeller) === $items->count(), automatic: true)
             : ['order_id' => $order->id, 'applied' => 0, 'rejected' => []];
     }
 
-    public function assignItems(Order $order, array $assignments, bool $stampOrderVendor = true): array
+    public function assignItems(Order $order, array $assignments, bool $stampOrderVendor = true, bool $automatic = false): array
     {
         [$city, $pincode] = $this->location($order);
         $byItem = [];
@@ -1046,7 +1046,7 @@ class OrderItemService
         // One transaction + ONE shared shipments map: a same-vendor multi-item override lands on
         // one shipment row (the old per-item reset created N duplicate rows that only regroup()
         // cleaned up — permanently, if anything failed mid-loop).
-        \Illuminate\Support\Facades\DB::transaction(function () use ($order, $byItem, $lockedItemIds, $city, $pincode, &$applied, &$rejected) {
+        \Illuminate\Support\Facades\DB::transaction(function () use ($order, $byItem, $lockedItemIds, $city, $pincode, $automatic, &$applied, &$rejected) {
             // Serialise on the order row like every other mutator — see splitShipment.
             Order::whereKey($order->id)->lockForUpdate()->first();
 
@@ -1082,7 +1082,9 @@ class OrderItemService
                     ShipmentItem::where('order_item_id', $item->id)->delete();
                 }
                 $item->update(['shipment_id' => null]);
-                $this->applyAssignment($order, $item, $pick, $shipments, 'overridden');
+                // 'overridden' = an operator's choice; a system assignment (the Tools seller) is
+                // recorded the way auto-assignment records it.
+                $this->applyAssignment($order, $item, $pick, $shipments, $automatic ? 'suggested' : 'overridden');
                 $applied[] = $itemId;
             }
 
@@ -1101,7 +1103,7 @@ class OrderItemService
             \Marvel\Database\Models\OrderEvent::record($order->id, 'items.assigned', [
                 'applied'  => count($applied),
                 'rejected' => count($rejected),
-                'auto'     => false,
+                'auto'     => $automatic,
             ]);
         }
 

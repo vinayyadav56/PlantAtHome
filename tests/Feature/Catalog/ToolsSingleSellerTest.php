@@ -529,6 +529,7 @@ final class ToolsSingleSellerTest extends TestCase
         $plant->refresh();
         $this->assertSame(1, (int) $tool->assigned_shop_id);
         $this->assertSame('courier', $tool->fulfillment_mode);
+        $this->assertSame('suggested', $tool->assignment_status, 'a system assignment, not an operator override');
         $this->assertNull($plant->assigned_shop_id);
         $this->assertSame('unassigned', $plant->assignment_status);
 
