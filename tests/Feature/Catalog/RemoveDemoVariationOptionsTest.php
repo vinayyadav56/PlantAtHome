@@ -36,6 +36,8 @@ final class RemoveDemoVariationOptionsTest extends TestCase
             $t->unsignedBigInteger('type_id');
             $t->decimal('min_price')->nullable();
             $t->decimal('max_price')->nullable();
+            $t->integer('quantity')->default(0);
+            $t->boolean('in_stock')->default(true);
             $t->timestamps();
         });
         Schema::create('variation_options', function (Blueprint $t) {
@@ -58,16 +60,17 @@ final class RemoveDemoVariationOptionsTest extends TestCase
 
         DB::table('types')->insert([['id' => 1, 'slug' => 'plants'], ['id' => 2, 'slug' => 'tools']]);
         DB::table('products')->insert([
-            ['id' => 1, 'slug' => 'vinca', 'type_id' => 1, 'min_price' => 80, 'max_price' => 779],
-            ['id' => 2, 'slug' => 'demo-only', 'type_id' => 1, 'min_price' => 140, 'max_price' => 140],
-            ['id' => 3, 'slug' => 'trowel', 'type_id' => 2, 'min_price' => 199, 'max_price' => 199],
-            ['id' => 4, 'slug' => 'salvia', 'type_id' => 1, 'min_price' => 220, 'max_price' => 819],
+            ['id' => 1, 'slug' => 'vinca', 'type_id' => 1, 'min_price' => 80, 'max_price' => 779, 'quantity' => 60],
+            ['id' => 2, 'slug' => 'demo-only', 'type_id' => 1, 'min_price' => 140, 'max_price' => 140, 'quantity' => 10],
+            ['id' => 3, 'slug' => 'trowel', 'type_id' => 2, 'min_price' => 199, 'max_price' => 199, 'quantity' => 10],
+            ['id' => 4, 'slug' => 'salvia', 'type_id' => 1, 'min_price' => 220, 'max_price' => 819, 'quantity' => 30],
         ]);
         $size = fn (string $v) => json_encode([['name' => 'Size', 'value' => $v]]);
         $demo = fn (string $a, string $b) => json_encode([['name' => 'Book Type', 'value' => $a], ['name' => 'Language', 'value' => $b]]);
         DB::table('variation_options')->insert([
             ['id' => 10, 'title' => 'Picture Book/French', 'price' => '80', 'options' => $demo('Picture Book', 'French'), 'product_id' => 1],
             ['id' => 11, 'title' => 'Paperback Book/Hindi', 'price' => '140', 'options' => $demo('Paperback Book', 'Hindi'), 'product_id' => 1],
+            ['id' => 15, 'title' => 'Blue', 'price' => '120', 'options' => json_encode([['name' => 'Color', 'value' => 'Blue']]), 'product_id' => 1],
             ['id' => 12, 'title' => 'Small', 'price' => '299', 'options' => $size('Small'), 'product_id' => 1],
             ['id' => 13, 'title' => 'Medium', 'price' => '509', 'options' => $size('Medium'), 'product_id' => 1],
             ['id' => 14, 'title' => 'Large', 'price' => '779', 'options' => $size('Large'), 'product_id' => 1],
@@ -94,13 +97,15 @@ final class RemoveDemoVariationOptionsTest extends TestCase
         $migration->up();
         $out = (string) ob_get_clean();
 
-        // Vinca's two demo rows gone; demo-only plant, the tool, and the ORDERED salvia row kept.
+        // Vinca's three demo rows (Book Type/Language and Color) gone; demo-only plant, the tool,
+        // and the ORDERED salvia row kept.
         $this->assertSame([12, 13, 14, 20, 30, 40, 41, 42], $this->ids());
         $this->assertStringContainsString('variation_option 40: referenced by order_items', $out);
         // Vinca's "from" price no longer comes from the ₹80 demo row.
         $vinca = DB::table('products')->find(1);
         $this->assertEquals(299, (float) $vinca->min_price);
         $this->assertEquals(779, (float) $vinca->max_price);
+        $this->assertSame(30, (int) $vinca->quantity, 'quantity = sum of the surviving size rows (3 × 10)');
         // Copies that pointed at removed rows are gone.
         $this->assertSame(0, DB::table('carts')->count());
         $this->assertSame(0, DB::table('wishlists')->count());
@@ -108,8 +113,9 @@ final class RemoveDemoVariationOptionsTest extends TestCase
 
         $migration->down();
 
-        $this->assertSame([10, 11, 12, 13, 14, 20, 30, 40, 41, 42], $this->ids());
+        $this->assertSame([10, 11, 12, 13, 14, 15, 20, 30, 40, 41, 42], $this->ids());
         $this->assertEquals(80, (float) DB::table('products')->find(1)->min_price);
+        $this->assertSame(60, (int) DB::table('products')->find(1)->quantity);
         $this->assertSame(1, DB::table('carts')->count());
         $this->assertSame(1, DB::table('wishlists')->count());
         $this->assertFalse(Schema::hasTable('pah_demo_variant_backup'));
@@ -120,7 +126,7 @@ final class RemoveDemoVariationOptionsTest extends TestCase
         DB::table('types')->where('slug', 'plants')->delete();
         (require base_path(self::MIGRATION))->up();
 
-        $this->assertCount(10, $this->ids());
+        $this->assertCount(11, $this->ids());
         $this->assertFalse(Schema::hasTable('pah_demo_variant_backup'));
     }
 }

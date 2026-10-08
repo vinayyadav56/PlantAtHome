@@ -10,25 +10,27 @@ use Illuminate\Support\Facades\Schema;
 /**
  * Remove leftover Pickbazar demo variants from real plants (owner go, 2026-10-08).
  *
- * Twenty real plants carried demo `variation_options` beside their real sizes — e.g. Vinca
- * "Picture Book/French ₹140" next to its real "Small ₹299" — listed first on the product page,
- * buyable, and pulling some listings' "from" price down to ₹80. They live only inside
+ * Real plants carried demo `variation_options` beside their real sizes — on prod 246 rows on 56
+ * products, e.g. Vinca "Picture Book/French ₹140" next to "Small ₹299", Color Blue/Red/White/
+ * Black on plants — listed first on the product page, buyable, and pulling "from" prices wrong
+ * (Strawberry advertised ₹549 against a cheapest real size of ₹1,429). They live only inside
  * `variation_options.options` (the demo attributes have no `attribute_product` rows), so an
  * attribute audit never saw them. Never ordered.
  *
- * A row is removed only when ALL hold: its product is a Plants product; its options name one of
- * the demo axes (DEMO_AXES, case-insensitive); the product keeps at least one real Size-only
- * row; and no order line, review, vendor price or inventory movement references it (those are
- * skipped and reported, never deleted). References that are only copies — server carts,
+ * Size is the ONLY axis a plant sells on (9,543 rows); every other axis found (Color, Language,
+ * Aurora Pope, Book Type) is demo data. So a row is removed only when ALL hold: its product is a
+ * Plants product (a pot or planter may legitimately vary by colour — never touched); its options
+ * name any axis other than Size; the product keeps at least one Size-only row; and no order
+ * line, review, vendor price or inventory movement references it (those are skipped and
+ * reported, never deleted). References that are only copies — server carts,
  * wishlists (their FK cascades), per-variant city availability — are snapshotted and removed
- * with it. Each touched product's min_price/max_price is recomputed from its remaining rows the
- * way ApplySizePricingCommand derives them (min/max of `price`).
+ * with it. Each touched product's min_price / max_price / quantity / in_stock is recomputed from
+ * its remaining rows exactly as ApplySizePricingCommand derives them.
  *
  * Everything removed or changed is snapshotted into pah_demo_variant_backup; down() restores it.
  */
 return new class extends Migration {
     private const BACKUP = 'pah_demo_variant_backup';
-    private const DEMO_AXES = ['aurora pope', 'language', 'book type'];
     /** Tables whose reference means the row is in use: skip it. */
     private const BLOCKING = ['order_product', 'order_items', 'reviews', 'vendor_product_prices', 'inventory_transactions'];
     /** Tables whose reference is a copy: snapshot and delete alongside. */
@@ -65,7 +67,7 @@ return new class extends Migration {
                 $byProduct = $rows->groupBy('product_id');
                 $junk = [];
                 foreach ($byProduct as $productId => $productRows) {
-                    $isDemo = fn ($r) => collect($this->axes($r->options))->contains(fn ($n) => in_array($n, self::DEMO_AXES, true));
+                    $isDemo = fn ($r) => collect($this->axes($r->options))->contains(fn ($n) => $n !== 'size');
                     $isSizeOnly = fn ($r) => ($axes = $this->axes($r->options)) && $axes === ['size'];
                     if (!$productRows->contains($isSizeOnly)) {
                         continue; // never strip a product of its only variants
@@ -108,7 +110,7 @@ return new class extends Migration {
                 }
 
                 $productIds = collect($junk)->pluck('product_id')->unique()->values()->all();
-                foreach (DB::table('products')->whereIn('id', $productIds)->get(['id', 'min_price', 'max_price']) as $p) {
+                foreach (DB::table('products')->whereIn('id', $productIds)->get(['id', 'min_price', 'max_price', 'quantity', 'in_stock']) as $p) {
                     $this->snapshot('products', $p->id, $p, $now);
                 }
                 foreach ($junk as $row) {
@@ -117,9 +119,16 @@ return new class extends Migration {
                 DB::table('variation_options')->whereIn('id', $ids)->delete();
 
                 foreach ($productIds as $pid) {
-                    $prices = DB::table('variation_options')->where('product_id', $pid)->pluck('price')->map(fn ($v) => (float) $v)->filter(fn ($v) => $v > 0);
-                    if ($prices->isNotEmpty()) {
-                        DB::table('products')->where('id', $pid)->update(['min_price' => $prices->min(), 'max_price' => $prices->max(), 'updated_at' => $now]);
+                    $left = DB::table('variation_options')->where('product_id', $pid)->get(['price', 'quantity']);
+                    if ($left->isNotEmpty()) {
+                        $qty = (int) $left->sum(fn ($v) => (int) $v->quantity);
+                        DB::table('products')->where('id', $pid)->update([
+                            'min_price'  => (float) $left->min(fn ($v) => (float) $v->price),
+                            'max_price'  => (float) $left->max(fn ($v) => (float) $v->price),
+                            'quantity'   => $qty,
+                            'in_stock'   => $qty > 0,
+                            'updated_at' => $now,
+                        ]);
                     }
                 }
                 echo 'Removed ' . count($ids) . ' demo variation_options from ' . count($productIds) . " plants.\n";
@@ -164,7 +173,7 @@ return new class extends Migration {
             foreach ($rows as $b) {
                 $data = json_decode($b->row_json, true);
                 if ($b->source_table === 'products') {
-                    DB::table('products')->where('id', $b->source_id)->update(['min_price' => $data['min_price'], 'max_price' => $data['max_price']]);
+                    DB::table('products')->where('id', $b->source_id)->update(array_intersect_key($data, array_flip(['min_price', 'max_price', 'quantity', 'in_stock'])));
                 } elseif (Schema::hasTable($b->source_table)) {
                     DB::table($b->source_table)->insertOrIgnore($data);
                 }
