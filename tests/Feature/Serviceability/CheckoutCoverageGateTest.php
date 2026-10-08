@@ -7,6 +7,8 @@ use Illuminate\Database\Schema\Blueprint;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Repositories\CheckoutRepository;
+use Marvel\Services\CoverageBridge;
+use Marvel\Services\ServiceAvailabilityService;
 
 /**
  * The Delivery Coverage checkout hard gate (CheckoutRepository::applyCoverageGate,
@@ -115,6 +117,27 @@ class CheckoutCoverageGateTest extends ServiceabilityTestCase
     private function lines(int ...$productIds): array
     {
         return array_map(fn ($id) => ['product_id' => $id, 'order_quantity' => 1, 'subtotal' => 100], $productIds);
+    }
+
+    public function test_a_single_seller_vertical_is_narrowed_only_by_rules_written_for_it(): void
+    {
+        $this->setFlag(true);
+        // Tools = single seller (shop 1); plants stay multi-vendor.
+        $this->app->instance(ServiceAvailabilityService::class, new class extends ServiceAvailabilityService {
+            public function singleSellerShopId(string $slug): ?int
+            {
+                return $slug === 'tools' ? 1 : null;
+            }
+        });
+        // Shop 1's general delivery area: Gurgaon, every vertical ('*').
+        $rule = $this->coverage->addCoverage(1, 'district', ['district_id' => $this->geo['gurgaon']]);
+        $this->assertSame('*', $rule->vertical);
+
+        $this->assertSame([1 => true], CoverageBridge::allowedShops([1], '302001', 'tools'), "a '*' area never narrows Tools");
+        $this->assertSame([], CoverageBridge::allowedShops([1], '302001', 'plants'), 'plants are narrowed exactly as before');
+
+        DB::table('vendor_coverage_rules')->where('id', $rule->id)->update(['vertical' => 'tools']);
+        $this->assertSame([], CoverageBridge::allowedShops([1], '302001', 'tools'), 'a rule written for Tools does narrow them');
     }
 
     public function test_flag_off_means_no_gate_even_for_an_uncovered_pincode(): void

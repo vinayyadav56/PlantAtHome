@@ -88,10 +88,15 @@ final class CoverageBridge
             $shopIds = array_values(array_unique(array_map('intval', $shopIds)));
             $scope = (string) ($vertical ?: '*');
             $covered = $resolver->vendorsFor((string) $pin, $scope);
+            // A single-seller vertical (Tools) ships nationwide: its seller is measured only
+            // against rules written FOR that vertical. A '*' rule is the seller's general (plant)
+            // delivery area and must never narrow Tools; a deliberate Tools rule still does.
+            $single = $scope !== '*'
+                && app(\Marvel\Services\ServiceAvailabilityService::class)->singleSellerShopId($scope) !== null;
             $configured = array_flip(
                 \Illuminate\Support\Facades\DB::table('vendor_coverage_rules')
                     ->whereIn('shop_id', $shopIds)->where('is_active', 1)
-                    ->whereIn('vertical', array_unique(['*', $scope]))
+                    ->whereIn('vertical', $single ? [$scope] : array_unique(['*', $scope]))
                     ->distinct()->pluck('shop_id')->map(fn ($id) => (int) $id)->all()
             );
 
