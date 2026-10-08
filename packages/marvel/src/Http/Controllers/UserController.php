@@ -1241,18 +1241,28 @@ class UserController extends CoreController
         $guard = app(\Marvel\Otp\OtpAbuseGuard::class);
         $guard->guardVerify($phoneNumber);
 
+        $normalized = \Marvel\Http\Rules\UniquePhone::normalize($phoneNumber);
+        // A new number verifies its code, THEN comes back with name + email — but MSG91
+        // accepts a code only once, so that second submit used to fail verification and
+        // no phone signup could ever finish. A verified new number earns a short-lived
+        // pass bound to the exact otp_id + code that verified it.
+        $passKey = 'otp:signup_pass:' . ($normalized ?: (string) $phoneNumber);
+        $pass = hash('sha256', $request->otp_id . '|' . $request->code);
+
         try {
-            if ($this->verifyOtp($request)) {
+            $hasPass = (string) $request->code !== ''
+                && hash_equals((string) Cache::get($passKey, ''), $pass);
+            if ($hasPass || $this->verifyOtp($request)) {
                 $guard->registerSuccess($phoneNumber);
                 // Look up by the normalized key first — legacy rows stored the
                 // phone in whatever format the client sent, so the same person
                 // typing "+91…" vs "98…" used to become two accounts. Raw match
                 // kept as a fallback for pre-backfill rows.
-                $normalized = \Marvel\Http\Rules\UniquePhone::normalize($phoneNumber);
                 $profile = ($normalized ? Profile::where('contact_clean', $normalized)->first() : null)
                     ?? Profile::where('contact', $phoneNumber)->first();
                 $user = '';
                 if (!$profile) {
+                    Cache::put($passKey, $pass, now()->addMinutes(10));
                     // profile not found so could be a new user
                     $name = trim((string) ($request->name
                         ?? trim(((string) $request->first_name) . ' ' . ((string) $request->last_name))));
@@ -1293,7 +1303,13 @@ class UserController extends CoreController
                         );
                         $this->giveSignupPointsToCustomer($user->id);
                     } else {
-                        return ['message' => REQUIRED_INFO_MISSING, 'success' => false];
+                        // 422 naming the fields is what the storefront and app switch to
+                        // their sign-up step on; a 200 left the user stuck on the code screen.
+                        return response()->json([
+                            'message' => 'Add your name and email to finish creating your account.',
+                            'name'    => ['Tell us your name to finish creating your account.'],
+                            'email'   => ['Add your email to finish creating your account.'],
+                        ], 422);
                     }
                 } else {
                     $user = User::where('id', $profile->customer_id)->first();
@@ -1303,6 +1319,7 @@ class UserController extends CoreController
                     // for a user that doesn't exist.
                     return response()->json(['message' => NOT_FOUND, 'success' => false], 404);
                 }
+                Cache::forget($passKey);
                 // Record HOW this session was authenticated. Same `providers` table
                 // social login uses, so WhatsApp/SMS become identities of the SAME
                 // customer instead of a parallel account space. Never fatal.
