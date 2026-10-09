@@ -610,7 +610,10 @@ class ProductController extends CoreController
         // An explicit selection wins over every FILTER -- but not over the gate above. A ticked
         // row that is not listed is reported back rather than silently dropped, because the
         // listing this button sits on deliberately shows uncurated products too.
-        $ids = array_filter(array_map('intval', (array) $request->input('ids', [])));
+        // `ids` as an array (ids[]=1&ids[]=2) or a comma list ("1,2") — the admin's file
+        // downloads send the latter, which a plain (array) cast would collapse to just [1].
+        $rawIds = $request->input('ids', []);
+        $ids = array_filter(array_map('intval', is_string($rawIds) ? explode(',', $rawIds) : (array) $rawIds));
         $excluded = 0;
         if ($ids !== []) {
             $query->whereIn('products.id', $ids);
@@ -647,8 +650,29 @@ class ProductController extends CoreController
         $sortedBy = strtolower((string) $request->input('sortedBy')) === 'desc' ? 'desc' : 'asc';
         $query->orderBy($orderBy, $sortedBy);
 
-        $sheet = app(\Marvel\Services\VendorPriceSheetService::class)->build($query);
+        $service = app(\Marvel\Services\VendorPriceSheetService::class);
+        $format = strtolower((string) $request->input('format', 'json'));
+
+        // Import-ready workbook: one row per product + size under the importer's own headings.
+        if ($format === 'xlsx') {
+            return \Maatwebsite\Excel\Facades\Excel::download(
+                new \Marvel\Exports\VendorPriceSheetExport($service->importRows(clone $query)),
+                'vendor-price-sheet.xlsx'
+            );
+        }
+
+        $sheet = $service->build($query);
         $sheet['meta']['excluded_unlisted'] = max(0, $excluded);
+
+        // The paper sheet as a PDF (same pattern as AccountingReportController's statements).
+        if ($format === 'pdf') {
+            if (!class_exists(\Barryvdh\DomPDF\Facade\Pdf::class)) {
+                abort(501, 'PDF generation is not available.');
+            }
+            $pdf = \Barryvdh\DomPDF\Facade\Pdf::loadHTML($service->html($sheet))->setPaper('a4', 'landscape');
+            $pdf->getDomPDF()->getOptions()->setIsPhpEnabled(false);
+            return $pdf->download('vendor-price-sheet.pdf');
+        }
 
         return response()->json($sheet);
     }

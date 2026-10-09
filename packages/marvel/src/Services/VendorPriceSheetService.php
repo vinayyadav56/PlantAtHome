@@ -192,6 +192,105 @@ class VendorPriceSheetService
     }
 
     /**
+     * Rows for the IMPORT-READY Excel (VendorPriceSheetExport): `sku, product_id, product, size,
+     * price` with price blank. One row per sellable variation_option, `size` = the option's own
+     * `title` — exactly what VendorPriceSheetImport matches (`title` or `sku`) — NOT the joined
+     * attribute label the paper sheet prints, which need not equal the title. A product with no
+     * options gets one row with no size. Attribute values that never became an option are left
+     * out: the importer has nothing to attach their price to.
+     *
+     * @param  \Illuminate\Database\Eloquent\Builder  $query  already filtered and ordered by the caller
+     * @return array<int, array<int, string|int>>
+     */
+    public function importRows($query): array
+    {
+        $products = $query
+            ->with(['variation_options:id,product_id,title,is_disable'])
+            ->limit(self::MAX_ROWS)
+            ->get(['id', 'name', 'sku']);
+
+        $rows = [];
+        foreach ($products as $product) {
+            $sizes = $product->variation_options
+                ->reject(fn ($o) => (bool) ($o->is_disable ?? false))
+                ->map(fn ($o) => trim((string) $o->title))
+                ->filter(fn ($t) => $t !== '')
+                ->unique()
+                ->values()
+                ->all();
+            foreach ($sizes === [] ? [''] : $sizes as $size) {
+                $rows[] = [
+                    self::cell((string) ($product->sku ?? '')),
+                    (int) $product->id,
+                    self::cell((string) $product->name),
+                    self::cell($size),
+                    '',
+                ];
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * The paper sheet as HTML for dompdf (A4 landscape): the same header, fill-in fields, groups,
+     * columns and empty/grey boxes as the admin's print page (pages/products/price-sheet.tsx).
+     */
+    public function html(array $sheet): string
+    {
+        $fields = ['Vendor Name', 'Nursery / Business', 'City', 'Contact Number', 'Date'];
+        $out = '<html><head><meta charset="utf-8"><style>'
+            . '@page{margin:12mm 10mm}body{font-family:DejaVu Sans,sans-serif;font-size:8.5pt;color:#000}'
+            . 'header{text-align:center;border-bottom:2px solid #000;padding-bottom:4px;margin-bottom:8px}'
+            . 'h1{font-size:15pt;margin:0;text-transform:uppercase;letter-spacing:1px}'
+            . '.sub{font-size:10pt;font-weight:bold;text-transform:uppercase;letter-spacing:1px;margin:2px 0 0}'
+            . '.fields td{padding:3px 8px 3px 0;white-space:nowrap}.line{display:inline-block;width:150px;border-bottom:1px solid #000}'
+            . 'h2{font-size:9.5pt;text-transform:uppercase;letter-spacing:1px;margin:12px 0 3px}'
+            . 'table.sheet{width:100%;border-collapse:collapse}table.sheet th{background:#f3f4f6;border:1px solid #6b7280;padding:3px;font-weight:bold}'
+            . 'table.sheet td{border:1px solid #9ca3af;padding:3px}tr{page-break-inside:avoid}'
+            . '.box{height:14px;border:1px solid #000}.na{height:14px;background:#d1d5db}'
+            . '.code{font-family:DejaVu Sans Mono,monospace;font-size:8pt}.foot{margin-top:10px;font-size:7.5pt;color:#4b5563}'
+            . '</style></head><body>'
+            . '<header><h1>PlantAtHome</h1><p class="sub">Vendor Price Collection Sheet</p></header>'
+            . '<table class="fields"><tr>';
+        foreach ($fields as $label) {
+            $out .= '<td><strong>' . e($label) . ':</strong> <span class="line">&nbsp;</span></td>';
+        }
+        $out .= '</tr></table>';
+
+        $groups = $sheet['groups'] ?? [];
+        if ($groups === []) {
+            $out .= '<p style="text-align:center;padding:30px">No products matched.</p>';
+        }
+        foreach ($groups as $group) {
+            $out .= '<h2>' . e((string) $group['label']) . '</h2><table class="sheet"><thead><tr>'
+                . '<th style="width:28px">#</th><th style="text-align:left">Product</th><th style="text-align:left">Code</th>';
+            foreach ($group['columns'] as $col) {
+                $out .= '<th>' . e((string) $col['label']) . '</th>';
+            }
+            $out .= '</tr></thead><tbody>';
+            foreach ($group['rows'] as $i => $row) {
+                $out .= '<tr><td style="text-align:center">' . str_pad((string) ($i + 1), 3, '0', STR_PAD_LEFT) . '</td>'
+                    . '<td>' . e((string) $row['name']) . '</td><td class="code">' . e((string) $row['code']) . '</td>';
+                foreach ($group['columns'] as $col) {
+                    $out .= '<td><div class="' . (!empty($row['cells'][$col['key']]) ? 'box' : 'na') . '"></div></td>';
+                }
+                $out .= '</tr>';
+            }
+            $out .= '</tbody></table>';
+        }
+
+        return $out . '<p class="foot">Write your selling price in each box. Leave a box blank if you do not supply that '
+            . 'variant. Grey cells are variants we do not list for that product.</p></body></html>';
+    }
+
+    /** A spreadsheet cell can't start with =, +, - or @ (formula injection from catalogue text). */
+    private static function cell(string $value): string
+    {
+        return $value !== '' && in_array($value[0], ['=', '+', '-', '@'], true) ? "'" . $value : $value;
+    }
+
+    /**
      * The variant labels a vendor is being asked to price, in the product's own order.
      *
      * `variation_options.options` has two shapes in production — admin-built rows carry the

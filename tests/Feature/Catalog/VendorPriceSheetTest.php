@@ -327,6 +327,68 @@ final class VendorPriceSheetTest extends TestCase
         $this->assertSame(count($labels), count(array_unique($labels)), 'two tables must never share a heading');
     }
 
+    /** The admin's file downloads send `ids=1,2`; a plain (array) cast kept only the first. */
+    public function test_a_comma_separated_selection_keeps_every_id(): void
+    {
+        $plants = $this->type('plants-t', 'Plants');
+        $a = $this->product('Alpha', $plants, [[['name' => 'Size', 'value' => 'Small']]]);
+        $b = $this->product('Beta', $plants, [[['name' => 'Size', 'value' => 'Small']]]);
+
+        $this->assertSame(2, $this->endpoint(['ids' => $a->id . ',' . $b->id])['meta']['total']);
+    }
+
+    /**
+     * Excel is IMPORT-READY (owner, 2026-10-09): one row per product + size under the headings
+     * VendorPriceSheetImport reads, with `size` = the option's own title — what the importer
+     * matches — so a filled file uploads in Vendor Pricing with no retyping.
+     */
+    public function test_the_excel_download_is_import_ready(): void
+    {
+        $plants = $this->type('plants-t', 'Plants');
+        $tools  = $this->type('tools-t', 'Tools');
+        $plant = $this->product('Monstera', $plants, [
+            [['name' => 'Size', 'value' => 'Small']],
+            [['name' => 'Size', 'value' => 'Large']],
+        ]);
+        $this->product('Hedge Shears', $tools, [], 'simple');
+        // Catalogue text must never become a live spreadsheet formula.
+        $this->product('=1+1 Planter', $tools, [], 'simple');
+
+        $request = \Illuminate\Http\Request::create('/vendor-price-sheet', 'GET', ['format' => 'xlsx', 'orderBy' => 'name']);
+        $response = app(\Marvel\Http\Controllers\ProductController::class)->priceSheet($request);
+        $this->assertInstanceOf(\Symfony\Component\HttpFoundation\BinaryFileResponse::class, $response);
+
+        $rows = \PhpOffice\PhpSpreadsheet\IOFactory::load($response->getFile()->getPathname())
+            ->getActiveSheet()->toArray(null, false, false);
+
+        $this->assertSame(['sku', 'product_id', 'product', 'size', 'price'], $rows[0]);
+        $byName = [];
+        foreach (array_slice($rows, 1) as $r) {
+            $byName[$r[2]][] = $r;
+        }
+        $titles = $plant->variation_options()->pluck('title')->all();
+        $this->assertSame($titles, array_column($byName['Monstera'], 3), 'one row per option, size = its title');
+        $this->assertSame((string) $plant->id, (string) $byName['Monstera'][0][1]);
+        $this->assertCount(1, $byName['Hedge Shears'], 'a product with no options gets one row');
+        $this->assertSame('', (string) $byName['Hedge Shears'][0][3]);
+        foreach (array_slice($rows, 1) as $r) {
+            $this->assertSame('', (string) $r[4], 'the price column ships blank');
+        }
+        $this->assertArrayHasKey("'=1+1 Planter", $byName, 'a leading = is neutralised');
+    }
+
+    public function test_the_pdf_download_is_a_pdf(): void
+    {
+        $plants = $this->type('plants-t', 'Plants');
+        $this->product('Monstera', $plants, [[['name' => 'Size', 'value' => 'Small']]]);
+
+        $request = \Illuminate\Http\Request::create('/vendor-price-sheet', 'GET', ['format' => 'pdf']);
+        $response = app(\Marvel\Http\Controllers\ProductController::class)->priceSheet($request);
+
+        $this->assertStringStartsWith('%PDF', $response->getContent());
+        $this->assertStringContainsString('vendor-price-sheet.pdf', (string) $response->headers->get('Content-Disposition'));
+    }
+
     public function test_the_route_is_registered_and_gated_on_read_permission(): void
     {
         $route = collect(Route::getRoutes()->getRoutes())->first(
