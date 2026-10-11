@@ -103,6 +103,19 @@ class CommandCenterController extends CoreController
         return $this->visitors->report((int) ($request->get('days', 7)));
     }
 
+    /** One day's visitors for the Traffic Report: ?date=YYYY-MM-DD (default today) &type= &page=. */
+    public function dayVisitors(Request $request)
+    {
+        $date = (string) $request->get('date', '');
+        $day = preg_match('/^\d{4}-\d{2}-\d{2}$/', $date) ? \Carbon\Carbon::createFromFormat('Y-m-d', $date) : \Carbon\Carbon::today();
+        $type = trim((string) $request->get('type', ''));
+        return $this->visitors->dayVisitors(
+            $day,
+            $type !== '' && $type !== 'all' ? $type : null,
+            max(1, (int) $request->get('page', 1)),
+        );
+    }
+
     public function visitorJourney(Request $request)
     {
         $visitorId = trim((string) $request->get('visitor_id', ''));

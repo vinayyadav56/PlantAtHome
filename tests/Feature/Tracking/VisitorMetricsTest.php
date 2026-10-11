@@ -141,6 +141,43 @@ final class VisitorMetricsTest extends TrackingTestCase
         Carbon::setTestNow();
     }
 
+    public function test_day_visitors_lists_everyone_who_came_that_day_with_identity_device_and_activity(): void
+    {
+        DB::table('users')->insert(['id' => 7, 'name' => 'Asha Rao', 'email' => 'asha@x.test']);
+        Carbon::setTestNow('2026-10-10 09:00:00');
+        $this->pageView('v_before01', '/');                       // the day before — not listed
+        Carbon::setTestNow('2026-10-11 10:00:00');
+        $this->pageView('v_custom01', '/', ['user_id' => 7]);
+        $this->pageView('v_custom01', '/plants', ['user_id' => 7]);  // same session, 2 page views
+        $this->pageView('v_guest001', '/products/m');
+        $this->pageView('v_gbot0001', '/', [], ['User-Agent' => self::GOOGLEBOT]);
+        $this->pageView('v_odd00001', '/', [], ['User-Agent' => self::ODD]);
+
+        $d = $this->svc->dayVisitors(Carbon::parse('2026-10-11'));
+        $this->assertSame('2026-10-11', $d['date']);
+        $this->assertSame(['total' => 4, 'human' => 2, 'bot' => 1, 'unknown' => 1], $d['counts']);
+        $this->assertSame(4, $d['total']);
+        $this->assertNotContains('v_before01', array_column($d['visitors'], 'visitor_id'));
+
+        $customer = collect($d['visitors'])->firstWhere('visitor_id', 'v_custom01');
+        $this->assertSame('human', $customer['traffic_type']);
+        $this->assertSame('Asha Rao', $customer['user']['name']);
+        $this->assertSame(2, $customer['page_views']);
+        $this->assertSame(1, $customer['sessions']);
+        $this->assertNull($customer['user_agent']);
+        $this->assertNull(collect($d['visitors'])->firstWhere('visitor_id', 'v_guest001')['user'], 'a guest has no identity');
+
+        $bot = collect($d['visitors'])->firstWhere('visitor_id', 'v_gbot0001');
+        $this->assertSame('bot', $bot['traffic_type']);
+        $this->assertSame('Googlebot', $bot['bot_name']);
+        $this->assertNotNull($bot['user_agent'], 'which client it was, for non-humans');
+
+        $unknown = $this->svc->dayVisitors(Carbon::parse('2026-10-11'), 'unknown');
+        $this->assertSame(['v_odd00001'], array_column($unknown['visitors'], 'visitor_id'));
+        $this->assertSame(4, $unknown['counts']['total'], 'filtering narrows the rows, never the counts');
+        Carbon::setTestNow();
+    }
+
     public function test_the_journey_includes_sessions(): void
     {
         $this->pageView('v_human001', '/', ['session_id' => 's_one00001']);

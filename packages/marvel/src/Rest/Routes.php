@@ -1304,6 +1304,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::get('command-center/visitor-journey', [CommandCenterController::class, 'visitorJourney']);
     Route::get('command-center/funnel', [CommandCenterController::class, 'funnel']);
     Route::get('command-center/traffic-report', [CommandCenterController::class, 'trafficReport']);
+    Route::get('command-center/day-visitors', [CommandCenterController::class, 'dayVisitors']);
     Route::get('command-center/activity-feed', [CommandCenterController::class, 'activityFeed']);
     // Phase 4 — Inventory + Customer Intelligence.
     Route::get('command-center/inventory', [CommandCenterController::class, 'inventory']);

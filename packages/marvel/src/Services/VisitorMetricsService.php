@@ -177,6 +177,91 @@ class VisitorMetricsService
     }
 
     /**
+     * Everyone who visited on one day — the Traffic Report's "click a date" list (owner
+     * annotation 2026-10-12: "full details of visitors … also unknown users"). One row per
+     * visitor with a session that STARTED that day (the rule TRAFFIC BY DAY counts by), latest
+     * first: who they are when signed in, where from, which device, and what they did that
+     * day. ?type narrows the rows; the counts always carry the full split. Paged, 50 a page.
+     */
+    public function dayVisitors(Carbon $day, ?string $type = null, int $page = 1, int $perPage = 50): array
+    {
+        $type = TrafficType::valid($type) ? $type : null;
+        $from = $day->copy()->startOfDay();
+        $to = $from->copy()->addDay();
+        $out = [
+            'date' => $from->toDateString(),
+            'counts' => ['total' => 0, 'human' => 0, 'bot' => 0, 'unknown' => 0],
+            'visitors' => [], 'page' => max(1, $page), 'per_page' => $perPage, 'total' => 0,
+        ];
+        try {
+            $ofDay = fn () => AnalyticsSession::where('started_at', '>=', $from)->where('started_at', '<', $to);
+            foreach ($ofDay()->select('traffic_type', DB::raw('COUNT(DISTINCT visitor_id) as c'))->groupBy('traffic_type')->get() as $r) {
+                $t = TrafficType::valid($r->traffic_type) ? $r->traffic_type : TrafficType::UNKNOWN;
+                $out['counts'][$t] += (int) $r->c;
+            }
+            $out['counts']['total'] = $out['counts']['human'] + $out['counts']['bot'] + $out['counts']['unknown'];
+
+            $agg = $ofDay()->when($type, fn ($q) => $q->where('traffic_type', $type))
+                ->select('visitor_id', DB::raw('COUNT(*) as sessions_count'), DB::raw('COALESCE(SUM(page_views),0) as pv'),
+                    DB::raw('MIN(started_at) as first_at'), DB::raw('MAX(last_seen_at) as last_at'))
+                ->groupBy('visitor_id');
+            $out['total'] = (int) DB::query()->fromSub($agg->toBase(), 'd')->count();
+            $rows = (clone $agg)->orderByDesc('last_at')->forPage($out['page'], $perPage)->toBase()->get();
+            $ids = $rows->pluck('visitor_id')->all();
+
+            $visitors = Visitor::whereIn('visitor_id', $ids)->get()->keyBy('visitor_id');
+            // That day's sessions for these visitors: time on site, landing/exit page, source, user.
+            $sessions = $ofDay()->whereIn('visitor_id', $ids)->orderBy('started_at')->get()->groupBy('visitor_id');
+            $userIds = $sessions->flatten()->pluck('user_id')->merge($visitors->pluck('user_id'))->filter()->unique()->values();
+            $users = $userIds->isEmpty() ? collect()
+                : DB::table('users')->whereIn('id', $userIds)->get(['id', 'name', 'email'])->keyBy('id');
+            $iso = fn ($v) => $v ? Carbon::parse($v)->toIso8601String() : null;
+
+            $out['visitors'] = $rows->map(function ($r) use ($visitors, $sessions, $users, $iso) {
+                $v = $visitors[$r->visitor_id] ?? null;
+                $ss = $sessions[$r->visitor_id] ?? collect();
+                $first = $ss->first();
+                $last = $ss->last();
+                $userId = $ss->pluck('user_id')->filter()->last() ?? $v?->user_id;
+                $u = $userId ? ($users[$userId] ?? null) : null;
+                $t = $first?->traffic_type ?? $v?->traffic_type;
+                $t = TrafficType::valid($t) ? $t : TrafficType::UNKNOWN;
+                $seconds = $ss->sum(fn ($s) => $s->started_at && $s->last_seen_at
+                    ? max(0, $s->last_seen_at->getTimestamp() - $s->started_at->getTimestamp()) : 0);
+                return [
+                    'visitor_id'       => $r->visitor_id,
+                    'traffic_type'     => $t,
+                    'bot_name'         => $v?->bot_name ?? $first?->bot_name,
+                    'user'             => $u ? ['id' => (int) $u->id, 'name' => $u->name, 'email' => $u->email] : null,
+                    'device'           => $v?->device,
+                    'browser'          => $v?->browser,
+                    'os'               => $v?->os,
+                    'ip'               => $v?->ip,
+                    'city'             => $v?->city,
+                    'state'            => $v?->state,
+                    'country'          => $v?->country_code ?: $v?->country,
+                    'shopping_city'    => $v?->shopping_city,
+                    // utm_source wins, else the referrer's host, else direct (the report's rule).
+                    'source'           => $first?->utm_source ?: (strtolower((string) parse_url((string) $first?->referrer, PHP_URL_HOST)) ?: 'direct'),
+                    'landing_page'     => $first?->landing_page,
+                    'exit_page'        => $last?->exit_page,
+                    'sessions'         => (int) $r->sessions_count,
+                    'page_views'       => (int) $r->pv,
+                    'time_on_site_sec' => (int) $seconds,
+                    'first_at'         => $iso($r->first_at),
+                    'last_at'          => $iso($r->last_at),
+                    'engaged'          => $ss->contains(fn ($s) => (bool) $s->engaged),
+                    // Which crawler / client, exactly — only interesting for non-humans.
+                    'user_agent'       => $t === TrafficType::HUMAN ? null : $v?->user_agent,
+                ];
+            })->values()->all();
+        } catch (\Throwable) {
+            // tables not migrated yet — an empty day
+        }
+        return $out;
+    }
+
+    /**
      * Purchase funnel over the window — HUMAN visitors only, so a crawl can never
      * look like a conversion collapse. Distinct visitors per step.
      */
