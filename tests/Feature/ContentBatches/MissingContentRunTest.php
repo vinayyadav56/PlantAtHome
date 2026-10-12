@@ -514,7 +514,7 @@ final class MissingContentRunTest extends ContentBatchTestCase
         $this->postJson('/api/ai-content-batches/missing')->assertCreated();
 
         $this->assertSame([['hindi_name', 'hinglish_name']], $this->ai->requestedFields());
-        $this->assertSame('Nag Paudha', $this->ai->plantCalls[0]->context['known']['current_hindi_name_not_in_devanagari'], 'the old name is the hint');
+        $this->assertSame('Nag Paudha', $this->ai->plantCalls[0]->context['old_hindi_name'], 'the old name is the hint');
         $plant = $this->plantRow($id);
         $this->assertSame('नाग पौधा', $plant->hindi_name);
         $this->assertSame('Nag Paudha', $plant->hinglish_name);
@@ -532,6 +532,6 @@ final class MissingContentRunTest extends ContentBatchTestCase
         $this->postJson('/api/ai-content-batches/missing')->assertCreated();
 
         $this->assertSame([['hindi_name', 'hinglish_name']], $this->ai->requestedFields());
-        $this->assertArrayNotHasKey('current_hindi_name_not_in_devanagari', $this->ai->plantCalls[0]->context['known'] ?? []);
+        $this->assertArrayNotHasKey('old_hindi_name', $this->ai->plantCalls[0]->context);
     }
 }
