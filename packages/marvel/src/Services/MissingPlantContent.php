@@ -308,12 +308,14 @@ class MissingPlantContent
     public function context(object $plant): array
     {
         $known = [];
+        $same  = fn ($a, $b) => mb_strtolower(preg_replace('/\s+/u', ' ', trim((string) $a))) === mb_strtolower(preg_replace('/\s+/u', ' ', trim((string) $b)));
         foreach (array_diff(self::FIELDS, ['description']) as $field) {
             $value = $plant->{$field} ?? null;
             if (!$this->isFieldMissing($field, $value)) {
                 $known[$field] = trim((string) $value);
-            } elseif ($field === 'hindi_name' && !$this->isMissing($value)) {
-                // Hinglish or English: a hint the AI converts into the Devanagari name.
+            } elseif ($field === 'hindi_name' && !$this->isMissing($value) && !$same($value, $plant->name ?? '')) {
+                // A hint only: Hinglish ("Nag Paudha"), but seeded rows also hold English or Marathi
+                // names. The product's own name repeated says nothing and made the AI decline.
                 $known['current_hindi_name_not_in_devanagari'] = trim((string) $value);
             }
         }

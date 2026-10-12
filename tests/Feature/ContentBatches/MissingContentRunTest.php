@@ -522,4 +522,16 @@ final class MissingContentRunTest extends ContentBatchTestCase
         $this->assertSame(['Nag Paudha'], json_decode($plant->common_names, true), 'still found by "nag paudha"');
         $this->assertSame([], app(MissingPlantContent::class)->missingFields(app(MissingPlantContent::class)->find($id)));
     }
+
+    public function test_a_hindi_name_that_repeats_the_product_name_is_not_sent_as_a_hint(): void
+    {
+        // 265 seeded plants carry their English name as the "Hindi name"; as a hint it made the AI decline.
+        $this->seedPlant('Song of India', [], ['hindi_name' => ' song  of india', 'hinglish_name' => null]);
+        $this->ai->plantQueue = [['fields' => ['hindi_name' => 'सॉन्ग ऑफ इंडिया', 'hinglish_name' => 'Song of India']]];
+
+        $this->postJson('/api/ai-content-batches/missing')->assertCreated();
+
+        $this->assertSame([['hindi_name', 'hinglish_name']], $this->ai->requestedFields());
+        $this->assertArrayNotHasKey('current_hindi_name_not_in_devanagari', $this->ai->plantCalls[0]->context['known'] ?? []);
+    }
 }
