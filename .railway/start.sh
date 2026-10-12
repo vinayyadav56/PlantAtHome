@@ -357,9 +357,23 @@ try {
   php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeCategoryBulkSeeder" --force \
     || echo "[bg] WARNING: PlantAtHomeCategoryBulkSeeder failed"
 
-  echo "==> [bg] [4b/7] Real plant catalog (1530 plants + attributes)..."
-  php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomePlantBulkSeeder" --force \
-    || echo "[bg] WARNING: PlantAtHomePlantBulkSeeder failed"
+  # Seed the 1,530-plant catalogue only into an empty catalogue. It updateOrCreates by slug,
+  # so re-running it on every deploy reset those plants' descriptions, prices, images,
+  # status and attributes (Hindi names included), wiping admin and AI edits. Production's
+  # deploy never runs it (only the manual prod-data-op workflow does).
+  PLANT_COUNT=$(php -r "
+try {
+  \$pdo = new PDO('mysql:host=${_HOST};port=${_PORT};dbname=${_DB}', '${_USER}', '${_PASS}');
+  echo \$pdo->query(\"SELECT COUNT(*) FROM products p JOIN types t ON t.id = p.type_id WHERE t.slug = 'plants'\")->fetchColumn();
+} catch (Exception \$e) { echo 0; }
+" 2>/dev/null)
+  if [ "${PLANT_COUNT:-0}" = "0" ]; then
+    echo "==> [bg] [4b/7] Real plant catalog (1530 plants + attributes)..."
+    php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomePlantBulkSeeder" --force \
+      || echo "[bg] WARNING: PlantAtHomePlantBulkSeeder failed"
+  else
+    echo "==> [bg] [4b/7] ${PLANT_COUNT} plants already present — not re-seeding (it would overwrite edits)."
+  fi
 
   echo "==> [bg] [4c/7] Tools catalog (gardening tools for the Tools vertical)..."
   php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeToolsSeeder" --force \
