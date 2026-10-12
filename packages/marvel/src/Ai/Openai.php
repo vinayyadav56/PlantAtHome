@@ -3,6 +3,7 @@
 namespace Marvel\Ai;
 
 use Exception;
+use GuzzleHttp\Client as GuzzleClient;
 use Marvel\Ai\AiInterface;
 use Marvel\Ai\Base;
 use OpenAI as OpenAIClient;
@@ -14,7 +15,12 @@ class Openai extends Base implements AiInterface
 
     public function __construct()
     {
-        $this->openAiClient = OpenAIClient::client(config('shop.openai.secret_Key'));
+        // 90s HTTP timeout: a hung request fails (and the bulk row retries)
+        // well inside the content queue job's time budget.
+        $this->openAiClient = OpenAIClient::factory()
+            ->withApiKey(config('shop.openai.secret_Key'))
+            ->withHttpClient(new GuzzleClient(['timeout' => 90, 'connect_timeout' => 10]))
+            ->make();
         parent::__construct();
     }
 
@@ -228,6 +234,97 @@ class Openai extends Base implements AiInterface
             'description'    => $description,
             'category_ids'   => $ids,
             'category_slugs' => $slugs,
+        ];
+    }
+
+    /**
+     * "Generate missing content" for ONE plant: asks only for the requested
+     * fields (JSON mode) and returns them raw — MissingPlantContent::validate()
+     * decides what is safe to store. Errors bubble so the batch job can
+     * classify them; a non-JSON or cut-off reply is \UnexpectedValueException
+     * (invalid output, never retried).
+     * $request = {name, fields: string[], context: array, vocabulary: {sunlight: {value: meaning}, water_requirement: {...}}}
+     */
+    public function generatePlantContent($request): mixed
+    {
+        $vocabulary = (array) ($request->vocabulary ?? []);
+        $context    = (array) ($request->context ?? []);
+        $choices    = fn (string $field) => implode('; ', array_map(
+            fn ($value, $meaning) => "\"{$value}\" ({$meaning})",
+            array_keys((array) ($vocabulary[$field] ?? [])),
+            (array) ($vocabulary[$field] ?? [])
+        ));
+
+        $spec = [
+            'description'       => '"description": a product description as clean HTML using only <p>, <ul>, <li>, <strong> and <em> (no headings), 450-900 visible characters: what the plant looks like, where it grows best and the basics of care.',
+            'seo_title'         => '"seo_title": a plain-text page title of at most 46 characters, WITHOUT the brand name (the site appends " | PlantAtHome").',
+            'seo_description'   => '"seo_description": a plain-text meta description of 120-155 characters on one line.',
+            'hindi_name'        => '"hindi_name": the plant\'s common Hindi name in Devanagari script (e.g. तुलसी). If it has no established Hindi name, transliterate its English common name into Devanagari (e.g. "Snake Plant" -> स्नेक प्लांट). Never Roman letters, and never a generic word on its own such as पौधा, पेड़ or फूल.',
+            'scientific_name'   => '"scientific_name": the accepted botanical name as "Genus species" (a cultivar may follow in single quotes), without the author citation; and "scientific_name_confidence": "high", "medium" or "low" - "high" only when the product name identifies the species unambiguously.',
+            'sunlight'          => '"sunlight": exactly one of these values, or null: ' . $choices('sunlight'),
+            'water_requirement' => '"water_requirement": exactly one of these values, or null: ' . $choices('water_requirement'),
+        ];
+        $fields = array_values(array_intersect(array_keys($spec), (array) ($request->fields ?? [])));
+
+        $system = "You are a horticulturist writing product content for PlantAtHome, an online plant nursery in India.\n"
+            . "Respond ONLY with one JSON object containing exactly these keys:\n- "
+            . implode("\n- ", array_map(fn ($f) => $spec[$f], $fields)) . "\n\n"
+            . "Rules:\n"
+            . "- Use null for any key you are not confident about. Never guess.\n"
+            . "- If the product is not one real, single plant (a combo or set of several plants, a mix, a pot, a tool, a demo or test entry), return null for EVERY key.\n"
+            . "- No medical, health, toxicity or pet/child-safety claims. Never use these words: cure, heal, medicinal, remedy, therapy, disease, diabetes, cancer, blood pressure, immunity, ayurvedic, toxic, non-toxic, poisonous, pet-safe, pet-friendly, safe for pets or kids.\n"
+            . "- Mention edible or culinary use only for plants commonly grown as herbs or vegetables.\n"
+            . "- No prices, discounts, guarantees or delivery promises.\n"
+            . "- Everything except hindi_name is in English.";
+
+        $user = "Product name: {$request->name}\n";
+        if (!empty($context['master'])) {
+            $user .= "Variety of: {$context['master']['name']}" . (!empty($context['master']['scientific_name']) ? " ({$context['master']['scientific_name']})" : '') . "\n";
+        }
+        if (!empty($context['categories'])) {
+            $user .= 'Categories: ' . implode(', ', $context['categories']) . "\n";
+        }
+        if (!empty($context['known'])) {
+            $user .= "Already on the product page (stay consistent with it):\n";
+            foreach ($context['known'] as $field => $value) {
+                $user .= "- {$field}: {$value}\n";
+            }
+        }
+        if (!empty($context['description_excerpt'])) {
+            $user .= "Current description (excerpt): {$context['description_excerpt']}\n";
+        }
+
+        $response = $this->openAiClient->chat()->create([
+            'model'           => $this->textModel(),
+            'max_tokens'      => 1200,
+            'temperature'     => 0.3,
+            'response_format' => ['type' => 'json_object'],
+            'messages'        => [
+                ['role' => 'system', 'content' => $system],
+                ['role' => 'user',   'content' => $user],
+            ],
+        ]);
+
+        $usage = [
+            'prompt_tokens'     => (int) $response->usage->promptTokens,
+            'completion_tokens' => (int) $response->usage->completionTokens,
+        ];
+        $choice = $response->choices[0] ?? null;
+        if ($choice && $choice->finishReason === 'length') {
+            throw new InvalidAiOutput('AI reply was cut off (finish_reason=length).', $usage);
+        }
+        $parsed = json_decode((string) ($choice->message->content ?? ''), true);
+        if (!is_array($parsed)) {
+            throw new InvalidAiOutput('AI reply was not valid JSON.', $usage);
+        }
+
+        $confidence = $parsed['scientific_name_confidence'] ?? null;
+
+        return [
+            'fields'                     => array_combine($fields, array_map(fn ($f) => $parsed[$f] ?? null, $fields)),
+            'scientific_name_confidence' => is_string($confidence) ? strtolower(trim($confidence)) : null,
+            'usage'                      => $usage,
+            'model'                      => $response->model,
         ];
     }
 }

@@ -3,15 +3,20 @@
 namespace Marvel\Http\Controllers;
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\ProductContentBatch;
 use Marvel\Database\Models\ProductContentJob;
 use Marvel\Jobs\GenerateProductContentBatchJob;
+use Marvel\Services\MissingPlantContent;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 class ProductContentBatchController extends CoreController
 {
+    /** Held while a missing-content run is being created (start or retry) — one active run at a time. */
+    private const MISSING_RUN_LOCK = 'ai-content:missing-run';
+
     /** Dropdown options + limits for the bulk-generate UI (config-driven). */
     public function capabilities()
     {
@@ -41,15 +46,134 @@ class ProductContentBatchController extends CoreController
 
     public function show($id)
     {
-        return ProductContentBatch::findOrFail($id);
+        $batch = ProductContentBatch::findOrFail($id);
+
+        return response()->json($batch->toArray() + ['summary' => $batch->summary()]);
     }
 
+    /** Rows, optionally filtered by status (?status=failed,needs_review), with the product slug for edit links. */
     public function rows(Request $request, $id)
     {
-        $batch = ProductContentBatch::findOrFail($id);
-        $limit = min(200, max(1, (int) ($request->limit ?? 30)));
+        $batch    = ProductContentBatch::findOrFail($id);
+        $limit    = min(200, max(1, (int) ($request->limit ?? 30)));
+        $statuses = array_values(array_intersect(
+            array_map('trim', explode(',', implode(',', (array) $request->query('status', '')))),
+            [
+                ProductContentJob::STATUS_PENDING, ProductContentJob::STATUS_RETRYING, ProductContentJob::STATUS_PROCESSING,
+                ProductContentJob::STATUS_COMPLETED, ProductContentJob::STATUS_NEEDS_REVIEW, ProductContentJob::STATUS_FAILED,
+                ProductContentJob::STATUS_SKIPPED,
+            ]
+        ));
 
-        return $batch->jobs()->orderBy('id')->paginate($limit);
+        return ProductContentJob::query()
+            ->leftJoin('products', 'products.id', '=', 'product_content_jobs.product_id')
+            ->where('product_content_jobs.batch_id', $batch->id)
+            ->when($statuses, fn ($q) => $q->whereIn('product_content_jobs.status', $statuses))
+            ->orderBy('product_content_jobs.id')
+            ->select('product_content_jobs.*', 'products.slug as product_slug')
+            ->paginate($limit);
+    }
+
+    /** Stats strip for "Generate Missing AI Content" (no AI calls). */
+    public function missingStats(MissingPlantContent $content)
+    {
+        return response()->json($content->stats());
+    }
+
+    /** Plants left for a human (flagged in any run), with the reasons and edit-link slugs. */
+    public function missingReview(MissingPlantContent $content)
+    {
+        return response()->json($content->reviewList());
+    }
+
+    /**
+     * Start a missing-content run over the whole plant catalogue. The server
+     * picks the plants (client product ids are ignored); `limit` serves the
+     * "try 25 first" trial. Capped by max_rows and the cost cap.
+     */
+    public function startMissing(Request $request, MissingPlantContent $content)
+    {
+        $max  = (int) config('content-batches.max_rows', 2000);
+        $data = $request->validate(['limit' => ['nullable', 'integer', 'min:1', "max:{$max}"]]);
+
+        // Same switch Marvel\Ai\Base enforces: refuse up front rather than queue a run
+        // the job would fail at once.
+        if (!data_get(\Marvel\Database\Models\Settings::first(), 'options.useAi', false)) {
+            return response()->json(['message' => 'AI is turned off in Settings. Turn it on to generate content.'], 422);
+        }
+
+        return $this->withMissingRunLock(function () use ($request, $content, $data, $max) {
+            $costPer = (float) config('content-batches.cost_per_product', 0.002);
+            $byCost  = $costPer > 0 ? (int) floor((float) config('content-batches.max_estimated_cost', 50) / $costPer + 1e-9) : $max;
+            $cap     = max(1, min((int) ($data['limit'] ?? $max), $max, $byCost));
+
+            $eligible = 0;
+            $queue    = [];
+            $content->eachPlant(function ($plant, array $missing, array $todo) use (&$eligible, &$queue, $cap) {
+                if ($todo === []) {
+                    return;
+                }
+                $eligible++;
+                if (count($queue) < $cap) {
+                    $queue[] = [(int) $plant->id, (string) $plant->name, $todo];
+                }
+            });
+
+            if ($eligible === 0) {
+                return response()->json(['message' => 'All plants already have the required content. Nothing needs to be generated.'], 422);
+            }
+
+            $byField = array_fill_keys(MissingPlantContent::FIELDS, 0);
+            foreach ($queue as [, , $todo]) {
+                foreach ($todo as $field) {
+                    $byField[$field]++;
+                }
+            }
+
+            $batch = DB::transaction(function () use ($request, $queue, $eligible, $byField, $costPer) {
+                $batch = ProductContentBatch::create([
+                    'created_by'     => optional($request->user())->id,
+                    'options'        => [
+                        'mode'                   => ProductContentBatch::MODE_MISSING,
+                        'fields'                 => MissingPlantContent::FIELDS,
+                        'eligible'               => $eligible,
+                        'queued'                 => count($queue),
+                        'fields_missing_initial' => array_sum($byField),
+                        'missing_by_field'       => $byField,
+                    ],
+                    'status'         => ProductContentBatch::STATUS_PENDING,
+                    'total_rows'     => count($queue),
+                    'estimated_cost' => round(count($queue) * $costPer, 2),
+                ]);
+
+                $now = now();
+                foreach (array_chunk($queue, 500) as $chunk) {
+                    ProductContentJob::insert(array_map(fn ($q) => [
+                        'batch_id'       => $batch->id,
+                        'product_id'     => $q[0],
+                        'product_name'   => $q[1],
+                        'status'         => ProductContentJob::STATUS_PENDING,
+                        'attempts'       => 0,
+                        'fields_missing' => count($q[2]),
+                        'changes'        => json_encode(['missing_before' => $q[2]]),
+                        'created_at'     => $now,
+                        'updated_at'     => $now,
+                    ], $chunk));
+                }
+
+                return $batch;
+            });
+
+            GenerateProductContentBatchJob::dispatch($batch->id);
+
+            $batch = $batch->fresh();
+
+            return response()->json($batch->toArray() + [
+                'summary'  => $batch->summary(),
+                'eligible' => $eligible,
+                'queued'   => count($queue),
+            ], 201);
+        });
     }
 
     public function store(Request $request)
@@ -150,6 +274,14 @@ class ProductContentBatchController extends CoreController
             throw new HttpException(409, 'Only completed-with-errors or failed runs can be retried.');
         }
 
+        // Re-activating a missing-content run must not overlap another one.
+        return $batch->isMissingMode()
+            ? $this->withMissingRunLock(fn () => $this->resetFailedRows($batch))
+            : $this->resetFailedRows($batch);
+    }
+
+    private function resetFailedRows(ProductContentBatch $batch)
+    {
         $reset = ProductContentJob::where('batch_id', $batch->id)
             ->where('status', ProductContentJob::STATUS_FAILED)
             ->update(['status' => ProductContentJob::STATUS_PENDING, 'attempts' => 0, 'last_error' => null]);
@@ -164,9 +296,8 @@ class ProductContentBatchController extends CoreController
             ->selectRaw('status, count(*) as c')
             ->groupBy('status')
             ->pluck('c', 'status');
-        $processed = (int) (($counts[ProductContentJob::STATUS_COMPLETED] ?? 0)
-            + ($counts[ProductContentJob::STATUS_SKIPPED] ?? 0)
-            + ($counts[ProductContentJob::STATUS_FAILED] ?? 0));
+        // Everything that isn't open is processed (needs_review included).
+        $processed = (int) $counts->sum() - (int) $counts->only(ProductContentJob::OPEN_STATUSES)->sum();
 
         $batch->update([
             'processed_count' => $processed,
@@ -179,5 +310,31 @@ class ProductContentBatchController extends CoreController
         GenerateProductContentBatchJob::dispatch($batch->id);
 
         return response()->json($batch->fresh());
+    }
+
+    /**
+     * Run $fn while holding the missing-run lock and while no other
+     * missing-content run is active; otherwise 409 (with the active run's id,
+     * so the admin panel can attach to it).
+     */
+    private function withMissingRunLock(callable $fn)
+    {
+        $lock = Cache::lock(self::MISSING_RUN_LOCK, 120);
+        if (!$lock->get()) {
+            return response()->json(['message' => 'A missing-content run is being started.'], 409);
+        }
+
+        try {
+            if ($active = ProductContentBatch::activeMissingRun()) {
+                return response()->json([
+                    'message'  => 'A missing-content run is already in progress.',
+                    'batch_id' => $active->id,
+                ], 409);
+            }
+
+            return $fn();
+        } finally {
+            $lock->release();
+        }
     }
 }

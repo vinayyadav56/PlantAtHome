@@ -1193,6 +1193,13 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
 
     // Bulk AI product-content generation (descriptions + categories) from the listing.
     Route::get('ai-content-batches/capabilities', [ProductContentBatchController::class, 'capabilities']);
+    // "Generate missing AI content" for the whole plant catalogue (server-selected
+    // plants). Declared before the {id} routes so "missing" is never read as an id.
+    // Named buckets: a bare numeric throttle shares one per-user counter with every
+    // other throttled route, so an image-generator poll could 429 the start button.
+    Route::get('ai-content-batches/missing/stats', [ProductContentBatchController::class, 'missingStats'])->middleware('throttle:30,1,ai-missing-stats');
+    Route::get('ai-content-batches/missing/review', [ProductContentBatchController::class, 'missingReview'])->middleware('throttle:30,1,ai-missing-review');
+    Route::post('ai-content-batches/missing', [ProductContentBatchController::class, 'startMissing'])->middleware('throttle:6,1,ai-missing-start');
     Route::get('ai-content-batches', [ProductContentBatchController::class, 'index']);
     Route::post('ai-content-batches', [ProductContentBatchController::class, 'store']);
     Route::get('ai-content-batches/{id}/rows', [ProductContentBatchController::class, 'rows']);

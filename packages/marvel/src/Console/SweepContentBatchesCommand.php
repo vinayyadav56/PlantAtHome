@@ -49,13 +49,12 @@ class SweepContentBatchesCommand extends Command
                 $batch->update(['last_dispatched_at' => now()]);
                 GenerateProductContentBatchJob::dispatch($batch->id);
             } else {
-                $failed = (int) $batch->failed_count;
                 // Guard the flip so a concurrent cancel isn't overwritten
-                // (mirrors the worker's guarded finalize).
+                // (mirrors the worker's guarded finalize, same status rule).
                 ProductContentBatch::where('id', $batch->id)
                     ->whereIn('status', ProductContentBatch::ACTIVE_STATUSES)
                     ->update([
-                        'status'       => $failed > 0 ? ProductContentBatch::STATUS_COMPLETED_WITH_ERRORS : ProductContentBatch::STATUS_COMPLETED,
+                        'status'       => $batch->finalStatus(),
                         'completed_at' => now(),
                     ]);
             }

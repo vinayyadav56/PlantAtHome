@@ -33,4 +33,29 @@ return [
     // Rough USD per product (one combined description+categories call on
     // gpt-4o-mini) — used only for the pre-flight cost estimate.
     'cost_per_product' => (float) env('CONTENT_BATCH_COST_PER_PRODUCT', 0.002),
+
+    // "Generate missing content": the ONLY values the AI may store for these two
+    // plant_attributes columns — the storefront filter rail's existing spellings
+    // ("Low Light Plants" is a collection rule on 'Low Light'). The meaning is
+    // sent with each value in the prompt.
+    'plant_vocabulary' => [
+        'sunlight' => [
+            'Full Sun'        => 'at least 6 hours of direct sun a day; outdoor beds, terraces and balconies',
+            'Partial Sun'     => 'about 3-6 hours of direct sun a day, ideally the gentler morning sun',
+            'Partial Shade'   => 'under 3 hours of direct sun; dappled or filtered light the rest of the day',
+            'Bright Indirect' => 'a bright spot indoors with no direct sun on the leaves, e.g. near a window',
+            'Low Light'       => 'tolerates dim indoor corners far from windows',
+        ],
+        'water_requirement' => [
+            'Low'      => 'let the soil dry out completely between waterings; about every 2-4 weeks (succulents, cacti)',
+            'Moderate' => 'water when the top 2-3 cm of soil is dry; roughly once a week',
+            'High'     => 'keep the soil evenly moist; water every 1-3 days in warm weather',
+        ],
+    ],
+
+    // USD per 1M tokens for text_model (gpt-4o-mini) — cost shown on run progress.
+    'token_price_per_million' => [
+        'input'  => 0.15,
+        'output' => 0.60,
+    ],
 ];

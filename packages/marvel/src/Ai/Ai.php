@@ -44,4 +44,15 @@ class Ai
   {
     return $this->ai->generateProductContent($request);
   }
+
+  /**
+   * generatePlantContent — one plant's missing fields (missing-content run).
+   *
+   * @param  object $request
+   * @return array
+   */
+  public function generatePlantContent($request)
+  {
+    return $this->ai->generatePlantContent($request);
+  }
 }

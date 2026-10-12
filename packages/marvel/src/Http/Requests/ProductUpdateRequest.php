@@ -123,6 +123,9 @@ class ProductUpdateRequest extends FormRequest
             'plant_attribute.fruit_bearing'          => ['nullable', 'boolean'],
             'plant_attribute.care_guide'             => ['nullable', 'string', 'max:10000'],
             'plant_attribute.planting_guide'         => ['nullable', 'string', 'max:10000'],
+            // Not Rule::in the AI vocabulary: legacy values ("Bright Light") must keep saving.
+            'plant_attribute.sunlight'               => ['nullable', 'string', 'max:100'],
+            'plant_attribute.water_requirement'      => ['nullable', 'string', 'max:100'],
         ];
     }
 

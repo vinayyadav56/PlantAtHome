@@ -514,6 +514,9 @@ class ProductRepository extends BaseRepository
             'width_range',
             'care_guide',
             'planting_guide',
+            // Free text, not Rule::in: legacy values ("Bright Light") must keep saving.
+            'sunlight',
+            'water_requirement',
         ];
         foreach ($stringKeys as $key) {
             if (array_key_exists($key, $payload)) {
