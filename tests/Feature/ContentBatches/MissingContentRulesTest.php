@@ -113,6 +113,8 @@ final class MissingContentRulesTest extends ContentBatchTestCase
         $meta = 'A sturdy, glossy rubber plant for bright rooms and busy people, delivered potted and ready to grow. Buy it online.';
         $this->assertInvalid('seo_description', "<p>{$meta}</p>", 'plain text');
         $this->assertValid('seo_description', $meta, $meta);
+        $short = 'Lemon plants give fragrant blossoms and fresh fruit on a sunny balcony. Buy yours online today.';
+        $this->assertValid('seo_description', $short, $short); // 95: the model's short end, fine as a meta description
     }
 
     public function test_hinglish_name_is_roman_letters_and_a_real_name(): void

@@ -421,7 +421,8 @@ class MissingPlantContent
                     // The storefront appends " | PlantAtHome" itself.
                     $line = trim(preg_replace('/\s*(?:[|\-–—:·]\s*plant\s*at\s*home|plantathome)(?:\.(?:com|in))?\s*$/iu', '', $line) ?? $line);
                 }
-                [$min, $max] = $field === 'seo_title' ? [10, 55] : [100, 170];
+                // Meta floor 70: gpt-4o-mini lands at 90-135 when asked for 120-155; failing the 90s failed 1 row in 5.
+                [$min, $max] = $field === 'seo_title' ? [10, 55] : [70, 170];
                 $len = mb_strlen($line);
                 if ($len < $min || $len > $max) {
                     return [null, "length {$len} (allowed {$min}-{$max})", null];
