@@ -277,8 +277,8 @@ class GardenController extends CoreController
             ->findOrFail($data['template_id']);
         $user = $request->user();
         // No city in the request body — the customer's chosen delivery city IS
-        // the city this work happens in, and it was already validated against
-        // acceptsOrders() when they picked it (UserController::preferred_city).
+        // the city this work happens in. It can be any listed city, one without a
+        // nursery too (UserController::updateShoppingCity), so this check is the gate.
         $this->assertCityAcceptsWork($user->preferred_city ?? null, 'gifting');
 
         $pkg = GardenPackage::create([

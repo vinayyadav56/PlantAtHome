@@ -490,9 +490,13 @@ class UserController extends CoreController
 
     /**
      * PUT me/shopping-city — persist the customer's chosen Shopping City (drives all
-     * product discovery; GPS never decides). Validates against the serviceable cities
-     * canon (alias-normalized, so "Gurgaon" resolves to "Gurugram") and stores the
-     * CANONICAL name in users.preferred_city.
+     * product discovery; GPS never decides). Accepts any city the storefront picker
+     * lists — active or maintenance, not one ops paused or disabled — and not only the
+     * nursery cities: since 2026-10-12 a shopper can pick a city with no partner nursery,
+     * which still gets Tools (they ship nationwide). Refusing those left preferred_city on
+     * the previous city, which a new device then adopted and the gifting checkout gated
+     * on. Alias-normalized ("Gurgaon" → "Gurugram"); the CANONICAL name is stored, and
+     * whatever reads it re-checks what the city can take (GardenController).
      */
     public function updateShoppingCity(Request $request)
     {
@@ -502,8 +506,15 @@ class UserController extends CoreController
             ->normalizeCityKey($data['city']);
         $canon = \Marvel\Database\Models\City::query()
             ->whereRaw('LOWER(name) = ?', [$normalized])
+            ->whereIn('status', [\Marvel\Database\Models\City::STATUS_ACTIVE, \Marvel\Database\Models\City::STATUS_MAINTENANCE])
+            // Not a subdivision ("Mumbai Suburban"): the picker never lists those (LocationController::cities).
+            ->when(
+                \Illuminate\Support\Facades\Schema::hasColumn('cities', 'is_subdivision'),
+                fn ($q) => $q->where('is_subdivision', false),
+            )
+            ->orderByDesc('is_serviceable') // a nursery city wins a name another state shares
             ->first();
-        if (!$canon || !$canon->acceptsOrders()) {
+        if (!$canon) {
             return response()->json([
                 'message' => 'This city is not serviceable yet.',
                 'code'    => 'CITY_NOT_SERVICEABLE',
