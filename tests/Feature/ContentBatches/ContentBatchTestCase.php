@@ -122,8 +122,14 @@ abstract class ContentBatchTestCase extends TestCase
             '2026_06_01_151945_create_plant_attributes_table.php',
             '2026_07_13_000200_add_botanical_fields_to_plant_attributes.php', // + products.seo_title/seo_description
             '2026_10_12_000100_add_ai_metrics_to_product_content_jobs.php',
+            '2026_10_13_000100_add_hinglish_name_to_plant_attributes.php',
         ] as $migration) {
             (require base_path('packages/marvel/database/migrations/' . $migration))->up();
+        }
+        // From the app's taxonomy migration (not the marvel package): search reads it, and a
+        // replaced Hinglish/English "Hindi name" is kept in it.
+        if (!Schema::hasColumn('plant_attributes', 'common_names')) {
+            Schema::table('plant_attributes', fn (Blueprint $t) => $t->json('common_names')->nullable());
         }
 
         $this->ai = new FakeAi();
@@ -169,6 +175,7 @@ abstract class ContentBatchTestCase extends TestCase
             ],
             'attribute' => [
                 'hindi_name'        => 'तुलसी',
+                'hinglish_name'     => 'Tulsi',
                 'scientific_name'   => 'Ocimum tenuiflorum',
                 'sunlight'          => 'Full Sun',
                 'water_requirement' => 'Moderate',
@@ -210,7 +217,7 @@ abstract class ContentBatchTestCase extends TestCase
         return DB::table('products')
             ->leftJoin('plant_attributes', 'plant_attributes.product_id', '=', 'products.id')
             ->where('products.id', $productId)
-            ->select('products.*', 'plant_attributes.hindi_name', 'plant_attributes.scientific_name', 'plant_attributes.sunlight', 'plant_attributes.water_requirement', 'plant_attributes.regional_names')
+            ->select('products.*', 'plant_attributes.hindi_name', 'plant_attributes.hinglish_name', 'plant_attributes.scientific_name', 'plant_attributes.sunlight', 'plant_attributes.water_requirement', 'plant_attributes.regional_names', 'plant_attributes.common_names')
             ->first();
     }
 

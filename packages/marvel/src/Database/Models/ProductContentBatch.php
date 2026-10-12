@@ -140,9 +140,11 @@ class ProductContentBatch extends Model
         $last      = $groups->max('last_at');
         $price     = (array) config('content-batches.token_price_per_million', []);
 
-        // Throughput over the last 10 minutes, or the run's lifetime if younger.
-        $since   = max($this->created_at ?? now(), now()->subMinutes(10));
-        $seconds = now()->diffInSeconds($since);
+        // Throughput over the last 10 minutes (or the run's lifetime if younger) while it
+        // runs; once it has ended, over the run's own span, so the figure doesn't decay.
+        $end     = $this->isActive() ? now() : ($this->completed_at ?? $this->cancelled_at ?? now());
+        $since   = max($this->created_at ?? $end, $end->copy()->subMinutes(10));
+        $seconds = $end->diffInSeconds($since);
         $recent  = $this->jobs()->whereNotIn('status', ProductContentJob::OPEN_STATUSES)->where('updated_at', '>=', $since)->count();
         $rate    = $seconds > 0 ? round($recent * 60 / $seconds, 1) : null;
 

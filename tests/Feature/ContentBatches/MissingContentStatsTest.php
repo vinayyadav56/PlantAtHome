@@ -20,7 +20,7 @@ final class MissingContentStatsTest extends ContentBatchTestCase
     public function test_stats_count_a_mixed_catalogue(): void
     {
         $complete = $this->seedPlant('Areca Palm');
-        $this->seedPlant('Nag Paudha Snake Plant', [], ['hindi_name' => 'Nag Paudha']);          // Roman Hindi counts as present
+        $this->seedPlant('Nag Paudha Snake Plant', [], ['hindi_name' => 'Nag Paudha']);          // Roman "Hindi" is not Hindi yet
         $draft    = $this->seedPlant('Draft Fern', ['status' => 'draft'], ['hindi_name' => null]); // any status is in scope
         $this->seedPlant('Areca Palm Dwarf', ['master_product_id' => $complete, 'seo_title' => ''], []); // a variety
         $this->seedPlant('Bare Jade', [], null);                                                   // no plant_attributes row
@@ -45,21 +45,22 @@ final class MissingContentStatsTest extends ContentBatchTestCase
 
         $this->assertSame([
             'total'               => 6,
-            'complete'            => 2,
-            'missing_any'         => 4,
-            'missing_hindi'       => 2, // draft fern + bare jade
+            'complete'            => 1,
+            'missing_any'         => 5,
+            'missing_hindi'       => 3, // draft fern + bare jade + the Roman "Nag Paudha"
             'missing_other'       => 3, // dwarf seo_title, bare jade attributes, succulent species
             'missing_both'        => 1, // bare jade
             'needs_review'        => 1,
-            'ready'               => 3, // the flagged succulent has nothing left for the AI
-            'ready_missing_hindi' => 2,
+            'ready'               => 4, // the flagged succulent has nothing left for the AI
+            'ready_missing_hindi' => 3,
             'processing'          => 0,
         ], array_intersect_key($stats, array_flip(['total', 'complete', 'missing_any', 'missing_hindi', 'missing_other', 'missing_both', 'needs_review', 'ready', 'ready_missing_hindi', 'processing'])));
         $this->assertSame([
             'description'       => 0,
             'seo_title'         => 1,
             'seo_description'   => 0,
-            'hindi_name'        => 2,
+            'hindi_name'        => 3,
+            'hinglish_name'     => 1, // bare jade
             'scientific_name'   => 2,
             'sunlight'          => 1,
             'water_requirement' => 1,
@@ -72,9 +73,9 @@ final class MissingContentStatsTest extends ContentBatchTestCase
 
         // While a run is active its open rows are "processing", not "ready".
         Queue::fake();
-        $this->postJson('/api/ai-content-batches/missing')->assertCreated()->assertJson(['eligible' => 3, 'queued' => 3]);
+        $this->postJson('/api/ai-content-batches/missing')->assertCreated()->assertJson(['eligible' => 4, 'queued' => 4]);
         $stats = $this->getJson('/api/ai-content-batches/missing/stats')->json();
-        $this->assertSame(3, $stats['processing']);
+        $this->assertSame(4, $stats['processing']);
         $this->assertSame(0, $stats['ready']);
         $this->assertSame('pending', $stats['latest_run']['status']);
         $this->assertTrue(ProductContentJob::where('product_id', $draft)->where('status', ProductContentJob::STATUS_PENDING)->exists(), 'drafts are in scope');
@@ -133,15 +134,15 @@ final class MissingContentStatsTest extends ContentBatchTestCase
 
         $batch = ProductContentBatch::findOrFail($response->json('id'));
         $this->assertSame(ProductContentBatch::MODE_MISSING, $batch->options['mode']);
-        $this->assertSame(100 * 4, $batch->options['fields_missing_initial']);
+        $this->assertSame(100 * 5, $batch->options['fields_missing_initial']); // no attributes row: 5 attribute fields
         $this->assertSame(100, $batch->options['missing_by_field']['hindi_name']);
         $this->assertSame(0, $batch->options['missing_by_field']['description']);
 
         $jobs = ProductContentJob::where('batch_id', $batch->id)->orderBy('id')->get();
         $this->assertCount(100, $jobs);
         $this->assertSame(range(1, 100), $jobs->pluck('product_id')->map(fn ($id) => (int) $id)->all(), 'the first 100 by id');
-        $this->assertSame(4, $jobs[0]->fields_missing);
-        $this->assertSame(['hindi_name', 'scientific_name', 'sunlight', 'water_requirement'], $jobs[0]->changes['missing_before']);
+        $this->assertSame(5, $jobs[0]->fields_missing);
+        $this->assertSame(['hindi_name', 'hinglish_name', 'scientific_name', 'sunlight', 'water_requirement'], $jobs[0]->changes['missing_before']);
         $this->assertSame(ProductContentJob::STATUS_PENDING, $jobs[0]->status);
         Queue::assertPushed(GenerateProductContentBatchJob::class);
 

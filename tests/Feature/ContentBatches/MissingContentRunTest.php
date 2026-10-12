@@ -39,6 +39,7 @@ final class MissingContentRunTest extends ContentBatchTestCase
         $this->assertSame($good['seo_title'], $plant->seo_title);
         $this->assertSame($good['seo_description'], $plant->seo_description);
         $this->assertSame('तुलसी', $plant->hindi_name);
+        $this->assertSame('Tulsi', $plant->hinglish_name);
         $this->assertSame(['hi' => 'तुलसी'], json_decode($plant->regional_names, true), 'mirrored like ProductRepository');
         $this->assertSame('Ocimum tenuiflorum', $plant->scientific_name);
         $this->assertSame('Full Sun', $plant->sunlight);
@@ -50,7 +51,7 @@ final class MissingContentRunTest extends ContentBatchTestCase
         $row = ProductContentJob::where('batch_id', $batch->id)->sole();
         $this->assertSame(ProductContentJob::STATUS_COMPLETED, $row->status);
         $this->assertSame(MissingPlantContent::FIELDS, $row->changes['generated']);
-        $this->assertSame(7, $row->fields_generated);
+        $this->assertSame(8, $row->fields_generated);
         $this->assertSame(0, $row->fields_missing);
         $this->assertSame(1, app(MissingPlantContent::class)->stats()['complete']);
     }
@@ -339,7 +340,7 @@ final class MissingContentRunTest extends ContentBatchTestCase
         $this->assertSame([
             'total' => 3, 'pending' => 0, 'retrying' => 0, 'processing' => 0, 'completed' => 3,
             'needs_review' => 0, 'failed' => 0, 'skipped' => 0, 'processed' => 3, 'progress' => 100,
-            'fields_initially_missing' => 9, 'fields_generated' => 9, 'fields_still_missing' => 0, 'retries' => 1,
+            'fields_initially_missing' => 10, 'fields_generated' => 10, 'fields_still_missing' => 0, 'retries' => 1,
         ], array_slice($summary, 0, 14));
         $this->assertSame(['prompt' => 1500, 'completion' => 510], $summary['tokens']);
         $this->assertEqualsWithDelta((1500 * 0.15 + 510 * 0.60) / 1_000_000, $summary['cost_usd'], 1e-9);
@@ -350,7 +351,7 @@ final class MissingContentRunTest extends ContentBatchTestCase
         $this->assertSame([], $summary['errors']);
 
         $tulsi = ProductContentJob::where('product_id', $everything)->sole();
-        $this->assertSame(7, $tulsi->fields_generated);
+        $this->assertSame(8, $tulsi->fields_generated);
         $this->assertSame(1000, $tulsi->prompt_tokens);
         $this->assertSame(1, (int) $tulsi->attempts);
     }
@@ -502,5 +503,23 @@ final class MissingContentRunTest extends ContentBatchTestCase
 
         $this->assertSame(ProductContentBatch::STATUS_FAILED, $batch->fresh()->status);
         $this->assertCount(0, $this->ai->plantCalls);
+    }
+
+    public function test_a_hinglish_hindi_name_becomes_devanagari_and_stays_searchable(): void
+    {
+        // Seeded like the old catalogue: the "Hindi name" is Hinglish, there is no Hinglish field.
+        $id = $this->seedPlant('Snake Plant', [], ['hindi_name' => 'Nag Paudha', 'hinglish_name' => null]);
+        $this->ai->plantQueue = [['fields' => ['hindi_name' => 'नाग पौधा', 'hinglish_name' => 'Nag Paudha']]];
+
+        $this->postJson('/api/ai-content-batches/missing')->assertCreated();
+
+        $this->assertSame([['hindi_name', 'hinglish_name']], $this->ai->requestedFields());
+        $this->assertSame('Nag Paudha', $this->ai->plantCalls[0]->context['known']['current_hindi_name_not_in_devanagari'], 'the old name is the hint');
+        $plant = $this->plantRow($id);
+        $this->assertSame('नाग पौधा', $plant->hindi_name);
+        $this->assertSame('Nag Paudha', $plant->hinglish_name);
+        $this->assertSame(['hi' => 'नाग पौधा'], json_decode($plant->regional_names, true));
+        $this->assertSame(['Nag Paudha'], json_decode($plant->common_names, true), 'still found by "nag paudha"');
+        $this->assertSame([], app(MissingPlantContent::class)->missingFields(app(MissingPlantContent::class)->find($id)));
     }
 }

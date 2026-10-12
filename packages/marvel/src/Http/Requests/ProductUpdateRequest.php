@@ -111,6 +111,7 @@ class ProductUpdateRequest extends FormRequest
             // Curated botanical text (plants only; see ProductRepository::syncPlantAttributeFromRequest).
             'plant_attribute'              => ['nullable', 'array'],
             'plant_attribute.hindi_name'   => ['nullable', 'string', 'max:191'],
+            'plant_attribute.hinglish_name' => ['nullable', 'string', 'max:191'],
             'plant_attribute.scientific_name'        => ['nullable', 'string', 'max:191'],
             'plant_attribute.difficulty_level'       => ['nullable', 'string', 'max:191'],
             'plant_attribute.season'                 => ['nullable', 'string', 'max:191'],

@@ -719,6 +719,7 @@ class ProductController extends CoreController
                       ->orWhereHas('plantAttribute', function ($p) use ($like) {
                           $p->where('scientific_name', 'like', $like)
                             ->orWhere('hindi_name', 'like', $like)
+                            ->orWhere('hinglish_name', 'like', $like)
                             ->orWhere('common_names', 'like', $like);
                       });
                 });

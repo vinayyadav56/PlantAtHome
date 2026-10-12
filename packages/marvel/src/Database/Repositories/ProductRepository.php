@@ -505,6 +505,8 @@ class ProductRepository extends BaseRepository
         // so partial edits never null-out other columns.
         $stringKeys = [
             'scientific_name',
+            // The Hindi name in Roman letters ("Tulsi"), shown and searched with hindi_name.
+            'hinglish_name',
             'difficulty_level',
             'season',
             'life_cycle',

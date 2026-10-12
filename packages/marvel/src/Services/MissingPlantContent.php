@@ -25,10 +25,10 @@ class MissingPlantContent
     public const PRODUCT_FIELDS = ['description', 'seo_title', 'seo_description'];
 
     /** Columns on `plant_attributes`. */
-    public const ATTRIBUTE_FIELDS = ['hindi_name', 'scientific_name', 'sunlight', 'water_requirement'];
+    public const ATTRIBUTE_FIELDS = ['hindi_name', 'hinglish_name', 'scientific_name', 'sunlight', 'water_requirement'];
 
     /** Every field a plant needs, in display order. */
-    public const FIELDS = ['description', 'seo_title', 'seo_description', 'hindi_name', 'scientific_name', 'sunlight', 'water_requirement'];
+    public const FIELDS = ['description', 'seo_title', 'seo_description', 'hindi_name', 'hinglish_name', 'scientific_name', 'sunlight', 'water_requirement'];
 
     /** Stand-ins that mean "nobody filled this in" (compared lower-cased). */
     private const PLACEHOLDERS = [
@@ -94,10 +94,23 @@ class MissingPlantContent
         return in_array($lower, self::PLACEHOLDERS, true) || str_starts_with($lower, 'lorem ipsum');
     }
 
+    /**
+     * isMissing() plus each field's own rule: a Hindi name with no Devanagari in it
+     * ("Nag Paudha", or just "Peace Lily") is not a Hindi name yet (owner 2026-10-12:
+     * the seeded names were Hinglish), so the AI replaces it with real Hindi.
+     */
+    public function isFieldMissing(string $field, mixed $value): bool
+    {
+        return $this->isMissing($value)
+            || ($field === 'hindi_name' && !preg_match('/\p{Devanagari}/u', (string) $value))
+            // Hinglish is the same name in Roman letters ("Tulsi"): Devanagari there is misplaced.
+            || ($field === 'hinglish_name' && preg_match('/\p{Devanagari}/u', (string) $value));
+    }
+
     /** @return string[] the FIELDS this scope() row is missing */
     public function missingFields(object $plant): array
     {
-        return array_values(array_filter(self::FIELDS, fn ($f) => $this->isMissing($plant->{$f} ?? null)));
+        return array_values(array_filter(self::FIELDS, fn ($f) => $this->isFieldMissing($f, $plant->{$f} ?? null)));
     }
 
     /** @return string[] what a run should ask the AI for: missing minus fields flagged for review */
@@ -152,7 +165,7 @@ class MissingPlantContent
             ->select([
                 'products.id', 'products.name', 'products.master_product_id',
                 'products.description', 'products.seo_title', 'products.seo_description',
-                'plant_attributes.hindi_name', 'plant_attributes.scientific_name',
+                'plant_attributes.hindi_name', 'plant_attributes.hinglish_name', 'plant_attributes.scientific_name',
                 'plant_attributes.sunlight', 'plant_attributes.water_requirement',
             ]);
     }
@@ -296,8 +309,12 @@ class MissingPlantContent
     {
         $known = [];
         foreach (array_diff(self::FIELDS, ['description']) as $field) {
-            if (!$this->isMissing($plant->{$field} ?? null)) {
-                $known[$field] = trim((string) $plant->{$field});
+            $value = $plant->{$field} ?? null;
+            if (!$this->isFieldMissing($field, $value)) {
+                $known[$field] = trim((string) $value);
+            } elseif ($field === 'hindi_name' && !$this->isMissing($value)) {
+                // Hinglish or English: a hint the AI converts into the Devanagari name.
+                $known['current_hindi_name_not_in_devanagari'] = trim((string) $value);
             }
         }
 
@@ -400,7 +417,7 @@ class MissingPlantContent
                     // The storefront appends " | PlantAtHome" itself.
                     $line = trim(preg_replace('/\s*(?:[|\-–—:·]\s*plant\s*at\s*home|plantathome)(?:\.(?:com|in))?\s*$/iu', '', $line) ?? $line);
                 }
-                [$min, $max] = $field === 'seo_title' ? [10, 55] : [50, 170];
+                [$min, $max] = $field === 'seo_title' ? [10, 55] : [100, 170];
                 $len = mb_strlen($line);
                 if ($len < $min || $len > $max) {
                     return [null, "length {$len} (allowed {$min}-{$max})", null];
@@ -416,6 +433,19 @@ class MissingPlantContent
                 }
                 $words = preg_split('/[\s\-\/(),\[\]]+/u', $line, -1, PREG_SPLIT_NO_EMPTY) ?: [];
                 if (array_diff($words, self::GENERIC_HINDI) === []) {
+                    return [null, 'a generic word, not a plant name', null];
+                }
+                return [$line, null, null];
+
+            case 'hinglish_name':
+                // The Hindi name as Indians type it in Roman letters ("Tulsi", "Nag Paudha").
+                if (!preg_match("/^[A-Za-z][A-Za-z\s\-'.()]*$/u", $line)) {
+                    return [null, 'not in Roman letters', null];
+                }
+                if (mb_strlen($line) < 2 || mb_strlen($line) > 60) {
+                    return [null, 'length ' . mb_strlen($line) . ' (allowed 2-60)', null];
+                }
+                if (in_array(mb_strtolower($line), ['paudha', 'paudhe', 'ped', 'phool', 'plant', 'plants'], true)) {
                     return [null, 'a generic word, not a plant name', null];
                 }
                 return [$line, null, null];
@@ -472,7 +502,7 @@ class MissingPlantContent
 
             $written = [];
             foreach (array_intersect_key($values, array_flip(self::PRODUCT_FIELDS)) as $field => $value) {
-                if ($this->isMissing($product->getAttributes()[$field] ?? null)) {
+                if ($this->isFieldMissing($field, $product->getAttributes()[$field] ?? null)) {
                     $product->{$field} = $value;
                     $written[] = $field;
                 }
@@ -495,12 +525,22 @@ class MissingPlantContent
             $attribute = PlantAttribute::where('product_id', $productId)->lockForUpdate()->first();
 
             foreach ($attributeValues as $field => $value) {
-                if (!$this->isMissing($attribute->getAttributes()[$field] ?? null)) {
+                $old = $attribute->getAttributes()[$field] ?? null;
+                if (!$this->isFieldMissing($field, $old)) {
                     continue;
                 }
                 $attribute->{$field} = $value;
                 $written[] = $field;
                 if ($field === 'hindi_name') {
+                    // The Hinglish/English name it replaces stays searchable: shoppers type "tulsi".
+                    $old = trim((string) $old);
+                    if ($old !== '' && !$this->isMissing($old)) {
+                        $names = (array) json_decode((string) ($attribute->getAttributes()['common_names'] ?? '[]'), true);
+                        if (!in_array(mb_strtolower($old), array_map(fn ($n) => mb_strtolower((string) $n), $names), true)) {
+                            $names[] = $old;
+                        }
+                        $attribute->common_names = json_encode(array_values($names), JSON_UNESCAPED_UNICODE);
+                    }
                     $regional = (array) ($attribute->regional_names ?? []);
                     $regional['hi'] = $value;
                     $attribute->regional_names = $regional;

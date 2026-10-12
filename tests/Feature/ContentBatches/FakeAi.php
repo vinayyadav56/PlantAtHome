@@ -55,6 +55,7 @@ class FakeAi
             'seo_title'         => 'Buy Tulsi Plant Online in India',
             'seo_description'   => 'Bring home a Tulsi plant grown in our nursery, delivered potted and ready to thrive on your sunny balcony or windowsill.',
             'hindi_name'        => 'तुलसी',
+            'hinglish_name'     => 'Tulsi',
             'scientific_name'   => 'Ocimum tenuiflorum',
             'sunlight'          => 'Full Sun',
             'water_requirement' => 'Moderate',

@@ -256,10 +256,11 @@ class Openai extends Base implements AiInterface
         ));
 
         $spec = [
-            'description'       => '"description": a product description as clean HTML using only <p>, <ul>, <li>, <strong> and <em> (no headings), 450-900 visible characters: what the plant looks like, where it grows best and the basics of care.',
-            'seo_title'         => '"seo_title": a plain-text page title of at most 46 characters, WITHOUT the brand name (the site appends " | PlantAtHome").',
-            'seo_description'   => '"seo_description": a plain-text meta description of 120-155 characters on one line.',
-            'hindi_name'        => '"hindi_name": the plant\'s common Hindi name in Devanagari script (e.g. तुलसी). If it has no established Hindi name, transliterate its English common name into Devanagari (e.g. "Snake Plant" -> स्नेक प्लांट). Never Roman letters, and never a generic word on its own such as पौधा, पेड़ or फूल.',
+            'description'       => '"description": a product description as clean HTML using only <p>, <ul>, <li>, <strong> and <em> (no headings), 450-900 visible characters: what the plant looks like, where it grows best and the basics of care. Use metric units (cm, not inches). Avoid clichés such as "stunning" or "must-have". Do not list light/water/humidity as bullet points: the page already shows a care card.',
+            'seo_title'         => '"seo_title": a plain-text page title of at most 46 characters for a page that SELLS the plant (e.g. "Buy Areca Palm Plant Online" or "Areca Palm Plant for Home"), never a care guide; WITHOUT the brand name (the site appends " | PlantAtHome").',
+            'seo_description'   => '"seo_description": a plain-text meta description of 120-155 characters on one line, written to make a shopper click: name the plant, one or two real qualities, and that it can be bought online. Do not start with "Discover".',
+            'hindi_name'        => '"hindi_name": the plant\'s common Hindi name in Devanagari script (e.g. तुलसी, गुड़हल). If a current name that is not in Devanagari is given, write that same name properly in Hindi (e.g. "Gudhal" -> गुड़हल, "Nag Paudha" -> नाग पौधा); if it is just the English name, give the real Hindi name. If the plant has no established Hindi name, transliterate its English common name into Devanagari (e.g. "Snake Plant" -> स्नेक प्लांट). Never Roman letters, and never a generic word on its own such as पौधा, पेड़ or फूल.',
+            'hinglish_name'     => '"hinglish_name": the same Hindi name written in Roman letters the way Indians type it (e.g. "Tulsi", "Gudhal", "Nag Paudha"); for a transliterated English name it is just the English name (e.g. "Snake Plant"). Never Devanagari.',
             'scientific_name'   => '"scientific_name": the accepted botanical name as "Genus species" (a cultivar may follow in single quotes), without the author citation; and "scientific_name_confidence": "high", "medium" or "low" - "high" only when the product name identifies the species unambiguously.',
             'sunlight'          => '"sunlight": exactly one of these values, or null: ' . $choices('sunlight'),
             'water_requirement' => '"water_requirement": exactly one of these values, or null: ' . $choices('water_requirement'),
@@ -275,7 +276,7 @@ class Openai extends Base implements AiInterface
             . "- No medical, health, toxicity or pet/child-safety claims. Never use these words: cure, heal, medicinal, remedy, therapy, disease, diabetes, cancer, blood pressure, immunity, ayurvedic, toxic, non-toxic, poisonous, pet-safe, pet-friendly, safe for pets or kids.\n"
             . "- Mention edible or culinary use only for plants commonly grown as herbs or vegetables.\n"
             . "- No prices, discounts, guarantees or delivery promises.\n"
-            . "- Everything except hindi_name is in English.";
+            . "- Everything except hindi_name is in English (hinglish_name is Hindi in Roman letters).";
 
         $user = "Product name: {$request->name}\n";
         if (!empty($context['master'])) {

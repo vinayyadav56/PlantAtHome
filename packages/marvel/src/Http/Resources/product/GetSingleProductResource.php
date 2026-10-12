@@ -37,6 +37,10 @@ class GetSingleProductResource extends Resource
             'manufacturer'                 => getResourceData($this->manufacturer, []),  // if you need extra data then pass key in array by second parameter
             'related_products'             => RelatedProductResource::collection($this->related_products),
             'description'                  => $this->description,
+            // The storefront's <title>/meta description and the admin edit form read these;
+            // without them a save from the form blanked any SEO text (the list resource had them).
+            'seo_title'                    => $this->seo_title ?? null,
+            'seo_description'              => $this->seo_description ?? null,
             'in_stock'                     => $this->in_stock,
             'is_taxable'                   => $this->is_taxable,
             'is_digital'                   => $this->is_digital,

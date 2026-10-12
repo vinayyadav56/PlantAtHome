@@ -39,10 +39,17 @@ final class MissingContentRulesTest extends ContentBatchTestCase
             $this->assertFalse($this->content->isMissing($value), 'expected present: ' . json_encode($value));
         }
 
-        // The 71 Roman-script Hindi names on prod are kept, not re-generated.
-        $plant = (object) array_merge(['id' => 1, 'name' => 'Snake Plant'], $this->completeContent()['product'], $this->completeContent()['attribute'], ['hindi_name' => 'Nag Paudha']);
+        // Owner 2026-10-12: a Hindi name must be in Devanagari, and the Hinglish name in
+        // Roman letters. A Roman/English "Hindi name" (the seeded ones) is not one yet.
+        $plant = (object) array_merge(['id' => 1, 'name' => 'Snake Plant'], $this->completeContent()['product'], $this->completeContent()['attribute']);
         $this->assertSame([], $this->content->missingFields($plant));
-        $plant->sunlight = "\u{00A0}";
+        $plant->hindi_name = 'Nag Paudha';
+        $this->assertSame(['hindi_name'], $this->content->missingFields($plant));
+        $plant->hindi_name    = 'नाग पौधा';
+        $plant->hinglish_name = 'नाग पौधा';
+        $this->assertSame(['hinglish_name'], $this->content->missingFields($plant));
+        $plant->hinglish_name = 'Nag Paudha';
+        $plant->sunlight      = "\u{00A0}";
         $this->assertSame(['sunlight'], $this->content->missingFields($plant));
     }
 
@@ -102,8 +109,20 @@ final class MissingContentRulesTest extends ContentBatchTestCase
 
         $this->assertInvalid('seo_description', 'Too short.', 'length 10');
         $this->assertInvalid('seo_description', str_repeat('Lovely plant. ', 13), 'length 181');
-        $this->assertInvalid('seo_description', '<p>A sturdy, glossy plant for bright rooms and busy people.</p>', 'plain text');
-        $this->assertValid('seo_description', 'A sturdy, glossy plant for bright rooms and busy people.', 'A sturdy, glossy plant for bright rooms and busy people.');
+        $this->assertInvalid('seo_description', 'A sturdy, glossy plant for bright rooms and busy people.', 'length 56');
+        $meta = 'A sturdy, glossy rubber plant for bright rooms and busy people, delivered potted and ready to grow. Buy it online.';
+        $this->assertInvalid('seo_description', "<p>{$meta}</p>", 'plain text');
+        $this->assertValid('seo_description', $meta, $meta);
+    }
+
+    public function test_hinglish_name_is_roman_letters_and_a_real_name(): void
+    {
+        $this->assertValid('hinglish_name', 'Tulsi', 'Tulsi');
+        $this->assertValid('hinglish_name', 'Nag Paudha', 'Nag Paudha');
+        $this->assertValid('hinglish_name', 'Snake Plant', 'Snake Plant');
+        $this->assertInvalid('hinglish_name', 'तुलसी', 'not in Roman letters');
+        $this->assertInvalid('hinglish_name', 'Paudha', 'generic');
+        $this->assertInvalid('hinglish_name', str_repeat('Tulsi ', 13), 'length');
     }
 
     public function test_banned_claims_are_rejected_but_culinary_copy_is_allowed(): void
@@ -120,7 +139,7 @@ final class MissingContentRulesTest extends ContentBatchTestCase
         ] as $claim) {
             $this->assertInvalid('description', $claim, 'banned claim');
         }
-        $this->assertInvalid('seo_description', 'A hardy, poisonous-looking succulent for sunny windowsills everywhere.', 'banned claim');
+        $this->assertInvalid('seo_description', 'A hardy, poisonous-looking succulent for sunny windowsills everywhere, delivered potted and ready to grow at home.', 'banned claim');
 
         $culinary = '<p>Tulsi is an edible culinary herb: its fresh leaves go into cooking and herbal tea, and it keeps a sunny kitchen windowsill healthy-looking.' . $long . '</p>';
         $this->assertValid('description', $culinary, $culinary);

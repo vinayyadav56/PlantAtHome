@@ -469,6 +469,7 @@ class Product extends Model
             'type_id'         => $this->type_id,
             'scientific_name' => optional($pa)->scientific_name,
             'hindi_name'      => optional($pa)->hindi_name,
+            'hinglish_name'   => optional($pa)->hinglish_name,
             'regional_names'  => optional($pa)->regional_names,
         ], fn ($v) => $v !== null && $v !== '');
     }
