@@ -144,16 +144,39 @@ class MissingPlantContent
 
         // Failed rows count too: a field the AI declined stays declined even when another
         // field in the same reply made the row fail.
+        $names = null;
         ProductContentJob::whereIn('product_id', $productIds)
             ->whereIn('status', [ProductContentJob::STATUS_NEEDS_REVIEW, ProductContentJob::STATUS_FAILED])
             ->get(['product_id', 'changes'])
-            ->each(function ($row) use (&$flags) {
-                foreach (array_keys((array) ($row->changes['review'] ?? [])) as $field) {
+            ->each(function ($row) use (&$flags, &$names, $productIds) {
+                foreach ((array) ($row->changes['review'] ?? []) as $field => $why) {
+                    if ($this->flagIsStale($field, (string) $why, (int) $row->product_id, $names, $productIds)) {
+                        continue;
+                    }
                     $flags[(int) $row->product_id][$field] = true;
                 }
             });
 
         return array_map('array_keys', $flags);
+    }
+
+    /**
+     * A flag set under a rule that has since changed is stale, so the plant is asked again
+     * instead of waiting for a hand edit: the value the AI gave now passes ("failed validation
+     * twice (not Devanagari: "7 लेयर लकी बैम्बू")" once digits were allowed), or a scientific
+     * name declined as not a binomial when the product's own name is one ("Abelia x grandiflora").
+     */
+    private function flagIsStale(string $field, string $why, int $productId, ?array &$names, array $productIds): bool
+    {
+        if (preg_match('/^failed validation twice \(.*?: "(.*)"\)$/su', $why, $m)) {
+            $value = preg_replace('/…$/u', '', $m[1]) ?? $m[1]; // the reason keeps 40 characters
+            return $this->validate([$field], [$field => $value], 'high')['values'] !== [];
+        }
+        if ($field === 'scientific_name' && str_contains($why, 'not a full binomial')) {
+            $names ??= DB::table('products')->whereIn('id', $productIds)->pluck('name', 'id')->all();
+            return preg_match(self::BINOMIAL, trim((string) ($names[$productId] ?? ''))) === 1;
+        }
+        return false;
     }
 
     /* ── the catalogue ────────────────────────────────────────────────────── */

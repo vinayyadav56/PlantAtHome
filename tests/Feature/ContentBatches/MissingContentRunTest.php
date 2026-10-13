@@ -580,6 +580,38 @@ final class MissingContentRunTest extends ContentBatchTestCase
         $this->assertStringContainsString('"Peace Lily"', (string) $row->last_error, 'each row keeps what the AI wrote');
     }
 
+    public function test_flags_set_under_an_older_rule_clear_themselves(): void
+    {
+        // Production 2026-10-13: 72 plants were flagged only because digits or commas were not allowed,
+        // and 5 "x" hybrids because the binomial check knew only ×. A rule fix must re-ask them.
+        $digits = $this->seedPlant('Begonia U400', [], ['hindi_name' => null, 'hinglish_name' => null]);
+        $hybrid = $this->seedPlant('Abelia x grandiflora', [], ['scientific_name' => null]);
+        $real   = $this->seedPlant('Phlox', [], ['hindi_name' => null]);
+        $batch  = $this->makeMissingBatch(
+            [$digits => ['hindi_name', 'hinglish_name'], $hybrid => ['scientific_name'], $real => ['hindi_name']],
+            ['status' => ProductContentBatch::STATUS_COMPLETED_WITH_ERRORS, 'completed_at' => now()]
+        );
+        $flag = fn (int $id, array $review) => ProductContentJob::where('batch_id', $batch->id)->where('product_id', $id)->sole()
+            ->update(['status' => ProductContentJob::STATUS_NEEDS_REVIEW, 'changes' => ['review' => $review]]);
+        $flag($digits, ['hindi_name' => 'failed validation twice (not Devanagari: "बेगोनिया यू400")', 'hinglish_name' => 'failed validation twice (not in Roman letters: "Begonia U400")']);
+        $flag($hybrid, ['scientific_name' => 'not a full binomial']);
+        $flag($real, ['hindi_name' => 'failed validation twice (not Devanagari: "Phlox")']);
+
+        $content = app(MissingPlantContent::class);
+        $this->assertSame([$real => ['hindi_name']], $content->reviewFlags([$digits, $hybrid, $real]), "only the flag that still fails today's rules is kept");
+
+        $this->ai->plantQueue = [
+            ['fields' => ['hindi_name' => 'बेगोनिया यू400', 'hinglish_name' => 'Begonia U400']],
+            ['fields' => ['scientific_name' => 'Abelia x grandiflora']],
+        ];
+        $this->postJson('/api/ai-content-batches/missing')->assertCreated()->assertJson(['queued' => 2]);
+
+        $this->assertSame([['hindi_name', 'hinglish_name'], ['scientific_name']], $this->ai->requestedFields(), 'Phlox stays with a person');
+        $this->assertSame('Begonia U400', $this->plantRow($digits)->hinglish_name);
+        $this->assertSame('बेगोनिया यू400', $this->plantRow($digits)->hindi_name);
+        $this->assertSame('Abelia x grandiflora', $this->plantRow($hybrid)->scientific_name);
+    }
+
     public function test_a_model_without_a_price_shows_no_cost(): void
     {
         config(['content-batches.text_model' => 'gpt-unpriced']);
