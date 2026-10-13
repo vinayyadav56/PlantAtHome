@@ -138,7 +138,8 @@ class ProductContentBatch extends Model
         $output    = $sum('ct');
         $timed     = $sum('timed');
         $last      = $groups->max('last_at');
-        $price     = (array) config('content-batches.token_price_per_million', []);
+        // Array access, not a dotted config key: model names have dots ("gpt-4.1").
+        $price     = ((array) config('content-batches.token_price_per_million', []))[(string) config('content-batches.text_model')] ?? null;
 
         // Throughput over the last 10 minutes (or the run's lifetime if younger) while it
         // runs; once it has ended, over the run's own span, so the figure doesn't decay.
@@ -178,7 +179,7 @@ class ProductContentBatch extends Model
             'retries'                  => max(0, $sum('att') - $failed),
             'last_activity_at'         => $last ? Carbon::parse($last)->toJSON() : null,
             'tokens'                   => ['prompt' => $prompt, 'completion' => $output],
-            'cost_usd'                 => round(($prompt * (float) ($price['input'] ?? 0) + $output * (float) ($price['output'] ?? 0)) / 1_000_000, 6),
+            'cost_usd'                 => $price ? round(($prompt * (float) ($price['input'] ?? 0) + $output * (float) ($price['output'] ?? 0)) / 1_000_000, 6) : null,
             'avg_ai_ms'                => $timed > 0 ? (int) round($sum('ms') / $timed) : null,
             'rows_per_minute'          => $rate,
             'eta_seconds'              => $this->isActive() && $rate > 0 ? (int) ceil($open * 60 / $rate) : null,

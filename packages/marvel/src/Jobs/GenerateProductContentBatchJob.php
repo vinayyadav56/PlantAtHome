@@ -318,11 +318,17 @@ class GenerateProductContentBatchJob implements ShouldQueue
 
             $missing = $content->missingFields($plant);
             $flags   = $content->reviewFlags([(int) $plant->id])[(int) $plant->id] ?? [];
+            // A retried row is pending again, so reviewFlags() no longer sees its own flags: what
+            // the AI declined or failed twice last time stays with a person, not asked again.
+            $flags   = array_values(array_unique(array_merge($flags, array_keys((array) ($changes['review'] ?? [])))));
             $todo    = $content->todo($missing, $flags);
 
             // Nothing left for the AI → no paid call. Flagged leftovers still need a human.
             if ($todo === []) {
-                $review = array_fill_keys(array_values(array_intersect($missing, $flags)), self::FLAGGED);
+                $review = [];
+                foreach (array_intersect($missing, $flags) as $field) {
+                    $review[$field] = $changes['review'][$field] ?? self::FLAGGED;
+                }
                 $this->finishRow($batch, $row, $review ? ProductContentJob::STATUS_NEEDS_REVIEW : ProductContentJob::STATUS_SKIPPED, 'skipped_count', [
                     'changes'        => $noCall($review),
                     'last_error'     => null,
@@ -340,7 +346,7 @@ class GenerateProductContentBatchJob implements ShouldQueue
             ]);
             $aiMs    = (int) round((microtime(true) - $started) * 1000);
             $usage   = (array) ($result['usage'] ?? []);
-            $checked = $content->validate($todo, (array) ($result['fields'] ?? []), $result['scientific_name_confidence'] ?? null);
+            $checked = $content->validate($todo, (array) ($result['fields'] ?? []), $result['scientific_name_confidence'] ?? null, (string) $plant->name);
 
             DB::transaction(function () use ($content, $batch, $row, $plant, $changes, $before, $todo, $flags, $checked, $usage, $aiMs) {
                 $written = $content->write((int) $plant->id, $checked['values']);
@@ -374,7 +380,7 @@ class GenerateProductContentBatchJob implements ShouldQueue
                     } elseif (isset($twice[$field])) {
                         $review[$field] = $twice[$field];
                     } elseif (in_array($field, $flags, true)) {
-                        $review[$field] = self::FLAGGED;
+                        $review[$field] = $changes['review'][$field] ?? self::FLAGGED;
                     }
                 }
 

@@ -53,9 +53,9 @@ return [
         ],
     ],
 
-    // USD per 1M tokens for text_model (gpt-4o-mini) — cost shown on run progress.
+    // USD per 1M tokens, by text_model, for the cost shown on run progress. A model that is
+    // not listed shows no cost rather than gpt-4o-mini's: add its price when switching.
     'token_price_per_million' => [
-        'input'  => 0.15,
-        'output' => 0.60,
+        'gpt-4o-mini' => ['input' => 0.15, 'output' => 0.60],
     ],
 ];

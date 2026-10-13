@@ -375,7 +375,7 @@ final class MissingContentRunTest extends ContentBatchTestCase
         $listed = $this->getJson("/api/ai-content-batches/{$batchId}/rows?status=failed,needs_review,bogus")->assertOk()->json('data');
         $this->assertSame([$invalid, $declined], array_map(fn ($r) => (int) $r['product_id'], $listed));
         $this->assertSame(DB::table('products')->where('id', $invalid)->value('slug'), $listed[0]['product_slug']);
-        $this->assertSame(['hindi_name' => 'not Devanagari'], $listed[0]['changes']['invalid']);
+        $this->assertSame(['hindi_name' => 'not Devanagari: "Boston Fern"'], $listed[0]['changes']['invalid'], 'a person sees what the AI wrote');
         $this->assertCount(3, $this->getJson("/api/ai-content-batches/{$batchId}/rows?status=bogus")->json('data'));
 
         // Another missing-content run is active → 409 with its id.
@@ -523,15 +523,53 @@ final class MissingContentRunTest extends ContentBatchTestCase
         $this->assertSame([], app(MissingPlantContent::class)->missingFields(app(MissingPlantContent::class)->find($id)));
     }
 
-    public function test_a_hindi_name_that_repeats_the_product_name_is_not_sent_as_a_hint(): void
+    public function test_an_old_hindi_name_that_is_the_product_name_or_english_is_not_sent_as_a_hint(): void
     {
-        // 265 seeded plants carry their English name as the "Hindi name"; as a hint it made the AI decline.
+        // Seeded "Hindi names": the product name again (265 plants; as a hint it made the AI decline),
+        // cut or reordered (the AI dropped or swapped words), or English (the AI copied it).
         $this->seedPlant('Song of India', [], ['hindi_name' => ' song  of india', 'hinglish_name' => null]);
-        $this->ai->plantQueue = [['fields' => ['hindi_name' => 'सॉन्ग ऑफ इंडिया', 'hinglish_name' => 'Song of India']]];
+        $this->seedPlant('Marble Queen Pothos', [], ['hindi_name' => 'Marble Queen', 'hinglish_name' => null]);
+        $this->seedPlant('Syngonium Neon', [], ['hindi_name' => 'Neon Syngonium', 'hinglish_name' => null]);
+        $this->seedPlant('Maranta', [], ['hindi_name' => 'Prayer Plant', 'hinglish_name' => null]);
+        $this->seedPlant('Jackfruit', [], ['hindi_name' => 'Kathal', 'hinglish_name' => null]);
+        $this->ai->plantQueue = array_fill(0, 5, ['fields' => ['hindi_name' => 'तुलसी', 'hinglish_name' => 'Tulsi']]);
 
         $this->postJson('/api/ai-content-batches/missing')->assertCreated();
 
-        $this->assertSame([['hindi_name', 'hinglish_name']], $this->ai->requestedFields());
-        $this->assertArrayNotHasKey('old_hindi_name', $this->ai->plantCalls[0]->context);
+        $hints = array_map(fn ($call) => $call->context['old_hindi_name'] ?? null, $this->ai->plantCalls);
+        $this->assertSame([null, null, null, null, 'Kathal'], $hints, 'only a name that can be Hinglish is a hint');
+    }
+
+    public function test_retry_failed_does_not_ask_again_for_what_the_row_sent_to_review(): void
+    {
+        $id = $this->seedPlant('Ti Plant', [], ['hindi_name' => null, 'hinglish_name' => null]);
+        $this->ai->plantQueue = [
+            ['fields' => ['hindi_name' => 'Ti Plant', 'hinglish_name' => null]], // invalid + declined
+            ['fields' => ['hindi_name' => 'टी प्लांट']],
+        ];
+        $batchId = $this->postJson('/api/ai-content-batches/missing')->assertCreated()->json('id');
+        $row     = ProductContentJob::where('batch_id', $batchId)->sole();
+        $this->assertSame(ProductContentJob::STATUS_FAILED, $row->status);
+        $this->assertSame(['hinglish_name' => 'AI was not confident'], $row->changes['review']);
+
+        Queue::fake();
+        $this->postJson("/api/ai-content-batches/{$batchId}/retry-failed")->assertOk();
+        (new GenerateProductContentBatchJob($batchId))->handle();
+
+        $this->assertSame([['hindi_name', 'hinglish_name'], ['hindi_name']], $this->ai->requestedFields(), 'the declined field is not asked again');
+        $row->refresh();
+        $this->assertSame(ProductContentJob::STATUS_NEEDS_REVIEW, $row->status);
+        $this->assertSame(['hinglish_name' => 'AI was not confident'], $row->changes['review'], 'the reason survives the retry');
+        $this->assertSame('टी प्लांट', $this->plantRow($id)->hindi_name);
+    }
+
+    public function test_a_model_without_a_price_shows_no_cost(): void
+    {
+        config(['content-batches.text_model' => 'gpt-unpriced']);
+        $this->seedPlant('Areca Palm', [], ['hindi_name' => null]);
+
+        $batchId = $this->postJson('/api/ai-content-batches/missing')->assertCreated()->json('id');
+
+        $this->assertNull(ProductContentBatch::find($batchId)->summary()['cost_usd'], 'no cost rather than gpt-4o-mini prices');
     }
 }

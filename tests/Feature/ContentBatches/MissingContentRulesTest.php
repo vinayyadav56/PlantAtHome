@@ -127,6 +127,29 @@ final class MissingContentRulesTest extends ContentBatchTestCase
         $this->assertInvalid('hinglish_name', str_repeat('Tulsi ', 13), 'length');
     }
 
+    public function test_a_respelled_cut_or_reordered_hinglish_name_becomes_the_product_name(): void
+    {
+        $hinglish = fn (string $value, string $product) => $this->content->validate(['hinglish_name'], ['hinglish_name' => $value], null, $product)['values']['hinglish_name'] ?? null;
+
+        $this->assertSame('Rosemary', $hinglish('Rosmary', 'Rosemary'));
+        $this->assertSame('Syngonium Pink', $hinglish('Singonium Pink', 'Syngonium Pink'));
+        $this->assertSame('Calathea Medallion', $hinglish('Medallion Calathea', 'Calathea Medallion'));
+        $this->assertSame('Cebu Blue Pothos', $hinglish('Cebu Blue', 'Cebu Blue Pothos'));
+        // A real Hindi name is further from the product name and is kept.
+        $this->assertSame('Papita', $hinglish('Papita', 'Papaya'));
+        $this->assertSame('Kadi Patta', $hinglish('Kadi Patta', 'Curry Leaf'));
+        $this->assertSame('Nag Paudha', $hinglish('Nag Paudha', 'Snake Plant'));
+        // A product name that is not valid Hinglish itself is never copied in.
+        $this->assertSame('Zz Raven', $hinglish('Zz Raven', 'ZZ Raven 2'));
+    }
+
+    public function test_a_description_of_only_an_image_or_a_video_is_content(): void
+    {
+        $this->assertFalse($this->content->isMissing('<p><img src="https://cdn.example/care-chart.png"></p>'));
+        $this->assertFalse($this->content->isMissing('<iframe class="ql-video" src="https://www.youtube.com/embed/x"></iframe><p><br></p>'));
+        $this->assertTrue($this->content->isMissing('<p><br></p>'));
+    }
+
     public function test_banned_claims_are_rejected_but_culinary_copy_is_allowed(): void
     {
         $long = ' It grows well in a bright spot with regular watering and rewards you with fresh green leaves all year round.';

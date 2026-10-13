@@ -55,6 +55,9 @@ class MissingPlantContent
     private const BANNED_CLAIMS = '/\b(?:cur(?:e|es|ed|ing)|heal(?:s|ed|ing)?|medicinal|remed(?:y|ies)|therap(?:y|ies|eutic)|diabet\w*|cancers?|blood\s+pressure|immun(?:e|ity)|ayurved\w*|(?:non[\s-]?)?toxic\w*|poisonous|pet[\s-]?(?:safe|friendly)|safe\s+(?:for|around|with)\s+(?:pets?|kids?|children|cats?|dogs?))\b/i';
 
     /** Genus + species epithet, optional hybrid sign, infraspecific rank and quoted cultivar. */
+    /** A seeded "Hindi name" with one of these is an English alternate ("Prayer Plant", "Flame Vine"). */
+    private const ENGLISH_PLANT_WORDS = '/\\b(?:plants?|palms?|trees?|ferns?|cact(?:us|i)|lil(?:y|ies)|lea(?:f|ves)|roses?|bells?|grass(?:es)?|vines?|creepers?|pines?|bamboos?|canes?|succulents?|ivy|orchids?|dais(?:y|ies)|flowers?|bush(?:es)?|shrubs?)\\b|flower/i';
+
     private const BINOMIAL = "/^[A-Z][a-z]+(?:-[a-z]+)?\\s(?:\u{00D7}\\s?)?(?!(?:sp|spp|species|hybrid|cultivar)\\b)[a-z][a-z-]+(?:\\s(?:subsp\\.|ssp\\.|var\\.|f\\.)\\s[a-z][a-z-]+)?(?:\\s['\u{2018}][^'\u{2019}]{1,40}['\u{2019}])?$/u";
 
     private ?int $plantsTypeId = null;
@@ -81,6 +84,11 @@ class MissingPlantContent
         }
         if (is_array($value)) {
             return $value === [];
+        }
+        // Media from the editor (a care-chart image, a video embed) is content without text:
+        // strip_tags would call it empty and the AI would replace it.
+        if (preg_match('/<(?:img|iframe|video|audio|embed|object|picture|svg)\\b/i', (string) $value)) {
+            return false;
         }
 
         $text = html_entity_decode(strip_tags((string) $value), ENT_QUOTES | ENT_HTML5, 'UTF-8');
@@ -309,14 +317,17 @@ class MissingPlantContent
     {
         $known = [];
         $hint  = null;
-        $same  = fn ($a, $b) => mb_strtolower(preg_replace('/\s+/u', ' ', trim((string) $a))) === mb_strtolower(preg_replace('/\s+/u', ' ', trim((string) $b)));
         foreach (array_diff(self::FIELDS, ['description']) as $field) {
             $value = $plant->{$field} ?? null;
             if (!$this->isFieldMissing($field, $value)) {
                 $known[$field] = trim((string) $value);
-            } elseif ($field === 'hindi_name' && !$this->isMissing($value) && !$same($value, $plant->name ?? '')) {
-                // A hint, kept apart from the known values: Hinglish ("Nag Paudha"), but seeded rows also
-                // hold English or Marathi names. The product's own name repeated made the AI decline.
+            } elseif ($field === 'hindi_name' && !$this->isMissing($value)
+                && array_diff(self::words($value), self::words($plant->name ?? '')) !== []
+                && !preg_match(self::ENGLISH_PLANT_WORDS, (string) $value)) {
+                // A hint, kept apart from the known values, and only when it can be Hinglish ("Nag
+                // Paudha"). Seeded rows also hold the product name again, whole, cut ("Marble Queen")
+                // or reordered ("Neon Syngonium"), and English names ("Prayer Plant"): the AI declined,
+                // dropped or swapped words, or copied the English name, so those are not sent.
                 $hint = trim((string) $value);
             }
         }
@@ -367,7 +378,7 @@ class MissingPlantContent
      *
      * @return array{values: array<string, string>, declined: array<string, string>, invalid: array<string, string>}
      */
-    public function validate(array $requested, array $fields, ?string $confidence = null): array
+    public function validate(array $requested, array $fields, ?string $confidence = null, ?string $productName = null): array
     {
         $out = ['values' => [], 'declined' => [], 'invalid' => []];
 
@@ -382,7 +393,7 @@ class MissingPlantContent
                 continue;
             }
 
-            [$clean, $problem, $declined] = $this->check($field, $value, $confidence);
+            [$clean, $problem, $declined] = $this->check($field, $value, $confidence, $productName);
             if ($declined !== null) {
                 $out['declined'][$field] = $declined;
             } elseif ($problem !== null) {
@@ -395,8 +406,37 @@ class MissingPlantContent
         return $out;
     }
 
+    /** Lower-case words of a name, for comparing names word by word. */
+    private static function words(mixed $name): array
+    {
+        return preg_split('/[^\\p{L}\\p{N}]+/u', mb_strtolower(trim((string) $name)), -1, PREG_SPLIT_NO_EMPTY) ?: [];
+    }
+
+    /**
+     * A transliteration's Hinglish name is the product name, but the AI respells it ("Rosmary"),
+     * drops a word ("Cebu Blue") or reorders it ("Medallion Calathea"). When every word is within
+     * one letter of a product-name word, the product name is used as it is. A real Hindi name is
+     * further away ("Papita" for Papaya, "Kadi Patta") and is kept.
+     */
+    private function asProductName(string $hinglish, ?string $productName): string
+    {
+        $name = trim(preg_replace('/\\s+/u', ' ', (string) $productName) ?? '');
+        if ($name === '' || mb_strlen($name) > 60 || !preg_match("/^[A-Za-z][A-Za-z\\s\\-'.()]*$/u", $name)) {
+            return $hinglish;
+        }
+        $own = self::words($name);
+        foreach (self::words($hinglish) as $word) {
+            $near = array_filter($own, fn ($o) => levenshtein($word, $o) <= 1);
+            if ($near === []) {
+                return $hinglish;
+            }
+        }
+
+        return $name;
+    }
+
     /** @return array{0: ?string, 1: ?string, 2: ?string} [clean value, invalid reason, declined reason] */
-    private function check(string $field, string $value, ?string $confidence): array
+    private function check(string $field, string $value, ?string $confidence, ?string $productName = null): array
     {
         $line = trim(preg_replace('/\s+/u', ' ', $value) ?? $value);
 
@@ -431,7 +471,7 @@ class MissingPlantContent
 
             case 'hindi_name':
                 if (!preg_match('/^[\p{Devanagari}\x{200C}\x{200D}\s\-\/(),\[\]]+$/u', $line) || !preg_match('/\p{Devanagari}/u', $line)) {
-                    return [null, 'not Devanagari', null];
+                    return [null, 'not Devanagari: "' . mb_strimwidth($line, 0, 40, '…') . '"', null];
                 }
                 if (mb_strlen($line) > 60) {
                     return [null, 'longer than 60 characters', null];
@@ -445,7 +485,7 @@ class MissingPlantContent
             case 'hinglish_name':
                 // The Hindi name as Indians type it in Roman letters ("Tulsi", "Nag Paudha").
                 if (!preg_match("/^[A-Za-z][A-Za-z\s\-'.()]*$/u", $line)) {
-                    return [null, 'not in Roman letters', null];
+                    return [null, 'not in Roman letters: "' . mb_strimwidth($line, 0, 40, '…') . '"', null];
                 }
                 if (mb_strlen($line) < 2 || mb_strlen($line) > 60) {
                     return [null, 'length ' . mb_strlen($line) . ' (allowed 2-60)', null];
@@ -453,7 +493,7 @@ class MissingPlantContent
                 if (in_array(mb_strtolower($line), ['paudha', 'paudhe', 'ped', 'phool', 'plant', 'plants'], true)) {
                     return [null, 'a generic word, not a plant name', null];
                 }
-                return [$line, null, null];
+                return [$this->asProductName($line, $productName), null, null];
 
             case 'scientific_name':
                 if (strtolower((string) $confidence) !== 'high') {
