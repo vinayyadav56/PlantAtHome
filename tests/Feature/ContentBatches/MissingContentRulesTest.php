@@ -202,6 +202,35 @@ final class MissingContentRulesTest extends ContentBatchTestCase
     }
 
     /** The real provider against OpenAI's own client fake (no network): JSON mode, only requested keys, no silent truncation. */
+    public function test_gpt_5_models_get_their_own_request_settings(): void
+    {
+        // Reasoning models reject max_tokens and temperature 0.3 (a 400 on every plant).
+        config(['shop.openai.secret_Key' => 'sk-test']);
+        $reply = CreateResponse::fake([
+            'model'   => 'gpt-5.4-mini-2026-03-17',
+            'choices' => [['message' => ['content' => json_encode(['hindi_name' => 'तुलसी'])], 'finish_reason' => 'stop']],
+            'usage'   => ['prompt_tokens' => 300, 'completion_tokens' => 40, 'total_tokens' => 340],
+        ]);
+        $request = (object) ['name' => 'Tulsi', 'fields' => ['hindi_name'], 'context' => [], 'vocabulary' => config('content-batches.plant_vocabulary')];
+
+        foreach (['gpt-5.4-mini' => 'none', 'gpt-5-mini' => 'minimal'] as $model => $effort) {
+            config(['content-batches.text_model' => $model]);
+            $client   = new ClientFake([$reply]);
+            $provider = new Openai();
+            $property = new \ReflectionProperty(Openai::class, 'openAiClient');
+            $property->setAccessible(true);
+            $property->setValue($provider, $client);
+
+            $this->assertSame(['hindi_name' => 'तुलसी'], $provider->generatePlantContent($request)['fields']);
+            $client->assertSent(Chat::class, fn ($method, $params) => $params['model'] === $model
+                && $params['reasoning_effort'] === $effort
+                && $params['max_completion_tokens'] === 2200
+                && !array_key_exists('max_tokens', $params)
+                && !array_key_exists('temperature', $params)
+                && $params['response_format'] === ['type' => 'json_object']);
+        }
+    }
+
     public function test_the_openai_provider_asks_for_json_and_rejects_unusable_replies(): void
     {
         config(['shop.openai.secret_Key' => 'sk-test']);

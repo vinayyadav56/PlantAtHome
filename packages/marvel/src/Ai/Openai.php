@@ -30,6 +30,26 @@ class Openai extends Base implements AiInterface
         return config('content-batches.text_model', 'gpt-4o-mini');
     }
 
+    /**
+     * Model, length cap and temperature for a text request. GPT-5 models are reasoning models:
+     * they reject `max_tokens` and any temperature but the default, so they get
+     * max_completion_tokens (with room for reasoning) and reasoning turned down to its lowest,
+     * 'none' from GPT-5.1 on, 'minimal' for the first GPT-5 models.
+     */
+    private function textParams(int $maxTokens, float $temperature): array
+    {
+        $model = $this->textModel();
+        if (!str_starts_with($model, 'gpt-5')) {
+            return ['model' => $model, 'max_tokens' => $maxTokens, 'temperature' => $temperature];
+        }
+
+        return [
+            'model'                 => $model,
+            'max_completion_tokens' => $maxTokens + 1000,
+            'reasoning_effort'      => preg_match('/^gpt-5(?:-mini|-nano)?(?:-\d{4}-\d{2}-\d{2})?$/', $model) ? 'minimal' : 'none',
+        ];
+    }
+
     /** Map a length option (short|medium|long, or a character count) to a prompt hint. */
     private function lengthHint($length): string
     {
@@ -82,15 +102,12 @@ class Openai extends Base implements AiInterface
                 $user .= "\n\nMake sure to naturally include these key points: {$keywords}";
             }
 
-            $response = $this->openAiClient->chat()->create([
-                'model'       => $this->textModel(),
-                'max_tokens'  => $this->maxTokensFor($length),
-                'temperature' => 0.7,
+            $response = $this->openAiClient->chat()->create(array_merge($this->textParams($this->maxTokensFor($length), 0.7), [
                 'messages'    => [
                     ['role' => 'system', 'content' => $this->descriptionSystemPrompt($language, $tone, $length)],
                     ['role' => 'user',   'content' => $user],
                 ],
-            ]);
+            ]));
 
             $content = $response->choices[0]->message->content ?? '';
             return ['status' => 'success', 'result' => trim($content)];
@@ -129,16 +146,13 @@ class Openai extends Base implements AiInterface
                 . ($description !== '' ? "Product description: {$description}\n" : '')
                 . "\nExisting categories (slug :: name):\n{$catList}";
 
-            $response = $this->openAiClient->chat()->create([
-                'model'           => $this->textModel(),
-                'max_tokens'      => 300,
-                'temperature'     => 0.2,
+            $response = $this->openAiClient->chat()->create(array_merge($this->textParams(300, 0.2), [
                 'response_format' => ['type' => 'json_object'],
                 'messages'        => [
                     ['role' => 'system', 'content' => $system],
                     ['role' => 'user',   'content' => $user],
                 ],
-            ]);
+            ]));
 
             $content = $response->choices[0]->message->content ?? '{}';
             $parsed  = json_decode($content, true) ?: [];
@@ -195,16 +209,13 @@ class Openai extends Base implements AiInterface
             . (!empty($request->prompt) ? "Extra context: {$request->prompt}\n" : '')
             . ($wantCats && $candidates->isNotEmpty() ? "\nExisting categories (slug :: name):\n{$catList}\n" : '');
 
-        $response = $this->openAiClient->chat()->create([
-            'model'           => $this->textModel(),
-            'max_tokens'      => $this->maxTokensFor($length) + 120,
-            'temperature'     => 0.6,
+        $response = $this->openAiClient->chat()->create(array_merge($this->textParams($this->maxTokensFor($length) + 120, 0.6), [
             'response_format' => ['type' => 'json_object'],
             'messages'        => [
                 ['role' => 'system', 'content' => $system],
                 ['role' => 'user',   'content' => $user],
             ],
-        ]);
+        ]));
 
         $content = $response->choices[0]->message->content ?? '';
         $parsed  = json_decode($content, true);
@@ -298,16 +309,13 @@ class Openai extends Base implements AiInterface
             $user .= "Current description (excerpt): {$context['description_excerpt']}\n";
         }
 
-        $response = $this->openAiClient->chat()->create([
-            'model'           => $this->textModel(),
-            'max_tokens'      => 1200,
-            'temperature'     => 0.3,
+        $response = $this->openAiClient->chat()->create(array_merge($this->textParams(1200, 0.3), [
             'response_format' => ['type' => 'json_object'],
             'messages'        => [
                 ['role' => 'system', 'content' => $system],
                 ['role' => 'user',   'content' => $user],
             ],
-        ]);
+        ]));
 
         $usage = [
             'prompt_tokens'     => (int) $response->usage->promptTokens,
