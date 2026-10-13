@@ -343,7 +343,8 @@ final class MissingContentRunTest extends ContentBatchTestCase
             'fields_initially_missing' => 10, 'fields_generated' => 10, 'fields_still_missing' => 0, 'retries' => 1,
         ], array_slice($summary, 0, 14));
         $this->assertSame(['prompt' => 1500, 'completion' => 510], $summary['tokens']);
-        $this->assertEqualsWithDelta((1500 * 0.15 + 510 * 0.60) / 1_000_000, $summary['cost_usd'], 1e-9);
+        $price = config('content-batches.token_price_per_million')[config('content-batches.text_model')];
+        $this->assertEqualsWithDelta((1500 * $price['input'] + 510 * $price['output']) / 1_000_000, $summary['cost_usd'], 1e-9);
         $this->assertGreaterThanOrEqual(3, $summary['avg_ai_ms']);
         $this->assertEqualsWithDelta(3.0, $summary['rows_per_minute'], 0.2);
         $this->assertNull($summary['eta_seconds'], 'no ETA once finished');

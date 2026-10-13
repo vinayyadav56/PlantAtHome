@@ -233,7 +233,8 @@ final class MissingContentRulesTest extends ContentBatchTestCase
 
     public function test_the_openai_provider_asks_for_json_and_rejects_unusable_replies(): void
     {
-        config(['shop.openai.secret_Key' => 'sk-test']);
+        // The classic request settings (temperature, max_tokens); GPT-5 has its own test above.
+        config(['shop.openai.secret_Key' => 'sk-test', 'content-batches.text_model' => 'gpt-4o-mini']);
         $reply = fn (string $content, string $finish = 'stop') => CreateResponse::fake([
             'model'   => 'gpt-4o-mini',
             'choices' => [['message' => ['content' => $content], 'finish_reason' => $finish]],

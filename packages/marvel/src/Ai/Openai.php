@@ -27,7 +27,7 @@ class Openai extends Base implements AiInterface
     /** Chat model used for all text generation (env OPENAI_TEXT_MODEL, via content-batches config). */
     private function textModel(): string
     {
-        return config('content-batches.text_model', 'gpt-4o-mini');
+        return config('content-batches.text_model', 'gpt-5.4-mini');
     }
 
     /**

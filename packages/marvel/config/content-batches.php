@@ -9,7 +9,7 @@ return [
     // Dedicated queue so bulk text runs never sit behind image batches.
     'queue' => env('CONTENT_BATCH_QUEUE', 'content'),
 
-    // Products processed per minute (each = one gpt-4o-mini call). gpt-4o-mini
+    // Products processed per minute (each = one text_model call). The mini models'
     // limits are high; raise via env if needed.
     'rate_per_minute' => (float) env('CONTENT_BATCH_RATE_PER_MINUTE', 30),
 
@@ -28,10 +28,13 @@ return [
     'redispatch_minutes' => (int) env('CONTENT_BATCH_REDISPATCH_MINUTES', 2),
 
     // Text model for all generation (shared with the inline description/category endpoints).
-    'text_model' => env('OPENAI_TEXT_MODEL', 'gpt-4o-mini'),
+    // gpt-5.4-mini (owner 2026-10-13): on a graded staging trial 2% of its Hindi names were wrong
+    // against gpt-4o-mini's 10%, at the same speed and about $0.0013 a plant. Openai::textParams()
+    // gives GPT-5 models the request settings they need.
+    'text_model' => env('OPENAI_TEXT_MODEL', 'gpt-5.4-mini'),
 
-    // Rough USD per product (one combined description+categories call on
-    // gpt-4o-mini) — used only for the pre-flight cost estimate.
+    // Rough USD per product, used only for the pre-flight cost estimate and cap. A
+    // gpt-5.4-mini plant measured about $0.0013, so 0.002 stays on the safe side.
     'cost_per_product' => (float) env('CONTENT_BATCH_COST_PER_PRODUCT', 0.002),
 
     // "Generate missing content": the ONLY values the AI may store for these two
