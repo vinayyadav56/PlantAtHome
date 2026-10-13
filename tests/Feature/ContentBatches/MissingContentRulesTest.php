@@ -167,6 +167,25 @@ final class MissingContentRulesTest extends ContentBatchTestCase
         $this->assertDeclined('scientific_name', 'Acalypha wilkesiana macrophylla rosea', 'high'); // not a binomial: left for a person
     }
 
+    public function test_a_medium_confidence_name_is_always_offered_as_a_suggestion(): void
+    {
+        // Production 2026-10-13: 45 plants whose medium-confidence name was a cultivar, not a binomial,
+        // got the bare reason, which counts as stale, so they were asked again in every run.
+        $r = $this->content->validate(['scientific_name'], ['scientific_name' => "Aglaonema 'Brilliant'"], 'medium');
+        $this->assertSame(['scientific_name' => 'scientific name confidence medium (AI suggests "Aglaonema \'Brilliant\'")'], $r['declined']);
+        $this->assertSame([], $r['values']);
+    }
+
+    public function test_a_claim_word_in_the_products_own_name_is_allowed(): void
+    {
+        // Production 2026-10-13: "Set of 4 Medicinal Plants" failed twice because its copy repeats its name.
+        $title = 'Buy a Set of 4 Medicinal Plants Online';
+        $this->assertSame(['seo_title' => $title], $this->content->validate(['seo_title'], ['seo_title' => $title], null, 'Set of 4 Medicinal Plants')['values']);
+        $this->assertSame([], $this->content->validate(['seo_title'], ['seo_title' => $title], null, 'Tulsi')['values'], 'still a claim for any other product');
+        $r = $this->content->validate(['seo_title'], ['seo_title' => 'Medicinal plants that cure diabetes'], null, 'Set of 4 Medicinal Plants');
+        $this->assertStringContainsString('banned claim "cure"', $r['invalid']['seo_title'], 'the other claims still count');
+    }
+
     public function test_banned_claims_are_rejected_but_culinary_copy_is_allowed(): void
     {
         $long = ' It grows well in a bright spot with regular watering and rewards you with fresh green leaves all year round.';

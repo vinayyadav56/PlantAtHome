@@ -489,7 +489,7 @@ class MissingPlantContent
                 if (mb_strlen($html) > 10000) {
                     return [null, 'too long', null];
                 }
-                return [$html, $this->bannedClaim($visible), null];
+                return [$html, $this->bannedClaim($visible, $productName), null];
 
             case 'seo_title':
             case 'seo_description':
@@ -506,7 +506,7 @@ class MissingPlantContent
                 if ($len < $min || $len > $max) {
                     return [null, "length {$len} (allowed {$min}-{$max})", null];
                 }
-                return [$line, $this->bannedClaim($line), null];
+                return [$line, $this->bannedClaim($line, $productName), null];
 
             case 'hindi_name':
                 if (!preg_match('/^[\p{Devanagari}0-9\x{200C}\x{200D}\s\-\/(),\[\]]+$/u', $line) || !preg_match('/\p{Devanagari}/u', $line)) {
@@ -536,8 +536,10 @@ class MissingPlantContent
 
             case 'scientific_name':
                 if (strtolower((string) $confidence) !== 'high') {
-                    // A medium-confidence binomial rides along as a suggestion, for the review list.
-                    $hint = strtolower((string) $confidence) === 'medium' && preg_match(self::BINOMIAL, $line) ? " (AI suggests \"{$line}\")" : '';
+                    // A medium-confidence name rides along as a suggestion, for the review list; a
+                    // cultivar name ("Aglaonema 'Brilliant'") too, or the bare reason would read as
+                    // stale and the plant would be asked again in every run.
+                    $hint = strtolower((string) $confidence) === 'medium' && $line !== '' ? ' (AI suggests "' . mb_strimwidth($line, 0, 60, '…') . '")' : '';
                     return [null, null, 'scientific name confidence ' . ($confidence ?: 'missing') . $hint];
                 }
                 if (!preg_match(self::BINOMIAL, $line)) {
@@ -559,9 +561,18 @@ class MissingPlantContent
         return [null, 'unknown field', null];
     }
 
-    private function bannedClaim(string $text): ?string
+    private function bannedClaim(string $text, ?string $productName = null): ?string
     {
-        return preg_match(self::BANNED_CLAIMS, $text, $m) ? "banned claim \"{$m[0]}\"" : null;
+        if (!preg_match_all(self::BANNED_CLAIMS, $text, $m)) {
+            return null;
+        }
+        // A word in the product's own name ("Set of 4 Medicinal Plants") is not a claim.
+        foreach ($m[0] as $word) {
+            if ($productName === null || !preg_match('/\b' . preg_quote($word, '/') . '\b/iu', $productName)) {
+                return "banned claim \"{$word}\"";
+            }
+        }
+        return null;
     }
 
     /* ── the write ────────────────────────────────────────────────────────── */
