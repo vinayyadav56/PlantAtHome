@@ -152,6 +152,21 @@ final class MissingContentRulesTest extends ContentBatchTestCase
         $this->assertTrue($this->content->isMissing('<p><br></p>'));
     }
 
+    public function test_names_with_digits_commas_and_x_hybrids_are_accepted(): void
+    {
+        // From the production catalogue (2026-10-13): SKUs with digits, two-name products, hybrids written "x".
+        $this->assertValid('hindi_name', 'बेगोनिया यू400', 'बेगोनिया यू400');
+        $this->assertValid('hindi_name', '7 लेयर लकी बैम्बू', '7 लेयर लकी बैम्बू');
+        $this->assertInvalid('hindi_name', '400', 'not Devanagari');
+        $this->assertValid('hinglish_name', 'Begonia U400', 'Begonia U400');
+        $this->assertValid('hinglish_name', '7 Layer Lucky Bamboo', '7 Layer Lucky Bamboo');
+        $this->assertValid('hinglish_name', 'Agar Wood, Eagle Wood', 'Agar Wood, Eagle Wood');
+        $this->assertInvalid('hinglish_name', '400', 'not in Roman letters');
+        $this->assertValid('scientific_name', 'Abelia x grandiflora', 'Abelia x grandiflora');
+        $this->assertValid('scientific_name', 'Abelia × grandiflora', 'Abelia × grandiflora');
+        $this->assertDeclined('scientific_name', 'Acalypha wilkesiana macrophylla rosea', 'high'); // not a binomial: left for a person
+    }
+
     public function test_banned_claims_are_rejected_but_culinary_copy_is_allowed(): void
     {
         $long = ' It grows well in a bright spot with regular watering and rewards you with fresh green leaves all year round.';

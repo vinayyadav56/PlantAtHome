@@ -58,7 +58,7 @@ class MissingPlantContent
     /** A seeded "Hindi name" with one of these is an English alternate ("Prayer Plant", "Flame Vine"). */
     private const ENGLISH_PLANT_WORDS = '/\\b(?:plants?|palms?|trees?|ferns?|cact(?:us|i)|lil(?:y|ies)|lea(?:f|ves)|roses?|bells?|grass(?:es)?|vines?|creepers?|pines?|bamboos?|canes?|succulents?|ivy|orchids?|dais(?:y|ies)|flowers?|bush(?:es)?|shrubs?)\\b|flower/i';
 
-    private const BINOMIAL = "/^[A-Z][a-z]+(?:-[a-z]+)?\\s(?:\u{00D7}\\s?)?(?!(?:sp|spp|species|hybrid|cultivar)\\b)[a-z][a-z-]+(?:\\s(?:subsp\\.|ssp\\.|var\\.|f\\.)\\s[a-z][a-z-]+)?(?:\\s['\u{2018}][^'\u{2019}]{1,40}['\u{2019}])?$/u";
+    private const BINOMIAL = "/^[A-Z][a-z]+(?:-[a-z]+)?\\s(?:(?:\u{00D7}|x)\\s?)?(?!(?:sp|spp|species|hybrid|cultivar)\\b)[a-z][a-z-]+(?:\\s(?:subsp\\.|ssp\\.|var\\.|f\\.)\\s[a-z][a-z-]+)?(?:\\s['\u{2018}][^'\u{2019}]{1,40}['\u{2019}])?$/u";
 
     private ?int $plantsTypeId = null;
 
@@ -421,7 +421,7 @@ class MissingPlantContent
     private function asProductName(string $hinglish, ?string $productName): string
     {
         $name = trim(preg_replace('/\\s+/u', ' ', (string) $productName) ?? '');
-        if ($name === '' || mb_strlen($name) > 60 || !preg_match("/^[A-Za-z][A-Za-z\\s\\-'.()]*$/u", $name)) {
+        if ($name === '' || mb_strlen($name) > 60 || !preg_match("/^(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9\\s\\-'.(),]*$/u", $name)) {
             return $hinglish;
         }
         $own = self::words($name);
@@ -473,7 +473,7 @@ class MissingPlantContent
                 return [$line, $this->bannedClaim($line), null];
 
             case 'hindi_name':
-                if (!preg_match('/^[\p{Devanagari}\x{200C}\x{200D}\s\-\/(),\[\]]+$/u', $line) || !preg_match('/\p{Devanagari}/u', $line)) {
+                if (!preg_match('/^[\p{Devanagari}0-9\x{200C}\x{200D}\s\-\/(),\[\]]+$/u', $line) || !preg_match('/\p{Devanagari}/u', $line)) {
                     return [null, 'not Devanagari: "' . mb_strimwidth($line, 0, 40, '…') . '"', null];
                 }
                 if (mb_strlen($line) > 60) {
@@ -487,7 +487,7 @@ class MissingPlantContent
 
             case 'hinglish_name':
                 // The Hindi name as Indians type it in Roman letters ("Tulsi", "Nag Paudha").
-                if (!preg_match("/^[A-Za-z][A-Za-z\s\-'.()]*$/u", $line)) {
+                if (!preg_match("/^(?=.*[A-Za-z])[A-Za-z0-9][A-Za-z0-9\s\-'.(),]*$/u", $line)) {
                     return [null, 'not in Roman letters: "' . mb_strimwidth($line, 0, 40, '…') . '"', null];
                 }
                 if (mb_strlen($line) < 2 || mb_strlen($line) > 60) {
