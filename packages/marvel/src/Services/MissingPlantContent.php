@@ -30,6 +30,10 @@ class MissingPlantContent
     /** Every field a plant needs, in display order. */
     public const FIELDS = ['description', 'seo_title', 'seo_description', 'hindi_name', 'hinglish_name', 'scientific_name', 'sunlight', 'water_requirement'];
 
+    /** Why a field was declined: the AI gave null, or the product is a pack or set and the field does not apply. */
+    public const DECLINED      = 'AI was not confident';
+    public const NOT_ONE_PLANT = 'a pack or set, not one plant';
+
     /** Stand-ins that mean "nobody filled this in" (compared lower-cased). */
     private const PLACEHOLDERS = [
         'n/a', 'na', 'n.a', 'n.a.', 'not available', 'not applicable', 'none', 'null', 'nil', 'undefined',
@@ -168,6 +172,15 @@ class MissingPlantContent
      */
     private function flagIsStale(string $field, string $why, int $productId, ?array &$names, array $productIds): bool
     {
+        // Copy is asked again: only packs and non-plants decline it, and they now get a
+        // description and SEO. The plant-identity fields stay with a person.
+        if ($why === self::DECLINED && in_array($field, self::PRODUCT_FIELDS, true)) {
+            return true;
+        }
+        // Asked once more, so the review list can carry the AI's suggestion.
+        if ($field === 'scientific_name' && $why === 'scientific name confidence medium') {
+            return true;
+        }
         if (preg_match('/^failed validation twice \(.*?: "(.*)"\)$/su', $why, $m)) {
             $value = preg_replace('/…$/u', '', $m[1]) ?? $m[1]; // the reason keeps 40 characters
             return $this->validate([$field], [$field => $value], 'high')['values'] !== [];
@@ -412,7 +425,7 @@ class MissingPlantContent
                 continue;
             }
             if ($this->isMissing($value)) {
-                $out['declined'][$field] = 'AI was not confident';
+                $out['declined'][$field] = self::DECLINED;
                 continue;
             }
 
@@ -523,7 +536,9 @@ class MissingPlantContent
 
             case 'scientific_name':
                 if (strtolower((string) $confidence) !== 'high') {
-                    return [null, null, 'scientific name confidence ' . ($confidence ?: 'missing')];
+                    // A medium-confidence binomial rides along as a suggestion, for the review list.
+                    $hint = strtolower((string) $confidence) === 'medium' && preg_match(self::BINOMIAL, $line) ? " (AI suggests \"{$line}\")" : '';
+                    return [null, null, 'scientific name confidence ' . ($confidence ?: 'missing') . $hint];
                 }
                 if (!preg_match(self::BINOMIAL, $line)) {
                     return [null, null, 'not a full binomial'];

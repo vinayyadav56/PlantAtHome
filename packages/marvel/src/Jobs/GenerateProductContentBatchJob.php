@@ -347,6 +347,14 @@ class GenerateProductContentBatchJob implements ShouldQueue
             $aiMs    = (int) round((microtime(true) - $started) * 1000);
             $usage   = (array) ($result['usage'] ?? []);
             $checked = $content->validate($todo, (array) ($result['fields'] ?? []), $result['scientific_name_confidence'] ?? null, (string) $plant->name);
+            if (($result['single_plant'] ?? null) === false) {
+                // A pack or set: its copy is written; the plant-identity fields do not apply.
+                foreach (array_keys($checked['declined']) as $field) {
+                    if (!in_array($field, MissingPlantContent::PRODUCT_FIELDS, true)) {
+                        $checked['declined'][$field] = MissingPlantContent::NOT_ONE_PLANT;
+                    }
+                }
+            }
 
             DB::transaction(function () use ($content, $batch, $row, $plant, $changes, $before, $todo, $flags, $checked, $usage, $aiMs) {
                 $written = $content->write((int) $plant->id, $checked['values']);

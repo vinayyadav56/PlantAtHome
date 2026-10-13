@@ -280,10 +280,11 @@ class Openai extends Base implements AiInterface
 
         $system = "You are a horticulturist writing product content for PlantAtHome, an online plant nursery in India.\n"
             . "Respond ONLY with one JSON object containing exactly these keys:\n- "
-            . implode("\n- ", array_map(fn ($f) => $spec[$f], $fields)) . "\n\n"
+            . implode("\n- ", array_map(fn ($f) => $spec[$f], $fields))
+            . "\n- \"single_plant\": true for one real plant, false for a set of plants or a non-plant item\n\n"
             . "Rules:\n"
             . "- Use null for any key you are not confident about. Never guess. (hindi_name and hinglish_name are the exception: when no Hindi name exists, the transliteration is always known.)\n"
-            . "- If the product is not one real, single plant (a combo or set of several plants, a mix, a pot, a tool, a demo or test entry), return null for EVERY key.\n"
+            . "- If the product is a set of several plants or not a plant (a pack, combo, kit, mix, pot, tool, demo or test entry): write description, seo_title and seo_description for it as it is sold, and return null for hindi_name, hinglish_name, scientific_name, sunlight and water_requirement.\n"
             . "- No medical, health, toxicity or pet/child-safety claims. Never use these words: cure, heal, medicinal, remedy, therapy, disease, diabetes, cancer, blood pressure, immunity, ayurvedic, toxic, non-toxic, poisonous, pet-safe, pet-friendly, safe for pets or kids.\n"
             . "- Mention edible or culinary use only for plants commonly grown as herbs or vegetables.\n"
             . "- No prices, discounts, guarantees or delivery promises.\n"
@@ -335,6 +336,7 @@ class Openai extends Base implements AiInterface
         return [
             'fields'                     => array_combine($fields, array_map(fn ($f) => $parsed[$f] ?? null, $fields)),
             'scientific_name_confidence' => is_string($confidence) ? strtolower(trim($confidence)) : null,
+            'single_plant'               => is_bool($parsed['single_plant'] ?? null) ? $parsed['single_plant'] : null,
             'usage'                      => $usage,
             'model'                      => $response->model,
         ];

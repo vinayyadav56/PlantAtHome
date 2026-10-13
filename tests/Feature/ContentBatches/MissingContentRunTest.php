@@ -239,7 +239,7 @@ final class MissingContentRunTest extends ContentBatchTestCase
         $combo     = $this->seedPlant('Combo of 3 Plants', ['description' => null], ['hindi_name' => null]);
         $this->ai->plantQueue = [
             ['scientific_name_confidence' => 'medium'],
-            // Not a single real plant: the model returns null for everything.
+            // Declines both: the copy is asked again next run, the name is not.
             ['fields' => ['description' => null, 'hindi_name' => null]],
         ];
 
@@ -249,7 +249,7 @@ final class MissingContentRunTest extends ContentBatchTestCase
         $this->assertNull($this->plantRow($succulent)->scientific_name);
         $row = ProductContentJob::where('product_id', $succulent)->sole();
         $this->assertSame(ProductContentJob::STATUS_NEEDS_REVIEW, $row->status);
-        $this->assertSame(['scientific_name' => 'scientific name confidence medium'], $row->changes['review']);
+        $this->assertSame(['scientific_name' => 'scientific name confidence medium (AI suggests "Ocimum tenuiflorum")'], $row->changes['review']);
         $comboRow = ProductContentJob::where('product_id', $combo)->sole();
         $this->assertSame(ProductContentJob::STATUS_NEEDS_REVIEW, $comboRow->status);
         $this->assertSame(['description', 'hindi_name'], array_keys($comboRow->changes['review']));
@@ -257,11 +257,11 @@ final class MissingContentRunTest extends ContentBatchTestCase
 
         $stats = app(MissingPlantContent::class)->stats();
         $this->assertSame(2, $stats['needs_review']);
-        $this->assertSame(0, $stats['ready']);
+        $this->assertSame(1, $stats['ready'], 'declined copy is asked again; the plant fields are not');
 
-        // Flags stick: a second run has nothing to ask the AI.
-        $this->postJson('/api/ai-content-batches/missing')->assertStatus(422);
-        $this->assertCount(2, $this->ai->plantCalls);
+        // Plant-identity flags stick: a second run asks only for the combo's copy.
+        $this->postJson('/api/ai-content-batches/missing')->assertCreated()->assertJson(['queued' => 1]);
+        $this->assertSame([['hindi_name', 'scientific_name'], ['description', 'hindi_name'], ['description']], $this->ai->requestedFields());
 
         // A human fills the species from the edit form → the plant is complete.
         DB::table('plant_attributes')->where('product_id', $succulent)->update(['scientific_name' => 'Echeveria elegans']);
@@ -610,6 +610,53 @@ final class MissingContentRunTest extends ContentBatchTestCase
         $this->assertSame('Begonia U400', $this->plantRow($digits)->hinglish_name);
         $this->assertSame('बेगोनिया यू400', $this->plantRow($digits)->hindi_name);
         $this->assertSame('Abelia x grandiflora', $this->plantRow($hybrid)->scientific_name);
+    }
+
+    public function test_a_pack_gets_its_copy_and_the_plant_fields_are_left_for_a_person(): void
+    {
+        $id = $this->seedPlant('2 Air Purifier Plants Pack', ['description' => null, 'seo_title' => null, 'seo_description' => null], ['hindi_name' => null, 'hinglish_name' => null, 'scientific_name' => null, 'sunlight' => null, 'water_requirement' => null]);
+        $this->ai->plantQueue = [['fields' => ['hindi_name' => null, 'hinglish_name' => null, 'scientific_name' => null, 'sunlight' => null, 'water_requirement' => null], 'single_plant' => false]];
+
+        $this->postJson('/api/ai-content-batches/missing')->assertCreated();
+
+        $row = ProductContentJob::latest('id')->first();
+        $this->assertSame(ProductContentJob::STATUS_NEEDS_REVIEW, $row->status);
+        $this->assertSame(['description', 'seo_title', 'seo_description'], $row->changes['generated']);
+        $this->assertSame(array_fill_keys(['hindi_name', 'hinglish_name', 'scientific_name', 'sunlight', 'water_requirement'], MissingPlantContent::NOT_ONE_PLANT), $row->changes['review']);
+        $this->assertNotNull($this->plantRow($id)->seo_title);
+        // Nothing left that the AI may do: the plant fields stay with a person.
+        $this->postJson('/api/ai-content-batches/missing')->assertStatus(422);
+    }
+
+    public function test_declined_copy_is_asked_again_but_declined_plant_fields_are_not(): void
+    {
+        $id = $this->seedPlant('Mystery Box', ['description' => null], ['hindi_name' => null]);
+        $this->ai->plantQueue = [['fields' => ['description' => null, 'hindi_name' => null]], []];
+
+        $this->postJson('/api/ai-content-batches/missing')->assertCreated();
+        $this->assertSame(ProductContentJob::STATUS_NEEDS_REVIEW, ProductContentJob::latest('id')->first()->status);
+
+        $this->postJson('/api/ai-content-batches/missing')->assertCreated();
+
+        $this->assertSame([['description', 'hindi_name'], ['description']], $this->ai->requestedFields(), 'copy is asked again; the Hindi name waits for a person');
+        $this->assertNotNull($this->plantRow($id)->description);
+    }
+
+    public function test_a_medium_confidence_scientific_name_is_kept_as_a_suggestion(): void
+    {
+        $id = $this->seedPlant('Acalypha wilkesiana macrophylla', [], ['scientific_name' => null]);
+        $this->ai->plantQueue = [['fields' => ['scientific_name' => 'Acalypha wilkesiana'], 'scientific_name_confidence' => 'medium']];
+
+        $this->postJson('/api/ai-content-batches/missing')->assertCreated();
+
+        $row = ProductContentJob::latest('id')->first();
+        $this->assertSame(['scientific_name' => 'scientific name confidence medium (AI suggests "Acalypha wilkesiana")'], $row->changes['review']);
+        $this->assertNull($this->plantRow($id)->scientific_name, 'a suggestion is not written');
+        $this->assertSame(['scientific_name'], app(MissingPlantContent::class)->reviewFlags([$id])[$id], 'and it stays with a person');
+
+        // A flag from before suggestions were recorded is asked once more, so the list can carry one.
+        $row->update(['changes' => ['review' => ['scientific_name' => 'scientific name confidence medium']]]);
+        $this->assertSame([], app(MissingPlantContent::class)->reviewFlags([$id]));
     }
 
     public function test_a_model_without_a_price_shows_no_cost(): void

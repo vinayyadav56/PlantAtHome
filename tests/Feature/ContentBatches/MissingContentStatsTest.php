@@ -230,7 +230,7 @@ final class MissingContentStatsTest extends ContentBatchTestCase
         $old      = $this->makeMissingBatch([$flagged => ['scientific_name']], ['status' => ProductContentBatch::STATUS_COMPLETED]);
         ProductContentJob::where('batch_id', $old->id)->update([
             'status'  => ProductContentJob::STATUS_NEEDS_REVIEW,
-            'changes' => json_encode(['review' => ['scientific_name' => 'scientific name confidence medium']]),
+            'changes' => json_encode(['review' => ['scientific_name' => 'scientific name confidence low']]),
         ]);
         // A newer run exists; the flagged plant is not one of its rows.
         $this->makeMissingBatch([$complete => ['seo_title']], ['status' => ProductContentBatch::STATUS_COMPLETED]);
@@ -240,7 +240,7 @@ final class MissingContentStatsTest extends ContentBatchTestCase
         $this->assertSame(1, $list['total']);
         $this->assertSame($flagged, $list['data'][0]['product_id']);
         $this->assertSame(['scientific_name'], $list['data'][0]['fields']);
-        $this->assertSame(['scientific_name' => 'scientific name confidence medium'], $list['data'][0]['reasons']);
+        $this->assertSame(['scientific_name' => 'scientific name confidence low'], $list['data'][0]['reasons']);
         $this->assertNotEmpty($list['data'][0]['product_slug']);
     }
 }

@@ -286,7 +286,7 @@ final class MissingContentRulesTest extends ContentBatchTestCase
                 && str_contains($system, '"hindi_name"') && str_contains($system, 'Devanagari')
                 && str_contains($system, '"Bright Indirect" (a bright spot indoors')
                 && !str_contains($system, '"description"')
-                && str_contains($system, 'return null for EVERY key')
+                && str_contains($system, 'a pack, combo, kit') && str_contains($system, '"single_plant"')
                 && str_contains($user, 'Product name: Tulsi')
                 && str_contains($user, 'Categories: Herbs')
                 && str_contains($user, '- scientific_name: Ocimum tenuiflorum');

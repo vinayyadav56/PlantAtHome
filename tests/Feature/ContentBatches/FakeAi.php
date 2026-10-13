@@ -83,6 +83,7 @@ class FakeAi
                 $next['fields'] ?? []
             ),
             'scientific_name_confidence' => array_key_exists('scientific_name_confidence', $next) ? $next['scientific_name_confidence'] : 'high',
+            'single_plant'               => array_key_exists('single_plant', $next) ? $next['single_plant'] : null,
             'usage'                      => $next['usage'] ?? $this->usage,
             'model'                      => 'gpt-4o-mini',
         ];
