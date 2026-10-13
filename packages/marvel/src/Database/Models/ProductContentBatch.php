@@ -149,15 +149,17 @@ class ProductContentBatch extends Model
         $recent  = $this->jobs()->whereNotIn('status', ProductContentJob::OPEN_STATUSES)->where('updated_at', '>=', $since)->count();
         $rate    = $seconds > 0 ? round($recent * 60 / $seconds, 1) : null;
 
+        // Grouped without the AI's quoted value ('hindi_name not Devanagari: "Ti Plant"'), so one
+        // cause is one line; each row's last_error keeps the value.
         $errors = $this->jobs()->toBase()
             ->where('status', ProductContentJob::STATUS_FAILED)
             ->whereNotNull('last_error')
-            ->selectRaw('substr(last_error, 1, 120) as message, count(*) as n')
-            ->groupBy('message')
-            ->orderByDesc('n')
-            ->limit(5)
-            ->get()
-            ->map(fn ($e) => ['message' => (string) $e->message, 'count' => (int) $e->n])
+            ->pluck('last_error')
+            ->countBy(fn ($m) => mb_substr(preg_replace('/: ".*?"(?=; |$)/u', '', (string) $m) ?? (string) $m, 0, 120))
+            ->sortDesc()
+            ->take(5)
+            ->map(fn ($n, $message) => ['message' => (string) $message, 'count' => (int) $n])
+            ->values()
             ->all();
 
         return [

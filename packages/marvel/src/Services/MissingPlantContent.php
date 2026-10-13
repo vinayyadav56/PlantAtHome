@@ -413,10 +413,10 @@ class MissingPlantContent
     }
 
     /**
-     * A transliteration's Hinglish name is the product name, but the AI respells it ("Rosmary"),
-     * drops a word ("Cebu Blue") or reorders it ("Medallion Calathea"). When every word is within
-     * one letter of a product-name word, the product name is used as it is. A real Hindi name is
-     * further away ("Papita" for Papaya, "Kadi Patta") and is kept.
+     * A transliteration's Hinglish name is the product name, but the AI respells it ("Rosmary") or
+     * reorders it ("Medallion Calathea"). When it has as many words as the product name and each is
+     * within one letter of one of them, the product name is used as it is. A real Hindi name is
+     * further away ("Papita" for Papaya) or shorter ("Mogra" for Jasmine Mogra) and is kept.
      */
     private function asProductName(string $hinglish, ?string $productName): string
     {
@@ -425,6 +425,9 @@ class MissingPlantContent
             return $hinglish;
         }
         $own = self::words($name);
+        if (count(self::words($hinglish)) !== count($own)) {
+            return $hinglish;
+        }
         foreach (self::words($hinglish) as $word) {
             $near = array_filter($own, fn ($o) => levenshtein($word, $o) <= 1);
             if ($near === []) {

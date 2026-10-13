@@ -563,6 +563,22 @@ final class MissingContentRunTest extends ContentBatchTestCase
         $this->assertSame('टी प्लांट', $this->plantRow($id)->hindi_name);
     }
 
+    public function test_the_error_list_groups_one_cause_across_plants(): void
+    {
+        $this->seedPlant('Boston Fern', [], ['hindi_name' => null]);
+        $lily = $this->seedPlant('Peace Lily', [], ['hindi_name' => null]);
+        $this->ai->plantQueue = [['fields' => ['hindi_name' => 'Boston Fern']], ['fields' => ['hindi_name' => 'Peace Lily']]];
+
+        $batchId = $this->postJson('/api/ai-content-batches/missing')->assertCreated()->json('id');
+
+        $this->assertSame(
+            [['message' => 'Invalid AI output: hindi_name not Devanagari', 'count' => 2]],
+            ProductContentBatch::find($batchId)->summary()['errors'],
+        );
+        $row = ProductContentJob::where('batch_id', $batchId)->where('product_id', $lily)->sole();
+        $this->assertStringContainsString('"Peace Lily"', (string) $row->last_error, 'each row keeps what the AI wrote');
+    }
+
     public function test_a_model_without_a_price_shows_no_cost(): void
     {
         config(['content-batches.text_model' => 'gpt-unpriced']);
