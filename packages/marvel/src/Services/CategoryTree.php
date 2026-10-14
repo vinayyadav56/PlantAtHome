@@ -56,6 +56,23 @@ class CategoryTree
         );
     }
 
+    /** The other parents a category is listed under (its placements), in name order. */
+    public function placementParents(int $id): array
+    {
+        $snap = $this->snap();
+        $out = [];
+        foreach ($snap['children'] as $parent => $entries) {
+            foreach ($entries as $entry) {
+                if ($entry[0] === $id && $entry[2]) {
+                    $out[] = ['id' => $parent, 'slug' => $snap['nodes'][$parent]['slug'], 'name' => $snap['nodes'][$parent]['name']];
+                }
+            }
+        }
+        usort($out, fn ($a, $b) => $a['name'] <=> $b['name']);
+
+        return $out;
+    }
+
     /** The given ids plus every descendant, through primary parents and placements. */
     public function descendantIds(array $ids): array
     {

@@ -33,6 +33,8 @@ class CategoryResource extends Resource
                 'name' => $this->parentCategory->name ?? null,
             ],
             'ancestors'            => $ancestors,
+            // The other parents it is also listed under (admin "Also show under").
+            'placements'           => app(CategoryTree::class)->placementParents((int) $this->id),
             'depth'                => count($ancestors) + 1,
             'display_order'        => (int) ($this->display_order ?? 0),
             'children'             => ChildrenCategoryResource::collection($this->children),

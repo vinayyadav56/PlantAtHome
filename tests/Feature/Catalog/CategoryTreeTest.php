@@ -361,6 +361,9 @@ class CategoryTreeTest extends TestCase
         $this->assertSame(3, $leaf['depth']);
         $this->assertSame(['id' => null, 'slug' => null, 'name' => null], $root['parent'], 'a root keeps an object, as before');
         $this->assertSame([], $root['ancestors']);
+
+        $hooks = (new CategoryResource(Category::query()->with('parentCategory')->find($this->c['root-hooks'])))->toArray(request());
+        $this->assertSame([['id' => $this->c['bonsai'], 'slug' => 'bonsai', 'name' => 'Bonsai Tools']], $hooks['placements']);
     }
 
     public function test_show_lists_live_children_in_order_with_placements(): void
