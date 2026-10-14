@@ -312,13 +312,19 @@ class GardeningToolsTaxonomyTest extends TestCase
         }
         $pid = DB::table('products')->insertGetId(['name' => 'Kept', 'slug' => 'kept', 'type_id' => $this->tools, 'price' => 1]);
         DB::table('category_product')->insert(['product_id' => $pid, 'category_id' => $this->cat('watering')->id]);
+        // Production's case: stale roots holding only products nobody can see (unlisted, drafts).
+        $hidden = DB::table('products')->insertGetId(['name' => 'Old', 'slug' => 'old', 'type_id' => $this->tools, 'price' => 1, 'listing_enabled' => false]);
+        $draft = DB::table('products')->insertGetId(['name' => 'Draft', 'slug' => 'draft', 'type_id' => $this->tools, 'price' => 1, 'status' => 'draft']);
+        DB::table('category_product')->insert(['product_id' => $hidden, 'category_id' => $this->cat('garden-tools')->id]);
+        DB::table('category_product')->insert(['product_id' => $draft, 'category_id' => $this->cat('pots-planters')->id]);
 
         $this->import();
 
-        $this->assertFalse((bool) $this->cat('garden-tools')->is_active);
+        $this->assertFalse((bool) $this->cat('garden-tools')->is_active, 'only an unlisted product: retired');
         $this->assertFalse((bool) $this->cat('soil-fertilizer')->is_active);
-        $this->assertFalse((bool) $this->cat('pots-planters')->is_active);
-        $this->assertTrue((bool) $this->cat('watering')->is_active, 'a stale root that holds a product is kept');
+        $this->assertFalse((bool) $this->cat('pots-planters')->is_active, 'only a draft: retired');
+        $this->assertTrue((bool) $this->cat('watering')->is_active, 'a stale root that holds a listed product is kept');
+        $this->assertSame(1, DB::table('category_product')->where('product_id', $hidden)->count(), 'retiring never touches product links');
     }
 
     public function test_admin_edits_survive_a_rerun(): void

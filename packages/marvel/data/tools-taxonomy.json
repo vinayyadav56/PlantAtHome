@@ -3,7 +3,7 @@
   "Gardening Tools taxonomy (owner brief 2026-10-14). Imported by `php artisan plantathome:tools-taxonomy` (create-only, idempotent).",
   "parents > children > children: {slug, name, order}. `reuse.legacy_name`: an existing root becomes this parent; it is renamed only while its name still equals legacy_name.",
   "placements: a category also listed under another parent (one page, every branch). aliases: listed names that map to an existing category.",
-  "keep: existing roots that stay roots; only their display order is set (while 0). retire: guard `empty` = no products, children or placements; `after-links` = after product_links.",
+  "keep: existing roots that stay roots; only their display order is set (while 0). retire: guard `empty` = no LISTED products, children or placements, not on the homepage; `after-links` = runs after product_links, no listed product left without another live category.",
   "product_links: seeded tools (data/tools.json) -> categories; insert-when-missing, existing links are never removed. Nothing here creates products, prices, SKUs or images."
  ],
  "version": 1,

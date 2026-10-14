@@ -354,10 +354,15 @@ class ToolsTaxonomyImporter
                 return;
             }
         } else {
-            $products = DB::table('category_product')->where('category_id', $id)->count();
+            // "Empty" = nothing a shopper can see: no LISTED product in it (unlisted or draft
+            // products keep their links and the category its URL; switching it off hides only
+            // the category from navigation). Production's stale Tools roots hold 6 such links.
+            $products = $this->listable(DB::table('category_product as cp')->join('products as p', 'p.id', '=', 'cp.product_id'))
+                ->where('cp.category_id', $id)
+                ->count();
             $onHome = (bool) ($row->show_on_homepage ?? false);
             if ($products || $subtree || $onHome) {
-                $this->report['skipped'][] = "retire {$slug}: {$products} products, {$subtree} sub-categories" . ($onHome ? ', on the homepage' : '') . ' — kept';
+                $this->report['skipped'][] = "retire {$slug}: {$products} listed products, {$subtree} sub-categories" . ($onHome ? ', on the homepage' : '') . ' — kept';
 
                 return;
             }
