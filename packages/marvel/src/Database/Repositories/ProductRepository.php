@@ -560,26 +560,64 @@ class ProductRepository extends BaseRepository
         );
     }
 
+    /**
+     * The status an update stores (null: leave it as it is). A vendor never publishes their own
+     * proposal: saved as a draft it stays a draft, any other save (re)submits it for review, and
+     * only an admin's decision publishes it, with product review on or off. Everything else
+     * follows checkProductForPublish when product review is on, else the status sent.
+     * $notify false: only work out the status (no review notifications), for checks run first.
+     */
+    public function statusForUpdate($request, $product, $setting, bool $notify = true): ?string
+    {
+        if ($this->isOwnProposal($request->user(), $product)) {
+            return $request->status === ProductStatus::DRAFT ? ProductStatus::DRAFT : ProductStatus::UNDER_REVIEW;
+        }
+        if ($setting?->options['isProductReview'] ?? false) {
+            $status = (string) $this->checkProductForPublish($request, $product, $notify);
+
+            return $status !== '' ? $status : null;
+        }
+
+        return $request->filled('status') ? (string) $request->status : null;
+    }
+
+    /** A store owner (never an admin) editing a product their own shop proposed. */
+    private function isOwnProposal($user, $product): bool
+    {
+        return $user
+            && !$user->hasPermissionTo(Permission::SUPER_ADMIN)
+            && $product->proposed_by_shop_id
+            && $user->hasPermissionTo(Permission::STORE_OWNER)
+            && \Marvel\Database\Models\Shop::where('owner_id', $user->id)->where('id', (int) $product->proposed_by_shop_id)->exists();
+    }
+
     /** $notify false: only work out the status (no review notifications), for checks run before the save. */
     public function checkProductForPublish($request, $product, bool $notify = true)
     {
         $status = '';
-        // Master-catalog vendor: the product belongs to the master shop, so the
-        // owner-id check below never matches a store owner. A vendor who created
-        // this product (proposed_by_shop_id) controls its status directly —
-        // honor the requested publish/unpublish/draft.
         $user = $request->user();
-        if ($user && $product->proposed_by_shop_id && $user->hasPermissionTo(Permission::STORE_OWNER)) {
-            $ownsProposal = \Marvel\Database\Models\Shop::where('owner_id', $user->id)
-                ->where('id', (int) $product->proposed_by_shop_id)
-                ->exists();
-            if ($ownsProposal) {
-                return in_array($request->status, [ProductStatus::PUBLISH, ProductStatus::UNPUBLISH, ProductStatus::DRAFT], true)
-                    ? $request->status
-                    : ProductStatus::PUBLISH;
+        // An admin decides, checked first: the master shop is created with the first super admin
+        // as its owner, and the shop-owner rules below (a vendor's review flow) turned that admin's
+        // "Published" on an under-review product into a draft. "Approved" publishes and "Rejected"
+        // rejects (the proposer is told); any other status is stored as sent, and a save that
+        // sends none keeps the current one (it used to reject the product).
+        if ($user && $user->hasPermissionTo(Permission::SUPER_ADMIN)) {
+            if ($request->status == ProductStatus::APPROVED) {
+                $notify && event(new ProductReviewApproved($product));
+
+                return ProductStatus::PUBLISH;
             }
+            if ($request->status == ProductStatus::REJECTED) {
+                $notify && event(new ProductReviewRejected($product));
+
+                return ProductStatus::REJECTED;
+            }
+
+            return in_array($request->status, [ProductStatus::PUBLISH, ProductStatus::UNPUBLISH, ProductStatus::DRAFT, ProductStatus::UNDER_REVIEW], true)
+                ? $request->status
+                : $product->status;
         }
-        if ($product->shop['owner']['id'] == $request->user()->id) {
+        if ($user && data_get($product, 'shop.owner.id') == $user->id) {
             if ($product->status == ProductStatus::DRAFT || $product->status == ProductStatus::UNDER_REVIEW || $product->status == ProductStatus::REJECTED) {
                 if ($request->status == ProductStatus::DRAFT) {
                     $status = ProductStatus::DRAFT;
@@ -596,20 +634,6 @@ class ProductRepository extends BaseRepository
                 } else {
                     $status = ProductStatus::UNPUBLISH;
                 }
-            }
-        } elseif ($request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
-            if ($request->status == ProductStatus::APPROVED) {
-                $status = ProductStatus::PUBLISH;
-                $notify && event(new ProductReviewApproved($product));
-            } elseif ($request->status == ProductStatus::REJECTED) {
-                $status = ProductStatus::REJECTED;
-                $notify && event(new ProductReviewRejected($product));
-            } elseif ($request->status == ProductStatus::PUBLISH) {
-                return ProductStatus::PUBLISH;
-            } elseif ($request->status == ProductStatus::UNPUBLISH) {
-                $status = ProductStatus::UNPUBLISH;
-            } else {
-                $status = ProductStatus::REJECTED;
             }
         } else {
             $status = ProductStatus::REJECTED;
@@ -743,8 +767,10 @@ class ProductRepository extends BaseRepository
             $data = $this->normalizeNumericFields($request->only($this->dataArray));
             $data['sale_price'] = isset($request['sale_price']) && $request['sale_price'] !== '' ? $request['sale_price'] : null;
 
-            if ($setting->options["isProductReview"] ?? false) {
-                $data['status'] = $this->checkProductForPublish($request, $product);
+            // Who may set which status (a vendor's proposal stays in review): statusForUpdate.
+            $status = $this->statusForUpdate($request, $product, $setting);
+            if ($status !== null) {
+                $data['status'] = $status;
             }
 
             if ($request->product_type == ProductType::VARIABLE) {

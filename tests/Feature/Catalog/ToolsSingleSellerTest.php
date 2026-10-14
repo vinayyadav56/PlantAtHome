@@ -409,6 +409,7 @@ final class ToolsSingleSellerTest extends TestCase
     public function test_a_product_form_save_is_re_mirrored(): void
     {
         $repo = \Mockery::mock(ProductRepository::class);
+        $repo->shouldReceive('statusForUpdate')->andReturn(null);   // the status stays as it is
         $repo->shouldReceive('updateProduct')->andReturnUsing(function ($request, $id) {
             DB::table('products')->where('id', $id)->update(['price' => 999, 'min_price' => 999, 'max_price' => 999, 'in_stock' => 1]);
             return Product::find($id);

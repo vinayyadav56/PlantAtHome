@@ -1355,8 +1355,8 @@ class ProductController extends CoreController
         $setting = $this->settings->first();
         if ($this->canManageProduct($request->user(), $request->id)) {
             // Master-catalog invariant a vendor edit must not break: ownership stays
-            // with the master shop. The vendor keeps control of the product status
-            // (publish / unpublish / draft) — edits no longer force a re-review.
+            // with the master shop. A vendor's edit never publishes their proposal: it stays
+            // a draft or goes (back) to review (ProductRepository::statusForUpdate).
             $user = $request->user();
             if (!($user && $user->hasPermissionTo(Permission::SUPER_ADMIN))) {
                 // A vendor may edit their live product, but not hide (unpublish/
@@ -1378,11 +1378,8 @@ class ProductController extends CoreController
             }
             $current = Product::find((int) $request->id);
             if ($current) {
-                // The status this save stores: with product review on, the repository turns an admin's
-                // "approved" and a vendor's own proposal into publish whatever the form sent.
-                $final = ($setting?->options['isProductReview'] ?? false)
-                    ? (string) $this->repository->checkProductForPublish($request, $current, false)
-                    : (string) ($request->has('status') ? $request->input('status') : $current->status);
+                // Judged on the status this save stores (ProductRepository::statusForUpdate).
+                $final = (string) ($this->repository->statusForUpdate($request, $current, $setting, false) ?? $current->status);
                 $this->assertRequiredSpecifications($request, $current, $final);
             }
             $id = $request->id;
