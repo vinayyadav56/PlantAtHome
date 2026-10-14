@@ -54,6 +54,8 @@ on:
           - cat-prune
           - trust
           - tools-seed
+          - tools-taxonomy-dry
+          - tools-taxonomy
           - pots-seed
           - sku-gen
           - recompute-availability
@@ -129,7 +131,7 @@ jobs:
             img-purge-rollback) ARGS="plantathome:purge-product-images --rollback --force" ;;
             # shipment-items-check is READ-ONLY and takes no artisan args; it rides the
             # empty-ARGS list below and runs its own inline script.
-            shipment-items-check|partner-caps-check|vendor-state|coverage-state|accounting-preflight|accounting-seed-chart|vendor-wipe|vpp-review-check|cat-backup|cat-restore|cat-seed|tools-seed|pots-seed|sku-gen|recompute-availability|cities-seed|geo-master-seed|coverage-backfill-dry|coverage-backfill|coverage-backfill-retire|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
+            shipment-items-check|partner-caps-check|vendor-state|coverage-state|accounting-preflight|accounting-seed-chart|vendor-wipe|vpp-review-check|cat-backup|cat-restore|cat-seed|tools-seed|tools-taxonomy-dry|tools-taxonomy|pots-seed|sku-gen|recompute-availability|cities-seed|geo-master-seed|coverage-backfill-dry|coverage-backfill|coverage-backfill-retire|taxonomy-seed|company-address|v2-backfill-dry|v2-backfill|v2-backfill-verify|v2-project-shops-dry|v2-project-shops|market-sync-dry|market-sync|market-publish-dry|market-publish) ARGS="" ;;
             cat-prune)     ARGS="plantathome:prune-non-seed-plants" ;;
             trust)         ARGS="plantathome:ensure-trust" ;;
             # Product STATE parity with staging (availability/listing/stock/prices/
@@ -379,6 +381,22 @@ jobs:
                 php artisan db:seed --class="Marvel\\Database\\Seeders\\IndiaCitySeeder" --force
                 php artisan cache:clear 2>/dev/null || true
                 echo "==> CITIES-SEED COMPLETE"
+                ;;
+
+              tools-taxonomy-dry|tools-taxonomy)
+                echo "==> Ensuring latest code on EC2..."
+                git fetch origin 2>/dev/null && git reset --hard origin/main 2>/dev/null || true
+                echo "==> Re-syncing marvel path package + autoloader (new command)..."
+                composer reinstall marvel/shop --no-interaction 2>&1 | tail -3 || true
+                composer dump-autoload -o 2>/dev/null || true
+                echo "==> Gardening tools taxonomy (create-only, idempotent; production.yml must have migrated first)."
+                if [ "$OP_MODE" = "tools-taxonomy-dry" ]; then
+                  php artisan plantathome:tools-taxonomy --dry-run
+                else
+                  php artisan plantathome:tools-taxonomy
+                  php artisan cache:clear 2>/dev/null || true
+                fi
+                echo "==> TOOLS-TAXONOMY COMPLETE ($OP_MODE)"
                 ;;
 
               tools-seed)

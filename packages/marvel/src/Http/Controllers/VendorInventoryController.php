@@ -126,8 +126,10 @@ class VendorInventoryController extends CoreController
             $query->where('type_id', (int) $request->type_id);
         }
         if ($request->filled('category_id')) {
-            $cid = (int) $request->category_id;
-            $query->whereHas('categories', fn ($c) => $c->where('categories.id', $cid));
+            // The category and everything under it: picking "Pruning and Cutting Tools" finds
+            // the secateurs filed under Bypass Pruners.
+            $ids = app(\Marvel\Services\CategoryTree::class)->descendantIds([(int) $request->category_id]);
+            $query->whereHas('categories', fn ($c) => $c->whereIn('categories.id', $ids));
         }
         // A single-seller vertical (Tools) takes supply from its seller only — never offer its
         // products to another shop (VendorProductPrice's saving hook would refuse the row anyway).

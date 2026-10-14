@@ -187,6 +187,15 @@ class ProductRepository extends BaseRepository
                 }
                 $field = substr($segment, 0, $pos);
                 $value = substr($segment, $pos + 1);
+                if ($field === 'categories.slug') {
+                    // A category means itself AND everything under it (sub-categories and the
+                    // categories placed in it): /c/<parent> lists its children's products.
+                    try {
+                        $value = implode(',', app(\Marvel\Services\CategoryTree::class)->expandSlugs(explode(',', $value)));
+                    } catch (\Throwable $e) {
+                        // hierarchy unavailable (missing table mid-deploy): the exact slugs still filter
+                    }
+                }
                 if (in_array($field, self::BOOLEAN_SEARCH_FIELDS, true)) {
                     $bool = filter_var(trim($value), FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
                     if ($bool === null) {

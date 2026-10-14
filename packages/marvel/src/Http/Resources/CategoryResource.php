@@ -3,6 +3,7 @@
 namespace Marvel\Http\Resources;
 
 use Illuminate\Http\Request;
+use Marvel\Services\CategoryTree;
 
 class CategoryResource extends Resource
 {
@@ -14,6 +15,8 @@ class CategoryResource extends Resource
      */
     public function toArray($request)
     {
+        // Root-first chain of primary parents, from the cached hierarchy (no query per row).
+        $ancestors = app(CategoryTree::class)->ancestors((int) $this->id);
 
         return [
             'id'                   => $this->id,
@@ -21,7 +24,17 @@ class CategoryResource extends Resource
             'slug'                 => $this->slug,
             'language'             => $this->language,
             'translated_languages' => $this->translated_languages,
-            'parent'               => ['name' => $this->parentCategory->name ?? null],
+            // id + slug as well as the name: the admin form re-submitted `parent` from here and,
+            // with only a name, silently turned every edited sub-category into a root. A root
+            // keeps an object with null fields, as before, for callers that test `!parent`.
+            'parent'               => [
+                'id'   => $this->parentCategory->id ?? null,
+                'slug' => $this->parentCategory->slug ?? null,
+                'name' => $this->parentCategory->name ?? null,
+            ],
+            'ancestors'            => $ancestors,
+            'depth'                => count($ancestors) + 1,
+            'display_order'        => (int) ($this->display_order ?? 0),
             'children'             => ChildrenCategoryResource::collection($this->children),
             'products_count'       => $this->products_count,
             'details'              => $this->details,

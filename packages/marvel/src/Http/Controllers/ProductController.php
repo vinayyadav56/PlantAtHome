@@ -376,6 +376,9 @@ class ProductController extends CoreController
         if ($request->filled('categories')) {
             $slugs = array_values(array_filter(array_map('trim', explode(',', (string) $request->categories))));
             if (!empty($slugs)) {
+                // Same expansion as the list's `categories.slug` (ProductRepository::boot), so the
+                // facet counts on /c/<parent> match the products it lists.
+                $slugs = app(\Marvel\Services\CategoryTree::class)->expandSlugs($slugs);
                 $query->whereHas('categories', fn ($q) => $q->whereIn('slug', $slugs));
             }
         }
@@ -626,7 +629,9 @@ class ProductController extends CoreController
             if ($request->filled('categories')) {
                 $cats = array_filter(array_map('trim', explode(',', (string) $request->input('categories'))));
                 if ($cats !== []) {
-                    $query->whereHas('categories', fn ($q) => $q->whereIn('slug', $cats)->orWhereIn('categories.id', $cats));
+                    // Slugs or ids, each with everything under it.
+                    $ids = app(\Marvel\Services\CategoryTree::class)->expandRefs($cats);
+                    $query->whereHas('categories', fn ($q) => $q->whereIn('categories.id', $ids ?: [0]));
                 }
             }
             if ($request->filled('status')) {

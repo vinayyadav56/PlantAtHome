@@ -43,7 +43,8 @@ class InventoryReviewController extends Controller
             ->when($request->filled('date_from'), fn ($q) => $q->where('submitted_at', '>=', $request->date_from))
             ->when($request->filled('date_to'), fn ($q) => $q->where('submitted_at', '<=', $request->date_to . ' 23:59:59'))
             ->when($request->filled('category_id'), function ($q) use ($request) {
-                $q->whereHas('product.categories', fn ($c) => $c->where('categories.id', (int) $request->category_id));
+                $ids = app(\Marvel\Services\CategoryTree::class)->descendantIds([(int) $request->category_id]);
+                $q->whereHas('product.categories', fn ($c) => $c->whereIn('categories.id', $ids));
             })
             ->when($request->filled('city'), function ($q) use ($request) {
                 $city = trim((string) $request->city);

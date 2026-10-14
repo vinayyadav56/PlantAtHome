@@ -111,6 +111,7 @@ class ShopServiceProvider extends ServiceProvider
         \Marvel\Console\SyncImageColumnsCommand::class,
         \Marvel\Console\AssignProductShopCommand::class,
         \Marvel\Console\CategorizePlantsCommand::class,
+        \Marvel\Console\ToolsTaxonomyCommand::class,
         \Marvel\Console\EnsureTrustCommand::class,
         \Marvel\Console\ResetAdminCommand::class,
         \Marvel\Console\GenerateSkusCommand::class,
@@ -349,6 +350,10 @@ class ShopServiceProvider extends ServiceProvider
         // listing. It reads the cache version once per instance; bust() moves it, and the next
         // request or queue job starts fresh.
         $this->app->scoped(\Marvel\Services\ServiceAvailabilityService::class);
+
+        // One category-hierarchy snapshot per request: product filters, category resources and
+        // parent validation all ask it. It re-reads when `categories:ver` moves.
+        $this->app->scoped(\Marvel\Services\CategoryTree::class);
 
         // scoped(), not singleton(): queue workers reset scoped instances
         // BETWEEN jobs, so a defaultPaymentGateway/defaultAi settings change

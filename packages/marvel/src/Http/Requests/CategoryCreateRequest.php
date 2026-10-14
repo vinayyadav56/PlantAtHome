@@ -6,6 +6,7 @@ namespace Marvel\Http\Requests;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Http\Exceptions\HttpResponseException;
+use Marvel\Rules\ValidCategoryParent;
 
 
 class CategoryCreateRequest extends FormRequest
@@ -38,7 +39,11 @@ class CategoryCreateRequest extends FormRequest
             'seo_title'       => ['nullable', 'string', 'max:191'],
             'seo_description' => ['nullable', 'string', 'max:500'],
             'noindex'         => ['nullable', 'boolean'],
-            'parent'      => ['nullable', 'integer'],
+            'parent'      => ['nullable', 'integer', new ValidCategoryParent($this->typeId())],
+            // Other parents this category is also listed under (navigation + roll-up only).
+            'placements'   => ['nullable', 'array'],
+            'placements.*' => ['integer', new ValidCategoryParent($this->typeId())],
+            'display_order' => ['nullable', 'integer', 'min:0', 'max:1000000'],
             // GST rate inherited by this category's products (nullable = unset).
             'tax_rate_id' => ['nullable', 'integer', 'exists:tax_classes,id'],
         ];
@@ -60,6 +65,11 @@ class CategoryCreateRequest extends FormRequest
             'details.string'        => 'Details is not a valid string',
             'parent.integer'        => 'Parent is not a valid integer',
         ];
+    }
+
+    private function typeId(): ?int
+    {
+        return is_numeric($this->input('type_id')) ? (int) $this->input('type_id') : null;
     }
 
     public function failedValidation(Validator $validator)

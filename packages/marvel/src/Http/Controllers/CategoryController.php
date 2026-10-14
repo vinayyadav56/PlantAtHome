@@ -6,12 +6,17 @@ namespace Marvel\Http\Controllers;
 use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Marvel\Database\Models\Category;
 use Marvel\Database\Repositories\CategoryRepository;
+use Marvel\Enums\Permission;
 use Marvel\Exceptions\MarvelException;
 use Marvel\Http\Requests\CategoryCreateRequest;
 use Marvel\Http\Requests\CategoryUpdateRequest;
 use Marvel\Http\Resources\CategoryResource;
+use Marvel\Services\CategoryTree;
 use Prettus\Validator\Exceptions\ValidatorException;
 
 
@@ -90,24 +95,43 @@ class CategoryController extends CoreController
         // Homepage placement filter, opt-in via ?home=1. Off by default so every
         // existing caller (filter sidebar, mega-menu, admin) is untouched.
         $homeOnly = filter_var($request->home ?? false, FILTER_VALIDATE_BOOLEAN);
+        // Switched-on categories in display order (the Tools surfaces). Opt-in, like `home`,
+        // so every existing caller is untouched.
+        $activeOnly = filter_var($request->active ?? false, FILTER_VALIDATE_BOOLEAN);
+        // A bare list (no vertical, no parent, no search) returns ROOTS only. The released app
+        // asks exactly that for its chip strip, and the 3-level Tools taxonomy would otherwise
+        // fill it with hundreds of sub-categories. Before the taxonomy the whole catalogue held
+        // two child rows, so this is what that request effectively always returned.
+        $rootsOnly = $typeSlug === '' && $parent === null && !$request->filled('search');
+        $hasOrder = $this->hasCategoryColumn('display_order');
 
         $ver = \Illuminate\Support\Facades\Cache::get('categories:ver', 1);
         // ⚠️ EVERY filter must appear in this key. c2 omitted the type and one
-        // unfiltered request poisoned every vertical; `home` is the same hazard,
-        // so it is in the key AND the code version is bumped to c4 to abandon
-        // any c3 entry that predates the filter.
-        $key = "categories:c4:v{$ver}:{$language}:{$parent}:{$selfId}:{$limit}:{$page}:{$typeSlug}:" . ($homeOnly ? 'home' : 'all');
+        // unfiltered request poisoned every vertical; `home` is the same hazard.
+        // c5 adds active/roots and the Prettus search + sort (admin name search and
+        // column sort used to be served whichever result was cached first).
+        $key = "categories:c5:v{$ver}:{$language}:{$parent}:{$selfId}:{$limit}:{$page}:{$typeSlug}:" . ($homeOnly ? 'home' : 'all')
+            . ($activeOnly ? ':active' : '') . ($rootsOnly ? ':roots' : '')
+            . ':' . md5($request->search . '|' . $request->orderBy . '|' . $request->sortedBy);
 
         // Cache the plain data ARRAY (not the JsonResponse — that would
         // re-serialize to {headers,original,exception} and break the shop).
-        $data = \Illuminate\Support\Facades\Cache::remember($key, 600, function () use ($language, $parent, $selfId, $limit, $typeSlug, $homeOnly) {
+        $data = \Illuminate\Support\Facades\Cache::remember($key, 600, function () use ($language, $parent, $selfId, $limit, $typeSlug, $homeOnly, $activeOnly, $rootsOnly, $hasOrder) {
             // N+1 fix: CategoryResource reads $this->parentCategory (the show() path at :155/:158
             // already eager-loads 'parentCategory'); 'parent' was loaded-but-unused while
             // parentCategory lazy-loaded per row.
             // Translation overlay: always read the canonical English row; the
             // requested language is applied at read-time by the overlay (the
             // per-language response cache key still keys on $language).
-            $categoriesQuery = $this->repository->with(['type', 'parentCategory', 'children'])
+            // Children: ONE level (that is all the resource serializes) and in display order.
+            // The relation itself recurses, which loaded every grandchild of a 3-level tree.
+            $categoriesQuery = $this->repository->with(['type', 'parentCategory', 'children' => function ($q) use ($hasOrder) {
+                $q->without('children');
+                if ($hasOrder) {
+                    $q->orderBy('display_order');
+                }
+                $q->orderBy('name');
+            }])
                 ->where('language', DEFAULT_LANGUAGE);
 
             if ($typeSlug) {
@@ -115,8 +139,15 @@ class CategoryController extends CoreController
                     $q->where('slug', $typeSlug);
                 });
             }
-            if ($parent === 'null') {
+            if ($parent === 'null' || $rootsOnly) {
                 $categoriesQuery->whereNull('parent');
+            }
+            if ($activeOnly && !$homeOnly) {
+                $categoriesQuery->where('is_active', true);
+                if ($hasOrder) {
+                    $categoriesQuery->orderBy('display_order');
+                }
+                $categoriesQuery->orderBy('name');
             }
             if ($selfId) {
                 $categoriesQuery->where('id', '!=', $selfId);
@@ -142,8 +173,86 @@ class CategoryController extends CoreController
     /** Invalidate the categories cache (called on any category write). */
     protected function bustCategoryCache(): void
     {
-        $ver = (int) \Illuminate\Support\Facades\Cache::get('categories:ver', 1);
-        \Illuminate\Support\Facades\Cache::forever('categories:ver', $ver + 1);
+        CategoryTree::bust();
+    }
+
+    /**
+     * GET /categories/tree?type=tools[&all=1] — the whole hierarchy of a vertical (every vertical
+     * without `type`), nested and in display order, each node with its listable products rolled
+     * up through its sub-tree and placements. `all=1` (super admin only) keeps switched-off
+     * categories, for the admin tree. Cached on the category and product versions.
+     */
+    public function tree(Request $request)
+    {
+        $typeSlug = trim((string) ($request->type ?? ''));
+        $all = filter_var($request->all ?? false, FILTER_VALIDATE_BOOLEAN) && $this->isSuperAdmin($request);
+        $typeId = null;
+        if ($typeSlug !== '') {
+            $typeId = DB::table('types')->where('slug', $typeSlug)->orderBy('id')->value('id');
+            if (!$typeId) {
+                return response()->json(['data' => []]);
+            }
+            $typeId = (int) $typeId;
+        }
+
+        $key = 'categories:tree-api:v' . CategoryTree::version() . ':p' . (int) Cache::get('products:ver', 1)
+            . ':' . $typeSlug . ':' . ($all ? 'all' : 'live');
+        $data = Cache::remember($key, 600, function () use ($typeId, $all) {
+            $tree = app(CategoryTree::class);
+
+            return $tree->tree($typeId, $all, $tree->listableCounts($typeId));
+        });
+
+        return response()->json(['data' => $data])
+            ->header('Cache-Control', $all ? 'private, no-store' : 'public, max-age=60, s-maxage=300, stale-while-revalidate=600');
+    }
+
+    /**
+     * A category page's children, from the hierarchy: switched-on only, in display order, with the
+     * categories placed here included (flagged `placement`) and each one's listable products rolled
+     * up through its own sub-tree. Replaces the recursive `children` eager load on show().
+     */
+    private function attachTreeChildren(Category $category): void
+    {
+        $tree = app(CategoryTree::class);
+        $entries = $tree->children((int) $category->id);
+        if (!$entries) {
+            $category->setRelation('children', collect());
+
+            return;
+        }
+        $models = Category::query()->whereIn('id', array_column($entries, 'id'))->get()->keyBy('id');
+        $counts = $tree->listableCounts((int) $category->type_id);
+        $children = collect($entries)->map(function ($entry) use ($models, $counts) {
+            $child = $models->get($entry['id']);
+            if (!$child || (isset($child->is_active) && !$child->is_active)) {
+                return null;
+            }
+            $child->setAttribute('products_count', $counts[$entry['id']] ?? 0);
+            $child->setAttribute('placement', $entry['placement']);
+
+            return $child;
+        })->filter()->values();
+        $category->setRelation('children', $children);
+    }
+
+    private function isSuperAdmin(Request $request): bool
+    {
+        try {
+            $user = $request->user() ?? $request->user('sanctum');
+
+            return $user && $user->hasPermissionTo(Permission::SUPER_ADMIN);
+        } catch (\Throwable $e) {
+            return false;
+        }
+    }
+
+    /** Per instance, never static: a process-wide memo outlives the schema it was read from (tests). */
+    private array $knownColumns = [];
+
+    private function hasCategoryColumn(string $column): bool
+    {
+        return $this->knownColumns[$column] ??= Schema::hasColumn('categories', $column);
     }
 
     /**
@@ -156,8 +265,10 @@ class CategoryController extends CoreController
     public function store(CategoryCreateRequest $request)
     {
         try {
+            $category = $this->repository->saveCategory($request);
+            // After the write: a bump before it let a concurrent read re-cache the old list.
             $this->bustCategoryCache();
-            return $this->repository->saveCategory($request);
+            return $category;
         } catch (MarvelException $th) {
             throw new MarvelException(COULD_NOT_CREATE_THE_RESOURCE);
         }
@@ -177,12 +288,11 @@ class CategoryController extends CoreController
     {
         try {
             $language = $request->language ?? DEFAULT_LANGUAGE;
-            if (is_numeric($params)) {
-                $params = (int) $params;
-                $category = $this->repository->with(['type', 'parentCategory', 'children'])->where('id', $params)->firstOrFail();
-                return new CategoryResource($category);
-            }
-            $category = $this->repository->with(['type', 'parentCategory', 'children'])->where('slug', $params)->firstOrFail();
+            $query = $this->repository->with(['type', 'parentCategory']);
+            $category = is_numeric($params)
+                ? $query->where('id', (int) $params)->firstOrFail()
+                : $query->where('slug', $params)->firstOrFail();
+            $this->attachTreeChildren($category);
             return new CategoryResource($category);
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
@@ -210,8 +320,9 @@ class CategoryController extends CoreController
     public function categoryUpdate(CategoryUpdateRequest $request)
     {
         $category = $this->repository->findOrFail($request->id);
+        $updated = $this->repository->updateCategory($request, $category);
         $this->bustCategoryCache();
-        return $this->repository->updateCategory($request, $category);
+        return $updated;
     }
 
     /**
@@ -223,10 +334,36 @@ class CategoryController extends CoreController
     public function destroy($id)
     {
         try {
-            $this->bustCategoryCache();
-            return $this->repository->findOrFail($id)->delete();
+            $category = $this->repository->findOrFail($id);
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
         }
+
+        // A delete is a hard delete that cascades to sub-categories and product links (no soft
+        // delete on Category, FKs ON DELETE CASCADE). Only an unused category may go; anything
+        // in use is switched off (archived) instead, which keeps its links and URL.
+        $children = DB::table('categories')->where('parent', $category->id)->count();
+        $placements = Schema::hasTable('category_placements')
+            ? DB::table('category_placements')->where('category_id', $category->id)->orWhere('parent_id', $category->id)->count()
+            : 0;
+        $products = DB::table('category_product')->where('category_id', $category->id)->count();
+        if ($children || $placements || $products) {
+            $uses = array_filter([
+                $children ? "{$children} sub-categories" : null,
+                $placements ? "{$placements} placements" : null,
+                $products ? "{$products} products" : null,
+            ]);
+
+            return response()->json([
+                'message'    => 'This category is still in use (' . implode(', ', $uses) . '). Switch it off (archive it) instead of deleting it.',
+                'children'   => $children,
+                'placements' => $placements,
+                'products'   => $products,
+            ], 422);
+        }
+
+        $deleted = $category->delete();
+        $this->bustCategoryCache();
+        return $deleted;
     }
 }

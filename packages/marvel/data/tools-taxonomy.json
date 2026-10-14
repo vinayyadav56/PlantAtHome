@@ -1,0 +1,2852 @@
+{
+ "_readme": [
+  "Gardening Tools taxonomy (owner brief 2026-10-14). Imported by `php artisan plantathome:tools-taxonomy` (create-only, idempotent).",
+  "parents > children > children: {slug, name, order}. `reuse.legacy_name`: an existing root becomes this parent; it is renamed only while its name still equals legacy_name.",
+  "placements: a category also listed under another parent (one page, every branch). aliases: listed names that map to an existing category.",
+  "keep: existing roots that stay roots; only their display order is set (while 0). retire: guard `empty` = no products, children or placements; `after-links` = after product_links.",
+  "product_links: seeded tools (data/tools.json) -> categories; insert-when-missing, existing links are never removed. Nothing here creates products, prices, SKUs or images."
+ ],
+ "version": 1,
+ "type": "tools",
+ "parents": [
+  {
+   "slug": "hand-gardening-tools",
+   "name": "Hand Gardening Tools",
+   "order": 10,
+   "children": [
+    {
+     "slug": "trowels-and-scoops",
+     "name": "Trowels and Scoops",
+     "order": 10,
+     "children": [
+      {
+       "slug": "hand-trowels",
+       "name": "Hand Trowels",
+       "order": 10
+      },
+      {
+       "slug": "transplanting-trowels",
+       "name": "Transplanting Trowels",
+       "order": 20
+      },
+      {
+       "slug": "serrated-trowels",
+       "name": "Serrated Trowels",
+       "order": 30
+      },
+      {
+       "slug": "pointed-khurpis",
+       "name": "Pointed Khurpis",
+       "order": 40
+      },
+      {
+       "slug": "straight-khurpis",
+       "name": "Straight Khurpis",
+       "order": 50
+      },
+      {
+       "slug": "soil-scoops",
+       "name": "Soil Scoops",
+       "order": 60
+      },
+      {
+       "slug": "bulb-trowels",
+       "name": "Bulb Trowels",
+       "order": 70
+      }
+     ]
+    },
+    {
+     "slug": "forks-and-cultivators",
+     "name": "Forks and Cultivators",
+     "order": 20,
+     "children": [
+      {
+       "slug": "hand-forks",
+       "name": "Hand Forks",
+       "order": 10
+      },
+      {
+       "slug": "border-forks",
+       "name": "Border Forks",
+       "order": 20
+      },
+      {
+       "slug": "hand-cultivators",
+       "name": "Hand Cultivators",
+       "order": 30
+      },
+      {
+       "slug": "three-prong-cultivators",
+       "name": "Three-Prong Cultivators",
+       "order": 40
+      },
+      {
+       "slug": "five-prong-cultivators",
+       "name": "Five-Prong Cultivators",
+       "order": 50
+      },
+      {
+       "slug": "claw-cultivators",
+       "name": "Claw Cultivators",
+       "order": 60
+      },
+      {
+       "slug": "root-looseners",
+       "name": "Root Looseners",
+       "order": 70
+      }
+     ]
+    },
+    {
+     "slug": "hand-hoes",
+     "name": "Hand Hoes",
+     "order": 30,
+     "children": [
+      {
+       "slug": "draw-hoes",
+       "name": "Draw Hoes",
+       "order": 10
+      },
+      {
+       "slug": "dutch-hoes",
+       "name": "Dutch Hoes",
+       "order": 20
+      },
+      {
+       "slug": "stirrup-hoes",
+       "name": "Stirrup Hoes",
+       "order": 30
+      },
+      {
+       "slug": "heart-shaped-hoes",
+       "name": "Heart-Shaped Hoes",
+       "order": 40
+      },
+      {
+       "slug": "triangular-hoes",
+       "name": "Triangular Hoes",
+       "order": 50
+      },
+      {
+       "slug": "oscillating-hoes",
+       "name": "Oscillating Hoes",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "weeders-and-garden-knives",
+     "name": "Weeders and Garden Knives",
+     "order": 40,
+     "children": [
+      {
+       "slug": "fishtail-weeders",
+       "name": "Fishtail Weeders",
+       "order": 10
+      },
+      {
+       "slug": "dandelion-weeders",
+       "name": "Dandelion Weeders",
+       "order": 20
+      },
+      {
+       "slug": "crack-weeders",
+       "name": "Crack Weeders",
+       "order": 30
+      },
+      {
+       "slug": "stand-up-weeders",
+       "name": "Stand-Up Weeders",
+       "order": 40
+      },
+      {
+       "slug": "hori-hori-knives",
+       "name": "Hori-Hori Knives",
+       "order": 50
+      },
+      {
+       "slug": "root-knives",
+       "name": "Root Knives",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "hand-rakes-and-specialty-tools",
+     "name": "Hand Rakes and Specialty Tools",
+     "order": 50,
+     "children": [
+      {
+       "slug": "mini-rakes",
+       "name": "Mini Rakes",
+       "order": 10
+      },
+      {
+       "slug": "shrub-rakes",
+       "name": "Shrub Rakes",
+       "order": 20
+      },
+      {
+       "slug": "soil-rakes",
+       "name": "Soil Rakes",
+       "order": 30
+      },
+      {
+       "slug": "bonsai-rakes",
+       "name": "Bonsai Rakes",
+       "order": 40
+      },
+      {
+       "slug": "bulb-planters",
+       "name": "Bulb Planters",
+       "order": 50
+      },
+      {
+       "slug": "dibbers",
+       "name": "Dibbers",
+       "order": 60
+      },
+      {
+       "slug": "widgers",
+       "name": "Widgers",
+       "order": 70
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "watering-tools",
+   "name": "Watering and Irrigation",
+   "order": 20,
+   "reuse": {
+    "legacy_name": "Watering"
+   },
+   "children": [
+    {
+     "slug": "watering-cans",
+     "name": "Watering Cans",
+     "order": 10,
+     "children": [
+      {
+       "slug": "indoor-watering-cans",
+       "name": "Indoor Watering Cans",
+       "order": 10
+      },
+      {
+       "slug": "outdoor-watering-cans",
+       "name": "Outdoor Watering Cans",
+       "order": 20
+      },
+      {
+       "slug": "long-spout-watering-cans",
+       "name": "Long-Spout Watering Cans",
+       "order": 30
+      },
+      {
+       "slug": "metal-watering-cans",
+       "name": "Metal Watering Cans",
+       "order": 40
+      },
+      {
+       "slug": "plastic-watering-cans",
+       "name": "Plastic Watering Cans",
+       "order": 50
+      },
+      {
+       "slug": "nursery-watering-cans-with-rose-attachments",
+       "name": "Nursery Watering Cans with Rose Attachments",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "hoses-and-hose-accessories",
+     "name": "Hoses and Hose Accessories",
+     "order": 20,
+     "children": [
+      {
+       "slug": "garden-hoses",
+       "name": "Garden Hoses",
+       "order": 10
+      },
+      {
+       "slug": "reinforced-hoses",
+       "name": "Reinforced Hoses",
+       "order": 20
+      },
+      {
+       "slug": "braided-hoses",
+       "name": "Braided Hoses",
+       "order": 30
+      },
+      {
+       "slug": "expandable-hoses",
+       "name": "Expandable Hoses",
+       "order": 40
+      },
+      {
+       "slug": "soaker-hoses",
+       "name": "Soaker Hoses",
+       "order": 50
+      },
+      {
+       "slug": "hose-reels",
+       "name": "Hose Reels",
+       "order": 60
+      },
+      {
+       "slug": "hose-hangers",
+       "name": "Hose Hangers",
+       "order": 70
+      },
+      {
+       "slug": "hose-repair-connectors",
+       "name": "Hose Repair Connectors",
+       "order": 80
+      },
+      {
+       "slug": "hose-joiners",
+       "name": "Hose Joiners",
+       "order": 90
+      }
+     ]
+    },
+    {
+     "slug": "nozzles-and-spray-guns",
+     "name": "Nozzles and Spray Guns",
+     "order": 30,
+     "children": [
+      {
+       "slug": "jet-nozzles",
+       "name": "Jet Nozzles",
+       "order": 10
+      },
+      {
+       "slug": "adjustable-nozzles",
+       "name": "Adjustable Nozzles",
+       "order": 20
+      },
+      {
+       "slug": "multi-pattern-spray-guns",
+       "name": "Multi-Pattern Spray Guns",
+       "order": 30
+      },
+      {
+       "slug": "shower-nozzles",
+       "name": "Shower Nozzles",
+       "order": 40
+      },
+      {
+       "slug": "fan-nozzles",
+       "name": "Fan Nozzles",
+       "order": 50
+      },
+      {
+       "slug": "brass-nozzles",
+       "name": "Brass Nozzles",
+       "order": 60
+      },
+      {
+       "slug": "quick-connect-nozzles",
+       "name": "Quick-Connect Nozzles",
+       "order": 70
+      }
+     ]
+    },
+    {
+     "slug": "sprinklers",
+     "name": "Sprinklers",
+     "order": 40,
+     "children": [
+      {
+       "slug": "oscillating-sprinklers",
+       "name": "Oscillating Sprinklers",
+       "order": 10
+      },
+      {
+       "slug": "rotary-sprinklers",
+       "name": "Rotary Sprinklers",
+       "order": 20
+      },
+      {
+       "slug": "impulse-sprinklers",
+       "name": "Impulse Sprinklers",
+       "order": 30
+      },
+      {
+       "slug": "spike-sprinklers",
+       "name": "Spike Sprinklers",
+       "order": 40
+      },
+      {
+       "slug": "pop-up-sprinklers",
+       "name": "Pop-Up Sprinklers",
+       "order": 50
+      },
+      {
+       "slug": "micro-sprinklers",
+       "name": "Micro-Sprinklers",
+       "order": 60
+      },
+      {
+       "slug": "sprinkler-guns",
+       "name": "Sprinkler Guns",
+       "order": 70
+      }
+     ]
+    },
+    {
+     "slug": "drip-irrigation",
+     "name": "Drip Irrigation",
+     "order": 50,
+     "children": [
+      {
+       "slug": "drip-irrigation-lines",
+       "name": "Drip Irrigation Lines",
+       "order": 10
+      },
+      {
+       "slug": "inline-drippers",
+       "name": "Inline Drippers",
+       "order": 20
+      },
+      {
+       "slug": "button-drippers",
+       "name": "Button Drippers",
+       "order": 30
+      },
+      {
+       "slug": "adjustable-drippers",
+       "name": "Adjustable Drippers",
+       "order": 40
+      },
+      {
+       "slug": "microtubes",
+       "name": "Microtubes",
+       "order": 50
+      },
+      {
+       "slug": "emitters",
+       "name": "Emitters",
+       "order": 60
+      },
+      {
+       "slug": "drip-stakes",
+       "name": "Drip Stakes",
+       "order": 70
+      },
+      {
+       "slug": "irrigation-filters",
+       "name": "Irrigation Filters",
+       "order": 80
+      },
+      {
+       "slug": "pressure-regulators",
+       "name": "Pressure Regulators",
+       "order": 90
+      },
+      {
+       "slug": "irrigation-valves",
+       "name": "Irrigation Valves",
+       "order": 100
+      }
+     ]
+    },
+    {
+     "slug": "automated-watering",
+     "name": "Automated Watering",
+     "order": 60,
+     "children": [
+      {
+       "slug": "battery-powered-water-timers",
+       "name": "Battery-Powered Water Timers",
+       "order": 10
+      },
+      {
+       "slug": "tap-timers",
+       "name": "Tap Timers",
+       "order": 20
+      },
+      {
+       "slug": "programmable-irrigation-controllers",
+       "name": "Programmable Irrigation Controllers",
+       "order": 30
+      },
+      {
+       "slug": "soil-moisture-controlled-irrigation-systems",
+       "name": "Soil-Moisture-Controlled Irrigation Systems",
+       "order": 40
+      },
+      {
+       "slug": "self-watering-spikes",
+       "name": "Self-Watering Spikes",
+       "order": 50
+      },
+      {
+       "slug": "automatic-watering-kits",
+       "name": "Automatic Watering Kits",
+       "order": 60
+      },
+      {
+       "slug": "multi-zone-irrigation-systems",
+       "name": "Multi-Zone Irrigation Systems",
+       "order": 70
+      }
+     ]
+    },
+    {
+     "slug": "misting-and-greenhouse-watering",
+     "name": "Misting and Greenhouse Watering",
+     "order": 70,
+     "children": [
+      {
+       "slug": "hand-misters",
+       "name": "Hand Misters",
+       "order": 10
+      },
+      {
+       "slug": "misting-nozzles",
+       "name": "Misting Nozzles",
+       "order": 20
+      },
+      {
+       "slug": "foggers",
+       "name": "Foggers",
+       "order": 30
+      },
+      {
+       "slug": "propagation-misting-kits",
+       "name": "Propagation Misting Kits",
+       "order": 40
+      },
+      {
+       "slug": "greenhouse-fogging-systems",
+       "name": "Greenhouse Fogging Systems",
+       "order": 50
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "digging-and-soil-preparation",
+   "name": "Digging and Soil Preparation",
+   "order": 30,
+   "children": [
+    {
+     "slug": "spades-and-shovels",
+     "name": "Spades and Shovels",
+     "order": 10,
+     "children": [
+      {
+       "slug": "round-point-shovels",
+       "name": "Round-Point Shovels",
+       "order": 10
+      },
+      {
+       "slug": "square-point-shovels",
+       "name": "Square-Point Shovels",
+       "order": 20
+      },
+      {
+       "slug": "trenching-shovels",
+       "name": "Trenching Shovels",
+       "order": 30
+      },
+      {
+       "slug": "transplanting-spades",
+       "name": "Transplanting Spades",
+       "order": 40
+      },
+      {
+       "slug": "drain-spades",
+       "name": "Drain Spades",
+       "order": 50
+      },
+      {
+       "slug": "scoop-shovels",
+       "name": "Scoop Shovels",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "digging-forks",
+     "name": "Digging Forks",
+     "order": 20,
+     "children": [
+      {
+       "slug": "manure-forks",
+       "name": "Manure Forks",
+       "order": 30
+      },
+      {
+       "slug": "potato-forks",
+       "name": "Potato Forks",
+       "order": 40
+      },
+      {
+       "slug": "compost-forks",
+       "name": "Compost Forks",
+       "order": 50
+      }
+     ]
+    },
+    {
+     "slug": "hoes-and-mattocks",
+     "name": "Hoes and Mattocks",
+     "order": 30,
+     "children": [
+      {
+       "slug": "garden-hoes",
+       "name": "Garden Hoes",
+       "order": 10
+      },
+      {
+       "slug": "grub-hoes",
+       "name": "Grub Hoes",
+       "order": 40
+      },
+      {
+       "slug": "mattocks",
+       "name": "Mattocks",
+       "order": 50
+      },
+      {
+       "slug": "pick-mattocks",
+       "name": "Pick Mattocks",
+       "order": 60
+      },
+      {
+       "slug": "pickaxes",
+       "name": "Pickaxes",
+       "order": 70
+      },
+      {
+       "slug": "adze-hoes",
+       "name": "Adze Hoes",
+       "order": 80
+      }
+     ]
+    },
+    {
+     "slug": "rakes-and-levelling-tools",
+     "name": "Rakes and Levelling Tools",
+     "order": 40,
+     "children": [
+      {
+       "slug": "bow-rakes",
+       "name": "Bow Rakes",
+       "order": 10
+      },
+      {
+       "slug": "landscape-rakes",
+       "name": "Landscape Rakes",
+       "order": 20
+      },
+      {
+       "slug": "leaf-rakes",
+       "name": "Leaf Rakes",
+       "order": 40
+      },
+      {
+       "slug": "lawn-levellers",
+       "name": "Lawn Levellers",
+       "order": 50
+      },
+      {
+       "slug": "levelling-lutes",
+       "name": "Levelling Lutes",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "soil-processing-equipment",
+     "name": "Soil Processing Equipment",
+     "order": 50,
+     "children": [
+      {
+       "slug": "soil-sieves",
+       "name": "Soil Sieves",
+       "order": 10
+      },
+      {
+       "slug": "compost-sifters",
+       "name": "Compost Sifters",
+       "order": 20
+      },
+      {
+       "slug": "soil-mixers",
+       "name": "Soil Mixers",
+       "order": 30
+      },
+      {
+       "slug": "manual-cultivators",
+       "name": "Manual Cultivators",
+       "order": 40
+      },
+      {
+       "slug": "soil-augers",
+       "name": "Soil Augers",
+       "order": 50
+      },
+      {
+       "slug": "hand-earth-augers",
+       "name": "Hand Earth Augers",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "soil-aeration-tools",
+     "name": "Soil Aeration Tools",
+     "order": 60,
+     "children": [
+      {
+       "slug": "hand-aerators",
+       "name": "Hand Aerators",
+       "order": 10
+      },
+      {
+       "slug": "core-aerators",
+       "name": "Core Aerators",
+       "order": 20
+      },
+      {
+       "slug": "spike-aerators",
+       "name": "Spike Aerators",
+       "order": 30
+      },
+      {
+       "slug": "lawn-aerator-sandals",
+       "name": "Lawn Aerator Sandals",
+       "order": 40
+      },
+      {
+       "slug": "plug-aerators",
+       "name": "Plug Aerators",
+       "order": 50
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "pruning-cutting",
+   "name": "Pruning and Cutting Tools",
+   "order": 40,
+   "reuse": {
+    "legacy_name": "Pruning & Cutting"
+   },
+   "children": [
+    {
+     "slug": "secateurs-and-pruners",
+     "name": "Secateurs and Pruners",
+     "order": 10,
+     "children": [
+      {
+       "slug": "bypass-pruners",
+       "name": "Bypass Pruners",
+       "order": 10
+      },
+      {
+       "slug": "anvil-pruners",
+       "name": "Anvil Pruners",
+       "order": 20
+      },
+      {
+       "slug": "ratchet-pruners",
+       "name": "Ratchet Pruners",
+       "order": 30
+      },
+      {
+       "slug": "parrot-beak-pruners",
+       "name": "Parrot-Beak Pruners",
+       "order": 40
+      },
+      {
+       "slug": "precision-snips",
+       "name": "Precision Snips",
+       "order": 50
+      },
+      {
+       "slug": "flower-snips",
+       "name": "Flower Snips",
+       "order": 60
+      },
+      {
+       "slug": "grape-shears",
+       "name": "Grape Shears",
+       "order": 70
+      }
+     ]
+    },
+    {
+     "slug": "loppers",
+     "name": "Loppers",
+     "order": 20,
+     "children": [
+      {
+       "slug": "bypass-loppers",
+       "name": "Bypass Loppers",
+       "order": 10
+      },
+      {
+       "slug": "anvil-loppers",
+       "name": "Anvil Loppers",
+       "order": 20
+      },
+      {
+       "slug": "ratchet-loppers",
+       "name": "Ratchet Loppers",
+       "order": 30
+      },
+      {
+       "slug": "compound-action-loppers",
+       "name": "Compound-Action Loppers",
+       "order": 40
+      },
+      {
+       "slug": "telescopic-loppers",
+       "name": "Telescopic Loppers",
+       "order": 50
+      }
+     ]
+    },
+    {
+     "slug": "shears",
+     "name": "Shears",
+     "order": 30,
+     "children": [
+      {
+       "slug": "hedge-shears",
+       "name": "Hedge Shears",
+       "order": 10
+      },
+      {
+       "slug": "topiary-shears",
+       "name": "Topiary Shears",
+       "order": 20
+      },
+      {
+       "slug": "grass-shears",
+       "name": "Grass Shears",
+       "order": 30
+      },
+      {
+       "slug": "edging-shears",
+       "name": "Edging Shears",
+       "order": 40
+      },
+      {
+       "slug": "long-reach-shears",
+       "name": "Long-Reach Shears",
+       "order": 50
+      }
+     ]
+    },
+    {
+     "slug": "garden-saws",
+     "name": "Garden Saws",
+     "order": 40,
+     "children": [
+      {
+       "slug": "folding-pruning-saws",
+       "name": "Folding Pruning Saws",
+       "order": 10
+      },
+      {
+       "slug": "fixed-pruning-saws",
+       "name": "Fixed Pruning Saws",
+       "order": 20
+      },
+      {
+       "slug": "curved-blade-saws",
+       "name": "Curved-Blade Saws",
+       "order": 30
+      },
+      {
+       "slug": "straight-blade-saws",
+       "name": "Straight-Blade Saws",
+       "order": 40
+      },
+      {
+       "slug": "pole-saws",
+       "name": "Pole Saws",
+       "order": 50
+      },
+      {
+       "slug": "fruit-tree-saws",
+       "name": "Fruit Tree Saws",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "pole-tools",
+     "name": "Pole Tools",
+     "order": 50,
+     "children": [
+      {
+       "slug": "pole-pruners",
+       "name": "Pole Pruners",
+       "order": 10
+      },
+      {
+       "slug": "telescopic-tree-pruners",
+       "name": "Telescopic Tree Pruners",
+       "order": 20
+      },
+      {
+       "slug": "rope-operated-pruners",
+       "name": "Rope-Operated Pruners",
+       "order": 40
+      },
+      {
+       "slug": "modular-pole-tool-systems",
+       "name": "Modular Pole Tool Systems",
+       "order": 50
+      }
+     ]
+    },
+    {
+     "slug": "grafting-and-specialty-cutting",
+     "name": "Grafting and Specialty Cutting",
+     "order": 60,
+     "children": [
+      {
+       "slug": "grafting-knives",
+       "name": "Grafting Knives",
+       "order": 10
+      },
+      {
+       "slug": "budding-knives",
+       "name": "Budding Knives",
+       "order": 20
+      },
+      {
+       "slug": "grafting-tools",
+       "name": "Grafting Tools",
+       "order": 30
+      },
+      {
+       "slug": "rose-thorn-strippers",
+       "name": "Rose Thorn Strippers",
+       "order": 40
+      },
+      {
+       "slug": "fruit-pickers",
+       "name": "Fruit Pickers",
+       "order": 50
+      },
+      {
+       "slug": "branch-cutters",
+       "name": "Branch Cutters",
+       "order": 60
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "planting-seeding-and-propagation",
+   "name": "Planting, Seeding and Propagation",
+   "order": 50,
+   "children": [
+    {
+     "slug": "seed-sowing-tools",
+     "name": "Seed Sowing Tools",
+     "order": 10,
+     "children": [
+      {
+       "slug": "seed-dispensers",
+       "name": "Seed Dispensers",
+       "order": 10
+      },
+      {
+       "slug": "manual-seed-sowers",
+       "name": "Manual Seed Sowers",
+       "order": 20
+      },
+      {
+       "slug": "seed-planters",
+       "name": "Seed Planters",
+       "order": 30
+      },
+      {
+       "slug": "seed-spacing-rulers",
+       "name": "Seed Spacing Rulers",
+       "order": 50
+      },
+      {
+       "slug": "seed-tape-dispensers",
+       "name": "Seed Tape Dispensers",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "bulb-and-seedling-planting",
+     "name": "Bulb and Seedling Planting",
+     "order": 20,
+     "children": [
+      {
+       "slug": "long-handled-bulb-planters",
+       "name": "Long-Handled Bulb Planters",
+       "order": 20
+      },
+      {
+       "slug": "seedling-dibbers",
+       "name": "Seedling Dibbers",
+       "order": 30
+      },
+      {
+       "slug": "plug-transplanters",
+       "name": "Plug Transplanters",
+       "order": 50
+      }
+     ]
+    },
+    {
+     "slug": "nursery-propagation-tools",
+     "name": "Nursery Propagation Tools",
+     "order": 30,
+     "children": [
+      {
+       "slug": "seedling-prickers",
+       "name": "Seedling Prickers",
+       "order": 10
+      },
+      {
+       "slug": "root-trainer-tools",
+       "name": "Root Trainer Tools",
+       "order": 30
+      },
+      {
+       "slug": "cutting-preparation-knives",
+       "name": "Cutting Preparation Knives",
+       "order": 40
+      },
+      {
+       "slug": "propagation-tray-accessories",
+       "name": "Propagation Tray Accessories",
+       "order": 50
+      }
+     ]
+    },
+    {
+     "slug": "potting-tools",
+     "name": "Potting Tools",
+     "order": 40,
+     "children": [
+      {
+       "slug": "compost-scoops",
+       "name": "Compost Scoops",
+       "order": 20
+      },
+      {
+       "slug": "potting-trowels",
+       "name": "Potting Trowels",
+       "order": 30
+      },
+      {
+       "slug": "root-hooks",
+       "name": "Root Hooks",
+       "order": 40
+      },
+      {
+       "slug": "root-rakes",
+       "name": "Root Rakes",
+       "order": 50
+      },
+      {
+       "slug": "repotting-spatulas",
+       "name": "Repotting Spatulas",
+       "order": 60
+      },
+      {
+       "slug": "potting-trays",
+       "name": "Potting Trays",
+       "order": 70
+      }
+     ]
+    },
+    {
+     "slug": "planting-accessories",
+     "name": "Planting Accessories",
+     "order": 50,
+     "children": [
+      {
+       "slug": "seed-labels",
+       "name": "Seed Labels",
+       "order": 10
+      },
+      {
+       "slug": "plant-tags",
+       "name": "Plant Tags",
+       "order": 20
+      },
+      {
+       "slug": "label-pens",
+       "name": "Label Pens",
+       "order": 30
+      },
+      {
+       "slug": "seedling-markers",
+       "name": "Seedling Markers",
+       "order": 40
+      },
+      {
+       "slug": "plant-spacing-markers",
+       "name": "Plant Spacing Markers",
+       "order": 50
+      },
+      {
+       "slug": "measuring-sticks",
+       "name": "Measuring Sticks",
+       "order": 60
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "sprayers-and-application-equipment",
+   "name": "Sprayers and Application Equipment",
+   "order": 60,
+   "children": [
+    {
+     "slug": "hand-sprayers",
+     "name": "Hand Sprayers",
+     "order": 10,
+     "children": [
+      {
+       "slug": "trigger-sprayers",
+       "name": "Trigger Sprayers",
+       "order": 10
+      },
+      {
+       "slug": "mist-spray-bottles",
+       "name": "Mist Spray Bottles",
+       "order": 20
+      },
+      {
+       "slug": "hand-pump-sprayers",
+       "name": "Hand Pump Sprayers",
+       "order": 30
+      },
+      {
+       "slug": "compression-sprayers",
+       "name": "Compression Sprayers",
+       "order": 40
+      },
+      {
+       "slug": "pressure-sprayers",
+       "name": "Pressure Sprayers",
+       "order": 50
+      }
+     ]
+    },
+    {
+     "slug": "large-capacity-sprayers",
+     "name": "Large-Capacity Sprayers",
+     "order": 20,
+     "children": [
+      {
+       "slug": "knapsack-sprayers",
+       "name": "Knapsack Sprayers",
+       "order": 10
+      },
+      {
+       "slug": "backpack-sprayers",
+       "name": "Backpack Sprayers",
+       "order": 20
+      },
+      {
+       "slug": "trolley-sprayers",
+       "name": "Trolley Sprayers",
+       "order": 30
+      },
+      {
+       "slug": "shoulder-sprayers",
+       "name": "Shoulder Sprayers",
+       "order": 40
+      },
+      {
+       "slug": "foot-operated-sprayers",
+       "name": "Foot-Operated Sprayers",
+       "order": 50
+      }
+     ]
+    },
+    {
+     "slug": "powered-sprayers",
+     "name": "Powered Sprayers",
+     "order": 30,
+     "children": [
+      {
+       "slug": "battery-sprayers",
+       "name": "Battery Sprayers",
+       "order": 10
+      },
+      {
+       "slug": "electric-sprayers",
+       "name": "Electric Sprayers",
+       "order": 20
+      },
+      {
+       "slug": "motorized-sprayers",
+       "name": "Motorized Sprayers",
+       "order": 30
+      },
+      {
+       "slug": "engine-powered-sprayers",
+       "name": "Engine-Powered Sprayers",
+       "order": 40
+      },
+      {
+       "slug": "mist-blowers",
+       "name": "Mist Blowers",
+       "order": 50
+      }
+     ]
+    },
+    {
+     "slug": "sprayer-accessories",
+     "name": "Sprayer Accessories",
+     "order": 40,
+     "children": [
+      {
+       "slug": "spray-lances",
+       "name": "Spray Lances",
+       "order": 10
+      },
+      {
+       "slug": "spray-wands",
+       "name": "Spray Wands",
+       "order": 20
+      },
+      {
+       "slug": "extension-rods",
+       "name": "Extension Rods",
+       "order": 30
+      },
+      {
+       "slug": "spray-tips",
+       "name": "Spray Tips",
+       "order": 40
+      },
+      {
+       "slug": "nozzle-holders",
+       "name": "Nozzle Holders",
+       "order": 50
+      },
+      {
+       "slug": "filters",
+       "name": "Filters",
+       "order": 60
+      },
+      {
+       "slug": "seals",
+       "name": "Seals",
+       "order": 70
+      },
+      {
+       "slug": "replacement-pumps",
+       "name": "Replacement Pumps",
+       "order": 80
+      }
+     ]
+    },
+    {
+     "slug": "spreaders",
+     "name": "Spreaders",
+     "order": 50,
+     "children": [
+      {
+       "slug": "handheld-spreaders",
+       "name": "Handheld Spreaders",
+       "order": 10
+      },
+      {
+       "slug": "rotary-spreaders",
+       "name": "Rotary Spreaders",
+       "order": 20
+      },
+      {
+       "slug": "drop-spreaders",
+       "name": "Drop Spreaders",
+       "order": 30
+      },
+      {
+       "slug": "fertilizer-spreaders",
+       "name": "Fertilizer Spreaders",
+       "order": 40
+      },
+      {
+       "slug": "seed-spreaders",
+       "name": "Seed Spreaders",
+       "order": 50
+      },
+      {
+       "slug": "push-spreaders",
+       "name": "Push Spreaders",
+       "order": 60
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "power-gardening-tools",
+   "name": "Power Gardening Tools",
+   "order": 70,
+   "children": [
+    {
+     "slug": "lawn-mowers",
+     "name": "Lawn Mowers",
+     "order": 10,
+     "children": [
+      {
+       "slug": "manual-reel-mowers",
+       "name": "Manual Reel Mowers",
+       "order": 10
+      },
+      {
+       "slug": "corded-electric-mowers",
+       "name": "Corded Electric Mowers",
+       "order": 20
+      },
+      {
+       "slug": "cordless-electric-mowers",
+       "name": "Cordless Electric Mowers",
+       "order": 30
+      },
+      {
+       "slug": "petrol-mowers",
+       "name": "Petrol Mowers",
+       "order": 40
+      },
+      {
+       "slug": "ride-on-mowers",
+       "name": "Ride-On Mowers",
+       "order": 50
+      },
+      {
+       "slug": "robotic-mowers",
+       "name": "Robotic Mowers",
+       "order": 60
+      },
+      {
+       "slug": "mulching-mowers",
+       "name": "Mulching Mowers",
+       "order": 70
+      }
+     ]
+    },
+    {
+     "slug": "grass-trimmers-and-brushcutters",
+     "name": "Grass Trimmers and Brushcutters",
+     "order": 20,
+     "children": [
+      {
+       "slug": "corded-grass-trimmers",
+       "name": "Corded Grass Trimmers",
+       "order": 10
+      },
+      {
+       "slug": "cordless-grass-trimmers",
+       "name": "Cordless Grass Trimmers",
+       "order": 20
+      },
+      {
+       "slug": "petrol-grass-trimmers",
+       "name": "Petrol Grass Trimmers",
+       "order": 30
+      },
+      {
+       "slug": "brushcutters",
+       "name": "Brushcutters",
+       "order": 40
+      },
+      {
+       "slug": "clearing-saws",
+       "name": "Clearing Saws",
+       "order": 50
+      },
+      {
+       "slug": "lawn-edging-trimmers",
+       "name": "Lawn Edging Trimmers",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "hedge-trimmers",
+     "name": "Hedge Trimmers",
+     "order": 30,
+     "children": [
+      {
+       "slug": "corded-hedge-trimmers",
+       "name": "Corded Hedge Trimmers",
+       "order": 10
+      },
+      {
+       "slug": "cordless-hedge-trimmers",
+       "name": "Cordless Hedge Trimmers",
+       "order": 20
+      },
+      {
+       "slug": "petrol-hedge-trimmers",
+       "name": "Petrol Hedge Trimmers",
+       "order": 30
+      },
+      {
+       "slug": "long-reach-hedge-trimmers",
+       "name": "Long-Reach Hedge Trimmers",
+       "order": 40
+      }
+     ]
+    },
+    {
+     "slug": "chainsaws-and-pole-saws",
+     "name": "Chainsaws and Pole Saws",
+     "order": 40,
+     "children": [
+      {
+       "slug": "electric-chainsaws",
+       "name": "Electric Chainsaws",
+       "order": 10
+      },
+      {
+       "slug": "battery-chainsaws",
+       "name": "Battery Chainsaws",
+       "order": 20
+      },
+      {
+       "slug": "petrol-chainsaws",
+       "name": "Petrol Chainsaws",
+       "order": 30
+      },
+      {
+       "slug": "telescopic-pole-saws",
+       "name": "Telescopic Pole Saws",
+       "order": 40
+      }
+     ]
+    },
+    {
+     "slug": "blowers-and-garden-vacuums",
+     "name": "Blowers and Garden Vacuums",
+     "order": 50,
+     "children": [
+      {
+       "slug": "leaf-blowers",
+       "name": "Leaf Blowers",
+       "order": 10
+      },
+      {
+       "slug": "backpack-blowers",
+       "name": "Backpack Blowers",
+       "order": 20
+      },
+      {
+       "slug": "cordless-blowers",
+       "name": "Cordless Blowers",
+       "order": 30
+      },
+      {
+       "slug": "leaf-vacuums",
+       "name": "Leaf Vacuums",
+       "order": 40
+      },
+      {
+       "slug": "vacuum-shredders",
+       "name": "Vacuum Shredders",
+       "order": 50
+      },
+      {
+       "slug": "garden-sweepers",
+       "name": "Garden Sweepers",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "soil-machinery",
+     "name": "Soil Machinery",
+     "order": 60,
+     "children": [
+      {
+       "slug": "power-tillers",
+       "name": "Power Tillers",
+       "order": 10
+      },
+      {
+       "slug": "cultivators",
+       "name": "Cultivators",
+       "order": 20
+      },
+      {
+       "slug": "mini-tillers",
+       "name": "Mini Tillers",
+       "order": 30
+      },
+      {
+       "slug": "power-weeders",
+       "name": "Power Weeders",
+       "order": 40
+      },
+      {
+       "slug": "earth-augers",
+       "name": "Earth Augers",
+       "order": 50
+      },
+      {
+       "slug": "garden-shredders",
+       "name": "Garden Shredders",
+       "order": 60
+      },
+      {
+       "slug": "wood-chippers",
+       "name": "Wood Chippers",
+       "order": 70
+      }
+     ]
+    },
+    {
+     "slug": "other-outdoor-machinery",
+     "name": "Other Outdoor Machinery",
+     "order": 70,
+     "children": [
+      {
+       "slug": "pressure-washers",
+       "name": "Pressure Washers",
+       "order": 10
+      },
+      {
+       "slug": "water-pumps",
+       "name": "Water Pumps",
+       "order": 20
+      },
+      {
+       "slug": "stump-grinders",
+       "name": "Stump Grinders",
+       "order": 30
+      },
+      {
+       "slug": "powered-aerators",
+       "name": "Powered Aerators",
+       "order": 50
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "lawn-and-turf-care-equipment",
+   "name": "Lawn and Turf Care Equipment",
+   "order": 80,
+   "children": [
+    {
+     "slug": "lawn-edging",
+     "name": "Lawn Edging",
+     "order": 10,
+     "children": [
+      {
+       "slug": "manual-half-moon-edgers",
+       "name": "Manual Half-Moon Edgers",
+       "order": 10
+      },
+      {
+       "slug": "rotary-edgers",
+       "name": "Rotary Edgers",
+       "order": 20
+      },
+      {
+       "slug": "powered-lawn-edgers",
+       "name": "Powered Lawn Edgers",
+       "order": 30
+      }
+     ]
+    },
+    {
+     "slug": "aeration-and-scarification",
+     "name": "Aeration and Scarification",
+     "order": 20,
+     "children": [
+      {
+       "slug": "hollow-tine-aerators",
+       "name": "Hollow-Tine Aerators",
+       "order": 10
+      },
+      {
+       "slug": "lawn-scarifiers",
+       "name": "Lawn Scarifiers",
+       "order": 30
+      },
+      {
+       "slug": "dethatchers",
+       "name": "Dethatchers",
+       "order": 40
+      }
+     ]
+    },
+    {
+     "slug": "lawn-finishing",
+     "name": "Lawn Finishing",
+     "order": 30,
+     "children": [
+      {
+       "slug": "lawn-rollers",
+       "name": "Lawn Rollers",
+       "order": 10
+      },
+      {
+       "slug": "lawn-brushes",
+       "name": "Lawn Brushes",
+       "order": 20
+      },
+      {
+       "slug": "grass-collectors",
+       "name": "Grass Collectors",
+       "order": 30
+      },
+      {
+       "slug": "lawn-sweepers",
+       "name": "Lawn Sweepers",
+       "order": 40
+      },
+      {
+       "slug": "lawn-rakes",
+       "name": "Lawn Rakes",
+       "order": 50
+      }
+     ]
+    },
+    {
+     "slug": "lawn-treatment-equipment",
+     "name": "Lawn Treatment Equipment",
+     "order": 40,
+     "children": [
+      {
+       "slug": "broadcast-spreaders",
+       "name": "Broadcast Spreaders",
+       "order": 10
+      },
+      {
+       "slug": "top-dressing-spreaders",
+       "name": "Top-Dressing Spreaders",
+       "order": 30
+      },
+      {
+       "slug": "fertilizer-applicators",
+       "name": "Fertilizer Applicators",
+       "order": 40
+      }
+     ]
+    },
+    {
+     "slug": "turf-repair-tools",
+     "name": "Turf Repair Tools",
+     "order": 50,
+     "children": [
+      {
+       "slug": "sod-cutters",
+       "name": "Sod Cutters",
+       "order": 10
+      },
+      {
+       "slug": "turfing-irons",
+       "name": "Turfing Irons",
+       "order": 20
+      },
+      {
+       "slug": "lawn-repair-rakes",
+       "name": "Lawn Repair Rakes",
+       "order": 30
+      },
+      {
+       "slug": "turf-aeration-forks",
+       "name": "Turf Aeration Forks",
+       "order": 40
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "soil-testing-and-garden-measurement",
+   "name": "Soil Testing and Garden Measurement",
+   "order": 90,
+   "children": [
+    {
+     "slug": "soil-meters",
+     "name": "Soil Meters",
+     "order": 10,
+     "children": [
+      {
+       "slug": "soil-ph-meters",
+       "name": "Soil pH Meters",
+       "order": 10
+      },
+      {
+       "slug": "soil-moisture-meters",
+       "name": "Soil Moisture Meters",
+       "order": 20
+      },
+      {
+       "slug": "combined-ph-moisture-and-light-meters",
+       "name": "Combined pH, Moisture and Light Meters",
+       "order": 30
+      },
+      {
+       "slug": "digital-soil-meters",
+       "name": "Digital Soil Meters",
+       "order": 40
+      }
+     ]
+    },
+    {
+     "slug": "electrical-soil-testing",
+     "name": "Electrical Soil Testing",
+     "order": 20,
+     "children": [
+      {
+       "slug": "ec-meters",
+       "name": "EC Meters",
+       "order": 10
+      },
+      {
+       "slug": "tds-meters",
+       "name": "TDS Meters",
+       "order": 20
+      },
+      {
+       "slug": "salinity-meters",
+       "name": "Salinity Meters",
+       "order": 30
+      },
+      {
+       "slug": "soil-nutrient-testing-kits",
+       "name": "Soil Nutrient Testing Kits",
+       "order": 40
+      }
+     ]
+    },
+    {
+     "slug": "environmental-meters",
+     "name": "Environmental Meters",
+     "order": 30,
+     "children": [
+      {
+       "slug": "digital-thermometers",
+       "name": "Digital Thermometers",
+       "order": 10
+      },
+      {
+       "slug": "soil-thermometers",
+       "name": "Soil Thermometers",
+       "order": 20
+      },
+      {
+       "slug": "humidity-meters",
+       "name": "Humidity Meters",
+       "order": 30
+      },
+      {
+       "slug": "light-meters",
+       "name": "Light Meters",
+       "order": 40
+      },
+      {
+       "slug": "lux-meters",
+       "name": "Lux Meters",
+       "order": 50
+      },
+      {
+       "slug": "rain-gauges",
+       "name": "Rain Gauges",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "measuring-tools",
+     "name": "Measuring Tools",
+     "order": 40,
+     "children": [
+      {
+       "slug": "measuring-tapes",
+       "name": "Measuring Tapes",
+       "order": 10
+      },
+      {
+       "slug": "plant-height-rulers",
+       "name": "Plant Height Rulers",
+       "order": 20
+      },
+      {
+       "slug": "soil-depth-gauges",
+       "name": "Soil Depth Gauges",
+       "order": 30
+      },
+      {
+       "slug": "plant-spacing-rulers",
+       "name": "Plant Spacing Rulers",
+       "order": 40
+      },
+      {
+       "slug": "calipers",
+       "name": "Calipers",
+       "order": 50
+      },
+      {
+       "slug": "weighing-scales",
+       "name": "Weighing Scales",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "smart-monitoring-devices",
+     "name": "Smart Monitoring Devices",
+     "order": 50,
+     "children": [
+      {
+       "slug": "wireless-soil-sensors",
+       "name": "Wireless Soil Sensors",
+       "order": 10
+      },
+      {
+       "slug": "smart-plant-sensors",
+       "name": "Smart Plant Sensors",
+       "order": 20
+      },
+      {
+       "slug": "connected-moisture-sensors",
+       "name": "Connected Moisture Sensors",
+       "order": 30
+      },
+      {
+       "slug": "temperature-and-humidity-loggers",
+       "name": "Temperature and Humidity Loggers",
+       "order": 40
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "indoor-balcony-and-bonsai-tools",
+   "name": "Indoor, Balcony and Bonsai Tools",
+   "order": 100,
+   "children": [
+    {
+     "slug": "indoor-plant-care-tools",
+     "name": "Indoor Plant Care Tools",
+     "order": 10,
+     "children": [
+      {
+       "slug": "precision-misters",
+       "name": "Precision Misters",
+       "order": 20
+      },
+      {
+       "slug": "leaf-cleaning-brushes",
+       "name": "Leaf Cleaning Brushes",
+       "order": 30
+      },
+      {
+       "slug": "pruning-snips",
+       "name": "Pruning Snips",
+       "order": 40
+      }
+     ]
+    },
+    {
+     "slug": "bonsai-tools",
+     "name": "Bonsai Tools",
+     "order": 20,
+     "children": [
+      {
+       "slug": "bonsai-scissors",
+       "name": "Bonsai Scissors",
+       "order": 10
+      },
+      {
+       "slug": "concave-cutters",
+       "name": "Concave Cutters",
+       "order": 20
+      },
+      {
+       "slug": "knob-cutters",
+       "name": "Knob Cutters",
+       "order": 30
+      },
+      {
+       "slug": "branch-splitters",
+       "name": "Branch Splitters",
+       "order": 40
+      },
+      {
+       "slug": "bonsai-wire-cutters",
+       "name": "Bonsai Wire Cutters",
+       "order": 70
+      }
+     ]
+    },
+    {
+     "slug": "repotting-tools",
+     "name": "Repotting Tools",
+     "order": 30,
+     "children": [
+      {
+       "slug": "repotting-mats",
+       "name": "Repotting Mats",
+       "order": 10
+      },
+      {
+       "slug": "root-combs",
+       "name": "Root Combs",
+       "order": 40
+      },
+      {
+       "slug": "miniature-shovels",
+       "name": "Miniature Shovels",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "climbing-plant-care",
+     "name": "Climbing Plant Care",
+     "order": 40,
+     "children": [
+      {
+       "slug": "moss-poles",
+       "name": "Moss Poles",
+       "order": 10
+      },
+      {
+       "slug": "coir-poles",
+       "name": "Coir Poles",
+       "order": 20
+      },
+      {
+       "slug": "plant-clips",
+       "name": "Plant Clips",
+       "order": 30
+      },
+      {
+       "slug": "vine-clips",
+       "name": "Vine Clips",
+       "order": 40
+      },
+      {
+       "slug": "support-rings",
+       "name": "Support Rings",
+       "order": 50
+      },
+      {
+       "slug": "plant-tying-tools",
+       "name": "Plant Tying Tools",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "balcony-gardening-kits",
+     "name": "Balcony Gardening Kits",
+     "order": 50,
+     "children": [
+      {
+       "slug": "mini-hand-tool-kits",
+       "name": "Mini Hand-Tool Kits",
+       "order": 10
+      },
+      {
+       "slug": "compact-pruning-kits",
+       "name": "Compact Pruning Kits",
+       "order": 20
+      },
+      {
+       "slug": "apartment-gardening-kits",
+       "name": "Apartment Gardening Kits",
+       "order": 30
+      },
+      {
+       "slug": "vertical-garden-maintenance-kits",
+       "name": "Vertical Garden Maintenance Kits",
+       "order": 40
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "safety-and-gardening-accessories",
+   "name": "Safety and Gardening Accessories",
+   "order": 110,
+   "children": [
+    {
+     "slug": "gardening-gloves",
+     "name": "Gardening Gloves",
+     "order": 10,
+     "children": [
+      {
+       "slug": "general-purpose-gardening-gloves",
+       "name": "General-Purpose Gardening Gloves",
+       "order": 10
+      },
+      {
+       "slug": "nitrile-coated-gloves",
+       "name": "Nitrile-Coated Gloves",
+       "order": 20
+      },
+      {
+       "slug": "leather-gardening-gloves",
+       "name": "Leather Gardening Gloves",
+       "order": 30
+      },
+      {
+       "slug": "thorn-resistant-gloves",
+       "name": "Thorn-Resistant Gloves",
+       "order": 40
+      },
+      {
+       "slug": "pruning-gloves",
+       "name": "Pruning Gloves",
+       "order": 50
+      }
+     ]
+    },
+    {
+     "slug": "protective-equipment",
+     "name": "Protective Equipment",
+     "order": 20,
+     "children": [
+      {
+       "slug": "safety-glasses",
+       "name": "Safety Glasses",
+       "order": 10
+      },
+      {
+       "slug": "face-shields",
+       "name": "Face Shields",
+       "order": 20
+      },
+      {
+       "slug": "hearing-protection",
+       "name": "Hearing Protection",
+       "order": 30
+      },
+      {
+       "slug": "dust-masks",
+       "name": "Dust Masks",
+       "order": 40
+      },
+      {
+       "slug": "protective-sleeves",
+       "name": "Protective Sleeves",
+       "order": 50
+      },
+      {
+       "slug": "safety-footwear",
+       "name": "Safety Footwear",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "knee-and-body-support",
+     "name": "Knee and Body Support",
+     "order": 30,
+     "children": [
+      {
+       "slug": "knee-pads",
+       "name": "Knee Pads",
+       "order": 10
+      },
+      {
+       "slug": "kneeling-mats",
+       "name": "Kneeling Mats",
+       "order": 20
+      },
+      {
+       "slug": "garden-kneeler-seats",
+       "name": "Garden Kneeler Seats",
+       "order": 30
+      },
+      {
+       "slug": "gardening-aprons",
+       "name": "Gardening Aprons",
+       "order": 40
+      },
+      {
+       "slug": "tool-belts",
+       "name": "Tool Belts",
+       "order": 50
+      }
+     ]
+    },
+    {
+     "slug": "tool-maintenance",
+     "name": "Tool Maintenance",
+     "order": 40,
+     "children": [
+      {
+       "slug": "sharpening-stones",
+       "name": "Sharpening Stones",
+       "order": 10
+      },
+      {
+       "slug": "diamond-sharpeners",
+       "name": "Diamond Sharpeners",
+       "order": 20
+      },
+      {
+       "slug": "pruner-sharpeners",
+       "name": "Pruner Sharpeners",
+       "order": 30
+      },
+      {
+       "slug": "blade-cleaners",
+       "name": "Blade Cleaners",
+       "order": 40
+      },
+      {
+       "slug": "rust-removers",
+       "name": "Rust Removers",
+       "order": 50
+      },
+      {
+       "slug": "tool-lubricants",
+       "name": "Tool Lubricants",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "storage-and-organisation",
+     "name": "Storage and Organisation",
+     "order": 50,
+     "children": [
+      {
+       "slug": "tool-pouches",
+       "name": "Tool Pouches",
+       "order": 10
+      },
+      {
+       "slug": "tool-bags",
+       "name": "Tool Bags",
+       "order": 20
+      },
+      {
+       "slug": "tool-rolls",
+       "name": "Tool Rolls",
+       "order": 30
+      },
+      {
+       "slug": "storage-cases",
+       "name": "Storage Cases",
+       "order": 40
+      },
+      {
+       "slug": "wall-racks",
+       "name": "Wall Racks",
+       "order": 50
+      },
+      {
+       "slug": "tool-hangers",
+       "name": "Tool Hangers",
+       "order": 60
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "garden-cleaning-and-material-handling",
+   "name": "Garden Cleaning and Material Handling",
+   "order": 120,
+   "children": [
+    {
+     "slug": "leaf-and-debris-cleanup",
+     "name": "Leaf and Debris Cleanup",
+     "order": 10,
+     "children": [
+      {
+       "slug": "spring-tine-rakes",
+       "name": "Spring-Tine Rakes",
+       "order": 20
+      },
+      {
+       "slug": "leaf-scoops",
+       "name": "Leaf Scoops",
+       "order": 30
+      },
+      {
+       "slug": "debris-claws",
+       "name": "Debris Claws",
+       "order": 50
+      },
+      {
+       "slug": "litter-pickers",
+       "name": "Litter Pickers",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "garden-transport",
+     "name": "Garden Transport",
+     "order": 20,
+     "children": [
+      {
+       "slug": "wheelbarrows",
+       "name": "Wheelbarrows",
+       "order": 10
+      },
+      {
+       "slug": "garden-trolleys",
+       "name": "Garden Trolleys",
+       "order": 20
+      },
+      {
+       "slug": "folding-garden-carts",
+       "name": "Folding Garden Carts",
+       "order": 30
+      },
+      {
+       "slug": "utility-carts",
+       "name": "Utility Carts",
+       "order": 40
+      },
+      {
+       "slug": "garden-wagons",
+       "name": "Garden Wagons",
+       "order": 50
+      }
+     ]
+    },
+    {
+     "slug": "compost-and-waste-handling",
+     "name": "Compost and Waste Handling",
+     "order": 30,
+     "children": [
+      {
+       "slug": "compost-aerators",
+       "name": "Compost Aerators",
+       "order": 20
+      },
+      {
+       "slug": "compost-turners",
+       "name": "Compost Turners",
+       "order": 30
+      },
+      {
+       "slug": "garden-waste-bags",
+       "name": "Garden Waste Bags",
+       "order": 40
+      },
+      {
+       "slug": "leaf-collectors",
+       "name": "Leaf Collectors",
+       "order": 50
+      }
+     ]
+    },
+    {
+     "slug": "cleaning-equipment",
+     "name": "Cleaning Equipment",
+     "order": 40,
+     "children": [
+      {
+       "slug": "garden-brooms",
+       "name": "Garden Brooms",
+       "order": 10
+      },
+      {
+       "slug": "outdoor-brushes",
+       "name": "Outdoor Brushes",
+       "order": 20
+      },
+      {
+       "slug": "patio-scrapers",
+       "name": "Patio Scrapers",
+       "order": 30
+      },
+      {
+       "slug": "gutter-cleaning-tools",
+       "name": "Gutter Cleaning Tools",
+       "order": 50
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "plant-support-and-training-tools",
+   "name": "Plant Support and Training Tools",
+   "order": 130,
+   "children": [
+    {
+     "slug": "stakes-and-supports",
+     "name": "Stakes and Supports",
+     "order": 10,
+     "children": [
+      {
+       "slug": "bamboo-stakes",
+       "name": "Bamboo Stakes",
+       "order": 10
+      },
+      {
+       "slug": "wooden-plant-stakes",
+       "name": "Wooden Plant Stakes",
+       "order": 20
+      },
+      {
+       "slug": "plastic-coated-metal-stakes",
+       "name": "Plastic-Coated Metal Stakes",
+       "order": 30
+      },
+      {
+       "slug": "steel-plant-stakes",
+       "name": "Steel Plant Stakes",
+       "order": 40
+      },
+      {
+       "slug": "flower-support-rings",
+       "name": "Flower Support Rings",
+       "order": 50
+      }
+     ]
+    },
+    {
+     "slug": "trellises-and-frames",
+     "name": "Trellises and Frames",
+     "order": 20,
+     "children": [
+      {
+       "slug": "wall-trellises",
+       "name": "Wall Trellises",
+       "order": 10
+      },
+      {
+       "slug": "fan-trellises",
+       "name": "Fan Trellises",
+       "order": 20
+      },
+      {
+       "slug": "expandable-trellises",
+       "name": "Expandable Trellises",
+       "order": 30
+      },
+      {
+       "slug": "obelisks",
+       "name": "Obelisks",
+       "order": 40
+      },
+      {
+       "slug": "climbing-frames",
+       "name": "Climbing Frames",
+       "order": 50
+      },
+      {
+       "slug": "plant-support-cages",
+       "name": "Plant Support Cages",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "tying-and-fastening",
+     "name": "Tying and Fastening",
+     "order": 30,
+     "children": [
+      {
+       "slug": "soft-plant-ties",
+       "name": "Soft Plant Ties",
+       "order": 20
+      },
+      {
+       "slug": "twist-ties",
+       "name": "Twist Ties",
+       "order": 30
+      },
+      {
+       "slug": "garden-wire",
+       "name": "Garden Wire",
+       "order": 40
+      },
+      {
+       "slug": "plant-tapes",
+       "name": "Plant Tapes",
+       "order": 50
+      },
+      {
+       "slug": "tying-tools",
+       "name": "Tying Tools",
+       "order": 60
+      },
+      {
+       "slug": "grafting-tapes",
+       "name": "Grafting Tapes",
+       "order": 70
+      }
+     ]
+    },
+    {
+     "slug": "specialised-supports",
+     "name": "Specialised Supports",
+     "order": 40,
+     "children": [
+      {
+       "slug": "tomato-cages",
+       "name": "Tomato Cages",
+       "order": 10
+      },
+      {
+       "slug": "fruit-support-slings",
+       "name": "Fruit Support Slings",
+       "order": 20
+      },
+      {
+       "slug": "orchid-clips",
+       "name": "Orchid Clips",
+       "order": 30
+      },
+      {
+       "slug": "stem-supports",
+       "name": "Stem Supports",
+       "order": 40
+      },
+      {
+       "slug": "branch-spreaders",
+       "name": "Branch Spreaders",
+       "order": 50
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "slug": "tool-sets",
+   "name": "Gardening Tool Sets and Kits",
+   "order": 140,
+   "reuse": {
+    "legacy_name": "Tool Sets"
+   },
+   "children": [
+    {
+     "slug": "beginner-tool-sets",
+     "name": "Beginner Tool Sets",
+     "order": 10,
+     "children": [
+      {
+       "slug": "three-piece-hand-tool-sets",
+       "name": "Three-Piece Hand Tool Sets",
+       "order": 10
+      },
+      {
+       "slug": "five-piece-hand-tool-sets",
+       "name": "Five-Piece Hand Tool Sets",
+       "order": 20
+      },
+      {
+       "slug": "six-piece-garden-tool-sets",
+       "name": "Six-Piece Garden Tool Sets",
+       "order": 30
+      },
+      {
+       "slug": "basic-balcony-gardening-kits",
+       "name": "Basic Balcony Gardening Kits",
+       "order": 40
+      }
+     ]
+    },
+    {
+     "slug": "premium-tool-sets",
+     "name": "Premium Tool Sets",
+     "order": 20,
+     "children": [
+      {
+       "slug": "stainless-steel-tool-sets",
+       "name": "Stainless-Steel Tool Sets",
+       "order": 10
+      },
+      {
+       "slug": "wooden-handle-tool-sets",
+       "name": "Wooden-Handle Tool Sets",
+       "order": 20
+      },
+      {
+       "slug": "forged-steel-tool-sets",
+       "name": "Forged-Steel Tool Sets",
+       "order": 30
+      },
+      {
+       "slug": "ergonomic-gardening-sets",
+       "name": "Ergonomic Gardening Sets",
+       "order": 40
+      }
+     ]
+    },
+    {
+     "slug": "task-specific-kits",
+     "name": "Task-Specific Kits",
+     "order": 30,
+     "children": [
+      {
+       "slug": "pruning-kits",
+       "name": "Pruning Kits",
+       "order": 10
+      },
+      {
+       "slug": "repotting-kits",
+       "name": "Repotting Kits",
+       "order": 20
+      },
+      {
+       "slug": "watering-kits",
+       "name": "Watering Kits",
+       "order": 30
+      },
+      {
+       "slug": "seed-starting-kits",
+       "name": "Seed-Starting Kits",
+       "order": 40
+      },
+      {
+       "slug": "bonsai-kits",
+       "name": "Bonsai Kits",
+       "order": 50
+      },
+      {
+       "slug": "lawn-care-kits",
+       "name": "Lawn Care Kits",
+       "order": 60
+      }
+     ]
+    },
+    {
+     "slug": "professional-tool-sets",
+     "name": "Professional Tool Sets",
+     "order": 40,
+     "children": [
+      {
+       "slug": "nursery-toolkits",
+       "name": "Nursery Toolkits",
+       "order": 10
+      },
+      {
+       "slug": "landscaping-tool-sets",
+       "name": "Landscaping Tool Sets",
+       "order": 20
+      },
+      {
+       "slug": "orchard-pruning-kits",
+       "name": "Orchard Pruning Kits",
+       "order": 30
+      },
+      {
+       "slug": "lawn-maintenance-kits",
+       "name": "Lawn Maintenance Kits",
+       "order": 40
+      }
+     ]
+    },
+    {
+     "slug": "gift-sets",
+     "name": "Gift Sets",
+     "order": 50,
+     "children": [
+      {
+       "slug": "gardening-gift-boxes",
+       "name": "Gardening Gift Boxes",
+       "order": 10
+      },
+      {
+       "slug": "premium-gardening-gift-sets",
+       "name": "Premium Gardening Gift Sets",
+       "order": 20
+      },
+      {
+       "slug": "beginner-gardening-gift-kits",
+       "name": "Beginner Gardening Gift Kits",
+       "order": 30
+      }
+     ]
+    }
+   ]
+  }
+ ],
+ "keep": [
+  {
+   "slug": "soil-care",
+   "order": 150
+  },
+  {
+   "slug": "planters-pots",
+   "order": 160
+  }
+ ],
+ "placements": [
+  {
+   "slug": "border-forks",
+   "also_under": "digging-forks",
+   "order": 10
+  },
+  {
+   "slug": "draw-hoes",
+   "also_under": "hoes-and-mattocks",
+   "order": 20
+  },
+  {
+   "slug": "dutch-hoes",
+   "also_under": "hoes-and-mattocks",
+   "order": 30
+  },
+  {
+   "slug": "soil-rakes",
+   "also_under": "rakes-and-levelling-tools",
+   "order": 30
+  },
+  {
+   "slug": "pole-saws",
+   "also_under": "pole-tools",
+   "order": 30
+  },
+  {
+   "slug": "dibbers",
+   "also_under": "seed-sowing-tools",
+   "order": 40
+  },
+  {
+   "slug": "bulb-planters",
+   "also_under": "bulb-and-seedling-planting",
+   "order": 10
+  },
+  {
+   "slug": "transplanting-spades",
+   "also_under": "bulb-and-seedling-planting",
+   "order": 40
+  },
+  {
+   "slug": "widgers",
+   "also_under": "nursery-propagation-tools",
+   "order": 20
+  },
+  {
+   "slug": "grafting-tools",
+   "also_under": "nursery-propagation-tools",
+   "order": 60
+  },
+  {
+   "slug": "soil-scoops",
+   "also_under": "potting-tools",
+   "order": 10
+  },
+  {
+   "slug": "powered-sprayers",
+   "also_under": "other-outdoor-machinery",
+   "order": 40
+  },
+  {
+   "slug": "edging-shears",
+   "also_under": "lawn-edging",
+   "order": 40
+  },
+  {
+   "slug": "spike-aerators",
+   "also_under": "aeration-and-scarification",
+   "order": 20
+  },
+  {
+   "slug": "powered-aerators",
+   "also_under": "aeration-and-scarification",
+   "order": 50
+  },
+  {
+   "slug": "drop-spreaders",
+   "also_under": "lawn-treatment-equipment",
+   "order": 20
+  },
+  {
+   "slug": "long-spout-watering-cans",
+   "also_under": "indoor-plant-care-tools",
+   "order": 10
+  },
+  {
+   "slug": "soil-scoops",
+   "also_under": "indoor-plant-care-tools",
+   "order": 50
+  },
+  {
+   "slug": "root-rakes",
+   "also_under": "bonsai-tools",
+   "order": 50
+  },
+  {
+   "slug": "root-hooks",
+   "also_under": "bonsai-tools",
+   "order": 60
+  },
+  {
+   "slug": "potting-trays",
+   "also_under": "repotting-tools",
+   "order": 20
+  },
+  {
+   "slug": "root-hooks",
+   "also_under": "repotting-tools",
+   "order": 30
+  },
+  {
+   "slug": "soil-sieves",
+   "also_under": "repotting-tools",
+   "order": 50
+  },
+  {
+   "slug": "leaf-rakes",
+   "also_under": "leaf-and-debris-cleanup",
+   "order": 10
+  },
+  {
+   "slug": "lawn-rakes",
+   "also_under": "leaf-and-debris-cleanup",
+   "order": 40
+  },
+  {
+   "slug": "compost-forks",
+   "also_under": "compost-and-waste-handling",
+   "order": 10
+  },
+  {
+   "slug": "pressure-washers",
+   "also_under": "cleaning-equipment",
+   "order": 40
+  },
+  {
+   "slug": "plant-clips",
+   "also_under": "tying-and-fastening",
+   "order": 10
+  }
+ ],
+ "aliases": [
+  {
+   "name": "Digging Forks",
+   "listed_under": "digging-forks",
+   "maps_to": "digging-forks"
+  }
+ ],
+ "retire": [
+  {
+   "slug": "tool-accessories",
+   "guard": "after-links"
+  },
+  {
+   "slug": "garden-tools",
+   "guard": "empty"
+  },
+  {
+   "slug": "soil-fertilizer",
+   "guard": "empty"
+  },
+  {
+   "slug": "watering",
+   "guard": "empty"
+  },
+  {
+   "slug": "pots-planters",
+   "guard": "empty"
+  }
+ ],
+ "product_links": {
+  "bypass-pruning-secateurs": [
+   "bypass-pruners"
+  ],
+  "hedge-shears": [
+   "hedge-shears"
+  ],
+  "folding-pruning-saw": [
+   "folding-pruning-saws"
+  ],
+  "long-reach-lopper": [
+   "telescopic-loppers",
+   "bypass-loppers"
+  ],
+  "garden-flower-snips": [
+   "flower-snips"
+  ],
+  "grafting-budding-knife": [
+   "grafting-knives",
+   "budding-knives"
+  ],
+  "watering-can-5l": [
+   "watering-cans"
+  ],
+  "watering-can-9l": [
+   "long-spout-watering-cans"
+  ],
+  "pressure-spray-bottle-1l": [
+   "pressure-sprayers"
+  ],
+  "garden-hose-15m": [
+   "garden-hoses"
+  ],
+  "7-pattern-hose-nozzle": [
+   "nozzles-and-spray-guns"
+  ],
+  "drip-irrigation-starter-kit": [
+   "drip-irrigation"
+  ],
+  "self-watering-spikes-set-6": [
+   "self-watering-spikes"
+  ],
+  "soil-ph-moisture-meter": [
+   "combined-ph-moisture-and-light-meters"
+  ],
+  "3-piece-hand-tool-set": [
+   "three-piece-hand-tool-sets"
+  ],
+  "5-piece-garden-tool-set-with-bag": [
+   "five-piece-hand-tool-sets"
+  ],
+  "bonsai-tool-kit-6-pieces": [
+   "bonsai-kits"
+  ],
+  "beginner-gardening-starter-kit": [
+   "beginner-tool-sets"
+  ],
+  "succulent-care-tool-set": [
+   "mini-hand-tool-kits"
+  ],
+  "gardening-gloves-pair": [
+   "nitrile-coated-gloves"
+  ],
+  "steel-hand-trowel": [
+   "hand-trowels"
+  ],
+  "hand-cultivator": [
+   "hand-cultivators",
+   "three-prong-cultivators"
+  ],
+  "garden-hand-weeder": [
+   "weeders-and-garden-knives"
+  ],
+  "plant-labels-set-50": [
+   "planting-accessories"
+  ],
+  "garden-twine-and-ties": [
+   "soft-plant-ties"
+  ],
+  "garden-kneeler-pad": [
+   "kneeling-mats"
+  ]
+ }
+}

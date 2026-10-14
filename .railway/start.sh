@@ -379,6 +379,12 @@ try {
   php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeToolsSeeder" --force \
     || echo "[bg] WARNING: PlantAtHomeToolsSeeder failed"
 
+  # Gardening Tools taxonomy (14 parents / 74 sub-categories / 390 tool types, owner brief
+  # 2026-10-14). Create-only and idempotent: admin edits survive every boot.
+  echo "==> [bg] [4d/7] Gardening tools taxonomy..."
+  php artisan plantathome:tools-taxonomy \
+    || echo "[bg] WARNING: tools-taxonomy failed"
+
   if [ "$APP_ENV_VAL" = "staging" ]; then
     echo "==> [bg] Staging env — running Tier 3 demo product seed..."
     php artisan db:seed --class="Marvel\\Database\\Seeders\\PlantAtHomeProductSeeder" --force \

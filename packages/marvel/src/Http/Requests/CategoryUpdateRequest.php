@@ -6,6 +6,8 @@ namespace Marvel\Http\Requests;
 use Illuminate\Contracts\Validation\Validator;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Http\Exceptions\HttpResponseException;
+use Illuminate\Support\Facades\DB;
+use Marvel\Rules\ValidCategoryParent;
 
 
 class CategoryUpdateRequest extends FormRequest
@@ -38,7 +40,11 @@ class CategoryUpdateRequest extends FormRequest
             'seo_title'       => ['nullable', 'string', 'max:191'],
             'seo_description' => ['nullable', 'string', 'max:500'],
             'noindex'         => ['nullable', 'boolean'],
-            'parent'      => ['nullable', 'integer'],
+            'parent'      => ['nullable', 'integer', new ValidCategoryParent($this->typeId(), $this->categoryId())],
+            // Other parents this category is also listed under (navigation + roll-up only).
+            'placements'   => ['nullable', 'array'],
+            'placements.*' => ['integer', new ValidCategoryParent($this->typeId(), $this->categoryId())],
+            'display_order' => ['nullable', 'integer', 'min:0', 'max:1000000'],
             // GST rate inherited by this category's products (nullable = unset).
             'tax_rate_id' => ['nullable', 'integer', 'exists:tax_classes,id'],
         ];
@@ -57,6 +63,26 @@ class CategoryUpdateRequest extends FormRequest
             'image.string'          => 'image is not a valid string',
             'parent.integer'        => 'Parent is not a valid integer',
         ];
+    }
+
+    /** The category being edited: the REST route parameter, or the id GraphQL merges in. */
+    private function categoryId(): ?int
+    {
+        $id = $this->route('category') ?? $this->input('id');
+
+        return is_numeric($id) ? (int) $id : null;
+    }
+
+    /** The vertical after this save: the one sent, else the category's current one. */
+    private function typeId(): ?int
+    {
+        if (is_numeric($this->input('type_id'))) {
+            return (int) $this->input('type_id');
+        }
+        $id = $this->categoryId();
+        $type = $id ? DB::table('categories')->where('id', $id)->value('type_id') : null;
+
+        return $type ? (int) $type : null;
     }
 
     public function failedValidation(Validator $validator)

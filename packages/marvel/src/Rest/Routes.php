@@ -386,6 +386,8 @@ Route::apiResource('types', TypeController::class, [
 Route::apiResource('attachments', AttachmentController::class, [
     'only' => ['index', 'show'],
 ])->middleware('auth:sanctum');
+// Before the resource: `categories/{category}` would otherwise read "tree" as a slug.
+Route::get('categories/tree', [CategoryController::class, 'tree'])->middleware('cache.headers:etag');
 Route::apiResource('categories', CategoryController::class, [
     'only' => ['index', 'show'],
 ])->middleware('cache.headers:etag');

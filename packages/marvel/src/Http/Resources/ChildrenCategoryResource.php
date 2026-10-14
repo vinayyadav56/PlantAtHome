@@ -22,6 +22,11 @@ class ChildrenCategoryResource extends Resource
             'translated_languages' => $this->translated_languages,
             'products_count'       => $this->products_count,
             'image'                => $this->image,
+            'is_active'            => (bool) ($this->is_active ?? true),
+            'display_order'        => (int) ($this->display_order ?? 0),
+            'parent_id'            => $this->getAttributes()['parent'] ?? null,
+            // Listed here as well as under its own parent (one page, every branch).
+            'placement'            => (bool) ($this->placement ?? false),
         ];
     }
 }
