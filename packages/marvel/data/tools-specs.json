@@ -1,0 +1,623 @@
+{
+  "_about": "Specifications each Gardening Tools product's OWN name or description states (quote kept with every value), extracted and adversarially checked 2026-10-15. Nothing here is inferred: no unstated sizes, materials, brands or prices. Imported create-only by `php artisan plantathome:tools-taxonomy --specs`: a value is set only while the product has none for that attribute (an admin's entry always wins); `options` are added to their attribute when missing.",
+  "options": {
+    "blade-material": [
+      "Carbon steel"
+    ],
+    "coating": [
+      "Nitrile"
+    ],
+    "grip-type": [
+      "Non-slip"
+    ],
+    "handle-material": [
+      "Aluminium"
+    ],
+    "head-shape": [
+      "Fork-tipped",
+      "Three-prong"
+    ],
+    "material": [
+      "Ceramic",
+      "Cocopeat",
+      "Compost",
+      "Cotton",
+      "Foam",
+      "Jute",
+      "Metal",
+      "Non-woven fabric",
+      "Perlite",
+      "Steel",
+      "Terracotta"
+    ],
+    "storage-case": [
+      "Canvas storage bag",
+      "Roll-up case"
+    ]
+  },
+  "products": {
+    "3-piece-hand-tool-set": [
+      {
+        "code": "material",
+        "value": [
+          "Steel"
+        ],
+        "quote": "rust-resistant steel"
+      },
+      {
+        "code": "pieces",
+        "value": 3,
+        "quote": "3-Piece"
+      },
+      {
+        "code": "included-tools",
+        "value": "Trowel, transplanter and cultivator",
+        "quote": "Trowel, transplanter and cultivator"
+      }
+    ],
+    "5-piece-garden-tool-set-with-bag": [
+      {
+        "code": "intended-use",
+        "value": "Everyday gardening",
+        "quote": "a complete kit for everyday gardening"
+      },
+      {
+        "code": "pieces",
+        "value": 5,
+        "quote": "5-Piece Garden Tool Set"
+      },
+      {
+        "code": "included-tools",
+        "value": "Trowel, fork, weeder, cultivator and pruner",
+        "quote": "Trowel, fork, weeder, cultivator and pruner"
+      },
+      {
+        "code": "storage-case",
+        "value": "Canvas storage bag",
+        "quote": "with a canvas storage bag"
+      }
+    ],
+    "7-pattern-hose-nozzle": [
+      {
+        "code": "material",
+        "value": [
+          "Metal"
+        ],
+        "quote": "Metal hose nozzle"
+      },
+      {
+        "code": "spray-patterns",
+        "value": 7,
+        "quote": "7 spray patterns"
+      }
+    ],
+    "balcony-window-box-24-inch": [
+      {
+        "code": "intended-use",
+        "value": "Railings and window ledges",
+        "quote": "rectangular planter for railings and window ledges"
+      },
+      {
+        "code": "included-accessories",
+        "value": "Clip-on brackets",
+        "quote": "with a drainage channel and clip-on brackets"
+      }
+    ],
+    "beginner-gardening-starter-kit": [
+      {
+        "code": "included-accessories",
+        "value": "Gloves, spray bottle and plant labels",
+        "quote": "hand tools, gloves, spray bottle and plant labels in one box"
+      },
+      {
+        "code": "included-tools",
+        "value": "Hand tools",
+        "quote": "hand tools, gloves, spray bottle and plant labels in one box"
+      },
+      {
+        "code": "skill-level",
+        "value": "Beginner",
+        "quote": "Beginner Gardening Starter Kit"
+      }
+    ],
+    "bonsai-tool-kit-6-pieces": [
+      {
+        "code": "pieces",
+        "value": 6,
+        "quote": "Bonsai Tool Kit (6 Pieces)"
+      },
+      {
+        "code": "included-tools",
+        "value": "Concave cutters, shears and a wire cutter",
+        "quote": "with concave cutters, shears and a wire cutter"
+      },
+      {
+        "code": "storage-case",
+        "value": "Roll-up case",
+        "quote": "in a roll-up case"
+      },
+      {
+        "code": "intended-task",
+        "value": "Fine detailing",
+        "quote": "for fine detailing"
+      }
+    ],
+    "bypass-pruning-secateurs": [
+      {
+        "code": "blade-material",
+        "value": "Carbon steel",
+        "quote": "Sharp carbon-steel bypass secateurs"
+      },
+      {
+        "code": "intended-use",
+        "value": "Clean cuts on stems and light branches",
+        "quote": "for clean cuts on stems and light branches up to 20mm"
+      },
+      {
+        "code": "ergonomic-design",
+        "value": true,
+        "quote": "Non-slip ergonomic grip"
+      },
+      {
+        "code": "cutting-mechanism",
+        "value": "Bypass",
+        "quote": "carbon-steel bypass secateurs"
+      },
+      {
+        "code": "cutting-capacity",
+        "value": 20,
+        "quote": "for clean cuts on stems and light branches up to 20mm"
+      },
+      {
+        "code": "locking-mechanism",
+        "value": true,
+        "quote": "with a safety lock"
+      }
+    ],
+    "ceramic-designer-planter": [
+      {
+        "code": "material",
+        "value": [
+          "Ceramic"
+        ],
+        "quote": "Glazed ceramic planter"
+      },
+      {
+        "code": "intended-use",
+        "value": "Medium indoor plants",
+        "quote": "an elegant home for medium indoor plants"
+      },
+      {
+        "code": "included-accessories",
+        "value": "Drainage tray",
+        "quote": "with a matte finish and drainage tray"
+      }
+    ],
+    "cocopeat-block-5kg": [
+      {
+        "code": "material",
+        "value": [
+          "Cocopeat"
+        ],
+        "quote": "Compressed cocopeat block"
+      },
+      {
+        "code": "weight",
+        "value": 5000,
+        "quote": "Cocopeat Block 5kg"
+      },
+      {
+        "code": "intended-use",
+        "value": "Water retention and seed starting",
+        "quote": "excellent for water retention and seed starting"
+      }
+    ],
+    "drip-irrigation-starter-kit": [
+      {
+        "code": "intended-use",
+        "value": "Water-efficient automatic watering",
+        "quote": "for water-efficient automatic watering"
+      },
+      {
+        "code": "included-accessories",
+        "value": "Tubing, drippers, connectors and stakes",
+        "quote": "tubing, drippers, connectors and stakes"
+      }
+    ],
+    "fabric-grow-bags-set-5": [
+      {
+        "code": "material",
+        "value": [
+          "Non-woven fabric"
+        ],
+        "quote": "Breathable non-woven fabric grow bags"
+      },
+      {
+        "code": "intended-use",
+        "value": "Vegetables and herbs",
+        "quote": "grow bags for vegetables and herbs"
+      }
+    ],
+    "folding-pruning-saw": [
+      {
+        "code": "intended-use",
+        "value": "Thicker branches",
+        "quote": "folding saw for thicker branches"
+      },
+      {
+        "code": "foldable",
+        "value": true,
+        "quote": "Razor-tooth folding saw"
+      },
+      {
+        "code": "cutting-capacity",
+        "value": 60,
+        "quote": "for thicker branches up to 60mm"
+      },
+      {
+        "code": "locking-mechanism",
+        "value": true,
+        "quote": "Locks open and closed"
+      }
+    ],
+    "garden-flower-snips": [
+      {
+        "code": "material",
+        "value": [
+          "Stainless steel"
+        ],
+        "quote": "stainless-steel snips"
+      },
+      {
+        "code": "intended-use",
+        "value": "Deadheading flowers, harvesting herbs and trimming delicate stems",
+        "quote": "for deadheading flowers, harvesting herbs and trimming delicate stems"
+      }
+    ],
+    "garden-hand-weeder": [
+      {
+        "code": "head-shape",
+        "value": "Fork-tipped",
+        "quote": "Fork-tipped weeder"
+      }
+    ],
+    "garden-hose-15m": [
+      {
+        "code": "intended-use",
+        "value": "Year-round watering",
+        "quote": "for year-round watering"
+      },
+      {
+        "code": "included-accessories",
+        "value": "Brass fittings",
+        "quote": "garden hose with brass fittings"
+      },
+      {
+        "code": "hose-length",
+        "value": 15,
+        "quote": "15-metre garden hose"
+      }
+    ],
+    "garden-kneeler-pad": [
+      {
+        "code": "material",
+        "value": [
+          "Foam"
+        ],
+        "quote": "Thick foam kneeling pad"
+      },
+      {
+        "code": "intended-use",
+        "value": "Planting, weeding and ground-level work",
+        "quote": "cushions your knees during planting, weeding and ground-level work"
+      }
+    ],
+    "garden-twine-and-ties": [
+      {
+        "code": "material",
+        "value": [
+          "Jute"
+        ],
+        "quote": "Soft jute twine"
+      },
+      {
+        "code": "intended-use",
+        "value": "Staking, training and supporting growing stems",
+        "quote": "for staking, training and supporting growing stems"
+      }
+    ],
+    "gardening-gloves-pair": [
+      {
+        "code": "material",
+        "value": [
+          "Cotton"
+        ],
+        "quote": "Breathable cotton gloves"
+      },
+      {
+        "code": "coating",
+        "value": "Nitrile",
+        "quote": "nitrile-coated grip"
+      }
+    ],
+    "grafting-budding-knife": [
+      {
+        "code": "intended-use",
+        "value": "Clean grafts, cuttings and budding work",
+        "quote": "for clean grafts, cuttings and budding work"
+      },
+      {
+        "code": "foldable",
+        "value": true,
+        "quote": "Folding grafting knife"
+      }
+    ],
+    "hand-cultivator": [
+      {
+        "code": "intended-use",
+        "value": "Loosening soil, weeding and mixing in compost",
+        "quote": "for loosening soil, weeding and mixing in compost around your plants"
+      },
+      {
+        "code": "head-shape",
+        "value": "Three-prong",
+        "quote": "Three-prong cultivator"
+      }
+    ],
+    "hedge-shears": [
+      {
+        "code": "handle-material",
+        "value": "Aluminium",
+        "quote": "lightweight aluminium handles"
+      },
+      {
+        "code": "intended-use",
+        "value": "Shaping hedges, shrubs and topiary",
+        "quote": "for shaping hedges, shrubs and topiary"
+      }
+    ],
+    "long-reach-lopper": [
+      {
+        "code": "intended-use",
+        "value": "High branches",
+        "quote": "lopper for high branches"
+      },
+      {
+        "code": "cutting-mechanism",
+        "value": "Bypass",
+        "quote": "Telescopic bypass lopper"
+      },
+      {
+        "code": "cutting-capacity",
+        "value": 35,
+        "quote": "for high branches up to 35mm"
+      }
+    ],
+    "macrame-hanging-planter": [
+      {
+        "code": "material",
+        "value": [
+          "Cotton",
+          "Ceramic"
+        ],
+        "quote": "Handwoven cotton macrame hanger with a ceramic pot"
+      },
+      {
+        "code": "intended-use",
+        "value": "Adds greenery to balconies and windows",
+        "quote": "adds greenery to balconies and windows without floor space"
+      },
+      {
+        "code": "included-accessories",
+        "value": "Ceramic pot",
+        "quote": "macrame hanger with a ceramic pot"
+      }
+    ],
+    "neem-cake-fertilizer-1kg": [
+      {
+        "code": "weight",
+        "value": 1000,
+        "quote": "Neem Cake Fertilizer 1kg"
+      },
+      {
+        "code": "intended-use",
+        "value": "Feeds plants while protecting roots from soil pests and nematodes",
+        "quote": "feeds plants while protecting roots from soil pests and nematodes"
+      }
+    ],
+    "npk-191919-fertilizer-900g": [
+      {
+        "code": "weight",
+        "value": 900,
+        "quote": "Fertilizer 900g"
+      },
+      {
+        "code": "intended-use",
+        "value": "Vigorous growth, flowering and fruiting",
+        "quote": "for vigorous growth, flowering and fruiting across plant types"
+      }
+    ],
+    "organic-compost-5kg": [
+      {
+        "code": "weight",
+        "value": 5000,
+        "quote": "Organic Compost 5kg"
+      }
+    ],
+    "perlite-1kg": [
+      {
+        "code": "material",
+        "value": [
+          "Perlite"
+        ],
+        "quote": "Horticultural perlite"
+      },
+      {
+        "code": "weight",
+        "value": 1000,
+        "quote": "Perlite 1kg"
+      },
+      {
+        "code": "intended-use",
+        "value": "Improves aeration and drainage in potting mixes and succulent blends",
+        "quote": "improves aeration and drainage in potting mixes and succulent blends"
+      }
+    ],
+    "plant-labels-set-50": [
+      {
+        "code": "intended-use",
+        "value": "Keep track of seedlings, herbs and varieties",
+        "quote": "keep track of seedlings, herbs and varieties"
+      },
+      {
+        "code": "included-accessories",
+        "value": "Marker pen",
+        "quote": "plant markers with a marker pen"
+      }
+    ],
+    "premium-potting-mix-5kg": [
+      {
+        "code": "material",
+        "value": [
+          "Cocopeat",
+          "Compost",
+          "Perlite"
+        ],
+        "quote": "potting mix with cocopeat, compost and perlite"
+      },
+      {
+        "code": "weight",
+        "value": 5000,
+        "quote": "Premium Potting Mix 5kg"
+      }
+    ],
+    "pressure-spray-bottle-1l": [
+      {
+        "code": "intended-use",
+        "value": "Misting indoor plants and applying foliar feed or neem spray",
+        "quote": "for misting indoor plants and applying foliar feed or neem spray evenly"
+      },
+      {
+        "code": "tank-capacity",
+        "value": 1,
+        "quote": "Pressure Spray Bottle 1L"
+      },
+      {
+        "code": "power-source",
+        "value": "Manual",
+        "quote": "Hand-pump pressure sprayer"
+      }
+    ],
+    "seedling-starter-tray-set-2": [
+      {
+        "code": "intended-use",
+        "value": "Germination of seeds and cuttings",
+        "quote": "for fast, even germination of seeds and cuttings"
+      },
+      {
+        "code": "included-accessories",
+        "value": "Humidity dome",
+        "quote": "seedling trays with a humidity dome"
+      }
+    ],
+    "self-watering-spikes-set-6": [
+      {
+        "code": "intended-use",
+        "value": "Keep potted plants hydrated for days",
+        "quote": "keep potted plants hydrated for days"
+      }
+    ],
+    "soil-ph-moisture-meter": [
+      {
+        "code": "measurement-type",
+        "value": [
+          "Moisture",
+          "pH",
+          "Light"
+        ],
+        "quote": "3-in-1 meter for soil moisture, pH and light"
+      },
+      {
+        "code": "battery-type",
+        "value": "No batteries needed",
+        "quote": "no batteries needed"
+      }
+    ],
+    "steel-hand-trowel": [
+      {
+        "code": "material",
+        "value": [
+          "Steel"
+        ],
+        "quote": "Steel Hand Trowel"
+      },
+      {
+        "code": "intended-use",
+        "value": "Digging, planting and potting",
+        "quote": "trowel for digging, planting and potting"
+      },
+      {
+        "code": "grip-type",
+        "value": "Non-slip",
+        "quote": "comfortable non-slip handle"
+      }
+    ],
+    "succulent-care-tool-set": [
+      {
+        "code": "intended-use",
+        "value": "Succulents and terrariums",
+        "quote": "for planting, cleaning and styling succulents and terrariums"
+      },
+      {
+        "code": "included-tools",
+        "value": "Mini rake, shovel, tweezers and brush",
+        "quote": "Mini rake, shovel, tweezers and brush"
+      },
+      {
+        "code": "intended-task",
+        "value": "Planting, cleaning and styling",
+        "quote": "for planting, cleaning and styling succulents and terrariums"
+      }
+    ],
+    "terracotta-pots-set-3": [
+      {
+        "code": "material",
+        "value": [
+          "Terracotta"
+        ],
+        "quote": "Hand-finished terracotta pots"
+      }
+    ],
+    "vermicompost-5kg": [
+      {
+        "code": "weight",
+        "value": 5000,
+        "quote": "Vermicompost 5kg"
+      },
+      {
+        "code": "intended-use",
+        "value": "Organic fertiliser for all plants",
+        "quote": "a gentle, odourless organic fertiliser for all plants"
+      }
+    ],
+    "watering-can-5l": [
+      {
+        "code": "capacity",
+        "value": 5,
+        "quote": "5-litre watering can"
+      },
+      {
+        "code": "rose-attachment",
+        "value": "Removable",
+        "quote": "with a detachable rose head"
+      }
+    ],
+    "watering-can-9l": [
+      {
+        "code": "capacity",
+        "value": 9,
+        "quote": "9-litre capacity"
+      }
+    ]
+  }
+}

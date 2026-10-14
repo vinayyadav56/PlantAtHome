@@ -272,6 +272,119 @@ class ToolsTaxonomyImporter
         return $report;
     }
 
+    /**
+     * Tool specifications (data/tools-specs.json): only facts each product's own name or
+     * description states, each kept with its quote. Create-only: a value is set only while the
+     * product has none for that attribute, so an admin's entry always wins; an option is added
+     * only when the file lists it. Every value is validated like an admin save.
+     */
+    public function importSpecs(bool $dryRun = false): array
+    {
+        $report = ['products' => 0, 'values' => 0, 'unchanged' => 0, 'options' => 0, 'skipped' => [], 'notes' => []];
+        $type = DB::table('types')->where('slug', 'tools')->where('language', 'en')->orderBy('id')->first();
+        if (!$type) {
+            $report['notes'][] = 'No tools vertical yet: nothing to import.';
+
+            return $report;
+        }
+        if (!Schema::hasColumn('plant_attribute_definitions', 'code') || !Schema::hasTable('plant_attribute_scopes')) {
+            throw new \RuntimeException('The attribute tables are not migrated yet: run the migrations first.');
+        }
+        $data = json_decode((string) @file_get_contents(dirname($this->file) . '/tools-specs.json'), true);
+        if (!is_array($data) || !isset($data['products'])) {
+            throw new \RuntimeException('Unreadable specifications (data/tools-specs.json).');
+        }
+        $writer = app(AttributeValueWriter::class);
+
+        DB::beginTransaction();
+        try {
+            $now = now();
+            foreach ($data['options'] ?? [] as $code => $values) {
+                $def = \Marvel\Database\Models\PlantAttributeDefinition::where('code', $code)
+                    ->where(fn ($q) => $q->whereNull('type_id')->orWhere('type_id', $type->id))->first();
+                if (!$def || !in_array($def->type, \Marvel\Database\Models\PlantAttributeDefinition::TERM_TYPES, true)) {
+                    $report['skipped'][] = "options for {$code}: no such option attribute";
+                    continue;
+                }
+                $sort = (int) DB::table('plant_attribute_terms')->where('definition_id', $def->id)->max('sort');
+                foreach ((array) $values as $value) {
+                    $slug = Str::slug((string) $value);
+                    if (!DB::table('plant_attribute_terms')->where('definition_id', $def->id)->where('slug', $slug)->exists()) {
+                        DB::table('plant_attribute_terms')->insert([
+                            'definition_id' => $def->id, 'value' => $value, 'slug' => $slug, 'sort' => $sort += 10, 'is_active' => true,
+                            'created_at' => $now, 'updated_at' => $now,
+                        ]);
+                        $report['options']++;
+                    }
+                }
+            }
+
+            foreach ($data['products'] as $slug => $facts) {
+                $product = \Marvel\Database\Models\Product::where('slug', $slug)->where('language', 'en')->where('type_id', $type->id)->first();
+                if (!$product) {
+                    $report['skipped'][] = "{$slug}: no such tool";
+                    continue;
+                }
+                $categoryIds = DB::table('category_product')->where('product_id', $product->id)->pluck('category_id')->map(fn ($v) => (int) $v)->all();
+                $applies = app(ProductAttributeSchema::class)->forProduct((int) $type->id, $categoryIds)->keyBy('code');
+                $has = DB::table('plant_attribute_product')->where('product_id', $product->id)->distinct()->pluck('definition_id')->map(fn ($v) => (int) $v)->flip();
+                $entries = [];
+                foreach ($facts as $fact) {
+                    $def = $applies->get($fact['code'] ?? '');
+                    if (!$def) {
+                        $report['skipped'][] = "{$slug} → " . ($fact['code'] ?? '?') . ': does not apply to its categories';
+                        continue;
+                    }
+                    if ($has->has($def->id)) {
+                        $report['unchanged']++; // the product already has a value: never overwritten
+                        continue;
+                    }
+                    $entry = $this->specEntry($def, $fact);
+                    if ($entry === null) {
+                        $report['skipped'][] = "{$slug} → {$def->code}: no option \"" . implode(', ', (array) $fact['value']) . '"';
+                        continue;
+                    }
+                    $entries[] = $entry;
+                }
+                if (!$entries) {
+                    continue;
+                }
+                if ($errors = $writer->errors($entries, (int) $type->id, $categoryIds, false, (int) $product->id)) {
+                    $report['skipped'][] = "{$slug}: " . implode(' ', $errors);
+                    continue;
+                }
+                $writer->write($product, $entries);
+                $report['products']++;
+                $report['values'] += count($entries);
+            }
+            $dryRun ? DB::rollBack() : DB::commit();
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            throw $e;
+        }
+
+        return $report;
+    }
+
+    /** One fact as the writer's payload entry; null when a named option does not exist. */
+    private function specEntry(\Marvel\Database\Models\PlantAttributeDefinition $def, array $fact): ?array
+    {
+        if (in_array($def->type, \Marvel\Database\Models\PlantAttributeDefinition::TERM_TYPES, true)) {
+            $ids = [];
+            foreach ((array) $fact['value'] as $value) {
+                $term = $def->terms->firstWhere('slug', Str::slug((string) $value));
+                if (!$term) {
+                    return null;
+                }
+                $ids[] = (int) $term->id;
+            }
+
+            return ['definition_id' => $def->id, 'term_ids' => $ids];
+        }
+
+        return ['definition_id' => $def->id, 'value' => $fact['value'], 'value_max' => $fact['value_max'] ?? null];
+    }
+
     public static function bustCaches(): void
     {
         CategoryTree::bust();

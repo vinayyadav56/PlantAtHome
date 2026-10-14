@@ -386,6 +386,8 @@ try {
     || echo "[bg] WARNING: tools-taxonomy failed"
   php artisan plantathome:tools-taxonomy --attributes \
     || echo "[bg] WARNING: tools-taxonomy --attributes failed"
+  php artisan plantathome:tools-taxonomy --specs \
+    || echo "[bg] WARNING: tools-taxonomy --specs failed"
 
   if [ "$APP_ENV_VAL" = "staging" ]; then
     echo "==> [bg] Staging env — running Tier 3 demo product seed..."

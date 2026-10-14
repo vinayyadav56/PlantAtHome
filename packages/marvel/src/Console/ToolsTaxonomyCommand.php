@@ -15,6 +15,7 @@ use Marvel\Services\ToolsTaxonomyImporter;
  *   php artisan plantathome:tools-taxonomy --relabel    rename to the data file's names (rows no admin edited)
  *   php artisan plantathome:tools-taxonomy --rollback   undo everything the import recorded
  *   php artisan plantathome:tools-taxonomy --attributes the attribute templates (create-only by code)
+ *   php artisan plantathome:tools-taxonomy --specs      the tools' stated specifications (create-only)
  */
 class ToolsTaxonomyCommand extends Command
 {
@@ -22,7 +23,8 @@ class ToolsTaxonomyCommand extends Command
         {--dry-run : Show what would change and write nothing}
         {--relabel : Rename categories to the names in the data file (only ones no admin has edited)}
         {--rollback : Undo every change the import recorded}
-        {--attributes : Import the attribute templates (data/tools-attributes.json) instead}';
+        {--attributes : Import the attribute templates (data/tools-attributes.json) instead}
+        {--specs : Import the tools\' stated specifications (data/tools-specs.json) instead}';
 
     protected $description = 'Import the Gardening Tools category taxonomy (create-only, idempotent).';
 
@@ -32,6 +34,8 @@ class ToolsTaxonomyCommand extends Command
         try {
             if ($this->option('attributes')) {
                 $report = $importer->importAttributes($dry);
+            } elseif ($this->option('specs')) {
+                $report = $importer->importSpecs($dry);
             } elseif ($this->option('rollback')) {
                 $report = $importer->rollback();
             } elseif ($this->option('relabel')) {

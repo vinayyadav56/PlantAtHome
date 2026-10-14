@@ -621,6 +621,51 @@ class ProductAttributesTest extends TestCase
         $this->assertSame("Deleted category #{$this->c['watering']}", $listed['scopes'][0]['name'] ?? null, 'the admin sees the scope that still limits it');
     }
 
+    public function test_stated_specifications_import_create_only(): void
+    {
+        $mechanism = $this->def('cutting-mechanism', 'single', [], ['pruning' => false], ['Bypass', 'Anvil']);
+        $capacity = $this->def('cutting-capacity', 'number', ['unit' => 'mm'], ['pruning' => false]);
+        $blade = $this->def('blade-material', 'single');
+        $this->def('hose-length', 'number', ['unit' => 'm'], ['watering' => false]);
+        $secateur = $this->product('secateur', 'bypass');
+        $hose = $this->product('hose', 'watering');
+        $this->writer()->write($secateur, [['definition_id' => $capacity, 'value' => 18]]);   // an admin's entry
+        $dir = sys_get_temp_dir() . '/specs-' . uniqid();
+        mkdir($dir);
+        file_put_contents("{$dir}/tools-specs.json", json_encode([
+            'options'  => ['blade-material' => ['Carbon steel']],
+            'products' => [
+                'secateur' => [
+                    ['code' => 'cutting-mechanism', 'value' => 'Bypass', 'quote' => 'bypass secateurs'],
+                    ['code' => 'cutting-capacity', 'value' => 20, 'quote' => 'up to 20mm'],
+                    ['code' => 'blade-material', 'value' => 'Carbon steel', 'quote' => 'carbon-steel'],
+                    ['code' => 'hose-length', 'value' => 5, 'quote' => 'n/a'],
+                ],
+                'hose'  => [['code' => 'hose-length', 'value' => 15, 'quote' => '15-metre']],
+                'ghost' => [['code' => 'hose-length', 'value' => 1, 'quote' => 'n/a']],
+            ],
+        ]));
+        $importer = new ToolsTaxonomyImporter("{$dir}/tools-taxonomy.json");
+
+        $dry = $importer->importSpecs(true);
+        $this->assertSame(3, $dry['values']);
+        $this->assertSame(1, DB::table('plant_attribute_product')->count(), 'a dry run writes nothing');
+
+        $first = $importer->importSpecs();
+        $again = $importer->importSpecs();
+
+        $values = collect($this->writer()->specifications($secateur->id))->pluck('values', 'code');
+        $this->assertSame(['Bypass'], $values['cutting-mechanism']);
+        $this->assertSame(['18 mm'], $values['cutting-capacity'], "the admin's value stays");
+        $this->assertSame(['Carbon steel'], $values['blade-material']);
+        $this->assertSame(['15 m'], collect($this->writer()->specifications($hose->id))->pluck('values', 'code')['hose-length']);
+        $this->assertSame(1, $first['options']);
+        $this->assertSame([0, 0, 4], [$again['values'], $again['options'], $again['unchanged']], 'a re-run changes nothing');
+        $this->assertCount(2, $first['skipped'], 'a fact outside its categories and an unknown product are reported, never forced');
+        $this->assertSame(1, DB::table('plant_attribute_terms')->where('definition_id', $blade)->count());
+        $this->assertSame($mechanism, (int) DB::table('plant_attribute_product')->where('product_id', $secateur->id)->whereNotNull('term_id')->where('definition_id', $mechanism)->value('definition_id'));
+    }
+
     public function test_a_template_waits_until_all_its_categories_exist(): void
     {
         $this->templateCategories();

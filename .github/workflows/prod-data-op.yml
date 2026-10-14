@@ -393,9 +393,11 @@ jobs:
                 if [ "$OP_MODE" = "tools-taxonomy-dry" ]; then
                   php artisan plantathome:tools-taxonomy --dry-run
                   php artisan plantathome:tools-taxonomy --attributes --dry-run
+                  php artisan plantathome:tools-taxonomy --specs --dry-run
                 else
                   php artisan plantathome:tools-taxonomy
                   php artisan plantathome:tools-taxonomy --attributes
+                  php artisan plantathome:tools-taxonomy --specs
                   php artisan cache:clear 2>/dev/null || true
                 fi
                 echo "==> TOOLS-TAXONOMY COMPLETE ($OP_MODE)"
