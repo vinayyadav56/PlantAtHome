@@ -124,8 +124,10 @@ class ToolsTaxonomyImporter
 
     /**
      * Undoes everything the import recorded, newest first. A category the import created is
-     * deleted only while nothing uses it (no products, sub-categories or placements); otherwise
-     * it is switched off, never deleted.
+     * deleted only while nothing uses it (no products, sub-categories, placements or attribute
+     * scopes); otherwise it is switched off, never deleted. Once the attribute templates are
+     * imported, the parents they are scoped to count as used: they are switched off, and a later
+     * re-import does not switch them back on (do that in the admin).
      */
     public function rollback(): array
     {
@@ -155,7 +157,8 @@ class ToolsTaxonomyImporter
                     case 'created':
                         $inUse = DB::table('category_product')->where('category_id', $id)->exists()
                             || DB::table('categories')->where('parent', $id)->exists()
-                            || DB::table('category_placements')->where('category_id', $id)->orWhere('parent_id', $id)->exists();
+                            || DB::table('category_placements')->where('category_id', $id)->orWhere('parent_id', $id)->exists()
+                            || (Schema::hasTable('plant_attribute_scopes') && DB::table('plant_attribute_scopes')->where('category_id', $id)->exists());
                         if ($inUse) {
                             DB::table('categories')->where('id', $id)->update(['is_active' => false]);
                             $report['switched_off']++;
@@ -176,8 +179,9 @@ class ToolsTaxonomyImporter
 
     /**
      * The Tools attribute templates (data/tools-attributes.json): create-only by code. A
-     * definition, a scope or an option is added when missing and never re-dressed, so an admin's
-     * renames, units, required flags and retirements survive every run.
+     * definition is added with its scopes when missing and never re-dressed; an option is added
+     * when missing. So an admin's renames, units, scopes, required flags and retirements survive
+     * every run.
      */
     public function importAttributes(bool $dryRun = false): array
     {
@@ -207,6 +211,13 @@ class ToolsTaxonomyImporter
                     continue;
                 }
                 if (!$row) {
+                    // Scopes are only ever added with the attribute, so it waits until all of its
+                    // categories exist: created without them it would apply to all of Tools.
+                    $missing = array_values(array_filter($d['scopes'] ?? [], fn ($s) => !isset($categories[$s])));
+                    if ($missing) {
+                        $report['skipped'][] = "{$d['code']}: not created yet, missing categories " . implode(', ', $missing);
+                        continue;
+                    }
                     $slug = $d['code'];
                     for ($n = 2; DB::table('plant_attribute_definitions')->where('slug', $slug)->exists(); $n++) {
                         $slug = "{$d['code']}-{$n}";
@@ -222,7 +233,9 @@ class ToolsTaxonomyImporter
                     $id = (int) $row->id;
                     $report['unchanged']++;
                 }
-                foreach ($d['scopes'] ?? [] as $j => $slug) {
+                // Scopes only on the run that creates the attribute: afterwards the admin owns them,
+                // and a scope they removed (or cleared to cover the whole vertical) stays removed.
+                foreach ($row ? [] : ($d['scopes'] ?? []) as $j => $slug) {
                     $categoryId = $categories[$slug] ?? null;
                     if (!$categoryId) {
                         $report['skipped'][] = "{$d['code']} → {$slug}: category missing";

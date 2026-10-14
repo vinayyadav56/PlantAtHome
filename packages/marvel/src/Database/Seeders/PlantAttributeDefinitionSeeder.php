@@ -4,6 +4,7 @@ namespace Marvel\Database\Seeders;
 
 use Illuminate\Database\Seeder;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 
 /**
@@ -29,6 +30,10 @@ class PlantAttributeDefinitionSeeder extends Seeder
 
     public function run(): void
     {
+        // After the 2026_10_15 generalisation every attribute carries a code and a vertical: these
+        // two are the plants' (the code is what the storefront's filters name).
+        $generalised = Schema::hasColumn('plant_attribute_definitions', 'code');
+        $plants = $generalised ? DB::table('types')->where('slug', 'plants')->orderBy('id')->value('id') : null;
         foreach (self::DEFINITIONS as $def) {
             $id = DB::table('plant_attribute_definitions')->where('slug', $def['slug'])->value('id');
             if (!$id) {
@@ -36,7 +41,11 @@ class PlantAttributeDefinitionSeeder extends Seeder
                     'name' => $def['name'], 'slug' => $def['slug'], 'type' => $def['type'],
                     'is_facet' => true, 'is_active' => true, 'sort' => $def['sort'],
                     'created_at' => now(), 'updated_at' => now(),
-                ]);
+                ] + ($generalised ? ['code' => $def['slug'], 'type_id' => $plants] : []));
+            } elseif ($generalised) {
+                // Rows from before the generalisation only (no code yet): an admin's later choice of
+                // vertical, "every vertical" included, is never re-dressed.
+                DB::table('plant_attribute_definitions')->where('id', $id)->whereNull('code')->update(['code' => $def['slug'], 'type_id' => $plants]);
             }
             $sort = 0;
             foreach ($def['terms'] as $value) {

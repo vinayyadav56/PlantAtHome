@@ -88,12 +88,9 @@ class ProductCreateRequest extends FormRequest
             // of a validation error (and used to silently double the size chips).
             'variations.*'                 => ['distinct'],
             'variation_options'            => ['array'],
-            // Specifications (attribute values) — see Marvel\Rules\ValidAttributeValues.
-            'attribute_values'             => ['nullable', 'array', new \Marvel\Rules\ValidAttributeValues(
-                is_numeric($this->input('type_id')) ? (int) $this->input('type_id') : null,
-                array_map('intval', array_filter((array) $this->input('categories', []), 'is_numeric')),
-                $this->input('status') === ProductStatus::PUBLISH
-            )],
+            // Specifications (attribute values) — see Marvel\Rules\ValidAttributeValues. The required
+            // ones are checked in ProductController against the status the create stores.
+            'attribute_values'             => ['nullable', 'array', new \Marvel\Rules\ValidAttributeValues()],
             'quantity'                     => ['nullable', 'integer'],
             'unit'                         => ['required', 'string'],
             'description'                  => ['nullable', 'string', 'max:10000'],

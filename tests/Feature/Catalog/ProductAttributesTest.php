@@ -137,6 +137,7 @@ class ProductAttributesTest extends TestCase
         // An existing plant definition, as production has (it must stay on Plants).
         DB::table('plant_attribute_definitions')->insert(['name' => 'Suitable Spaces', 'slug' => 'suitable-spaces', 'type' => 'multi', 'is_facet' => true, 'is_active' => true, 'sort' => 1]);
         (require base_path('database/migrations/2026_10_15_000200_generalize_product_attributes.php'))->up();
+        (require base_path('database/migrations/2026_10_15_000300_attribute_text_values_as_text.php'))->up();
 
         $cat = function (string $slug, ?string $parent, int $type) {
             $this->c[$slug] = DB::table('categories')->insertGetId([
@@ -271,11 +272,11 @@ class ProductAttributesTest extends TestCase
 
     public function test_the_request_rule_wraps_the_writer(): void
     {
-        $capacity = $this->def('cutting-capacity', 'number', ['max_value' => 60]);
-        $rule = fn (bool $publishing) => new ValidAttributeValues($this->tools, [$this->c['bypass']], $publishing);
+        $capacity = $this->def('cutting-capacity', 'number', ['max_value' => 60], ['pruning' => true]);
 
-        $this->assertTrue(Validator::make(['attribute_values' => [['definition_id' => $capacity, 'value' => 20]]], ['attribute_values' => [$rule(true)]])->passes());
-        $v = Validator::make(['attribute_values' => [['definition_id' => $capacity, 'value' => 90]]], ['attribute_values' => [$rule(false)]]);
+        $this->assertTrue(Validator::make(['attribute_values' => [['definition_id' => $capacity, 'value' => 20]]], ['attribute_values' => [new ValidAttributeValues()]])->passes());
+        $this->assertTrue(Validator::make(['attribute_values' => []], ['attribute_values' => [new ValidAttributeValues()]])->passes(), 'required ones are judged later, on the stored status');
+        $v = Validator::make(['attribute_values' => [['definition_id' => $capacity, 'value' => 90]]], ['attribute_values' => [new ValidAttributeValues()]]);
         $this->assertTrue($v->fails());
         $this->assertStringContainsString('at most 60', $v->errors()->first('attribute_values'));
     }
@@ -365,13 +366,19 @@ class ProductAttributesTest extends TestCase
 
     /* ── templates import ───────────────────────────────────────────────── */
 
-    public function test_the_templates_import_creates_once_and_never_re_dresses(): void
+    /** The categories the templates are scoped to. */
+    private function templateCategories(): void
     {
         foreach (['hand-gardening-tools', 'watering-tools', 'digging-and-soil-preparation', 'pruning-cutting', 'sprayers-and-application-equipment',
             'power-gardening-tools', 'lawn-and-turf-care-equipment', 'soil-testing-and-garden-measurement', 'safety-and-gardening-accessories',
             'gardening-gloves', 'plant-support-and-training-tools', 'tool-sets'] as $slug) {
             DB::table('categories')->insert(['name' => $slug, 'slug' => $slug, 'type_id' => $this->tools]);
         }
+    }
+
+    public function test_the_templates_import_creates_once_and_never_re_dresses(): void
+    {
+        $this->templateCategories();
         $importer = app(ToolsTaxonomyImporter::class);
 
         $first = $importer->importAttributes();
@@ -387,6 +394,20 @@ class ProductAttributesTest extends TestCase
         $this->assertSame(3, DB::table('plant_attribute_scopes')->where('definition_id', $blade->id)->count(), 'one definition, three branches');
         $this->assertSame(4, DB::table('plant_attribute_terms')->where('definition_id', DB::table('plant_attribute_definitions')->where('code', 'power-source')->value('id'))->count());
         $this->assertSame(0, DB::table('plant_attribute_product')->count(), 'no product values are invented');
+    }
+
+    public function test_a_re_import_keeps_the_scopes_an_admin_removed(): void
+    {
+        $this->templateCategories();
+        $importer = app(ToolsTaxonomyImporter::class);
+        $importer->importAttributes();
+        $blade = (int) DB::table('plant_attribute_definitions')->where('code', 'blade-length')->value('id');
+        DB::table('plant_attribute_scopes')->where('definition_id', $blade)->delete();   // the admin made it cover all of Tools
+
+        $again = $importer->importAttributes();
+
+        $this->assertSame(0, $again['scopes']);
+        $this->assertSame(0, DB::table('plant_attribute_scopes')->where('definition_id', $blade)->count());
     }
 
     /* ── admin endpoints ────────────────────────────────────────────────── */
@@ -444,5 +465,253 @@ class ProductAttributesTest extends TestCase
         $this->assertNotNull($find(1), 'same brand: duplicate');
         $this->assertNull($find(2), 'another brand: allowed');
         $this->assertNull($find(null), 'unbranded vs branded: allowed');
+    }
+
+    /* ── review fixes (2026-10-14) ──────────────────────────────────────── */
+
+    public function test_long_text_values_are_kept_whole(): void
+    {
+        $safety = $this->def('safety-instructions', 'text');
+        $product = $this->product('secateur', 'bypass');
+        $long = trim(str_repeat('Keep the blade closed when not in use. ', 6));   // past the old 191 characters
+
+        $this->assertSame('text', Schema::getColumnType('plant_attribute_product', 'value_text'), 'production MySQL cut VARCHAR(191) silently');
+        $this->assertSame([], $this->writer()->errors([['definition_id' => $safety, 'value' => $long]], $this->tools, [$this->c['bypass']], false));
+        $this->writer()->write($product, [['definition_id' => $safety, 'value' => $long]]);
+        $this->assertSame([$long], collect($this->writer()->specifications($product->id))->firstWhere('code', 'safety-instructions')['values']);
+    }
+
+    public function test_a_code_made_from_a_long_name_fits_its_column_and_stays_unique(): void
+    {
+        $controller = app(PlantTaxonomyController::class);
+        $name = 'Maximum recommended operating pressure for the attached spray lance and its replaceable nozzle tips';
+        $first = $controller->storeDefinition($this->asAdmin(Request::create('/', 'POST', ['name' => $name, 'type' => 'number'])))->getData(true);
+        $second = $controller->storeDefinition($this->asAdmin(Request::create('/', 'POST', ['name' => "{$name} (two)", 'type' => 'number'])))->getData(true);
+
+        $this->assertLessThanOrEqual(64, strlen($first['code']));
+        $this->assertLessThanOrEqual(64, strlen($second['code']));
+        $this->assertSame("{$first['code']}-2", $second['code'], 'the same first 60 characters: suffixed, not a 500');
+    }
+
+    public function test_the_plant_terms_panel_keeps_typed_specifications(): void
+    {
+        $spaces = (int) DB::table('plant_attribute_definitions')->where('code', 'suitable-spaces')->value('id');
+        DB::table('plant_attribute_terms')->insert(['definition_id' => $spaces, 'value' => 'Balcony', 'slug' => 'balcony', 'sort' => 1, 'is_active' => true]);
+        $capacity = $this->def('cutting-capacity', 'number');
+        $product = $this->product('secateur', 'bypass');
+        $this->writer()->write($product, [['definition_id' => $capacity, 'value' => 20]]);
+        $before = (int) Cache::get('products:ver', 1);
+
+        app(PlantTaxonomyController::class)->syncProductTerms($this->asAdmin(Request::create('/', 'PUT', ['term_ids' => [$this->term($spaces, 'balcony')]])), $product->id);
+
+        $current = collect($this->writer()->current($product->id))->keyBy('definition_id');
+        $this->assertSame(20.0, $current[$capacity]['value'], 'the typed value survives an options-only save');
+        $this->assertSame([$this->term($spaces, 'balcony')], $current[$spaces]['term_ids']);
+        $this->assertGreaterThan($before, (int) Cache::get('products:ver', 1));
+    }
+
+    public function test_plant_option_facets_keep_the_terms_param_and_other_kinds_use_attr(): void
+    {
+        $spaces = (int) DB::table('plant_attribute_definitions')->where('code', 'suitable-spaces')->value('id');
+        DB::table('plant_attribute_terms')->insert(['definition_id' => $spaces, 'value' => 'Balcony', 'slug' => 'balcony', 'sort' => 1, 'is_active' => true]);
+        $height = $this->def('mature-height', 'number', ['type_id' => $this->plants, 'unit' => 'cm']);
+        $plant = $this->product('monstera', 'indoor', ['type_id' => $this->plants]);
+        $this->writer()->write($plant, [['definition_id' => $spaces, 'term_ids' => [$this->term($spaces, 'balcony')]], ['definition_id' => $height, 'value' => 90]]);
+
+        $dynamic = collect($this->getJson('/api/products/filter-facets?type=plants')->assertOk()->json('facets.dynamic'))->keyBy('code');
+
+        $this->assertSame('terms', $dynamic['suitable-spaces']['param'], 'unchanged for the plants');
+        $this->assertSame('attr', $dynamic['mature-height']['param'], 'terms cannot filter a number');
+    }
+
+    /** ProductController's required check: null when the save may go ahead, else the status code. */
+    private function requiredCheck(array $input, ?Product $product, string $storedStatus): ?int
+    {
+        try {
+            (new \ReflectionMethod(ProductController::class, 'assertRequiredSpecifications'))
+                ->invoke(app(ProductController::class), Request::create('/', 'PUT', $input), $product, $storedStatus);
+
+            return null;
+        } catch (\Illuminate\Http\Exceptions\HttpResponseException $e) {
+            return $e->getResponse()->getStatusCode();
+        }
+    }
+
+    public function test_required_specifications_are_judged_on_the_status_the_save_stores(): void
+    {
+        $capacity = $this->def('cutting-capacity', 'number', [], ['pruning' => true]);
+        $draft = $this->product('draft-secateur', 'bypass', ['status' => 'draft']);
+        $live = $this->product('live-hose', 'watering', ['status' => 'publish']);
+
+        $this->assertSame(422, $this->requiredCheck(['status' => 'publish'], $draft, 'publish'), 'publishing without sending them');
+        $this->assertSame(422, $this->requiredCheck(['status' => 'under_review'], $draft, 'publish'), 'the stored status decides (product review turns a proposal into publish)');
+        $this->assertNull($this->requiredCheck(['status' => 'publish'], null, 'under_review'), "a vendor's proposal may be incomplete");
+        $this->assertSame(422, $this->requiredCheck(['type_id' => $this->tools, 'categories' => [$this->c['bypass']]], null, 'publish'), 'a create that publishes');
+        $this->assertNull($this->requiredCheck(['quantity' => 3], $live, 'publish'), 'an unrelated partial update of a live product');
+        $this->assertSame(422, $this->requiredCheck(['categories' => [$this->c['bypass']]], $live, 'publish'), 'moving a live product into a category that requires it');
+        $this->assertNull($this->requiredCheck(['categories' => [$this->c['bypass']], 'attribute_values' => [['definition_id' => $capacity, 'value' => 20]]], $live, 'publish'), 'sent with the save');
+    }
+
+    public function test_review_approval_refuses_a_product_missing_a_required_specification(): void
+    {
+        $this->def('cutting-capacity', 'number', [], ['pruning' => true]);
+        $product = $this->product('proposal', 'bypass', ['status' => 'under_review']);
+
+        try {
+            app(ProductController::class)->updateStatus($this->asAdmin(Request::create('/', 'POST', ['id' => $product->id, 'status' => 'publish'])));
+            $this->fail('approval went ahead without the required specification');
+        } catch (\Illuminate\Http\Exceptions\HttpResponseException $e) {
+            $response = $e->getResponse();
+        }
+
+        $this->assertSame(422, $response->getStatusCode());
+        $this->assertStringContainsString('Cutting Capacity is required', $response->getData(true)['message']);
+        $this->assertSame('under_review', DB::table('products')->where('id', $product->id)->value('status'));
+    }
+
+    public function test_malformed_values_are_refused_before_anything_is_saved(): void
+    {
+        $model = $this->def('model-number', 'text');
+        $material = $this->def('material', 'multi', [], [], ['Steel']);
+        $errors = fn (array $values) => $this->writer()->errors($values, $this->tools, [$this->c['bypass']], false);
+
+        $this->assertNotEmpty($errors([['definition_id' => $model, 'value' => ['x']]]), 'a list where text belongs');
+        $this->assertNotEmpty($errors([['definition_id' => $material, 'term_ids' => [[$this->term($material, 'steel')]]]]), 'a nested option id');
+        $this->assertNotEmpty($errors([['definition_id' => [$model], 'value' => 'x']]), 'a list for the attribute');
+        $this->assertNotEmpty($errors(['not an entry']));
+        $this->assertFalse((new ValidAttributeValues())->passes('attribute_values', [['definition_id' => $model, 'value' => ['x']]]), 'refused, not waved through');
+    }
+
+    public function test_a_value_under_a_deleted_attribute_can_be_cleared_but_not_set(): void
+    {
+        $old = $this->def('old-spec', 'number');
+        $product = $this->product('saw', 'bypass');
+        $this->writer()->write($product, [['definition_id' => $old, 'value' => 5]]);
+        DB::table('plant_attribute_definitions')->where('id', $old)->update(['deleted_at' => now()]);   // manual database work
+        $errors = fn (array $entry) => $this->writer()->errors([$entry], $this->tools, [$this->c['bypass']], false, $product->id);
+
+        $this->assertNotEmpty($errors(['definition_id' => $old, 'value' => 7]));
+        $this->assertSame([], $errors(['definition_id' => $old, 'value' => null]), "the form's Remove");
+        $this->writer()->write($product, [['definition_id' => $old, 'value' => null]]);
+        $this->assertSame(0, DB::table('plant_attribute_product')->where('product_id', $product->id)->count());
+    }
+
+    public function test_yes_no_values_read_back_as_booleans(): void
+    {
+        $foldable = $this->def('foldable', 'boolean');
+        $product = $this->product('saw', 'bypass');
+        $value = fn () => collect($this->writer()->current($product->id))->firstWhere('definition_id', $foldable)['value'];
+
+        $this->writer()->write($product, [['definition_id' => $foldable, 'value' => true]]);
+        $this->assertTrue($value());
+        $this->writer()->write($product, [['definition_id' => $foldable, 'value' => false]]);
+        $this->assertFalse($value());
+    }
+
+    public function test_a_scoped_category_cannot_be_deleted_and_a_lost_scope_never_widens_the_attribute(): void
+    {
+        $this->def('hose-length', 'number', [], ['watering' => false]);
+
+        $response = app(\Marvel\Http\Controllers\CategoryController::class)->destroy($this->c['watering']);
+        $this->assertSame(422, $response->getStatusCode(), 'an attribute is scoped to it');
+
+        DB::table('categories')->where('id', $this->c['watering'])->delete();   // gone some other way
+        $this->assertFalse(app(ProductAttributeSchema::class)->forProduct($this->tools, [$this->c['bypass']])->contains('code', 'hose-length'));
+        $listed = collect($this->getJson("/api/plant-attributes?type=tools&include_inactive=1")->assertOk()->json())->firstWhere('code', 'hose-length');
+        $this->assertSame("Deleted category #{$this->c['watering']}", $listed['scopes'][0]['name'] ?? null, 'the admin sees the scope that still limits it');
+    }
+
+    public function test_a_template_waits_until_all_its_categories_exist(): void
+    {
+        $this->templateCategories();
+        DB::table('categories')->where('slug', 'pruning-cutting')->delete();
+        $importer = app(ToolsTaxonomyImporter::class);
+
+        $first = $importer->importAttributes();
+        $this->assertNull(DB::table('plant_attribute_definitions')->where('code', 'cutting-capacity')->value('id'), 'never created unscoped');
+        $this->assertNotEmpty(array_filter($first['skipped'], fn ($line) => str_starts_with($line, 'cutting-capacity:')));
+
+        DB::table('categories')->insert(['name' => 'pruning-cutting', 'slug' => 'pruning-cutting', 'type_id' => $this->tools]);
+        $importer->importAttributes();
+        $id = DB::table('plant_attribute_definitions')->where('code', 'cutting-capacity')->value('id');
+        $this->assertSame(1, DB::table('plant_attribute_scopes')->where('definition_id', $id)->count(), 'created later, with its scope');
+    }
+
+    public function test_the_plants_seeder_sets_code_and_vertical_and_never_re_dresses(): void
+    {
+        DB::table('plant_attribute_definitions')->where('slug', 'suitable-spaces')->update(['type_id' => null]);   // the admin chose "every vertical"
+
+        (new \Marvel\Database\Seeders\PlantAttributeDefinitionSeeder())->run();
+
+        $this->assertNull(DB::table('plant_attribute_definitions')->where('slug', 'suitable-spaces')->value('type_id'));
+        $special = DB::table('plant_attribute_definitions')->where('slug', 'special-characteristics')->first();
+        $this->assertSame('special-characteristics', $special->code);
+        $this->assertSame($this->plants, (int) $special->type_id);
+    }
+
+    public function test_deactivating_an_attribute_and_reordering_options_refresh_product_caches(): void
+    {
+        $material = $this->def('material', 'multi', [], [], ['Steel', 'Plastic']);
+        $controller = app(PlantTaxonomyController::class);
+        $version = fn () => (int) Cache::get('products:ver', 1);
+
+        $before = $version();
+        $controller->reorderTerms($this->asAdmin(Request::create('/', 'POST', ['ids' => [$this->term($material, 'plastic'), $this->term($material, 'steel')]])), $material);
+        $this->assertGreaterThan($before, $version());
+        $before = $version();
+        $controller->destroyDefinition($this->asAdmin(Request::create('/', 'DELETE')), $material);
+        $this->assertGreaterThan($before, $version());
+    }
+
+    public function test_numbers_and_names_fit_their_columns(): void
+    {
+        $capacity = $this->def('capacity', 'number');
+        $this->assertNotEmpty($this->writer()->errors([['definition_id' => $capacity, 'value' => 25000000000]], $this->tools, [], false), 'DECIMAL(14,4) would clip it');
+
+        $controller = app(PlantTaxonomyController::class);
+        try {
+            $controller->storeDefinition($this->asAdmin(Request::create('/', 'POST', ['name' => 'Huge', 'type' => 'number', 'max_value' => 1e11])));
+            $this->fail('a limit wider than the column was accepted');
+        } catch (\Illuminate\Validation\ValidationException $e) {
+            $this->assertArrayHasKey('max_value', $e->errors());
+        }
+
+        $name = str_repeat('a', 191);
+        $first = $controller->storeDefinition($this->asAdmin(Request::create('/', 'POST', ['name' => $name, 'type' => 'text'])))->getData(true);
+        $second = $controller->storeDefinition($this->asAdmin(Request::create('/', 'POST', ['name' => $name, 'type' => 'text'])))->getData(true);
+        $this->assertLessThanOrEqual(191, strlen($second['slug']));
+        $this->assertNotSame($first['slug'], $second['slug']);
+    }
+
+    public function test_array_attr_and_text_params_do_not_break_the_listing(): void
+    {
+        // What the listing reads besides the fixture's tables.
+        foreach (['reviews' => fn ($t) => [$t->unsignedBigInteger('product_id'), $t->integer('rating')->default(5), $t->softDeletes()],
+                  'product_inclusions' => fn ($t) => [$t->unsignedBigInteger('parent_id'), $t->unsignedBigInteger('child_id'), $t->integer('quantity')->default(1), $t->integer('sort_order')->default(0), $t->string('relation')->default('bundle')],
+                  'availabilities' => fn ($t) => [$t->unsignedBigInteger('product_id'), $t->string('bookable_type')->nullable(), $t->unsignedBigInteger('bookable_id')->nullable(), $t->date('from')->nullable(), $t->date('to')->nullable()],
+                  'tags' => fn ($t) => [$t->string('name'), $t->string('slug')],
+                  'product_tag' => fn ($t) => [$t->unsignedBigInteger('product_id'), $t->unsignedBigInteger('tag_id')],
+                  'shops' => fn ($t) => [$t->string('name')->nullable(), $t->string('slug')->nullable(), $t->unsignedBigInteger('owner_id')->nullable(), $t->boolean('is_active')->default(true)],
+        ] as $table => $columns) {
+            Schema::create($table, function (Blueprint $t) use ($columns) {
+                $t->bigIncrements('id');
+                $columns($t);
+                $t->timestamps();
+            });
+        }
+        $this->product('saw', 'bypass');
+
+        $this->getJson('/api/products?attr[]=x&text[]=y&limit=5')->assertOk();
+    }
+
+    public function test_without_a_plants_vertical_no_facet_uses_the_terms_param(): void
+    {
+        DB::table('types')->where('slug', 'plants')->delete();
+        $everywhere = $this->def('finish', 'multi', ['type_id' => null], [], ['Matte']);
+        $this->writer()->write($this->product('saw', 'bypass'), [['definition_id' => $everywhere, 'term_ids' => [$this->term($everywhere, 'matte')]]]);
+
+        $dynamic = collect($this->getJson('/api/products/filter-facets?type=tools')->assertOk()->json('facets.dynamic'))->keyBy('code');
+
+        $this->assertSame('attr', $dynamic['finish']['param']);
     }
 }

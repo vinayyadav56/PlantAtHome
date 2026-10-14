@@ -29,8 +29,14 @@ class AttributeValueWriter
      */
     public function errors(array $values, ?int $typeId, array $categoryIds, bool $publishing, ?int $productId = null): array
     {
+        if (!$values && !$publishing) {
+            return [];
+        }
         $errors = [];
-        $ids = collect($values)->pluck('definition_id')->filter()->map(fn ($v) => (int) $v)->all();
+        $values = array_map(fn ($entry) => is_object($entry) ? (array) $entry : $entry, $values);
+        $ids = collect($values)
+            ->map(fn ($entry) => is_array($entry) && is_numeric($entry['definition_id'] ?? null) ? (int) $entry['definition_id'] : null)
+            ->filter()->all();
         $definitions = PlantAttributeDefinition::with('terms')->whereIn('id', $ids)->get()->keyBy('id');
         $current = $productId
             ? DB::table('plant_attribute_product')->where('product_id', $productId)->whereNotNull('term_id')->pluck('term_id')->map(fn ($v) => (int) $v)->all()
@@ -39,10 +45,16 @@ class AttributeValueWriter
         $submitted = [];
         foreach ($values as $i => $entry) {
             $field = "attribute_values.{$i}";
-            $entry = (array) $entry;
-            $def = $definitions->get((int) ($entry['definition_id'] ?? 0));
+            if (!is_array($entry) || !is_numeric($entry['definition_id'] ?? null)) {
+                $errors[$field] = 'Each specification needs the attribute it sets.';
+                continue;
+            }
+            $def = $definitions->get((int) $entry['definition_id']);
             if (!$def) {
-                $errors[$field] = 'Unknown attribute.';
+                // A value left under an attribute that no longer exists can be cleared, never set.
+                if (!$this->blank($entry)) {
+                    $errors[$field] = 'Unknown attribute.';
+                }
                 continue;
             }
             $empty = $this->isEmpty($def, $entry);
@@ -52,7 +64,12 @@ class AttributeValueWriter
             }
 
             if (in_array($def->type, PlantAttributeDefinition::TERM_TYPES, true)) {
-                $termIds = array_values(array_unique(array_map('intval', (array) $entry['term_ids'])));
+                // Option ids only: intval() would turn a nested [5] into 1, some other option.
+                if (array_filter((array) $entry['term_ids'], fn ($t) => !is_numeric($t) && $t !== null && $t !== '')) {
+                    $errors[$field] = "{$def->name}: not a valid choice.";
+                    continue;
+                }
+                $termIds = array_values(array_unique(array_map('intval', array_filter((array) $entry['term_ids']))));
                 if ($def->type === 'single' && count($termIds) > 1) {
                     $errors[$field] = "{$def->name}: choose one value.";
                     continue;
@@ -70,6 +87,9 @@ class AttributeValueWriter
                         continue 2;
                     }
                 }
+            } elseif (!is_scalar($entry['value']) || (isset($entry['value_max']) && !is_scalar($entry['value_max']))) {
+                // A list or an object where one value belongs: refused here, before anything is saved.
+                $errors[$field] = "{$def->name}: not a valid value.";
             } elseif ($def->type === 'boolean') {
                 if (filter_var($entry['value'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE) === null) {
                     $errors[$field] = "{$def->name}: answer yes or no.";
@@ -82,6 +102,11 @@ class AttributeValueWriter
                 foreach ($numbers as $n) {
                     if (!is_numeric($n)) {
                         $errors[$field] = "{$def->name}: enter a number.";
+                        continue 2;
+                    }
+                    if (abs((float) $n) >= 1e10) {
+                        // DECIMAL(14,4): MySQL would silently clip it.
+                        $errors[$field] = "{$def->name}: that number is too large.";
                         continue 2;
                     }
                     $unit = $def->unit ? " {$def->unit}" : '';
@@ -106,8 +131,12 @@ class AttributeValueWriter
         }
 
         if ($publishing) {
+            // A stored row counts only when it holds a value (an empty row is not an answer).
             $stored = $productId
-                ? DB::table('plant_attribute_product')->where('product_id', $productId)->distinct()->pluck('definition_id')->map(fn ($v) => (int) $v)->flip()->all()
+                ? DB::table('plant_attribute_product')->where('product_id', $productId)
+                    ->where(fn ($w) => $w->whereNotNull('term_id')->orWhereNotNull('value_number')
+                        ->orWhere(fn ($t) => $t->whereNotNull('value_text')->where('value_text', '<>', '')))
+                    ->distinct()->pluck('definition_id')->map(fn ($v) => (int) $v)->flip()->all()
                 : [];
             foreach (app(ProductAttributeSchema::class)->forProduct($typeId, $categoryIds) as $def) {
                 if (!$def->is_required) {
@@ -127,16 +156,20 @@ class AttributeValueWriter
     public function write(Product $product, array $values): void
     {
         $ids = collect($values)->pluck('definition_id')->filter()->map(fn ($v) => (int) $v)->all();
-        $definitions = PlantAttributeDefinition::whereIn('id', $ids)->get()->keyBy('id');
-        if ($definitions->isEmpty()) {
+        if (!$ids) {
             return;
         }
+        $definitions = PlantAttributeDefinition::withTrashed()->whereIn('id', $ids)->get()->keyBy('id');
 
         DB::transaction(function () use ($product, $values, $definitions) {
             foreach ($values as $entry) {
                 $entry = (array) $entry;
-                $def = $definitions->get((int) ($entry['definition_id'] ?? 0));
+                $id = (int) ($entry['definition_id'] ?? 0);
+                $def = $definitions->get($id);
                 if (!$def) {
+                    if ($id > 0 && $this->blank($entry)) {
+                        DB::table('plant_attribute_product')->where('product_id', $product->id)->where('definition_id', $id)->delete();
+                    }
                     continue;
                 }
                 DB::table('plant_attribute_product')->where('product_id', $product->id)->where('definition_id', $def->id)->delete();
@@ -146,7 +179,7 @@ class AttributeValueWriter
                 $now = now();
                 $row = ['definition_id' => $def->id, 'product_id' => $product->id, 'created_at' => $now, 'updated_at' => $now];
                 if (in_array($def->type, PlantAttributeDefinition::TERM_TYPES, true)) {
-                    foreach (array_values(array_unique(array_map('intval', (array) $entry['term_ids']))) as $termId) {
+                    foreach (array_values(array_unique(array_map('intval', array_filter((array) $entry['term_ids'])))) as $termId) {
                         DB::table('plant_attribute_product')->insert($row + ['term_id' => $termId]);
                     }
                 } elseif ($def->type === 'text') {
@@ -170,7 +203,10 @@ class AttributeValueWriter
      */
     public function current(int $productId): array
     {
-        $rows = DB::table('plant_attribute_product')->where('product_id', $productId)->orderBy('id')->get();
+        $rows = DB::table('plant_attribute_product as v')
+            ->leftJoin('plant_attribute_definitions as d', 'd.id', '=', 'v.definition_id')
+            ->where('v.product_id', $productId)->orderBy('v.id')
+            ->get(['v.definition_id', 'v.term_id', 'v.value_text', 'v.value_number', 'v.value_number_max', 'd.type']);
         $out = [];
         foreach ($rows as $r) {
             $id = (int) $r->definition_id;
@@ -178,7 +214,8 @@ class AttributeValueWriter
             if ($r->term_id) {
                 $out[$id]['term_ids'][] = (int) $r->term_id;
             } elseif ($r->value_number !== null) {
-                $out[$id]['value'] = (float) $r->value_number;
+                // Yes/no is stored as 1/0 but read and written as true/false.
+                $out[$id]['value'] = $r->type === 'boolean' ? (bool) (float) $r->value_number : (float) $r->value_number;
                 $out[$id]['value_max'] = $r->value_number_max !== null ? (float) $r->value_number_max : null;
             } elseif ($r->value_text !== null) {
                 $out[$id]['value'] = (string) $r->value_text;
@@ -229,6 +266,14 @@ class AttributeValueWriter
         $value = $entry['value'] ?? null;
 
         return $value === null || (is_string($value) && trim($value) === '') || (is_array($value) && !$value);
+    }
+
+    /** No option and no value: an entry that clears, whatever the attribute's kind. */
+    private function blank(array $entry): bool
+    {
+        $value = $entry['value'] ?? null;
+
+        return !array_filter((array) ($entry['term_ids'] ?? [])) && ($value === null || (is_string($value) && trim($value) === ''));
     }
 
     private function num(float $n): string

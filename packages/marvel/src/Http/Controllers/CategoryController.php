@@ -347,11 +347,16 @@ class CategoryController extends CoreController
             ? DB::table('category_placements')->where('category_id', $category->id)->orWhere('parent_id', $category->id)->count()
             : 0;
         $products = DB::table('category_product')->where('category_id', $category->id)->count();
-        if ($children || $placements || $products) {
+        // An attribute scoped here would lose its scope (and its required flag) with the row.
+        $attributes = Schema::hasTable('plant_attribute_scopes')
+            ? DB::table('plant_attribute_scopes')->where('category_id', $category->id)->count()
+            : 0;
+        if ($children || $placements || $products || $attributes) {
             $uses = array_filter([
                 $children ? "{$children} sub-categories" : null,
                 $placements ? "{$placements} placements" : null,
                 $products ? "{$products} products" : null,
+                $attributes ? "{$attributes} product attributes" : null,
             ]);
 
             return response()->json([
@@ -359,6 +364,7 @@ class CategoryController extends CoreController
                 'children'   => $children,
                 'placements' => $placements,
                 'products'   => $products,
+                'attributes' => $attributes,
             ], 422);
         }
 

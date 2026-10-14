@@ -3,6 +3,7 @@
 namespace Marvel\Services;
 
 use Illuminate\Support\Collection;
+use Illuminate\Support\Facades\DB;
 use Marvel\Database\Models\PlantAttributeDefinition;
 
 /**
@@ -41,8 +42,13 @@ class ProductAttributeSchema
             ->orderBy('sort')->orderBy('name')
             ->get();
 
-        return $definitions->filter(function (PlantAttributeDefinition $def) use ($context) {
-            if ($def->categories->isEmpty()) {
+        // Scoped or not is read from the scope rows themselves: the loaded relation skips a scope
+        // whose category is gone, and that must not widen the attribute to the whole vertical.
+        $scoped = DB::table('plant_attribute_scopes')->whereIn('definition_id', $definitions->modelKeys())
+            ->distinct()->pluck('definition_id')->map(fn ($v) => (int) $v)->flip();
+
+        return $definitions->filter(function (PlantAttributeDefinition $def) use ($context, $scoped) {
+            if (!$scoped->has($def->id)) {
                 $def->setAttribute('is_required', false);
 
                 return true;

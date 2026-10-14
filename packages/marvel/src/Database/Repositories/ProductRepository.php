@@ -560,7 +560,8 @@ class ProductRepository extends BaseRepository
         );
     }
 
-    public function checkProductForPublish($request, $product)
+    /** $notify false: only work out the status (no review notifications), for checks run before the save. */
+    public function checkProductForPublish($request, $product, bool $notify = true)
     {
         $status = '';
         // Master-catalog vendor: the product belongs to the master shop, so the
@@ -599,10 +600,10 @@ class ProductRepository extends BaseRepository
         } elseif ($request->user()->hasPermissionTo(Permission::SUPER_ADMIN)) {
             if ($request->status == ProductStatus::APPROVED) {
                 $status = ProductStatus::PUBLISH;
-                event(new ProductReviewApproved($product));
+                $notify && event(new ProductReviewApproved($product));
             } elseif ($request->status == ProductStatus::REJECTED) {
                 $status = ProductStatus::REJECTED;
-                event(new ProductReviewRejected($product));
+                $notify && event(new ProductReviewRejected($product));
             } elseif ($request->status == ProductStatus::PUBLISH) {
                 return ProductStatus::PUBLISH;
             } elseif ($request->status == ProductStatus::UNPUBLISH) {

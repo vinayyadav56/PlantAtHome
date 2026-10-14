@@ -564,7 +564,9 @@ class ProductController extends CoreController
                     'name'  => $def->name,
                     'type'  => $def->type,
                     'unit'  => $def->unit,
-                    'param' => (int) $def->type_id === $plantsTypeId ? 'terms' : 'attr',
+                    // `terms` can only match options: a plant number or yes/no attribute filters via attr.
+                    'param' => $plantsTypeId > 0 && (int) $def->type_id === $plantsTypeId
+                        && in_array($def->type, \Marvel\Database\Models\PlantAttributeDefinition::TERM_TYPES, true) ? 'terms' : 'attr',
                 ];
                 $n = $numbers->get($def->id);
                 if (in_array($def->type, \Marvel\Database\Models\PlantAttributeDefinition::TERM_TYPES, true)) {
@@ -751,8 +753,9 @@ class ProductController extends CoreController
         // the plant even though only `name` is Prettus-searchable. Applied as an explicit
         // whereHas OR-group (never through the Prettus `search` rewrite, which smears a
         // colon-less term across every searchable field).
-        if ($request->filled('text')) {
-            $term = trim((string) $request->input('text'));
+        // A string only: `text[]=…` would otherwise be cast from an array and fail the request.
+        if (is_string($request->input('text'))) {
+            $term = trim($request->input('text'));
             if ($term !== '') {
                 // A category named like the search ("secateurs" → Secateurs and Pruners) brings in
                 // everything filed beneath it. Bounded: the 50 closest live names.
@@ -808,7 +811,8 @@ class ProductController extends CoreController
         $products_query = $this->applyStatusExclusion($products_query, $request);
         $products_query = $this->applyMissingTaxConfig($products_query, $request);
         // Attribute filters (tools specs): AND across attributes, OR within one.
-        $products_query = \Marvel\Services\AttributeFilter::apply($products_query, $request->input('attr'));
+        $attr = $request->input('attr');
+        $products_query = \Marvel\Services\AttributeFilter::apply($products_query, is_string($attr) ? $attr : null);
 
         // City-first availability (single source of truth: AvailabilityService::cityScopeProductIds):
         //   - city has vendor inventory -> STRICT, only that inventory
@@ -909,6 +913,8 @@ class ProductController extends CoreController
         if (!$isSuperAdmin) {
             $request->merge(['status' => \Marvel\Enums\ProductStatus::UNDER_REVIEW]);
         }
+        // The status this create stores (a vendor's is under review by now: a proposal may be incomplete).
+        $this->assertRequiredSpecifications($request, null, (string) ($request->input('status') ?: \Marvel\Enums\ProductStatus::DRAFT));
 
         try {
             // inform_purchased_customer
@@ -1370,6 +1376,15 @@ class ProductController extends CoreController
                     'shop_id' => \Marvel\Database\Models\Shop::masterId(),
                 ]);
             }
+            $current = Product::find((int) $request->id);
+            if ($current) {
+                // The status this save stores: with product review on, the repository turns an admin's
+                // "approved" and a vendor's own proposal into publish whatever the form sent.
+                $final = ($setting?->options['isProductReview'] ?? false)
+                    ? (string) $this->repository->checkProductForPublish($request, $current, false)
+                    : (string) ($request->has('status') ? $request->input('status') : $current->status);
+                $this->assertRequiredSpecifications($request, $current, $final);
+            }
             $id = $request->id;
             $product = $this->repository->updateProduct($request, $id, $setting);
             // The form writes price/in_stock straight onto the row; a single-seller product
@@ -1552,6 +1567,41 @@ class ProductController extends CoreController
     }
 
     /**
+     * A save that leaves the product published must carry the specifications its categories
+     * require, judged on the status the save STORES (see the callers), never the one sent. An
+     * unrelated partial update (stock, price) of a product that is already live is not re-judged.
+     * Raised before anything is written, in the validation errors' 422 shape (+ message).
+     */
+    private function assertRequiredSpecifications(Request $request, ?Product $product, string $finalStatus): void
+    {
+        if ($finalStatus !== \Marvel\Enums\ProductStatus::PUBLISH) {
+            return;
+        }
+        if ($product && $product->status === \Marvel\Enums\ProductStatus::PUBLISH
+            && !$request->hasAny(['attribute_values', 'categories', 'type_id', 'status'])) {
+            return;
+        }
+        try {
+            $categories = $request->has('categories')
+                ? array_values(array_map('intval', array_filter((array) $request->input('categories', []), 'is_numeric')))
+                : ($product ? DB::table('category_product')->where('product_id', $product->id)->pluck('category_id')->map(fn ($v) => (int) $v)->all() : []);
+            $type = is_numeric($request->input('type_id'))
+                ? (int) $request->input('type_id')
+                : ($product && $product->type_id ? (int) $product->type_id : null);
+            $values = is_array($request->input('attribute_values')) ? $request->input('attribute_values') : [];
+            $missing = array_values(app(\Marvel\Services\AttributeValueWriter::class)
+                ->errors($values, $type, $categories, true, $product ? (int) $product->id : null));
+        } catch (\Illuminate\Database\QueryException $e) {
+            return; // attribute tables not migrated yet
+        }
+        if ($missing) {
+            throw new \Illuminate\Http\Exceptions\HttpResponseException(
+                response()->json(['message' => implode(' ', $missing), 'attribute_values' => $missing], 422)
+            );
+        }
+    }
+
+    /**
      * POST update-product-status { id, status } — the admin review queue's
      * lightweight approve/reject (no full product payload round-trip).
      */
@@ -1567,6 +1617,8 @@ class ProductController extends CoreController
             'note'   => ['required_if:status,rejected', 'nullable', 'string', 'max:2000'],
         ]);
         $product = Product::findOrFail((int) $data['id']);
+        // Approving publishes, so the specifications its categories require must be there first.
+        $this->assertRequiredSpecifications($request, $product, (string) $data['status']);
         $product->status = $data['status'];
         if (\Illuminate\Support\Facades\Schema::hasColumn('products', 'review_note')) {
             // Cleared on publish: a note explaining a rejection that no longer applies is

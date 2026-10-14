@@ -36,10 +36,8 @@ class PlantTaxonomyController extends Controller
     /** GET plant-attributes — definitions + terms (public read: filters are built from this). */
     public function definitions(Request $request)
     {
-        $q = PlantAttributeDefinition::with(array_merge(
-            ['terms' => fn ($t) => $request->boolean('include_inactive') ? $t : $t->where('is_active', true)],
-            $this->generalised() ? ['categories:id,name,slug'] : []
-        ))->orderBy('sort')->orderBy('name');
+        $q = PlantAttributeDefinition::with(['terms' => fn ($t) => $request->boolean('include_inactive') ? $t : $t->where('is_active', true)])
+            ->orderBy('sort')->orderBy('name');
         if (!$request->boolean('include_inactive')) {
             $q->active();
         }
@@ -48,7 +46,15 @@ class PlantTaxonomyController extends Controller
             $typeId = (int) DB::table('types')->where('slug', (string) $request->type)->orderBy('id')->value('id');
             $q->where(fn ($w) => $w->whereNull('type_id')->orWhere('type_id', $typeId));
         }
-        return response()->json($q->get()->map(fn ($d) => $this->definitionPayload($d)));
+        $definitions = $q->get();
+        // Scopes from their own rows: one whose category was deleted outside the admin still limits
+        // where the attribute applies (ProductAttributeSchema reads the rows), so it is listed too.
+        $scopes = $this->generalised()
+            ? DB::table('plant_attribute_scopes as s')->leftJoin('categories as c', 'c.id', '=', 's.category_id')
+                ->whereIn('s.definition_id', $definitions->modelKeys())->orderBy('s.sort')->orderBy('s.id')
+                ->get(['s.definition_id', 's.category_id', 's.is_required', 'c.name', 'c.slug'])->groupBy('definition_id')
+            : collect();
+        return response()->json($definitions->map(fn ($d) => $this->definitionPayload($d, $scopes->get($d->id, collect()))));
     }
 
     /**
@@ -68,8 +74,8 @@ class PlantTaxonomyController extends Controller
         return response()->json(['data' => $definitions->map(fn ($d) => $this->definitionPayload($d) + ['is_required' => (bool) $d->is_required])->values()]);
     }
 
-    /** One definition as the admin and the product form read it. */
-    private function definitionPayload(PlantAttributeDefinition $d): array
+    /** One definition as the admin and the product form read it ($scopeRows: from definitions()). */
+    private function definitionPayload(PlantAttributeDefinition $d, ?\Illuminate\Support\Collection $scopeRows = null): array
     {
         return [
             'id'              => $d->id,
@@ -91,9 +97,16 @@ class PlantTaxonomyController extends Controller
             'terms'           => $d->relationLoaded('terms')
                 ? $d->terms->map(fn ($t) => ['id' => $t->id, 'value' => $t->value, 'slug' => $t->slug, 'sort' => (int) $t->sort, 'is_active' => (bool) $t->is_active])->values()
                 : [],
-            'scopes'          => $d->relationLoaded('categories')
-                ? $d->categories->map(fn ($c) => ['category_id' => $c->id, 'name' => $c->name ?? null, 'slug' => $c->slug ?? null, 'is_required' => (bool) $c->pivot->is_required])->values()
-                : [],
+            'scopes'          => $scopeRows !== null
+                ? $scopeRows->map(fn ($s) => [
+                    'category_id' => (int) $s->category_id,
+                    'name'        => $s->name ?? "Deleted category #{$s->category_id}",
+                    'slug'        => $s->slug,
+                    'is_required' => (bool) $s->is_required,
+                ])->values()
+                : ($d->relationLoaded('categories')
+                    ? $d->categories->map(fn ($c) => ['category_id' => $c->id, 'name' => $c->name ?? null, 'slug' => $c->slug ?? null, 'is_required' => (bool) $c->pivot->is_required])->values()
+                    : []),
         ];
     }
 
@@ -110,8 +123,15 @@ class PlantTaxonomyController extends Controller
         $data['slug'] = $this->uniqueSlug($data['name'], 'plant_attribute_definitions');
         if ($this->generalised()) {
             // The stable code filters and imports refer to: chosen once, never rewritten.
-            $code = $data['code'] ?? $data['slug'];
-            if (PlantAttributeDefinition::withTrashed()->where('code', $code)->exists()) {
+            $code = $data['code'] ?? null;
+            if ($code === null) {
+                // From the name: cut to fit the 64-character column, then made unique.
+                $base = rtrim(Str::limit($data['slug'], 60, ''), '-') ?: 'attribute';
+                $code = $base;
+                for ($n = 2; PlantAttributeDefinition::withTrashed()->where('code', $code)->exists(); $n++) {
+                    $code = "{$base}-{$n}";
+                }
+            } elseif (PlantAttributeDefinition::withTrashed()->where('code', $code)->exists()) {
                 return response()->json(['code' => ["The code \"{$code}\" is already used by another attribute."]], 422);
             }
             $data['code'] = $code;
@@ -175,12 +195,13 @@ class PlantTaxonomyController extends Controller
             'is_variant_axis'        => "{$sometimes}|boolean",
             'sort'                   => "{$sometimes}|integer",
             'unit'                   => 'nullable|string|max:16',
-            'min_value'              => 'nullable|numeric',
-            'max_value'              => 'nullable|numeric',
-            'step'                   => 'nullable|numeric|min:0',
+            // DECIMAL(14,4): MySQL would silently clip anything wider.
+            'min_value'              => 'nullable|numeric|between:-9999999999,9999999999',
+            'max_value'              => 'nullable|numeric|between:-9999999999,9999999999',
+            'step'                   => 'nullable|numeric|min:0|max:9999999999',
             'max_length'             => 'nullable|integer|min:1|max:5000',
             'type_id'                => 'nullable|integer|exists:types,id',
-            'help_text'              => 'nullable|string|max:255',
+            'help_text'              => 'nullable|string|max:191', // the column's length
             'scopes'                 => 'nullable|array',
             'scopes.*.category_id'   => 'required|integer|exists:categories,id',
             'scopes.*.is_required'   => 'nullable|boolean',
@@ -218,6 +239,7 @@ class PlantTaxonomyController extends Controller
         $this->assertCatalogAdmin($request);
         $def = PlantAttributeDefinition::findOrFail($id);
         $def->update(['is_active' => false]);
+        $this->bustProducts();
         return response()->json(['ok' => true, 'deactivated' => true]);
     }
 
@@ -262,6 +284,7 @@ class PlantTaxonomyController extends Controller
         foreach ($ids as $i => $termId) {
             PlantAttributeTerm::where('definition_id', $definitionId)->where('id', $termId)->update(['sort' => ($i + 1) * 10]);
         }
+        $this->bustProducts();
         return response()->json(['ok' => true]);
     }
 
@@ -402,13 +425,13 @@ class PlantTaxonomyController extends Controller
                 $clone['updated_at'] = now();
                 DB::table('plant_attributes')->insert($clone);
             }
-            $terms = DB::table('plant_attribute_product')->where('product_id', $master->id)->get();
-            foreach ($terms as $t) {
-                DB::table('plant_attribute_product')->insert([
-                    'definition_id' => $t->definition_id, 'term_id' => $t->term_id,
-                    'product_id' => $variety->id, 'value_text' => $t->value_text,
-                    'created_at' => now(), 'updated_at' => now(),
-                ]);
+            // Every value column (terms, text, numbers), whichever the table has.
+            foreach (DB::table('plant_attribute_product')->where('product_id', $master->id)->get() as $t) {
+                $row = (array) $t;
+                unset($row['id']);
+                DB::table('plant_attribute_product')->insert(array_merge($row, [
+                    'product_id' => $variety->id, 'created_at' => now(), 'updated_at' => now(),
+                ]));
             }
         });
 
@@ -430,13 +453,15 @@ class PlantTaxonomyController extends Controller
         $product = Product::findOrFail($productId);
 
         $terms = PlantAttributeTerm::whereIn('id', $termIds)->get(['id', 'definition_id']);
-        DB::table('plant_attribute_product')->where('product_id', $product->id)->delete();
+        // Option rows only: the same table holds the typed specifications (numbers, yes/no, text).
+        DB::table('plant_attribute_product')->where('product_id', $product->id)->whereNotNull('term_id')->delete();
         if ($terms->isNotEmpty()) {
             DB::table('plant_attribute_product')->insert($terms->map(fn ($t) => [
                 'definition_id' => $t->definition_id, 'term_id' => $t->id, 'product_id' => $product->id,
                 'created_at' => now(), 'updated_at' => now(),
             ])->all());
         }
+        $this->bustProducts();
         return response()->json(['ok' => true, 'count' => $terms->count()]);
     }
 
@@ -457,7 +482,8 @@ class PlantTaxonomyController extends Controller
 
     private function uniqueSlug(string $name, string $table): string
     {
-        $base = Str::slug($name);
+        // Room for a "-N" suffix inside the 191-character column (MySQL would cut it, then clash).
+        $base = rtrim(Str::limit(Str::slug($name), 180, ''), '-');
         $slug = $base;
         $i = 1;
         while (DB::table($table)->where('slug', $slug)->exists()) {
