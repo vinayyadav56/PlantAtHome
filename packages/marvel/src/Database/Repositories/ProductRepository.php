@@ -885,14 +885,35 @@ class ProductRepository extends BaseRepository
         try {
             $product    = $this->findOneByFieldOrFail('slug', $slug);
             $categories = $product->categories->pluck('id');
+            // The product's own starting price: sale, else list, else the lowest size price.
+            $anchor = (float) ($product->sale_price ?: $product->price ?: $product->min_price ?: 0);
 
-            $query = $this->where('language', $language)->whereHas('categories', function ($query) use ($categories) {
-                $query->whereIn('categories.id', $categories);
-            })->with('type');
+            // Only products a shopper can buy right now (owner 2026-10-14: "Frequently bought
+            // together" showed draft and test rows), from the same categories, nearest in price
+            // first. A plain Product::query(), not $this->where(): the repository's request
+            // criteria would eager-load the product page's seven relations onto every row.
+            $query = Product::query()
+                ->where('products.language', $language)
+                ->where('products.id', '!=', $product->id)
+                ->where('products.status', ProductStatus::PUBLISH)
+                ->sellable()
+                ->where('products.in_stock', true)
+                ->where(function ($q) {
+                    $q->where('products.price', '>', 0)
+                        ->orWhere('products.sale_price', '>', 0)
+                        ->orWhere('products.max_price', '>', 0);
+                })
+                ->whereHas('categories', function ($query) use ($categories) {
+                    $query->whereIn('categories.id', $categories);
+                })
+                ->with('type')
+                ->orderByRaw('ABS(COALESCE(NULLIF(products.min_price, 0), products.price, 0) - ?)', [$anchor])
+                ->orderBy('products.id');
             // City-first scope (same policy as the listing).
             $query = (new \Marvel\Services\AvailabilityService())->applyCityScope($query, $city, false, 'products.id');
             return $query->limit($limit)->get();
         } catch (Exception $e) {
+            Log::warning('fetchRelated failed', ['slug' => $slug, 'error' => $e->getMessage()]);
             return [];
         }
     }
