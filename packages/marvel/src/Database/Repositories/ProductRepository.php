@@ -469,6 +469,12 @@ class ProductRepository extends BaseRepository
                 $this->syncPlantAttributeFromRequest($product, $request);
             }
 
+            // Specifications for every vertical (validated by ValidAttributeValues before the save):
+            // only the attributes sent are replaced, so a category change never drops saved specs.
+            if (isset($request['attribute_values']) && is_array($request['attribute_values'])) {
+                app(\Marvel\Services\AttributeValueWriter::class)->write($product, $request['attribute_values']);
+            }
+
             // PlantAtHome: bundle items + buy-together add-ons.
             if (isset($request['bundle_items']) || isset($request['addons'])) {
                 $product->syncInclusions($request['bundle_items'] ?? [], $request['addons'] ?? []);
@@ -796,6 +802,12 @@ class ProductRepository extends BaseRepository
             if (optional($product->type)->slug === 'plants') {
                 $product->reconcilePlantImages($data['image'] ?? null, $data['gallery'] ?? null);
                 $this->syncPlantAttributeFromRequest($product, $request);
+            }
+
+            // Specifications for every vertical (validated by ValidAttributeValues before the save):
+            // only the attributes sent are replaced, so a category change never drops saved specs.
+            if (isset($request['attribute_values']) && is_array($request['attribute_values'])) {
+                app(\Marvel\Services\AttributeValueWriter::class)->write($product, $request['attribute_values']);
             }
 
             // PlantAtHome: bundle items + buy-together add-ons.

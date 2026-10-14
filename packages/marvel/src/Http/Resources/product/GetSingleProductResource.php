@@ -60,6 +60,10 @@ class GetSingleProductResource extends Resource
             'image'                        => $this->image,
             'size_guide'                   => $this->size_guide,
             'plant_attribute'              => $this->plantAttribute,
+            // Specifications from the attribute layer: display-ready for the product page, and the
+            // raw values the admin form edits. Fail-soft: a product page never breaks on them.
+            'specifications'               => $this->attributeData('specifications'),
+            'attribute_values'             => $this->attributeData('current'),
             'images'                       => $this->images,
             // PlantAtHome — bundle items + buy-together add-ons
             'bundle_items'                 => $this->relationLoaded('bundleItems') ? ProductResource::mapInclusions($this->bundleItems) : [],
@@ -89,4 +93,14 @@ class GetSingleProductResource extends Resource
             'in_flash_sale'                => $this->in_flash_sale
         ];
     }
+
+    private function attributeData(string $method): array
+    {
+        try {
+            return app(\Marvel\Services\AttributeValueWriter::class)->{$method}((int) $this->id);
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
 }

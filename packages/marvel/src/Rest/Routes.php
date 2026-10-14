@@ -161,6 +161,8 @@ Route::get("products/calculate-rental-price", [ProductController::class, 'calcul
 Route::get('plant-attributes', [PlantTaxonomyController::class, 'definitions']);
 Route::get('plant-collections', [PlantTaxonomyController::class, 'collections']);
 Route::get('products/filter-facets', [ProductController::class, 'filterFacets'])->middleware('throttle:120,1');
+// The attributes a product of a vertical + categories should describe (the product form's Specifications).
+Route::get('products/attribute-schema', [PlantTaxonomyController::class, 'schema'])->middleware('throttle:120,1');
 // Bulk import/export carry an in-controller hasPermission() check; add a throttle
 // so the public routes can't be abused for bulk-write storms / catalog scraping.
 Route::post('import-products', [ProductController::class, 'importProducts'])->middleware('throttle:20,1');
@@ -1060,6 +1062,7 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     // Catalog taxonomy (admin-owned): attribute definitions + terms, dynamic collections,
     // plant varieties, product term assignment.
     Route::post('plant-attributes', [PlantTaxonomyController::class, 'storeDefinition']);
+    Route::post('plant-attributes/reorder', [PlantTaxonomyController::class, 'reorderDefinitions']);
     Route::put('plant-attributes/{id}', [PlantTaxonomyController::class, 'updateDefinition'])->whereNumber('id');
     Route::delete('plant-attributes/{id}', [PlantTaxonomyController::class, 'destroyDefinition'])->whereNumber('id');
     Route::post('plant-attributes/{id}/terms', [PlantTaxonomyController::class, 'storeTerm'])->whereNumber('id');

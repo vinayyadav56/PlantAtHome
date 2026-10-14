@@ -174,6 +174,91 @@ class ToolsTaxonomyImporter
         return $report;
     }
 
+    /**
+     * The Tools attribute templates (data/tools-attributes.json): create-only by code. A
+     * definition, a scope or an option is added when missing and never re-dressed, so an admin's
+     * renames, units, required flags and retirements survive every run.
+     */
+    public function importAttributes(bool $dryRun = false): array
+    {
+        $report = ['definitions' => 0, 'unchanged' => 0, 'scopes' => 0, 'terms' => 0, 'skipped' => [], 'notes' => []];
+        $type = DB::table('types')->where('slug', 'tools')->where('language', 'en')->orderBy('id')->first();
+        if (!$type) {
+            $report['notes'][] = 'No tools vertical yet: nothing to import.';
+
+            return $report;
+        }
+        if (!Schema::hasColumn('plant_attribute_definitions', 'code') || !Schema::hasTable('plant_attribute_scopes')) {
+            throw new \RuntimeException('The attribute tables are not migrated yet: run the migrations first.');
+        }
+        $data = json_decode((string) file_get_contents(dirname($this->file) . '/tools-attributes.json'), true);
+        if (!is_array($data) || !isset($data['definitions'])) {
+            throw new \RuntimeException('Unreadable attribute templates (data/tools-attributes.json).');
+        }
+        $categories = DB::table('categories')->where('language', 'en')->where('type_id', $type->id)->pluck('id', 'slug');
+
+        DB::beginTransaction();
+        try {
+            $now = now();
+            foreach ($data['definitions'] as $i => $d) {
+                $row = DB::table('plant_attribute_definitions')->where('code', $d['code'])->first();
+                if ($row && $row->type_id !== null && (int) $row->type_id !== (int) $type->id) {
+                    $report['skipped'][] = "{$d['code']}: code used by another vertical's attribute — left alone";
+                    continue;
+                }
+                if (!$row) {
+                    $slug = $d['code'];
+                    for ($n = 2; DB::table('plant_attribute_definitions')->where('slug', $slug)->exists(); $n++) {
+                        $slug = "{$d['code']}-{$n}";
+                    }
+                    $id = DB::table('plant_attribute_definitions')->insertGetId([
+                        'name' => $d['name'], 'slug' => $slug, 'code' => $d['code'], 'type' => $d['type'],
+                        'unit' => $d['unit'] ?? null, 'is_facet' => (bool) ($d['facet'] ?? false), 'is_active' => true,
+                        'sort' => ($i + 1) * 10, 'type_id' => $type->id, 'help_text' => $d['help_text'] ?? null,
+                        'created_at' => $now, 'updated_at' => $now,
+                    ]);
+                    $report['definitions']++;
+                } else {
+                    $id = (int) $row->id;
+                    $report['unchanged']++;
+                }
+                foreach ($d['scopes'] ?? [] as $j => $slug) {
+                    $categoryId = $categories[$slug] ?? null;
+                    if (!$categoryId) {
+                        $report['skipped'][] = "{$d['code']} → {$slug}: category missing";
+                        continue;
+                    }
+                    if (!DB::table('plant_attribute_scopes')->where('definition_id', $id)->where('category_id', $categoryId)->exists()) {
+                        DB::table('plant_attribute_scopes')->insert([
+                            'definition_id' => $id, 'category_id' => $categoryId, 'is_required' => false, 'sort' => $j,
+                            'created_at' => $now, 'updated_at' => $now,
+                        ]);
+                        $report['scopes']++;
+                    }
+                }
+                foreach ($d['terms'] ?? [] as $j => $value) {
+                    $termSlug = Str::slug($value);
+                    if (!DB::table('plant_attribute_terms')->where('definition_id', $id)->where('slug', $termSlug)->exists()) {
+                        DB::table('plant_attribute_terms')->insert([
+                            'definition_id' => $id, 'value' => $value, 'slug' => $termSlug, 'sort' => ($j + 1) * 10, 'is_active' => true,
+                            'created_at' => $now, 'updated_at' => $now,
+                        ]);
+                        $report['terms']++;
+                    }
+                }
+            }
+            $dryRun ? DB::rollBack() : DB::commit();
+        } catch (\Throwable $e) {
+            DB::rollBack();
+            throw $e;
+        }
+        if (!$dryRun && ($report['definitions'] || $report['scopes'] || $report['terms'])) {
+            Cache::forever('products:ver', (int) Cache::get('products:ver', 1) + 1);
+        }
+
+        return $report;
+    }
+
     public static function bustCaches(): void
     {
         CategoryTree::bust();

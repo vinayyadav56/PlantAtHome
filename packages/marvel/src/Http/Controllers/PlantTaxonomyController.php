@@ -5,6 +5,7 @@ namespace Marvel\Http\Controllers;
 use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
 use Illuminate\Support\Str;
 use Marvel\Database\Models\PlantAttributeDefinition;
 use Marvel\Database\Models\PlantAttributeTerm;
@@ -35,41 +36,180 @@ class PlantTaxonomyController extends Controller
     /** GET plant-attributes — definitions + terms (public read: filters are built from this). */
     public function definitions(Request $request)
     {
-        $q = PlantAttributeDefinition::with(['terms' => fn ($t) => $request->boolean('include_inactive') ? $t : $t->where('is_active', true)])
-            ->orderBy('sort')->orderBy('name');
+        $q = PlantAttributeDefinition::with(array_merge(
+            ['terms' => fn ($t) => $request->boolean('include_inactive') ? $t : $t->where('is_active', true)],
+            $this->generalised() ? ['categories:id,name,slug'] : []
+        ))->orderBy('sort')->orderBy('name');
         if (!$request->boolean('include_inactive')) {
             $q->active();
         }
-        return response()->json($q->get());
+        // ?type=tools — one vertical's attributes (plus the ones that apply to every vertical).
+        if ($request->filled('type') && $this->generalised()) {
+            $typeId = (int) DB::table('types')->where('slug', (string) $request->type)->orderBy('id')->value('id');
+            $q->where(fn ($w) => $w->whereNull('type_id')->orWhere('type_id', $typeId));
+        }
+        return response()->json($q->get()->map(fn ($d) => $this->definitionPayload($d)));
+    }
+
+    /**
+     * GET products/attribute-schema?type_id=&category_ids=1,2 — the attributes a product of that
+     * vertical in those categories should describe (scopes inherit down the category tree), with
+     * their options, units, limits and whether each is required before publishing. The product
+     * form renders its Specifications section from this.
+     */
+    public function schema(Request $request)
+    {
+        $typeId = $request->filled('type_id') ? (int) $request->type_id : null;
+        $raw = $request->input('category_ids', []);
+        $categoryIds = array_values(array_filter(array_map('intval', is_string($raw) ? explode(',', $raw) : (array) $raw)));
+
+        $definitions = app(\Marvel\Services\ProductAttributeSchema::class)->forProduct($typeId, $categoryIds);
+
+        return response()->json(['data' => $definitions->map(fn ($d) => $this->definitionPayload($d) + ['is_required' => (bool) $d->is_required])->values()]);
+    }
+
+    /** One definition as the admin and the product form read it. */
+    private function definitionPayload(PlantAttributeDefinition $d): array
+    {
+        return [
+            'id'              => $d->id,
+            'code'            => $d->code ?: $d->slug,
+            'slug'            => $d->slug,
+            'name'            => $d->name,
+            'type'            => $d->type,
+            'unit'            => $d->unit,
+            'min_value'       => $d->min_value,
+            'max_value'       => $d->max_value,
+            'step'            => $d->step,
+            'max_length'      => $d->max_length,
+            'type_id'         => $d->type_id,
+            'is_facet'        => (bool) $d->is_facet,
+            'is_active'       => (bool) $d->is_active,
+            'is_variant_axis' => (bool) $d->is_variant_axis,
+            'help_text'       => $d->help_text,
+            'sort'            => (int) $d->sort,
+            'terms'           => $d->relationLoaded('terms')
+                ? $d->terms->map(fn ($t) => ['id' => $t->id, 'value' => $t->value, 'slug' => $t->slug, 'sort' => (int) $t->sort, 'is_active' => (bool) $t->is_active])->values()
+                : [],
+            'scopes'          => $d->relationLoaded('categories')
+                ? $d->categories->map(fn ($c) => ['category_id' => $c->id, 'name' => $c->name ?? null, 'slug' => $c->slug ?? null, 'is_required' => (bool) $c->pivot->is_required])->values()
+                : [],
+        ];
     }
 
     public function storeDefinition(Request $request)
     {
         $this->assertCatalogAdmin($request);
-        $data = $request->validate([
-            'name'      => 'required|string|max:191',
-            'type'      => 'required|in:' . implode(',', PlantAttributeDefinition::TYPES),
-            'is_facet'  => 'nullable|boolean',
-            'is_active' => 'nullable|boolean',
-            'sort'      => 'nullable|integer',
+        $data = $request->validate($this->definitionRules(true) + [
+            'name' => 'required|string|max:191',
+            'type' => 'required|in:' . implode(',', PlantAttributeDefinition::TYPES),
+            'code' => 'nullable|string|max:64|regex:/^[a-z0-9-]+$/',
         ]);
-        $data['slug'] = $this->uniqueSlug($data['name']);
+        $scopes = $data['scopes'] ?? null;
+        unset($data['scopes']);
+        $data['slug'] = $this->uniqueSlug($data['name'], 'plant_attribute_definitions');
+        if ($this->generalised()) {
+            // The stable code filters and imports refer to: chosen once, never rewritten.
+            $code = $data['code'] ?? $data['slug'];
+            if (PlantAttributeDefinition::withTrashed()->where('code', $code)->exists()) {
+                return response()->json(['code' => ["The code \"{$code}\" is already used by another attribute."]], 422);
+            }
+            $data['code'] = $code;
+        } else {
+            // Before the 2026_10_15_000200 migration only the original columns exist.
+            $data = array_intersect_key($data, array_flip(['name', 'type', 'is_facet', 'is_active', 'sort', 'slug']));
+        }
         $data['created_by_user_id'] = $request->user()?->id;
-        return response()->json(PlantAttributeDefinition::create($data), 201);
+        $def = PlantAttributeDefinition::create($data);
+        if ($scopes !== null && $this->generalised()) {
+            $this->syncScopes($def, $scopes);
+        }
+        $this->bustProducts();
+        return response()->json($this->definitionPayload($def->fresh($this->generalised() ? ['terms', 'categories'] : ['terms'])), 201);
     }
 
     public function updateDefinition(Request $request, int $id)
     {
         $this->assertCatalogAdmin($request);
         $def = PlantAttributeDefinition::findOrFail($id);
-        $def->fill($request->validate([
-            'name'      => 'sometimes|string|max:191',
-            'type'      => 'sometimes|in:' . implode(',', PlantAttributeDefinition::TYPES),
-            'is_facet'  => 'sometimes|boolean',
-            'is_active' => 'sometimes|boolean',
-            'sort'      => 'sometimes|integer',
-        ]))->save();
-        return response()->json($def->fresh('terms'));
+        $data = $request->validate($this->definitionRules(false) + [
+            'name' => 'sometimes|string|max:191',
+            'type' => 'sometimes|in:' . implode(',', PlantAttributeDefinition::TYPES),
+        ]);
+        // Changing the kind of value under existing products would orphan their values.
+        if (isset($data['type']) && $data['type'] !== $def->type
+            && DB::table('plant_attribute_product')->where('definition_id', $def->id)->exists()) {
+            return response()->json(['type' => ['Products already use this attribute: its kind of value cannot change. Retire it and create a new one.']], 422);
+        }
+        $scopes = $data['scopes'] ?? null;
+        unset($data['scopes'], $data['code']);
+        if (!$this->generalised()) {
+            $data = array_intersect_key($data, array_flip(['name', 'type', 'is_facet', 'is_active', 'sort']));
+        }
+        $def->fill($data)->save();
+        if ($scopes !== null && $this->generalised()) {
+            $this->syncScopes($def, $scopes);
+        }
+        $this->bustProducts();
+        return response()->json($this->definitionPayload($def->fresh($this->generalised() ? ['terms', 'categories'] : ['terms'])));
+    }
+
+    /** POST plant-attributes/reorder {ids: [...]} — the order of attributes on forms and filters. */
+    public function reorderDefinitions(Request $request)
+    {
+        $this->assertCatalogAdmin($request);
+        $ids = $request->validate(['ids' => 'required|array', 'ids.*' => 'integer'])['ids'];
+        foreach ($ids as $i => $definitionId) {
+            PlantAttributeDefinition::where('id', $definitionId)->update(['sort' => ($i + 1) * 10]);
+        }
+        $this->bustProducts();
+        return response()->json(['ok' => true]);
+    }
+
+    private function definitionRules(bool $creating): array
+    {
+        $sometimes = $creating ? 'nullable' : 'sometimes';
+        return [
+            'is_facet'               => "{$sometimes}|boolean",
+            'is_active'              => "{$sometimes}|boolean",
+            'is_variant_axis'        => "{$sometimes}|boolean",
+            'sort'                   => "{$sometimes}|integer",
+            'unit'                   => 'nullable|string|max:16',
+            'min_value'              => 'nullable|numeric',
+            'max_value'              => 'nullable|numeric',
+            'step'                   => 'nullable|numeric|min:0',
+            'max_length'             => 'nullable|integer|min:1|max:5000',
+            'type_id'                => 'nullable|integer|exists:types,id',
+            'help_text'              => 'nullable|string|max:255',
+            'scopes'                 => 'nullable|array',
+            'scopes.*.category_id'   => 'required|integer|exists:categories,id',
+            'scopes.*.is_required'   => 'nullable|boolean',
+        ];
+    }
+
+    /** Exactly these category scopes (a definition with none applies to its whole vertical). */
+    private function syncScopes(PlantAttributeDefinition $def, array $scopes): void
+    {
+        $rows = [];
+        foreach ($scopes as $i => $scope) {
+            $rows[(int) $scope['category_id']] = ['is_required' => (bool) ($scope['is_required'] ?? false), 'sort' => $i];
+        }
+        $def->categories()->sync($rows);
+    }
+
+    /** Per instance, never static: a process-wide memo outlives the schema it read (tests). */
+    private ?bool $generalised = null;
+
+    /** Whether the attribute generalisation migration (code, units, scopes) has run. */
+    private function generalised(): bool
+    {
+        return $this->generalised ??= Schema::hasColumn('plant_attribute_definitions', 'code') && Schema::hasTable('plant_attribute_scopes');
+    }
+
+    /** Facets, product lists and product pages cache on products:ver. */
+    private function bustProducts(): void
+    {
+        \Illuminate\Support\Facades\Cache::forever('products:ver', (int) \Illuminate\Support\Facades\Cache::get('products:ver', 1) + 1);
     }
 
     /** Deactivate rather than delete: assignments and historical filters keep resolving. */
@@ -93,10 +233,12 @@ class PlantTaxonomyController extends Controller
         if (PlantAttributeTerm::where('definition_id', $def->id)->where('slug', $slug)->exists()) {
             return response()->json(['message' => 'That value already exists for this attribute.'], 422);
         }
-        return response()->json(PlantAttributeTerm::create([
+        $term = PlantAttributeTerm::create([
             'definition_id' => $def->id, 'value' => $data['value'], 'slug' => $slug,
             'sort' => $data['sort'] ?? 0, 'is_active' => true,
-        ]), 201);
+        ]);
+        $this->bustProducts();
+        return response()->json($term, 201);
     }
 
     public function updateTerm(Request $request, int $id)
@@ -108,6 +250,7 @@ class PlantTaxonomyController extends Controller
             'sort'      => 'sometimes|integer',
             'is_active' => 'sometimes|boolean',
         ]))->save();
+        $this->bustProducts();
         return response()->json($term);
     }
 
@@ -227,7 +370,7 @@ class PlantTaxonomyController extends Controller
         DB::transaction(function () use ($master, $data, $name, &$variety) {
             $variety = Product::create([
                 'name'              => $name,
-                'slug'              => $this->uniqueSlug($name),
+                'slug'              => $this->uniqueSlug($name, 'products'),
                 'master_product_id' => $master->id,
                 'variety_name'      => $data['variety_name'],
                 'description'       => $data['description'] ?? $master->description,
@@ -312,7 +455,7 @@ class PlantTaxonomyController extends Controller
         ]);
     }
 
-    private function uniqueSlug(string $name, string $table = 'products'): string
+    private function uniqueSlug(string $name, string $table): string
     {
         $base = Str::slug($name);
         $slug = $base;

@@ -89,6 +89,8 @@ class ProductUpdateRequest extends FormRequest
             'gallery'                      => ['array'],
             'video'                        => ['array'],
             'status'                       => ['string', Rule::in($productStatus)],
+            // Specifications (attribute values) — see Marvel\Rules\ValidAttributeValues.
+            'attribute_values'             => $this->has('attribute_values') ? ['nullable', 'array', $this->attributeValuesRule()] : ['nullable', 'array'],
             'height'                       => ['nullable', 'string'],
             'length'                       => ['nullable', 'string'],
             'width'                        => ['nullable', 'string'],
@@ -134,4 +136,23 @@ class ProductUpdateRequest extends FormRequest
     {
         throw new HttpResponseException(response()->json($validator->errors(), 422));
     }
+
+    /**
+     * The specifications rule, judged against the product as it will be after this save: the
+     * vertical, categories and status sent, else the ones it already has.
+     */
+    private function attributeValuesRule(): \Marvel\Rules\ValidAttributeValues
+    {
+        $id = $this->route('product') ?? $this->input('id');
+        $id = is_numeric($id) ? (int) $id : null;
+        $product = $id ? \Illuminate\Support\Facades\DB::table('products')->where('id', $id)->first(['type_id', 'status']) : null;
+        $categories = $this->has('categories')
+            ? array_map('intval', array_filter((array) $this->input('categories', []), 'is_numeric'))
+            : ($id ? \Illuminate\Support\Facades\DB::table('category_product')->where('product_id', $id)->pluck('category_id')->map(fn ($v) => (int) $v)->all() : []);
+        $type = is_numeric($this->input('type_id')) ? (int) $this->input('type_id') : ($product->type_id ?? null);
+        $status = $this->input('status', $product->status ?? null);
+
+        return new \Marvel\Rules\ValidAttributeValues($type !== null ? (int) $type : null, $categories, $status === ProductStatus::PUBLISH, $id);
+    }
+
 }

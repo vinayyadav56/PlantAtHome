@@ -392,8 +392,10 @@ jobs:
                 echo "==> Gardening tools taxonomy (create-only, idempotent; production.yml must have migrated first)."
                 if [ "$OP_MODE" = "tools-taxonomy-dry" ]; then
                   php artisan plantathome:tools-taxonomy --dry-run
+                  php artisan plantathome:tools-taxonomy --attributes --dry-run
                 else
                   php artisan plantathome:tools-taxonomy
+                  php artisan plantathome:tools-taxonomy --attributes
                   php artisan cache:clear 2>/dev/null || true
                 fi
                 echo "==> TOOLS-TAXONOMY COMPLETE ($OP_MODE)"

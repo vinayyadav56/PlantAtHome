@@ -384,6 +384,8 @@ try {
   echo "==> [bg] [4d/7] Gardening tools taxonomy..."
   php artisan plantathome:tools-taxonomy \
     || echo "[bg] WARNING: tools-taxonomy failed"
+  php artisan plantathome:tools-taxonomy --attributes \
+    || echo "[bg] WARNING: tools-taxonomy --attributes failed"
 
   if [ "$APP_ENV_VAL" = "staging" ]; then
     echo "==> [bg] Staging env — running Tier 3 demo product seed..."

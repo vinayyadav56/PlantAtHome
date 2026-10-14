@@ -1,0 +1,902 @@
+{
+ "_readme": [
+  "Gardening Tools attribute templates (owner brief 2026-10-14, sections 4.1–4.3). Imported by `php artisan plantathome:tools-taxonomy --attributes`: create-only by code.",
+  "scopes: category slugs the attribute applies to (and everything beneath them); [] = every Tools product. Units are stored apart from names.",
+  "terms: only option values the brief itself names; admins add the rest from real supplier data. No product values are seeded."
+ ],
+ "version": 1,
+ "type": "tools",
+ "definitions": [
+  {
+   "code": "model-number",
+   "name": "Model number",
+   "type": "text",
+   "facet": false,
+   "scopes": [],
+   "help_text": "The manufacturer's model number, as printed on the tool or its box."
+  },
+  {
+   "code": "material",
+   "name": "Material",
+   "type": "multi",
+   "facet": true,
+   "terms": [
+    "Plastic",
+    "Stainless steel",
+    "Galvanized metal"
+   ],
+   "scopes": []
+  },
+  {
+   "code": "colour",
+   "name": "Colour",
+   "type": "multi",
+   "facet": true,
+   "scopes": [],
+   "help_text": "Only colours the supplier actually offers."
+  },
+  {
+   "code": "length",
+   "name": "Length",
+   "type": "number",
+   "unit": "cm",
+   "facet": false,
+   "scopes": []
+  },
+  {
+   "code": "width",
+   "name": "Width",
+   "type": "number",
+   "unit": "cm",
+   "facet": false,
+   "scopes": []
+  },
+  {
+   "code": "height",
+   "name": "Height",
+   "type": "number",
+   "unit": "cm",
+   "facet": false,
+   "scopes": []
+  },
+  {
+   "code": "weight",
+   "name": "Weight",
+   "type": "number",
+   "unit": "g",
+   "facet": false,
+   "scopes": []
+  },
+  {
+   "code": "handle-material",
+   "name": "Handle material",
+   "type": "single",
+   "facet": true,
+   "scopes": []
+  },
+  {
+   "code": "blade-material",
+   "name": "Blade material",
+   "type": "single",
+   "facet": true,
+   "scopes": []
+  },
+  {
+   "code": "warranty",
+   "name": "Warranty",
+   "type": "number",
+   "unit": "months",
+   "facet": false,
+   "scopes": []
+  },
+  {
+   "code": "country-of-origin",
+   "name": "Country of origin",
+   "type": "single",
+   "facet": false,
+   "scopes": []
+  },
+  {
+   "code": "intended-use",
+   "name": "Intended use",
+   "type": "text",
+   "facet": false,
+   "scopes": []
+  },
+  {
+   "code": "included-accessories",
+   "name": "Included accessories",
+   "type": "text",
+   "facet": false,
+   "scopes": []
+  },
+  {
+   "code": "replaceable-parts",
+   "name": "Replaceable parts available",
+   "type": "boolean",
+   "facet": false,
+   "scopes": []
+  },
+  {
+   "code": "ergonomic-design",
+   "name": "Ergonomic design",
+   "type": "boolean",
+   "facet": true,
+   "scopes": []
+  },
+  {
+   "code": "foldable",
+   "name": "Foldable",
+   "type": "boolean",
+   "facet": true,
+   "scopes": []
+  },
+  {
+   "code": "safety-instructions",
+   "name": "Safety instructions",
+   "type": "text",
+   "facet": false,
+   "scopes": []
+  },
+  {
+   "code": "care-instructions",
+   "name": "Care instructions",
+   "type": "text",
+   "facet": false,
+   "scopes": []
+  },
+  {
+   "code": "blade-length",
+   "name": "Blade length",
+   "type": "number",
+   "unit": "mm",
+   "facet": true,
+   "scopes": [
+    "hand-gardening-tools",
+    "pruning-cutting",
+    "power-gardening-tools"
+   ]
+  },
+  {
+   "code": "blade-type",
+   "name": "Blade type",
+   "type": "single",
+   "facet": true,
+   "scopes": [
+    "hand-gardening-tools"
+   ]
+  },
+  {
+   "code": "head-shape",
+   "name": "Head shape",
+   "type": "single",
+   "facet": false,
+   "scopes": [
+    "hand-gardening-tools"
+   ]
+  },
+  {
+   "code": "head-width",
+   "name": "Head width",
+   "type": "number",
+   "unit": "mm",
+   "facet": false,
+   "scopes": [
+    "hand-gardening-tools"
+   ]
+  },
+  {
+   "code": "overall-length",
+   "name": "Overall length",
+   "type": "number",
+   "unit": "cm",
+   "facet": true,
+   "scopes": [
+    "hand-gardening-tools",
+    "digging-and-soil-preparation"
+   ]
+  },
+  {
+   "code": "grip-type",
+   "name": "Grip type",
+   "type": "single",
+   "facet": false,
+   "scopes": [
+    "hand-gardening-tools"
+   ]
+  },
+  {
+   "code": "handedness",
+   "name": "Left- or right-handed",
+   "type": "single",
+   "facet": false,
+   "terms": [
+    "Right-handed",
+    "Left-handed",
+    "Either hand"
+   ],
+   "scopes": [
+    "hand-gardening-tools",
+    "pruning-cutting"
+   ]
+  },
+  {
+   "code": "capacity",
+   "name": "Capacity",
+   "type": "number",
+   "unit": "L",
+   "facet": true,
+   "scopes": [
+    "watering-tools"
+   ]
+  },
+  {
+   "code": "hose-length",
+   "name": "Hose length",
+   "type": "number",
+   "unit": "m",
+   "facet": true,
+   "scopes": [
+    "watering-tools"
+   ]
+  },
+  {
+   "code": "hose-diameter",
+   "name": "Hose diameter",
+   "type": "number",
+   "unit": "mm",
+   "facet": false,
+   "scopes": [
+    "watering-tools"
+   ]
+  },
+  {
+   "code": "connector-size",
+   "name": "Connector size",
+   "type": "single",
+   "facet": false,
+   "scopes": [
+    "watering-tools"
+   ]
+  },
+  {
+   "code": "working-pressure",
+   "name": "Working pressure",
+   "type": "number",
+   "unit": "bar",
+   "facet": false,
+   "scopes": [
+    "watering-tools"
+   ]
+  },
+  {
+   "code": "flow-rate",
+   "name": "Flow rate",
+   "type": "number",
+   "unit": "L/h",
+   "facet": false,
+   "scopes": [
+    "watering-tools",
+    "sprayers-and-application-equipment"
+   ]
+  },
+  {
+   "code": "spray-patterns",
+   "name": "Spray patterns",
+   "type": "number",
+   "facet": true,
+   "scopes": [
+    "watering-tools"
+   ]
+  },
+  {
+   "code": "spray-radius",
+   "name": "Spray radius",
+   "type": "number",
+   "unit": "m",
+   "facet": false,
+   "scopes": [
+    "watering-tools"
+   ]
+  },
+  {
+   "code": "coverage",
+   "name": "Irrigation coverage",
+   "type": "number",
+   "unit": "m²",
+   "facet": false,
+   "scopes": [
+    "watering-tools"
+   ]
+  },
+  {
+   "code": "emitter-flow-rate",
+   "name": "Emitter flow rate",
+   "type": "number",
+   "unit": "L/h",
+   "facet": false,
+   "scopes": [
+    "watering-tools"
+   ]
+  },
+  {
+   "code": "kit-length",
+   "name": "Kit length",
+   "type": "number",
+   "unit": "m",
+   "facet": false,
+   "scopes": [
+    "watering-tools"
+   ]
+  },
+  {
+   "code": "plants-supported",
+   "name": "Plants supported",
+   "type": "number",
+   "facet": true,
+   "scopes": [
+    "watering-tools"
+   ]
+  },
+  {
+   "code": "watering-zones",
+   "name": "Watering zones",
+   "type": "number",
+   "facet": false,
+   "scopes": [
+    "watering-tools"
+   ]
+  },
+  {
+   "code": "rose-attachment",
+   "name": "Rose attachment",
+   "type": "single",
+   "facet": true,
+   "terms": [
+    "Included",
+    "Not included",
+    "Removable"
+   ],
+   "scopes": [
+    "watering-tools"
+   ]
+  },
+  {
+   "code": "cutting-mechanism",
+   "name": "Cutting mechanism",
+   "type": "single",
+   "facet": true,
+   "terms": [
+    "Bypass",
+    "Anvil",
+    "Ratchet",
+    "Compound action"
+   ],
+   "scopes": [
+    "pruning-cutting"
+   ]
+  },
+  {
+   "code": "cutting-capacity",
+   "name": "Cutting capacity",
+   "type": "number",
+   "unit": "mm",
+   "facet": true,
+   "scopes": [
+    "pruning-cutting"
+   ]
+  },
+  {
+   "code": "handle-length",
+   "name": "Handle length",
+   "type": "number",
+   "unit": "cm",
+   "facet": false,
+   "scopes": [
+    "pruning-cutting"
+   ]
+  },
+  {
+   "code": "extension-range",
+   "name": "Extension range",
+   "type": "range",
+   "unit": "cm",
+   "facet": false,
+   "scopes": [
+    "pruning-cutting"
+   ]
+  },
+  {
+   "code": "replaceable-blade",
+   "name": "Replaceable blade",
+   "type": "boolean",
+   "facet": true,
+   "scopes": [
+    "pruning-cutting"
+   ]
+  },
+  {
+   "code": "locking-mechanism",
+   "name": "Locking mechanism",
+   "type": "boolean",
+   "facet": false,
+   "scopes": [
+    "pruning-cutting"
+   ]
+  },
+  {
+   "code": "tank-capacity",
+   "name": "Tank capacity",
+   "type": "number",
+   "unit": "L",
+   "facet": true,
+   "scopes": [
+    "sprayers-and-application-equipment"
+   ]
+  },
+  {
+   "code": "operating-pressure",
+   "name": "Operating pressure",
+   "type": "number",
+   "unit": "bar",
+   "facet": false,
+   "scopes": [
+    "sprayers-and-application-equipment"
+   ]
+  },
+  {
+   "code": "nozzle-type",
+   "name": "Nozzle type",
+   "type": "single",
+   "facet": false,
+   "scopes": [
+    "sprayers-and-application-equipment"
+   ]
+  },
+  {
+   "code": "nozzle-count",
+   "name": "Number of nozzles",
+   "type": "number",
+   "facet": false,
+   "scopes": [
+    "sprayers-and-application-equipment"
+   ]
+  },
+  {
+   "code": "lance-length",
+   "name": "Lance length",
+   "type": "number",
+   "unit": "cm",
+   "facet": false,
+   "scopes": [
+    "sprayers-and-application-equipment"
+   ]
+  },
+  {
+   "code": "battery-voltage",
+   "name": "Battery voltage",
+   "type": "number",
+   "unit": "V",
+   "facet": true,
+   "scopes": [
+    "sprayers-and-application-equipment",
+    "power-gardening-tools"
+   ]
+  },
+  {
+   "code": "battery-capacity",
+   "name": "Battery capacity",
+   "type": "number",
+   "unit": "Ah",
+   "facet": false,
+   "scopes": [
+    "sprayers-and-application-equipment",
+    "power-gardening-tools"
+   ]
+  },
+  {
+   "code": "battery-included",
+   "name": "Battery included",
+   "type": "boolean",
+   "facet": true,
+   "scopes": [
+    "sprayers-and-application-equipment",
+    "power-gardening-tools"
+   ]
+  },
+  {
+   "code": "charger-included",
+   "name": "Charger included",
+   "type": "boolean",
+   "facet": false,
+   "scopes": [
+    "sprayers-and-application-equipment",
+    "power-gardening-tools"
+   ]
+  },
+  {
+   "code": "runtime",
+   "name": "Runtime",
+   "type": "number",
+   "unit": "min",
+   "facet": false,
+   "scopes": [
+    "sprayers-and-application-equipment",
+    "power-gardening-tools"
+   ],
+   "help_text": "As the manufacturer specifies it."
+  },
+  {
+   "code": "power-source",
+   "name": "Power source",
+   "type": "single",
+   "facet": true,
+   "terms": [
+    "Corded electric",
+    "Cordless battery",
+    "Petrol",
+    "Manual"
+   ],
+   "scopes": [
+    "power-gardening-tools",
+    "lawn-and-turf-care-equipment",
+    "sprayers-and-application-equipment"
+   ]
+  },
+  {
+   "code": "rated-power",
+   "name": "Rated input power",
+   "type": "number",
+   "unit": "W",
+   "facet": true,
+   "scopes": [
+    "power-gardening-tools"
+   ]
+  },
+  {
+   "code": "motor-type",
+   "name": "Motor type",
+   "type": "single",
+   "facet": false,
+   "scopes": [
+    "power-gardening-tools"
+   ]
+  },
+  {
+   "code": "cutting-width",
+   "name": "Cutting width",
+   "type": "number",
+   "unit": "cm",
+   "facet": true,
+   "scopes": [
+    "power-gardening-tools",
+    "lawn-and-turf-care-equipment"
+   ]
+  },
+  {
+   "code": "cutting-height-range",
+   "name": "Cutting height range",
+   "type": "range",
+   "unit": "mm",
+   "facet": false,
+   "scopes": [
+    "power-gardening-tools",
+    "lawn-and-turf-care-equipment"
+   ]
+  },
+  {
+   "code": "bar-length",
+   "name": "Bar length",
+   "type": "number",
+   "unit": "cm",
+   "facet": false,
+   "scopes": [
+    "power-gardening-tools"
+   ]
+  },
+  {
+   "code": "chain-pitch",
+   "name": "Chain pitch",
+   "type": "text",
+   "facet": false,
+   "scopes": [
+    "power-gardening-tools"
+   ]
+  },
+  {
+   "code": "max-output",
+   "name": "Maximum rated output",
+   "type": "text",
+   "facet": false,
+   "scopes": [
+    "power-gardening-tools"
+   ]
+  },
+  {
+   "code": "charging-time",
+   "name": "Charging time",
+   "type": "number",
+   "unit": "min",
+   "facet": false,
+   "scopes": [
+    "power-gardening-tools"
+   ]
+  },
+  {
+   "code": "battery-compatibility",
+   "name": "Battery compatibility",
+   "type": "text",
+   "facet": false,
+   "scopes": [
+    "power-gardening-tools"
+   ]
+  },
+  {
+   "code": "noise-rating",
+   "name": "Noise rating",
+   "type": "number",
+   "unit": "dB",
+   "facet": false,
+   "scopes": [
+    "power-gardening-tools"
+   ]
+  },
+  {
+   "code": "service-availability",
+   "name": "Warranty and service",
+   "type": "text",
+   "facet": false,
+   "scopes": [
+    "power-gardening-tools"
+   ]
+  },
+  {
+   "code": "measurement-type",
+   "name": "Measures",
+   "type": "multi",
+   "facet": true,
+   "terms": [
+    "pH",
+    "Moisture",
+    "Light",
+    "Temperature",
+    "EC",
+    "TDS",
+    "Salinity",
+    "Humidity"
+   ],
+   "scopes": [
+    "soil-testing-and-garden-measurement"
+   ]
+  },
+  {
+   "code": "measurement-range",
+   "name": "Measurement range",
+   "type": "text",
+   "facet": false,
+   "scopes": [
+    "soil-testing-and-garden-measurement"
+   ]
+  },
+  {
+   "code": "accuracy",
+   "name": "Accuracy",
+   "type": "text",
+   "facet": false,
+   "scopes": [
+    "soil-testing-and-garden-measurement"
+   ]
+  },
+  {
+   "code": "resolution",
+   "name": "Resolution",
+   "type": "text",
+   "facet": false,
+   "scopes": [
+    "soil-testing-and-garden-measurement"
+   ]
+  },
+  {
+   "code": "probe-length",
+   "name": "Probe length",
+   "type": "number",
+   "unit": "cm",
+   "facet": false,
+   "scopes": [
+    "soil-testing-and-garden-measurement"
+   ]
+  },
+  {
+   "code": "calibration",
+   "name": "Calibration",
+   "type": "text",
+   "facet": false,
+   "scopes": [
+    "soil-testing-and-garden-measurement"
+   ]
+  },
+  {
+   "code": "display-type",
+   "name": "Display",
+   "type": "single",
+   "facet": true,
+   "terms": [
+    "Analogue",
+    "Digital"
+   ],
+   "scopes": [
+    "soil-testing-and-garden-measurement"
+   ]
+  },
+  {
+   "code": "battery-type",
+   "name": "Battery type",
+   "type": "text",
+   "facet": false,
+   "scopes": [
+    "soil-testing-and-garden-measurement"
+   ]
+  },
+  {
+   "code": "connectivity",
+   "name": "Connectivity",
+   "type": "single",
+   "facet": true,
+   "scopes": [
+    "soil-testing-and-garden-measurement"
+   ]
+  },
+  {
+   "code": "sensor-compatibility",
+   "name": "Sensor compatibility",
+   "type": "text",
+   "facet": false,
+   "scopes": [
+    "soil-testing-and-garden-measurement"
+   ]
+  },
+  {
+   "code": "size",
+   "name": "Size",
+   "type": "single",
+   "facet": true,
+   "scopes": [
+    "safety-and-gardening-accessories"
+   ]
+  },
+  {
+   "code": "fit-type",
+   "name": "Fit",
+   "type": "single",
+   "facet": false,
+   "scopes": [
+    "safety-and-gardening-accessories"
+   ]
+  },
+  {
+   "code": "protection-rating",
+   "name": "Protection rating",
+   "type": "text",
+   "facet": false,
+   "scopes": [
+    "safety-and-gardening-accessories"
+   ],
+   "help_text": "Only a rating the manufacturer documents."
+  },
+  {
+   "code": "safety-certification",
+   "name": "Safety certification",
+   "type": "text",
+   "facet": false,
+   "scopes": [
+    "safety-and-gardening-accessories"
+   ],
+   "help_text": "Only a certification the manufacturer documents."
+  },
+  {
+   "code": "adjustable",
+   "name": "Adjustable",
+   "type": "boolean",
+   "facet": false,
+   "scopes": [
+    "safety-and-gardening-accessories"
+   ]
+  },
+  {
+   "code": "cuff-length",
+   "name": "Cuff length",
+   "type": "number",
+   "unit": "cm",
+   "facet": false,
+   "scopes": [
+    "gardening-gloves"
+   ]
+  },
+  {
+   "code": "coating",
+   "name": "Coating",
+   "type": "single",
+   "facet": true,
+   "scopes": [
+    "gardening-gloves"
+   ]
+  },
+  {
+   "code": "diameter",
+   "name": "Diameter",
+   "type": "number",
+   "unit": "mm",
+   "facet": false,
+   "scopes": [
+    "plant-support-and-training-tools"
+   ]
+  },
+  {
+   "code": "pack-quantity",
+   "name": "Pack quantity",
+   "type": "number",
+   "facet": true,
+   "scopes": [
+    "plant-support-and-training-tools"
+   ]
+  },
+  {
+   "code": "support-type",
+   "name": "Support type",
+   "type": "single",
+   "facet": false,
+   "scopes": [
+    "plant-support-and-training-tools"
+   ]
+  },
+  {
+   "code": "pieces",
+   "name": "Number of pieces",
+   "type": "number",
+   "facet": true,
+   "scopes": [
+    "tool-sets"
+   ]
+  },
+  {
+   "code": "included-tools",
+   "name": "Included tools",
+   "type": "text",
+   "facet": false,
+   "scopes": [
+    "tool-sets"
+   ]
+  },
+  {
+   "code": "storage-case",
+   "name": "Storage case",
+   "type": "single",
+   "facet": false,
+   "scopes": [
+    "tool-sets"
+   ]
+  },
+  {
+   "code": "skill-level",
+   "name": "Skill level",
+   "type": "single",
+   "facet": true,
+   "terms": [
+    "Beginner",
+    "Professional"
+   ],
+   "scopes": [
+    "tool-sets"
+   ]
+  },
+  {
+   "code": "intended-task",
+   "name": "Intended task",
+   "type": "text",
+   "facet": false,
+   "scopes": [
+    "tool-sets"
+   ]
+  }
+ ]
+}

@@ -220,7 +220,8 @@ class ProductController extends CoreController
         ];
         // `facets2`: the payload shape changed (categories/sizes/air_purifying) and the
         // key carried no code version, so a live 300 s entry would have lacked them.
-        $key = 'products:facets2:v' . $this->cacheVersion('products') . ':' . $language . ':' . md5(json_encode($keyParams));
+        // facets3: dynamic facets gained code/unit/param/range/options.
+        $key = 'products:facets3:v' . $this->cacheVersion('products') . ':' . $language . ':' . md5(json_encode($keyParams));
         $data = Cache::remember($key, 300, fn () => $this->computeFilterFacets($request));
 
         return response()->json($data)->header('Cache-Control', $this->cacheControl());
@@ -367,6 +368,9 @@ class ProductController extends CoreController
         $query = $this->applyUnpricedGate($query, $request);
         $query = $this->applyCatalogGate($query, $request);
         $query = $this->applyStatusExclusion($query, $request);
+        // No attribute filter here on purpose: facet counts describe the whole listing, not the
+        // current selection (as the plant rail always has), so picking one value never hides
+        // its siblings.
 
         // Optional narrowing to the current listing context (vertical / category pages).
         if ($request->filled('type')) {
@@ -527,21 +531,54 @@ class ProductController extends CoreController
         // Every active definition flagged is_facet becomes a filter section on the
         // storefront automatically — adding "Suitable Spaces > Balcony" is a data edit,
         // never a code change (that is the whole point of the taxonomy work).
+        // Each facet names the URL param that filters it: the plants' attributes keep `terms`
+        // (their long-standing OR filter), every other vertical uses `attr` (AND across
+        // attributes, OR within one; numbers as a min–max window). Only attributes that some
+        // listed product actually has are offered: never a filter that finds nothing.
         $dynamic = [];
         try {
+            $plantsTypeId = (int) DB::table('types')->where('slug', 'plants')->orderBy('id')->value('id');
+            $typeId = $request->filled('type')
+                ? (int) DB::table('types')->where('slug', (string) $request->type)->orderBy('id')->value('id')
+                : null;
             $definitions = \Marvel\Database\Models\PlantAttributeDefinition::active()
-                ->where('is_facet', true)->with('terms')->orderBy('sort')->get();
+                ->where('is_facet', true)
+                ->when($typeId, fn ($q) => $q->where(fn ($w) => $w->whereNull('type_id')->orWhere('type_id', $typeId)))
+                ->with(['terms' => fn ($t) => $t->where('is_active', true)])
+                ->orderBy('sort')->orderBy('name')->get();
             $counts = $total > 0
                 ? DB::table('plant_attribute_product')->whereIn('product_id', $ids)
                     ->selectRaw('term_id, COUNT(*) as cnt')->groupBy('term_id')->pluck('cnt', 'term_id')
                 : collect();
+            $numbers = $total > 0 && \Illuminate\Support\Facades\Schema::hasColumn('plant_attribute_product', 'value_number')
+                ? DB::table('plant_attribute_product')->whereIn('product_id', $ids)->whereNotNull('value_number')
+                    ->selectRaw('definition_id, MIN(value_number) as lo, MAX(COALESCE(value_number_max, value_number)) as hi,'
+                        . ' SUM(CASE WHEN value_number = 1 THEN 1 ELSE 0 END) as yes, SUM(CASE WHEN value_number = 0 THEN 1 ELSE 0 END) as no,'
+                        . ' COUNT(DISTINCT product_id) as cnt')
+                    ->groupBy('definition_id')->get()->keyBy('definition_id')
+                : collect();
             foreach ($definitions as $def) {
-                $terms = $def->terms
-                    ->map(fn ($t) => ['slug' => $t->slug, 'value' => $t->value, 'count' => (int) ($counts[$t->id] ?? 0)])
-                    ->filter(fn ($t) => $t['count'] > 0)
-                    ->values()->all();
-                if ($terms) {
-                    $dynamic[] = ['slug' => $def->slug, 'name' => $def->name, 'type' => $def->type, 'terms' => $terms];
+                $facet = [
+                    'slug'  => $def->slug,
+                    'code'  => $def->code ?: $def->slug,
+                    'name'  => $def->name,
+                    'type'  => $def->type,
+                    'unit'  => $def->unit,
+                    'param' => (int) $def->type_id === $plantsTypeId ? 'terms' : 'attr',
+                ];
+                $n = $numbers->get($def->id);
+                if (in_array($def->type, \Marvel\Database\Models\PlantAttributeDefinition::TERM_TYPES, true)) {
+                    $terms = $def->terms
+                        ->map(fn ($t) => ['slug' => $t->slug, 'value' => $t->value, 'count' => (int) ($counts[$t->id] ?? 0)])
+                        ->filter(fn ($t) => $t['count'] > 0)
+                        ->values()->all();
+                    if ($terms) {
+                        $dynamic[] = $facet + ['terms' => $terms];
+                    }
+                } elseif ($def->type === 'boolean' && $n && ((int) $n->yes + (int) $n->no) > 0) {
+                    $dynamic[] = $facet + ['options' => ['true' => (int) $n->yes, 'false' => (int) $n->no], 'terms' => []];
+                } elseif (in_array($def->type, ['number', 'range'], true) && $n && (int) $n->cnt > 0) {
+                    $dynamic[] = $facet + ['range' => ['min' => (float) $n->lo, 'max' => (float) $n->hi, 'count' => (int) $n->cnt], 'terms' => []];
                 }
             }
         } catch (\Throwable $e) {
@@ -717,9 +754,21 @@ class ProductController extends CoreController
         if ($request->filled('text')) {
             $term = trim((string) $request->input('text'));
             if ($term !== '') {
-                $products_query->where(function ($w) use ($term) {
+                // A category named like the search ("secateurs" → Secateurs and Pruners) brings in
+                // everything filed beneath it. Bounded: the 50 closest live names.
+                $categoryIds = [];
+                try {
+                    $named = DB::table('categories')->where('language', DEFAULT_LANGUAGE)->where('is_active', true)
+                        ->where('name', 'like', '%' . $term . '%')->limit(50)->pluck('id')->map(fn ($v) => (int) $v)->all();
+                    $categoryIds = $named ? app(\Marvel\Services\CategoryTree::class)->descendantIds($named) : [];
+                } catch (\Throwable $e) {
+                    $categoryIds = [];
+                }
+                $products_query->where(function ($w) use ($term, $categoryIds) {
                     $like = '%' . $term . '%';
                     $w->where('products.name', 'like', $like)
+                      ->orWhere('products.sku', $term)
+                      ->when($categoryIds, fn ($c) => $c->orWhereHas('categories', fn ($q) => $q->whereIn('categories.id', $categoryIds)))
                       ->orWhere('products.variety_name', 'like', $like)
                       ->orWhereHas('plantAttribute', function ($p) use ($like) {
                           $p->where('scientific_name', 'like', $like)
@@ -758,6 +807,8 @@ class ProductController extends CoreController
         $products_query = $this->applyCatalogGate($products_query, $request);
         $products_query = $this->applyStatusExclusion($products_query, $request);
         $products_query = $this->applyMissingTaxConfig($products_query, $request);
+        // Attribute filters (tools specs): AND across attributes, OR within one.
+        $products_query = \Marvel\Services\AttributeFilter::apply($products_query, $request->input('attr'));
 
         // City-first availability (single source of truth: AvailabilityService::cityScopeProductIds):
         //   - city has vendor inventory -> STRICT, only that inventory
@@ -833,7 +884,11 @@ class ProductController extends CoreController
         // The master catalog stays UNIQUE: an exact (case-insensitive) name match
         // within the same vertical blocks the create and points at the existing
         // product, so the vendor attaches inventory to it instead of duplicating.
-        $existing = $this->findCatalogDuplicate((string) $request->name, $request->type_id ? (int) $request->type_id : null);
+        $existing = $this->findCatalogDuplicate(
+            (string) $request->name,
+            $request->type_id ? (int) $request->type_id : null,
+            $request->manufacturer_id ? (int) $request->manufacturer_id : null
+        );
         if ($existing) {
             return response()->json([
                 'message'  => 'This product is already in the PlantAtHome catalogue — attach your rate & stock to it from "Add from catalogue" instead of creating a duplicate.',
@@ -886,7 +941,7 @@ class ProductController extends CoreController
     }
 
     /** Exact (case-insensitive) catalog duplicate by name within a vertical, if any. */
-    private function findCatalogDuplicate(string $name, ?int $typeId): ?Product
+    private function findCatalogDuplicate(string $name, ?int $typeId, ?int $manufacturerId = null): ?Product
     {
         $name = trim($name);
         if ($name === '') {
@@ -895,6 +950,11 @@ class ProductController extends CoreController
         return Product::whereRaw('LOWER(name) = ?', [mb_strtolower($name)])
             ->where('language', DEFAULT_LANGUAGE)
             ->when($typeId, fn ($q) => $q->where('type_id', $typeId))
+            // Same name from another brand is another product (two "Bypass Pruners" by different
+            // manufacturers); same name, same brand (or both unbranded, as every plant) is not.
+            ->when(\Illuminate\Support\Facades\Schema::hasColumn('products', 'manufacturer_id'), fn ($q) => $manufacturerId
+                ? $q->where('manufacturer_id', $manufacturerId)
+                : $q->whereNull('manufacturer_id'))
             // A variety carries its master's name as a prefix ("Snake Plant — Laurentii"),
             // so exact-name matching already separates them; this only guards against a
             // variety row shadowing a master lookup.
