@@ -683,6 +683,17 @@ class ProductAttributesTest extends TestCase
         $this->assertNotSame($first['slug'], $second['slug']);
     }
 
+    public function test_an_image_less_product_stays_editable(): void
+    {
+        $product = $this->product('saw', 'bypass');
+        $request = \Marvel\Http\Requests\ProductUpdateRequest::create("/api/products/{$product->id}", 'PUT', []);
+        $request->setRouteResolver(fn () => (new \Illuminate\Routing\Route('PUT', 'api/products/{product}', []))->bind($request));
+        $rules = array_intersect_key($request->rules(), array_flip(['image', 'gallery', 'video']));
+
+        $this->assertTrue(Validator::make(['image' => null, 'gallery' => null, 'video' => null], $rules)->passes(), 'the seeded tools have no image: their specifications must be savable');
+        $this->assertTrue(Validator::make(['image' => 'x'], $rules)->fails());
+    }
+
     public function test_array_attr_and_text_params_do_not_break_the_listing(): void
     {
         // What the listing reads besides the fixture's tables.

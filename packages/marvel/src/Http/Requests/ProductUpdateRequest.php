@@ -84,10 +84,10 @@ class ProductUpdateRequest extends FormRequest
             'description'                  => ['nullable', 'string', 'max:10000'],
             'quantity'                     => ['nullable', 'integer'],
             'sku'                          => ['string', Rule::unique('variation_options')->where(fn ($query) => $query->whereSku($this->sku))],
-            'image'                        => ['array'],
+            'image'                        => ['nullable', 'array'], // an image-less product (the seeded tools) must stay editable
             'size_guide'                   => ['nullable', 'array'],
-            'gallery'                      => ['array'],
-            'video'                        => ['array'],
+            'gallery'                      => ['nullable', 'array'],
+            'video'                        => ['nullable', 'array'],
             'status'                       => ['string', Rule::in($productStatus)],
             // Specifications (attribute values) — see Marvel\Rules\ValidAttributeValues. The required
             // ones are checked in ProductController against the status the save stores.

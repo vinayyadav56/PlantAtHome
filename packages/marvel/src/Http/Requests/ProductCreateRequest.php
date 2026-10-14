@@ -95,10 +95,10 @@ class ProductCreateRequest extends FormRequest
             'unit'                         => ['required', 'string'],
             'description'                  => ['nullable', 'string', 'max:10000'],
             'sku'                          => ['string', 'unique:variation_options,sku'],
-            'image'                        => ['array'],
+            'image'                        => ['nullable', 'array'], // an image-less product (the seeded tools) must stay editable
             'size_guide'                   => ['nullable', 'array'],
-            'gallery'                      => ['array'],
-            'video'                        => ['array'],
+            'gallery'                      => ['nullable', 'array'],
+            'video'                        => ['nullable', 'array'],
             'status'                       => ['string', Rule::in($productStatus)],
             'height'                       => ['nullable', 'string'],
             'length'                       => ['nullable', 'string'],
