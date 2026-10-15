@@ -66,30 +66,30 @@ class CheckoutRepository
         $unavailable_products = $this->checkStock($request['products']);
 
         // Operations Control Center — block any cart line whose vertical is
-        // currently unavailable in the shipping city. FAIL OPEN: no city ⇒ no gate.
+        // currently unavailable. With no shipping city only the platform and global
+        // tiers apply, so a coming-soon vertical is refused even when the client sends
+        // no address. FAIL OPEN on a fault.
         $blocked_verticals = [];
         $shipCity = is_array($request['shipping_address'] ?? null) ? ($request['shipping_address']['city'] ?? null) : null;
-        if (!empty($shipCity)) {
-            try {
-                $availSvc = app(\Marvel\Services\ServiceAvailabilityService::class);
-                $ids = collect($request['products'])->pluck('product_id')->filter()->unique()->values()->all();
-                if (!empty($ids)) {
-                    foreach (Product::with('type')->whereIn('id', $ids)->get(['id', 'type_id']) as $p) {
-                        $slug = optional($p->type)->slug;
-                        if (!$slug) {
-                            continue;
-                        }
-                        $res = $availSvc->resolve($slug, (string) $shipCity);
-                        if (!$res['available']) {
-                            $unavailable_products[] = $p->id;
-                            $blocked_verticals[$slug] = $res['message'];
-                        }
+        try {
+            $availSvc = app(\Marvel\Services\ServiceAvailabilityService::class);
+            $ids = collect($request['products'])->pluck('product_id')->filter()->unique()->values()->all();
+            if (!empty($ids)) {
+                foreach (Product::with('type')->whereIn('id', $ids)->get(['id', 'type_id']) as $p) {
+                    $slug = optional($p->type)->slug;
+                    if (!$slug) {
+                        continue;
                     }
-                    $unavailable_products = array_values(array_unique($unavailable_products));
+                    $res = $availSvc->resolve($slug, !empty($shipCity) ? (string) $shipCity : null);
+                    if (!$res['available']) {
+                        $unavailable_products[] = $p->id;
+                        $blocked_verticals[$slug] = $res['message'];
+                    }
                 }
-            } catch (\Throwable $e) {
-                // fail open
+                $unavailable_products = array_values(array_unique($unavailable_products));
             }
+        } catch (\Throwable $e) {
+            // fail open
         }
 
         // City-first availability — a cart line must belong to the shipping city.
@@ -128,7 +128,7 @@ class CheckoutRepository
         if ($city_stock !== null) {
             $unavailable_products = array_values(array_unique(array_merge(
                 array_map('intval', (array) $unavailable_products),
-                $this->cityBasedProductIds($request)
+                $this->localSupplyProductIds($request)
             )));
         }
         if ($city_mismatch !== null) {
@@ -453,9 +453,10 @@ class CheckoutRepository
             if ($city === '') {
                 return null;
             }
-            // A cart of single-seller lines only (Tools) never depends on the city.
+            // A cart of single-seller (Tools) or global-catalogue (fallback) lines only never
+            // depends on the city's vendor supply.
             $lines = collect($request['products'] ?? [])->pluck('product_id')->filter()->unique();
-            $cityLines = $this->cityBasedProductIds($request);
+            $cityLines = $this->localSupplyProductIds($request);
             if ($lines->isNotEmpty() && !$cityLines) {
                 return null;
             }
@@ -544,6 +545,23 @@ class CheckoutRepository
     }
 
     /**
+     * The city-based lines that need a vendor IN the shopping city: all of them except
+     * global-catalogue lines, which the fallback shop fulfils wherever no vendor does. The
+     * browse-only (CITY_OUT_OF_STOCK) gate asks this; the city-MISMATCH gate keeps asking
+     * cityBasedProductIds(), so the price shown stays the price charged.
+     *
+     * @return int[]
+     */
+    public function localSupplyProductIds($request): array
+    {
+        $svc = app(\Marvel\Services\ServiceAvailabilityService::class);
+        return array_values(array_filter(
+            $this->cityBasedProductIds($request),
+            fn ($pid) => $svc->globalFallbackFor($pid) === null
+        ));
+    }
+
+    /**
      * Delivery Coverage checkout gate — the ONE pincode gate, shared by
      * verify() and OrderRepository::storeOrder() so a client that skips verify
      * cannot slip past it. Guard chain, each miss failing open silently: the
@@ -562,13 +580,47 @@ class CheckoutRepository
      * Asks VendorServiceabilityResolver, not the assignment engine: the engine
      * consults this same resolver, so calling it here would be circular.
      *
+     * Global-catalogue lines (the fallback shop fulfils them where no vendor does) first
+     * need a real Indian PIN — the postal master — whatever the coverage setting:
+     * PINCODE_UNKNOWN. A missing PIN only fails when $requirePin (order creation; the cart
+     * page's delivery preview verifies without an address). Then, with the gate on, such a
+     * line passes when a covering vendor OR the fallback's own rules for its vertical cover it.
+     *
      * @param  array<int, array>  $lines  cart lines ({product_id, ...})
      * @return array{blocked: int[], coverage: ?array}
      */
-    public function applyCoverageGate(array $lines, ?string $zip): array
+    public function applyCoverageGate(array $lines, ?string $zip, bool $requirePin = false): array
     {
         $none = ['blocked' => [], 'coverage' => null];
         try {
+            $ids = collect($lines)->pluck('product_id')->filter()
+                ->map(fn ($id) => (int) $id)->unique()->values()->all();
+            if ($ids === []) {
+                return $none;
+            }
+
+            $svc = app(\Marvel\Services\ServiceAvailabilityService::class);
+            $fallbacks = [];
+            foreach ($ids as $pid) {
+                if (($shop = $svc->globalFallbackFor($pid)) !== null) {
+                    $fallbacks[$pid] = $shop;
+                }
+            }
+            if ($fallbacks && ($zip !== null || $requirePin)
+                && \Marvel\Services\CoverageBridge::isKnownPincode($zip) === false) {
+                $blocked = array_keys($fallbacks);
+                return [
+                    'blocked'  => $blocked,
+                    'coverage' => [
+                        'code'             => 'PINCODE_UNKNOWN',
+                        'pincode'          => $zip,
+                        'blocked_products' => $blocked,
+                        'reason'           => 'unknown_pincode',
+                        'message'          => "We couldn't find this PIN code. Please check it and try again.",
+                    ],
+                ];
+            }
+
             $settings = Settings::getData();
             if (empty($settings['options']['coverageCheckoutGate'])) {
                 return $none;
@@ -576,16 +628,11 @@ class CheckoutRepository
             if ($zip === null || strlen($zip) < 6) {
                 return $none;
             }
-            $ids = collect($lines)->pluck('product_id')->filter()
-                ->map(fn ($id) => (int) $id)->unique()->values()->all();
-            if ($ids === []) {
-                return $none;
-            }
 
             $verticalByProduct = $this->productVerticals($ids);
             $supplyByProduct = $this->supplyingShops($ids);
             $allShops = collect($supplyByProduct)->flatten()->unique()->values()->all();
-            if ($allShops === []) {
+            if ($allShops === [] && $fallbacks === []) {
                 return $none;
             }
 
@@ -605,7 +652,16 @@ class CheckoutRepository
                 }
 
                 $passing = array_filter($shops, fn ($shopId) => isset($allowed[$shopId]));
-                if ($passing === []) {
+                if ($passing === [] && !isset($fallbacks[$pid])) {
+                    $blocked[] = $pid;
+                }
+            }
+            // A global-catalogue line whose vendors (if any) don't cover the pin falls back.
+            foreach ($fallbacks as $pid => $shop) {
+                $vendorPasses = isset($supplyByProduct[$pid], $allowedByVertical[$verticalByProduct[$pid] ?? '*'])
+                    && array_filter($supplyByProduct[$pid], fn ($s) => isset($allowedByVertical[$verticalByProduct[$pid] ?? '*'][$s]));
+                if (!$vendorPasses
+                    && !\Marvel\Services\CoverageBridge::fallbackCovers($shop, $zip, $verticalByProduct[$pid] ?? null)) {
                     $blocked[] = $pid;
                 }
             }
@@ -638,7 +694,8 @@ class CheckoutRepository
      */
     public function assertCoverage($request): void
     {
-        $gate = $this->applyCoverageGate((array) ($request['products'] ?? []), $this->shippingZip($request));
+        // requirePin: an order for a global-catalogue line must carry its delivery PIN.
+        $gate = $this->applyCoverageGate((array) ($request['products'] ?? []), $this->shippingZip($request), true);
         if ($gate['coverage'] === null) {
             return;
         }
@@ -1055,11 +1112,31 @@ class CheckoutRepository
             } else {
                 $is_not_in_stock = $this->isInStock($product['product_id'], $product['order_quantity']);
             }
+            if (!$is_not_in_stock) {
+                $is_not_in_stock = $this->globalNotOrderable((int) ($product['product_id'] ?? 0));
+            }
             if ($is_not_in_stock) {
                 $unavailable_products[] = $is_not_in_stock;
             }
         }
         return $unavailable_products;
+    }
+
+    /**
+     * A global-catalogue line is sold with no vendor in the loop, so the catalogue rules are
+     * its only gate: the product id when it is not orderable (draft, unlisted, unpriced —
+     * Product::orderable()), else false. Fail-open, like singleSellerOutOfStock.
+     */
+    private function globalNotOrderable(int $productId)
+    {
+        try {
+            if ($productId <= 0 || app(\Marvel\Services\ServiceAvailabilityService::class)->globalFallbackFor($productId) === null) {
+                return false;
+            }
+            return Product::whereKey($productId)->orderable()->exists() ? false : $productId;
+        } catch (\Throwable $e) {
+            return false;
+        }
     }
 
     /**

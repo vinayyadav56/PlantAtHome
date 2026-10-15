@@ -983,6 +983,10 @@ class ProductRepository extends BaseRepository
         // City-first scope (same policy as the listing). Qualified id column for the joins.
         $city = $request->filled('city') ? (string) $request->city : null;
         $products_query = (new \Marvel\Services\AvailabilityService())->applyCityScope($products_query, $city, false, 'products.id');
+        // Operations vertical filter, as the listing applies it (a coming-soon vertical never ranks).
+        if (($verticals = app(\Marvel\Services\ServiceAvailabilityService::class)->verticalFilterForCity($city)) !== null) {
+            $products_query->whereHas('type', fn ($t) => $t->whereIn('slug', $verticals));
+        }
         return $products_query->take($limit)->get();
     }
 
@@ -1001,22 +1005,20 @@ class ProductRepository extends BaseRepository
             $query = Product::query()
                 ->where('products.language', $language)
                 ->where('products.id', '!=', $product->id)
-                ->where('products.status', ProductStatus::PUBLISH)
-                ->sellable()
+                ->orderable()
                 ->where('products.in_stock', true)
-                ->where(function ($q) {
-                    $q->where('products.price', '>', 0)
-                        ->orWhere('products.sale_price', '>', 0)
-                        ->orWhere('products.max_price', '>', 0);
-                })
                 ->whereHas('categories', function ($query) use ($categories) {
                     $query->whereIn('categories.id', $categories);
                 })
                 ->with('type')
                 ->orderByRaw('ABS(COALESCE(NULLIF(products.min_price, 0), products.price, 0) - ?)', [$anchor])
                 ->orderBy('products.id');
-            // City-first scope (same policy as the listing).
+            // City-first scope and the Operations vertical filter (same policy as the listing):
+            // a coming-soon vertical's products are never offered beside a plant.
             $query = (new \Marvel\Services\AvailabilityService())->applyCityScope($query, $city, false, 'products.id');
+            if (($verticals = app(\Marvel\Services\ServiceAvailabilityService::class)->verticalFilterForCity($city)) !== null) {
+                $query->whereHas('type', fn ($t) => $t->whereIn('slug', $verticals));
+            }
             $related = $query->limit($limit)->get();
 
             // "Add all" must add a variable companion WITH a variant: give each its cheapest enabled,

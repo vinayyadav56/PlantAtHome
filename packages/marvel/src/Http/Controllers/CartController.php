@@ -141,13 +141,16 @@ class CartController extends CoreController
 
         // Display-only policy: a serviceable city with NO nursery supply shows the
         // catalog but cannot hold an orderable cart — every city-based line is
-        // unavailable; single-seller lines (Tools) ship anywhere and stay.
+        // unavailable; single-seller lines (Tools) and global-catalogue lines (their
+        // fallback shop ships them) stay.
         // (cityHasSupply fails open TRUE, so a fault keeps today's keep-all behavior.)
         if ($allowed === null && !$availability->cityHasSupply($city)) {
             $sellers = app(\Marvel\Services\ServiceAvailabilityService::class);
+            $global = $sellers->globalCatalogueTypeIds($city);
             $allowed = array_values(array_filter(
                 array_map(fn ($l) => (int) $l['product_id'], $data['items']),
                 fn ($pid) => $sellers->singleSellerFor($pid) !== null
+                    || ($global && isset($global[(int) \Marvel\Database\Models\Product::whereKey($pid)->value('type_id')]))
             ));
         }
 

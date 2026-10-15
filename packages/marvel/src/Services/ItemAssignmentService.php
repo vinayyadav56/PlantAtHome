@@ -123,32 +123,37 @@ class ItemAssignmentService
 
         // Operations Control Center — no vendor / delivery assignment when the
         // "Stop All Deliveries" kill-switch is engaged, or for a vertical that's
-        // unavailable in the city. FAIL OPEN (no city / error). When warm() has been
-        // called, the flags / slug / availability come from memo (one resolution per cart).
+        // unavailable. Without a city only the platform and global tiers apply (a
+        // coming-soon vertical is unavailable everywhere). FAIL OPEN on error. When
+        // warm() has been called, the flags / slug / availability come from memo.
         try {
             $svc = app(\Marvel\Services\ServiceAvailabilityService::class);
             $flags = $this->platformFlagsMemo ?? (array) $svc->platformFlags();
             if (!empty($flags['stop_deliveries'])) {
                 return [];
             }
-            if (!empty($city)) {
-                $slug = $this->slugByProductMemo[$productId]
-                    ?? \Marvel\Database\Models\Product::where('products.id', $productId)
-                        ->join('types', 'products.type_id', '=', 'types.id')
-                        ->value('types.slug');
-                if ($slug) {
-                    $memoKey = "{$slug}|{$cityN}";
-                    $available = array_key_exists($memoKey, $this->availabilityMemo)
-                        ? $this->availabilityMemo[$memoKey]
-                        : $svc->resolve($slug, (string) $city)['available'];
-                    if (!$available) {
-                        return [];
-                    }
+            $slug = $this->slugByProductMemo[$productId]
+                ?? \Marvel\Database\Models\Product::where('products.id', $productId)
+                    ->join('types', 'products.type_id', '=', 'types.id')
+                    ->value('types.slug');
+            if ($slug) {
+                $memoKey = "{$slug}|{$cityN}";
+                $available = array_key_exists($memoKey, $this->availabilityMemo)
+                    ? $this->availabilityMemo[$memoKey]
+                    : $svc->resolve($slug, !empty($city) ? (string) $city : null)['available'];
+                if (!$available) {
+                    return [];
                 }
             }
         } catch (\Throwable $e) {
             // fail open
         }
+
+        // Global catalogue: the vertical's fallback shop can fulfil this line by courier at
+        // the catalogue price wherever its coverage allows. Offered on EVERY such line, last,
+        // so a line staff gave it stays valid when a vendor appears; never auto-picked
+        // (bestFor() skips it — owner decision 2026-10-15: staff assign these by hand).
+        $fallback = $this->fallbackCandidate($productId, $variationOptionId, $qty, $pincode, $customer);
 
         $vendors = $this->availability->vendorsForProduct($productId, $variationOptionId);
         // Single-seller product (Tools): its seller is the only candidate, wherever the
@@ -158,7 +163,7 @@ class ItemAssignmentService
             $vendors = array_values(array_filter($vendors, fn ($v) => (int) $v['shop_id'] === $seller));
         }
         if (empty($vendors)) {
-            return [];
+            return $fallback ? [$fallback] : [];
         }
 
         // Delivery Coverage — when the shopper gave a pincode, that is a more
@@ -176,7 +181,7 @@ class ItemAssignmentService
             $vendors = array_values(array_filter($vendors, fn ($v) => isset($allowed[(int) $v['shop_id']])));
         }
         if (empty($vendors)) {
-            return [];
+            return $fallback ? [$fallback] : [];
         }
 
         // Memoized across lines of one request: a handful of vendors recur over a whole
@@ -269,7 +274,7 @@ class ItemAssignmentService
         }
 
         if (empty($candidates)) {
-            return [];
+            return $fallback ? [$fallback] : [];
         }
 
         // Uniform customer selling price for this line: MAX vendor rate among the
@@ -281,7 +286,9 @@ class ItemAssignmentService
         // candidates only price the line when nobody covers the city (otherwise one
         // expensive courier-anywhere vendor would inflate every city's price).
         $ratePool = array_filter($candidates, fn ($c) => !empty($c['_city_matched']));
-        if (empty($ratePool)) {
+        // A global-catalogue line no vendor covers here is sold at catalogue price (the
+        // fallback's), exactly what checkout charges — never an out-of-city vendor's rate.
+        if (empty($ratePool) && $fallback === null) {
             $ratePool = $candidates;
         }
         $rates = array_values(array_filter(
@@ -309,6 +316,9 @@ class ItemAssignmentService
         $allRates = array_values(array_filter(array_map(fn ($c) => $c['vendor_rate'], $candidates), fn ($r) => $r !== null));
         $minRate = !empty($allRates) ? min($allRates) : 0.0;
         $maxRate = !empty($allRates) ? max($allRates) : 0.0;
+        if ($sellingPrice === null && $fallback !== null) {
+            $sellingPrice = $fallback['selling_price'];
+        }
         foreach ($candidates as &$c) {
             $c['selling_price']  = $sellingPrice ?? ($c['selling_price'] ?? null);
             $c['margin_percent'] = $marginPercent;
@@ -380,7 +390,68 @@ class ItemAssignmentService
         }
         unset($c);
 
+        // The fallback goes last, at the line's uniform price — unless its shop is already a
+        // real candidate (PlantAtHome can also be a vendor somewhere).
+        if ($fallback !== null && !in_array($fallback['shop_id'], array_column($candidates, 'shop_id'), true)) {
+            $candidates[] = ['selling_price' => $sellingPrice, 'margin_percent' => $marginPercent] + $fallback;
+        }
+
         return $candidates;
+    }
+
+    /**
+     * The global-catalogue fallback candidate for a line, or null: the product's vertical
+     * is not a global catalogue, or the fallback shop's own rules for that vertical do not
+     * cover the pincode. Courier from its door at the catalogue price; no vendor rate (the
+     * shop is PlantAtHome itself), so no margin figures.
+     */
+    private function fallbackCandidate(int $productId, ?int $variationOptionId, int $qty, ?string $pincode, ?array $customer): ?array
+    {
+        try {
+            $shopId = app(\Marvel\Services\ServiceAvailabilityService::class)->globalFallbackFor($productId);
+            if ($shopId === null) {
+                return null;
+            }
+            $vertical = $this->slugByProductMemo[$productId] ?? \Marvel\Services\CoverageBridge::verticalOfProduct($productId);
+            if (!\Marvel\Services\CoverageBridge::fallbackCovers($shopId, $pincode, $vertical)) {
+                return null;
+            }
+            $product = \Marvel\Database\Models\Product::find($productId);
+            if (!$product) {
+                return null;
+            }
+            $shop = $this->loadShops([$shopId])[$shopId] ?? null;
+            $eta = $shop && $shop->sla_default_days ? (int) $shop->sla_default_days : self::DEFAULT_COURIER_ETA;
+            return [
+                'shop_id'                 => $shopId,
+                'vendor_product_price_id' => null,
+                'vendor_name'             => $shop->name ?? null,
+                'city'                    => is_array($shop?->address ?? null) ? ($shop->address['city'] ?? null) : null,
+                'cities'                  => [],
+                'distance_km'             => $this->distanceKm($customer, $shop),
+                'vendor_rate'             => null,
+                'selling_price'           => (new PricingService())->catalogUnitPrice($product, $variationOptionId),
+                'margin_percent'          => null,
+                'margin_per_unit'         => null,
+                'margin_total'            => null,
+                'available_qty'           => 0,
+                'stock_tracked'           => false,
+                'fulfillment_mode'        => 'courier',
+                'serves_city'             => true,
+                'pincode_covered'         => false,
+                'sla_days'                => $eta,
+                'eta_days'                => $eta,
+                'rating'                  => $shop && $shop->vendor_rating !== null ? (float) $shop->vendor_rating : null,
+                'priority'                => $shop ? (int) ($shop->vendor_priority_score ?? 50) : 50,
+                'shipping_cost'           => 0.0,
+                'score'                   => 0.0,
+                'recommended'             => false,
+                'best_margin'             => false,
+                'global_fallback'         => true,
+            ];
+        } catch (\Throwable $e) {
+            return null;
+        }
     }
 
     /** Straight-line km between the delivery address and a vendor, null if either is unpinned. */
@@ -410,7 +481,11 @@ class ItemAssignmentService
      */
     public function bestFor(int $productId, ?int $variationOptionId, int $qty, ?string $city, ?string $pincode = null): ?array
     {
-        $candidates = $this->candidatesFor($productId, $variationOptionId, $qty, $city, $pincode);
+        // Never the global-catalogue fallback: staff assign those lines by hand.
+        $candidates = array_values(array_filter(
+            $this->candidatesFor($productId, $variationOptionId, $qty, $city, $pincode),
+            fn ($c) => empty($c['global_fallback'])
+        ));
         if (empty($candidates)) {
             return null;
         }

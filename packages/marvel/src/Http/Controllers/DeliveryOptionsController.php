@@ -98,7 +98,7 @@ class DeliveryOptionsController extends CoreController
 
         if (!$cityName) {
             $out['reason'] = 'unknown_pincode';
-            $out['message'] = "We don't have this pincode on our map yet.";
+            $out['message'] = "We couldn't find this PIN code. Please check it.";
             return $out;
         }
 
@@ -142,10 +142,14 @@ class DeliveryOptionsController extends CoreController
             return $out;
         }
 
+        // Global catalogue (Plants while vendors onboard): where no vendor supplies this
+        // product, its fallback shop ships it by courier — an open city needs no vendor.
+        $fallback = $productId > 0 ? app(\Marvel\Services\ServiceAvailabilityService::class)->globalFallbackFor($productId) : null;
+
         // A paused/maintenance city answers before anything else — quoting a
         // courier for a city we aren't serving today would be a lie with a
-        // number attached.
-        if ($city && !$city->acceptsOrders()) {
+        // number attached. Not serviceable (no vendor yet) is no block for a fallback.
+        if ($city && !$city->acceptsOrders() && !($fallback !== null && $city->status === City::STATUS_ACTIVE)) {
             $out['reason'] = $city->status === City::STATUS_ACTIVE
                 ? 'city_not_serviceable'
                 : 'city_' . $city->status;
@@ -186,6 +190,21 @@ class DeliveryOptionsController extends CoreController
             $areas = $areas->filter(fn ($a) => isset($allowed[(int) $a->shop_id]))->values();
         }
 
+        if ($areas->isEmpty() && $fallback !== null) {
+            // Only the fallback's own rules for this vertical can narrow it (never its '*').
+            if (!\Marvel\Services\CoverageBridge::fallbackCovers($fallback, $pincode, \Marvel\Services\CoverageBridge::verticalOfProduct($productId))) {
+                $out['reason'] = 'no_supply';
+                $out['message'] = "We can't deliver this to {$pincode} yet.";
+                return $out;
+            }
+            if (empty($geo['lat']) && $city) {
+                $geo['lat'] = $city->lat;
+                $geo['lng'] = $city->lng;
+            }
+            $out['serviceable'] = true;
+            $out['options'][] = $this->courierOption([$fallback], $geo, $productId);
+            return $out;
+        }
         if ($areas->isEmpty()) {
             $out['reason'] = 'no_supply';
             $out['message'] = "No nursery delivers this to {$cityName} yet.";

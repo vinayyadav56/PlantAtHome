@@ -372,17 +372,42 @@ class ServiceAvailabilityController extends CoreController
      * Merged into `settings` (other keys survive). Multi → single is refused while other
      * shops still supply the vertical; a seller change is allowed and reports the old
      * seller's rows, which go inert (every read filters to the seller).
+     *
+     * A multi-vendor vertical may also run as a GLOBAL CATALOGUE (`catalogue_mode` global +
+     * `fallback_shop_id`): city vendors sell where they exist, and every other product stays
+     * orderable at its catalogue price for staff to assign to the fallback shop. Only
+     * changed when `catalogue_mode` is sent; never together with a single seller.
      */
     public function setSellerModel(Request $request, string $slug)
     {
         abort_unless(Type::where('slug', $slug)->exists(), 404, 'Unknown vertical.');
         $data = $request->validate([
-            'seller_model'   => ['required', Rule::in(['single_vendor', 'multi_vendor'])],
-            'seller_shop_id' => ['nullable', 'integer', 'required_if:seller_model,single_vendor'],
-            'reason'         => ['nullable', 'string', 'max:500'],
+            'seller_model'     => ['required', Rule::in(['single_vendor', 'multi_vendor'])],
+            'seller_shop_id'   => ['nullable', 'integer', 'required_if:seller_model,single_vendor'],
+            'catalogue_mode'   => ['nullable', Rule::in(['city', 'global'])],
+            'fallback_shop_id' => ['nullable', 'integer', 'required_if:catalogue_mode,global'],
+            'reason'           => ['nullable', 'string', 'max:500'],
         ]);
         $oldSeller = $this->availability->singleSellerShopId($slug);
         $newSeller = $data['seller_model'] === 'single_vendor' ? (int) $data['seller_shop_id'] : null;
+
+        $storedSettings = (array) (GVS::where('vertical_slug', $slug)->value('settings') ?? []);
+        $catalogueMode = $request->has('catalogue_mode')
+            ? ($data['catalogue_mode'] ?? 'city')
+            : (($storedSettings['catalogue_mode'] ?? null) === 'global' ? 'global' : 'city');
+        if ($catalogueMode === 'global' && $newSeller !== null) {
+            throw ValidationException::withMessages(['catalogue_mode' => [
+                'A nationwide fallback is for multi-vendor verticals. Turn it off before giving the vertical a single seller.',
+            ]]);
+        }
+        $fallbackId = null;
+        if ($catalogueMode === 'global') {
+            $fallbackId = (int) ($request->has('catalogue_mode') ? $data['fallback_shop_id'] : ($storedSettings['fallback_shop_id'] ?? 0));
+            $fallback = $fallbackId ? Shop::find($fallbackId) : null;
+            if (!$fallback || !$fallback->is_active || $fallback->approval_status === Shop::STATUS_ON_HOLD) {
+                throw ValidationException::withMessages(['fallback_shop_id' => ['The fallback must be an active shop that is not on hold.']]);
+            }
+        }
 
         $products = Product::query()->select('id')->whereIn('type_id', Type::where('slug', $slug)->pluck('id'))
             ->where(fn ($q) => $q->whereNull('product_type')->orWhere('product_type', '!=', \Marvel\Enums\ProductType::BUNDLE));
@@ -413,7 +438,10 @@ class ServiceAvailabilityController extends CoreController
         $row->settings = array_merge((array) ($row->settings ?? []), [
             'seller_model'   => $data['seller_model'],
             'seller_shop_id' => $newSeller,
-        ]);
+        ], $request->has('catalogue_mode') ? [
+            'catalogue_mode'   => $catalogueMode,
+            'fallback_shop_id' => $fallbackId,
+        ] : []);
         if (!$row->exists) {
             $row->is_active = true;
             $row->status = GVS::STATUS_ACTIVE;
@@ -434,17 +462,24 @@ class ServiceAvailabilityController extends CoreController
         return $this->sellerModel($slug) + ['warnings' => $warnings, 'inert_rows' => $inert];
     }
 
-    /** @return array{vertical:string,seller_model:string,seller_shop_id:?int,seller:?array,city_based:bool} */
+    /** @return array{vertical:string,seller_model:string,seller_shop_id:?int,seller:?array,city_based:bool,catalogue_mode:string,fallback_shop_id:?int,fallback:?array} */
     private function sellerModel(string $slug): array
     {
         $sellerId = $this->availability->singleSellerShopId($slug);
         $shop = $sellerId ? Shop::find($sellerId, ['id', 'name', 'slug']) : null;
+        // Stored intent, not the live verdict: a switched-off vertical or a held fallback
+        // shop still shows its configured fallback here (the storefront asks the live one).
+        $fallbackId = $this->availability->map()['global'][$slug]['fallback_shop_id'] ?? null;
+        $fallback = $fallbackId ? Shop::find($fallbackId, ['id', 'name', 'slug']) : null;
         return [
-            'vertical'       => $slug,
-            'seller_model'   => $sellerId ? 'single_vendor' : 'multi_vendor',
-            'seller_shop_id' => $sellerId,
-            'seller'         => $shop ? ['id' => (int) $shop->id, 'name' => $shop->name, 'slug' => $shop->slug] : null,
-            'city_based'     => $sellerId === null,
+            'vertical'         => $slug,
+            'seller_model'     => $sellerId ? 'single_vendor' : 'multi_vendor',
+            'seller_shop_id'   => $sellerId,
+            'seller'           => $shop ? ['id' => (int) $shop->id, 'name' => $shop->name, 'slug' => $shop->slug] : null,
+            'city_based'       => $sellerId === null,
+            'catalogue_mode'   => $fallbackId ? 'global' : 'city',
+            'fallback_shop_id' => $fallbackId,
+            'fallback'         => $fallback ? ['id' => (int) $fallback->id, 'name' => $fallback->name, 'slug' => $fallback->slug] : null,
         ];
     }
 

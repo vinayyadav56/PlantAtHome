@@ -108,11 +108,15 @@ class LocationPriceController extends CoreController
         $svc  = new AvailabilityService();
         $all   = $svc->availableProductIdsInCity($city, false);
         $local = $svc->availableProductIdsInCity($city, true);
+        // A global-catalogue vertical open in this city is orderable here without a vendor
+        // (its fallback shop ships it). The counts stay the real vendor supply.
+        $global = trim($city) !== ''
+            && app(\Marvel\Services\ServiceAvailabilityService::class)->globalCatalogueTypeIds($city) !== [];
         return [
             'city'             => $city,
             'available_count'  => count($all),
             'local_count'      => count($local),
-            'has_availability' => count($all) > 0,
+            'has_availability' => count($all) > 0 || $global,
         ];
     }
 

@@ -24,6 +24,8 @@ class TypeResource extends Resource
             'promotional_sliders' => $this->promotional_sliders,
             'settings' => $this->settings,
             'icon' => $this->icon,
+            // Storefront lists only: {status: active|coming_soon, message, nationwide} (TypeController).
+            'availability' => $this->resource->getAttribute('availability'),
         ];
     }
 }

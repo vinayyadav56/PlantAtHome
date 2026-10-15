@@ -97,6 +97,12 @@ class FulfillmentService
         }
         $pick = $this->chooseVendor($vendors, $this->norm($city), max(1, $qty));
         if ($pick === null) {
+            // Global catalogue: no vendor reaches this customer, so the vertical's fallback
+            // shop ships it by courier — when its own rules for the vertical cover the pin.
+            $fallback = app(ServiceAvailabilityService::class)->globalFallbackFor($productId);
+            if ($fallback !== null && CoverageBridge::fallbackCovers($fallback, $pincode, CoverageBridge::verticalOfProduct($productId))) {
+                return ['fulfillment_mode' => 'courier', 'eta_days' => self::DEFAULT_COURIER_ETA];
+            }
             return null;
         }
         return [

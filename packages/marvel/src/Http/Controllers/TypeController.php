@@ -87,7 +87,10 @@ class TypeController extends CoreController
     }
 
     /**
-     * Drop verticals the Operations Control Center has disabled.
+     * Drop verticals the Operations Control Center has disabled, and tag the rest with
+     * `availability` {status: active|coming_soon, message, nationwide}. A COMING SOON
+     * vertical stays listed so the storefront renders its Coming Soon page instead of a
+     * 404; disabled / paused ones still disappear. `nationwide` marks a global catalogue.
      *
      * FAIL OPEN: only narrows when something is actually disabled, and never
      * hides EVERY vertical (an explicit all-off is the platform kill-switch,
@@ -96,10 +99,20 @@ class TypeController extends CoreController
     private function availableOnly($types, $availSvc, ?string $city)
     {
         $available = $availSvc->verticalFilterForCity($city);
-        if ($available !== null) {
-            return $types->filter(fn ($t) => in_array($t->slug, $available, true))->values();
-        }
-        return $types;
+        $global = $availSvc->globalCatalogueVerticals();
+        return $types->filter(function ($t) use ($available, $availSvc, $city, $global) {
+            $r = $availSvc->resolve((string) $t->slug, $city);
+            $comingSoon = !$r['available'] && ($r['status'] ?? null) === 'coming_soon';
+            if (!$comingSoon && $available !== null && !in_array($t->slug, $available, true)) {
+                return false;
+            }
+            $t->setAttribute('availability', [
+                'status'     => $comingSoon ? 'coming_soon' : 'active',
+                'message'    => $comingSoon ? ($r['message'] ?? null) : null,
+                'nationwide' => isset($global[$t->slug]),
+            ]);
+            return true;
+        })->values();
     }
 
     /**

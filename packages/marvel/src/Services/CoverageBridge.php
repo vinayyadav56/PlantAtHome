@@ -66,10 +66,14 @@ final class CoverageBridge
      * declared plants coverage, so its plants lines pass rather than blocking
      * on a scope it never wrote.
      *
+     * $verticalRulesOnly measures the shops only against rules written FOR the vertical (as
+     * a single seller is): a '*' rule is a shop's own local area and must not narrow a role
+     * it plays nationwide (the global-catalogue fallback — see fallbackCovers()).
+     *
      * @param  int[]  $shopIds
      * @return array<int,true>|null
      */
-    public static function allowedShops(array $shopIds, ?string $pincode, ?string $vertical = null): ?array
+    public static function allowedShops(array $shopIds, ?string $pincode, ?string $vertical = null, bool $verticalRulesOnly = false): ?array
     {
         try {
             $pin = preg_replace('/\D/', '', (string) $pincode);
@@ -91,8 +95,8 @@ final class CoverageBridge
             // A single-seller vertical (Tools) ships nationwide: its seller is measured only
             // against rules written FOR that vertical. A '*' rule is the seller's general (plant)
             // delivery area and must never narrow Tools; a deliberate Tools rule still does.
-            $single = $scope !== '*'
-                && app(\Marvel\Services\ServiceAvailabilityService::class)->singleSellerShopId($scope) !== null;
+            $single = $scope !== '*' && ($verticalRulesOnly
+                || app(\Marvel\Services\ServiceAvailabilityService::class)->singleSellerShopId($scope) !== null);
             $configured = array_flip(
                 \Illuminate\Support\Facades\DB::table('vendor_coverage_rules')
                     ->whereIn('shop_id', $shopIds)->where('is_active', 1)
@@ -111,6 +115,39 @@ final class CoverageBridge
         } catch (\Throwable $e) {
             Log::warning('CoverageBridge: coverage narrowing failed open', ['error' => $e->getMessage()]);
 
+            return null;
+        }
+    }
+
+    /**
+     * May a global-catalogue fallback shop deliver this vertical to this pincode? Only rules
+     * written for the vertical count — the shop's '*' rules describe its own vendor area
+     * (PlantAtHome's Bengaluru plants) and must never confine the nationwide fallback.
+     * Fails open: no gate, no pincode or no coverage module ⇒ true.
+     */
+    public static function fallbackCovers(int $shopId, ?string $pincode, ?string $vertical): bool
+    {
+        if ($vertical === null || $vertical === '') {
+            return true;
+        }
+        $allowed = self::allowedShops([$shopId], $pincode, $vertical, true);
+        return $allowed === null || isset($allowed[$shopId]);
+    }
+
+    /**
+     * Is this a real Indian PIN — an active row of the postal master? NULL when the master is
+     * missing or empty (a fresh install, a stub test schema): callers then fail open.
+     */
+    public static function isKnownPincode(?string $pincode): ?bool
+    {
+        try {
+            $pin = preg_replace('/\D/', '', (string) $pincode);
+            if (preg_match('/^\d{6}$/', (string) $pin)
+                && \Illuminate\Support\Facades\DB::table('postal_codes')->where('pincode', $pin)->where('status', 'active')->exists()) {
+                return true;
+            }
+            return \Illuminate\Support\Facades\DB::table('postal_codes')->exists() ? false : null;
+        } catch (\Throwable $e) {
             return null;
         }
     }

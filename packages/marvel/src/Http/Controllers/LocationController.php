@@ -471,20 +471,27 @@ class LocationController extends CoreController
         }
         $resolver = \Marvel\Services\CoverageBridge::resolver();
         $occ = app(\Marvel\Services\ServiceAvailabilityService::class);
+        $global = $occ->globalCatalogueVerticals();
 
         $out = [];
         foreach (DB::table('types')->orderBy('name')->get(['id', 'name', 'slug']) as $type) {
             $vendors = $resolver === null ? [] : $resolver->vendorsFor($pincode, (string) $type->slug);
             $switch = $cityName === '' ? ['available' => true, 'reason' => null]
                 : $occ->resolve((string) $type->slug, $cityName);
+            // Global catalogue: the fallback shop can take this pin when no vendor covers it.
+            $fallback = $global[$type->slug] ?? null;
+            $fallbackOk = $fallback !== null
+                && \Marvel\Services\CoverageBridge::fallbackCovers($fallback, $pincode, (string) $type->slug);
             $out[] = [
-                'vertical'  => $type->slug,
-                'name'      => $type->name,
-                'vendors'   => count($vendors),
-                'shop_ids'  => array_keys($vendors),
-                'switch_on' => (bool) ($switch['available'] ?? true),
-                'reason'    => $switch['reason'] ?? null,
-                'orderable' => count($vendors) > 0 && (bool) ($switch['available'] ?? true),
+                'vertical'    => $type->slug,
+                'name'        => $type->name,
+                'vendors'     => count($vendors),
+                'shop_ids'    => array_keys($vendors),
+                'switch_on'   => (bool) ($switch['available'] ?? true),
+                'reason'      => $switch['reason'] ?? null,
+                'orderable'   => (count($vendors) > 0 || $fallbackOk) && (bool) ($switch['available'] ?? true),
+                'nationwide'  => $fallback !== null,
+                'fallback_shop_id' => $fallbackOk ? $fallback : null,
             ];
         }
 

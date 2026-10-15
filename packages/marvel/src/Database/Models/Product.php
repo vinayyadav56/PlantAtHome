@@ -211,6 +211,22 @@ class Product extends Model
     }
 
     /**
+     * What a shopper may order under the catalogue rules: published, in the curated catalogue
+     * (sellable()) and priced. Shared by the bought-together / related feed and the order
+     * path's catalogue check, so a draft or unlisted product can be neither shown nor bought.
+     */
+    public function scopeOrderable($query)
+    {
+        return $query->where('products.status', \Marvel\Enums\ProductStatus::PUBLISH)
+            ->sellable()
+            ->where(function ($q) {
+                $q->where('products.price', '>', 0)
+                    ->orWhere('products.sale_price', '>', 0)
+                    ->orWhere('products.max_price', '>', 0);
+            });
+    }
+
+    /**
      * Rebuild this product's bundle items + buy-together add-ons from the admin
      * form. Each entry is an id or {id, quantity}. Pass null to leave unchanged.
      */

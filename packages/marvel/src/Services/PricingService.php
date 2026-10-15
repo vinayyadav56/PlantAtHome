@@ -62,6 +62,11 @@ class PricingService
             // never the catalogue-price fallback below.
             return $this->result($basePrice, false, null, $basePrice, false);
         }
+        if (app(ServiceAvailabilityService::class)->globalFallbackFor($product) !== null) {
+            // Global catalogue: no vendor covers this customer, so the fallback shop sells it
+            // at the catalogue price — never another city's vendor rate, never the "6h" note.
+            return $this->result($basePrice, true, null, $basePrice, false);
+        }
 
         // Nothing available. Is there any effective row at all (priced but unavailable)?
         $any = $this->nearestCost($product->id, $variationOptionId, $latLng);
@@ -97,7 +102,8 @@ class PricingService
      * Available vendor rows for a product/variant, narrowed to vendors whose active
      * service area covers the city. When a city is given but NO vendor covers it, fall
      * back to all available rows (national-courier tier — mirrors
-     * ItemAssignmentService::matchArea) so a fulfillable line is never unpriced.
+     * ItemAssignmentService::matchArea) so a fulfillable line is never unpriced. A
+     * global-catalogue product never falls back: uncovered, it sells at catalogue price.
      */
     public function coveredRows(int $productId, ?int $variationOptionId, ?string $cityKey)
     {
@@ -112,8 +118,12 @@ class PricingService
                 ->get();
         }
         $rows = $this->availableRowsQuery($productId, $variationOptionId)->get();
-        if ($rows->isEmpty() || !$cityKey) {
+        if ($rows->isEmpty()) {
             return $rows;
+        }
+        $global = app(ServiceAvailabilityService::class)->globalFallbackFor($productId) !== null;
+        if (!$cityKey) {
+            return $global ? $rows->take(0) : $rows;
         }
         // Match every raw spelling of this city, not just the canonical key. `vendor_service_areas`
         // stores the vendor's own words ("Gurgaon", "South Delhi"), so an equality test against the
@@ -127,7 +137,7 @@ class PricingService
             ->pluck('shop_id')
             ->flip();
         $covered = $rows->filter(fn ($r) => isset($coveredShopIds[$r->shop_id]));
-        return $covered->isNotEmpty() ? $covered->values() : $rows;
+        return $covered->isNotEmpty() ? $covered->values() : ($global ? $rows->take(0) : $rows);
     }
 
     /** Effective, available, priced vendor rows for a product/size (vendor-set OR cost). */
@@ -201,7 +211,7 @@ class PricingService
             // catalog price is the product row's own price.
             if ($product->product_type === \Marvel\Enums\ProductType::BUNDLE) {
                 if ($catalogFallback) {
-                    $unit = (float) ($product->sale_price ?: $product->price);
+                    $unit = $this->catalogUnitPrice($product);
                     $line['unit_price'] = $unit;
                     $line['subtotal'] = round($unit * $qty, 2);
                 }
@@ -218,20 +228,28 @@ class PricingService
                 // resolution calculateSubtotal charges (variation sale→price,
                 // else product sale→price). CartController keeps the default
                 // (false) — its unit_price ?? null contract is unchanged.
-                $unit = null;
-                if (!empty($vo)) {
-                    // Scoped to the line's product: another product's cheaper variant must never price it.
-                    $v = \Marvel\Database\Models\Variation::where('product_id', $product->id)->find((int) $vo);
-                    $unit = $v ? (float) ($v->sale_price ?: $v->price) : null;
-                }
-                if ($unit === null) {
-                    $unit = (float) ($product->sale_price ?: $product->price);
-                }
+                $unit = $this->catalogUnitPrice($product, $vo !== null ? (int) $vo : null);
                 $line['unit_price'] = $unit;
                 $line['subtotal'] = round($unit * $qty, 2);
             }
         }
         return $products;
+    }
+
+    /**
+     * The catalogue unit price of a product/size — what checkout charges a line no vendor
+     * prices: the variation's sale→price, else the product's. Bundles use the product row.
+     */
+    public function catalogUnitPrice(Product $product, ?int $variationOptionId = null): float
+    {
+        if ($product->product_type !== \Marvel\Enums\ProductType::BUNDLE && !empty($variationOptionId)) {
+            // Scoped to the line's product: another product's cheaper variant must never price it.
+            $v = \Marvel\Database\Models\Variation::where('product_id', $product->id)->find($variationOptionId);
+            if ($v) {
+                return (float) ($v->sale_price ?: $v->price);
+            }
+        }
+        return (float) ($product->sale_price ?: $product->price);
     }
 
     /**

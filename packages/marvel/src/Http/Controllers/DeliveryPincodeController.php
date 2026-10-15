@@ -28,6 +28,10 @@ class DeliveryPincodeController extends CoreController
             return ['serviceable' => false, 'pincode' => $pincode, 'reason' => 'invalid'];
         }
 
+        if (($global = $this->globalCheck($request, $pincode)) !== null) {
+            return $global;
+        }
+
         // Delivery Coverage side (fail-safe: any fault = "coverage not configured").
         $coverageConfigured = false;
         $coveredCount = 0;
@@ -148,6 +152,56 @@ class DeliveryPincodeController extends CoreController
             'available_vendors' => $coveredCount,
             'source'            => $source,
         ];
+    }
+
+    /**
+     * Global catalogue (Plants while vendors onboard): its fallback shop delivers to any real
+     * Indian PIN its own rules for the vertical allow — vendor coverage and the allow-list are
+     * not the question. Answers for the named vertical, or, when none is named (the checkout),
+     * while a global-catalogue vertical is on. Null = not global: the usual check runs.
+     */
+    private function globalCheck(Request $request, string $pincode): ?array
+    {
+        try {
+            $svc = app(\Marvel\Services\ServiceAvailabilityService::class);
+            $globals = $svc->globalCatalogueVerticals();
+            $vertical = $request->filled('vertical') ? (string) $request->vertical : null;
+            $slug = $vertical !== null ? (isset($globals[$vertical]) ? $vertical : null) : array_key_first($globals);
+            if ($slug === null) {
+                return null;
+            }
+            if (\Marvel\Services\CoverageBridge::isKnownPincode($pincode) === false) {
+                return ['serviceable' => false, 'pincode' => $pincode, 'reason' => 'unknown_pincode',
+                    'message' => "We couldn't find this PIN code. Please check it.", 'source' => 'global'];
+            }
+            if (!\Marvel\Services\CoverageBridge::fallbackCovers($globals[$slug], $pincode, $slug)) {
+                return ['serviceable' => false, 'pincode' => $pincode, 'reason' => 'not_covered',
+                    'message' => "We can't deliver to {$pincode} yet.", 'source' => 'global'];
+            }
+            $geo = $this->postalGeo($pincode);
+            $cityName = $geo['city'] ?? null;
+            if ($cityName) {
+                $av = $svc->resolve($slug, $cityName);
+                if (!$av['available']) {
+                    return ['serviceable' => false, 'pincode' => $pincode, 'city' => $cityName, 'state' => $geo['state'] ?? null,
+                        'reason' => $av['reason'], 'message' => $av['message'] ?: "We're not delivering to {$cityName} right now.",
+                        'source' => 'global'];
+                }
+            }
+            return [
+                'serviceable'       => true,
+                'pincode'           => $pincode,
+                'city'              => $cityName,
+                'state'             => $geo['state'] ?? null,
+                'cod_enabled'       => true,
+                'eta_days'          => null,
+                'maintenance'       => false,
+                'available_vendors' => 0,
+                'source'            => 'global',
+            ];
+        } catch (\Throwable $e) {
+            return null; // fall through to the usual check
+        }
     }
 
     /** state/city display names for a pin from the postal master (best-effort). */

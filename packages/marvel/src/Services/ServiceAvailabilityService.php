@@ -28,6 +28,13 @@ use Marvel\Enums\ProductType;
  * A vertical whose `settings.seller_model` is 'single_vendor' (Tools) is sold by ONE
  * seller shop nationwide: tiers 2–3 never apply to it, and every "is this product
  * single-seller?" branch elsewhere asks singleSellerFor(). Absent ⇒ multi-vendor.
+ *
+ * A multi-vendor vertical whose `settings.catalogue_mode` is 'global' (Plants, while no
+ * vendors are onboarded) is a GLOBAL CATALOGUE: city vendors still sell where they exist,
+ * and everywhere else the product stays orderable at its catalogue price, fulfilled by
+ * `settings.fallback_shop_id` (staff assign it). Only the city's "not serviceable yet"
+ * flag stops applying; a paused city and the city × vertical matrix still block. Every
+ * "can a fallback take this?" branch asks globalFallbackFor(). Absent ⇒ city-only.
  */
 class ServiceAvailabilityService
 {
@@ -39,6 +46,12 @@ class ServiceAvailabilityService
     private ?int $memoVer = null;
     /** product id => seller shop id|null, valid for $memoVer. */
     private array $sellerMemo = [];
+    /** Global-catalogue verticals (slug => fallback shop id), valid for $memoVer. */
+    private ?array $globalMemo = null;
+    /** product id => fallback shop id|null, valid for $memoVer. */
+    private array $fallbackMemo = [];
+    /** shop id => can it take orders, per instance (the binding is scoped per request). */
+    private array $shopMemo = [];
     /** The cache version as this instance last read or wrote it. */
     private ?int $verRead = null;
 
@@ -75,7 +88,8 @@ class ServiceAvailabilityService
         if ($this->memo !== null && $this->memoVer === $ver) {
             return $this->memo;
         }
-        $map = Cache::remember('service_availability:m2:v' . $ver, self::TTL, function () {
+        // m3: adds global-catalogue keys; a new prefix so no reader ever sees an older shape.
+        $map = Cache::remember('service_availability:m3:v' . $ver, self::TTL, function () {
             $global = [];
             $platform = ['stop_platform' => false, 'stop_orders' => false, 'stop_deliveries' => false, 'maintenance' => false, 'message' => null];
             foreach (GVS::all() as $g) {
@@ -98,6 +112,9 @@ class ServiceAvailabilityService
                     'seller_shop_id' => ($s['seller_model'] ?? null) === 'single_vendor' && !empty($s['seller_shop_id'])
                         ? (int) $s['seller_shop_id']
                         : null,
+                    'fallback_shop_id' => ($s['catalogue_mode'] ?? null) === 'global' && !empty($s['fallback_shop_id'])
+                        ? (int) $s['fallback_shop_id']
+                        : null,
                 ];
             }
 
@@ -110,10 +127,14 @@ class ServiceAvailabilityService
             foreach (City::all(['id', 'name', 'status', 'is_serviceable']) as $c) {
                 $key = self::norm($c->name);
                 $accepts = $c->acceptsOrders();
+                // `active`: every same-named row is open (status active), serviceable or not —
+                // all a global-catalogue vertical needs. Most-restrictive, like `accepts`.
+                $open = $c->status === City::STATUS_ACTIVE;
                 if (!isset($cities[$key])) {
-                    $cities[$key] = ['ids' => [$c->id], 'accepts' => $accepts, 'status' => $c->status];
+                    $cities[$key] = ['ids' => [$c->id], 'accepts' => $accepts, 'status' => $c->status, 'active' => $open];
                 } else {
                     $cities[$key]['ids'][] = $c->id;
+                    $cities[$key]['active'] = $cities[$key]['active'] && $open;
                     if (!$accepts && $cities[$key]['accepts']) {
                         // Promote the blocking city's status as the reason.
                         $cities[$key]['accepts'] = false;
@@ -145,6 +166,8 @@ class ServiceAvailabilityService
         $this->memo = $map;
         $this->memoVer = $ver;
         $this->sellerMemo = [];
+        $this->globalMemo = null;
+        $this->fallbackMemo = [];
         return $map;
     }
 
@@ -158,14 +181,18 @@ class ServiceAvailabilityService
         }
     }
 
-    /** @return array<int,int> type_id => seller shop id, for every single-vendor vertical. */
-    public function singleSellerTypeIds(): array
+    /**
+     * @return array<int,int> type_id => seller shop id, for every single-vendor vertical.
+     * $activeOnly drops a vertical that is switched off or coming soon — for the city scope
+     * only: pricing, city_based and the recompute must keep treating it as single-seller.
+     */
+    public function singleSellerTypeIds(bool $activeOnly = false): array
     {
         try {
             $map = $this->map();
             $out = [];
             foreach ($map['global'] as $slug => $g) {
-                if (!empty($g['seller_shop_id'])) {
+                if (!empty($g['seller_shop_id']) && (!$activeOnly || self::isOn($g))) {
                     foreach ($map['type_ids'][$slug] ?? [] as $typeId) {
                         $out[(int) $typeId] = (int) $g['seller_shop_id'];
                     }
@@ -202,6 +229,109 @@ class ServiceAvailabilityService
         } catch (\Throwable $e) {
             return null;
         }
+    }
+
+    /** A vertical row that is switched on: active, and neither disabled nor coming soon. */
+    private static function isOn(array $g): bool
+    {
+        return !empty($g['is_active']) && !in_array($g['status'] ?? null, ['disabled', 'coming_soon'], true);
+    }
+
+    /**
+     * Global-catalogue verticals that are live right now: slug => fallback shop id. A
+     * vertical counts while it is switched on, multi-vendor, and its fallback shop can take
+     * orders (checked per request — deactivating a shop does not bust the map cache).
+     * Fail closed: on any fault, no vertical is global (today's city-only behaviour).
+     *
+     * @return array<string,int>
+     */
+    public function globalCatalogueVerticals(): array
+    {
+        try {
+            $map = $this->map();
+            if ($this->globalMemo !== null) {
+                return $this->globalMemo;
+            }
+            $out = [];
+            foreach ($map['global'] as $slug => $g) {
+                $shop = $g['fallback_shop_id'] ?? null;
+                if ($shop && empty($g['seller_shop_id']) && self::isOn($g) && $this->shopCanSell($shop)) {
+                    $out[$slug] = $shop;
+                }
+            }
+            return $this->globalMemo = $out;
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
+     * type_id => fallback shop for the global-catalogue verticals. With a city, only the
+     * verticals resolve() allows there (a paused city or a matrix block drops them).
+     *
+     * @return array<int,int>
+     */
+    public function globalCatalogueTypeIds(?string $city = null): array
+    {
+        $verticals = $this->globalCatalogueVerticals();
+        if (!$verticals) {
+            return [];
+        }
+        try {
+            $typeIds = $this->map()['type_ids'];
+            $out = [];
+            foreach ($verticals as $slug => $shop) {
+                if ($city !== null && trim($city) !== '' && !$this->resolve($slug, $city)['available']) {
+                    continue;
+                }
+                foreach ($typeIds[$slug] ?? [] as $typeId) {
+                    $out[(int) $typeId] = $shop;
+                }
+            }
+            return $out;
+        } catch (\Throwable $e) {
+            return [];
+        }
+    }
+
+    /**
+     * The shop that fulfils this product where no city vendor can — its vertical is a global
+     * catalogue — or null. Bundles included: the fallback needs no vendor rows.
+     */
+    public function globalFallbackFor(Product|int $product): ?int
+    {
+        $types = $this->globalCatalogueTypeIds();
+        if (!$types) {
+            return null;
+        }
+        try {
+            if ($product instanceof Product && array_key_exists('type_id', $product->getAttributes())) {
+                return $types[(int) $product->type_id] ?? null;
+            }
+            $id = $product instanceof Product ? (int) $product->getKey() : (int) $product;
+            if (!array_key_exists($id, $this->fallbackMemo)) {
+                $typeId = DB::table('products')->where('id', $id)->value('type_id');
+                $this->fallbackMemo[$id] = $typeId ? ($types[(int) $typeId] ?? null) : null;
+            }
+            return $this->fallbackMemo[$id];
+        } catch (\Throwable $e) {
+            return null;
+        }
+    }
+
+    /** Can this shop take orders: it exists, is active and is not on hold. */
+    public function shopCanSell(int $shopId): bool
+    {
+        if (!array_key_exists($shopId, $this->shopMemo)) {
+            try {
+                $row = DB::table('shops')->where('id', $shopId)->first();
+                $this->shopMemo[$shopId] = $row !== null && !empty($row->is_active)
+                    && ($row->approval_status ?? null) !== \Marvel\Database\Models\Shop::STATUS_ON_HOLD;
+            } catch (\Throwable $e) {
+                $this->shopMemo[$shopId] = false;
+            }
+        }
+        return $this->shopMemo[$shopId];
     }
 
     /** Every known vertical slug: catalog Type slugs ∪ the 2 service verticals. */
@@ -258,7 +388,11 @@ class ServiceAvailabilityService
                 ? AvailabilityService::canonicalCityKey((string) $city)
                 : '';
             $c = $cityKey !== '' ? ($map['cities'][$cityKey] ?? null) : null;
-            if ($c && !$c['accepts']) {
+            // A global-catalogue vertical ships from its fallback shop, so a city that is open
+            // but has no vendor yet (not serviceable) still takes its orders. A paused /
+            // maintenance / disabled city blocks it like any other vertical.
+            if ($c && !$c['accepts']
+                && !(!empty($c['active']) && isset($this->globalCatalogueVerticals()[$vertical]))) {
                 return $this->blocked('city_' . $c['status'], null, $c['status']);
             }
 
@@ -315,7 +449,11 @@ class ServiceAvailabilityService
      */
     public function verticalFilterForCity(?string $city): ?array
     {
-        $available = $this->availableVerticalsForCity($city);
+        try {
+            $available = $this->availableVerticalsForCity($city);
+        } catch (\Throwable $e) {
+            return null; // fail open: no narrowing
+        }
         $singleSeller = [];
         try {
             foreach ($this->map()['global'] as $slug => $g) {

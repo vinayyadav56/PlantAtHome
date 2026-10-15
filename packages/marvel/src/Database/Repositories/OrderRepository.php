@@ -1265,9 +1265,8 @@ class OrderRepository extends BaseRepository
         try {
             $addr = $request['shipping_address'] ?? null;
             $city = is_array($addr) ? ($addr['city'] ?? null) : null;
-            if (empty($city)) {
-                return;
-            }
+            // No city still checks the platform + global tiers: an order that omits its
+            // address must not slip a coming-soon vertical past this guard.
             $ids = collect($request['products'] ?? [])->pluck('product_id')->filter()->unique()->all();
             if (empty($ids)) {
                 return;
@@ -1278,7 +1277,7 @@ class OrderRepository extends BaseRepository
                 if (!$slug) {
                     continue;
                 }
-                $res = $svc->resolve($slug, (string) $city);
+                $res = $svc->resolve($slug, !empty($city) ? (string) $city : null);
                 if (!$res['available']) {
                     // Keep the reason so the message can distinguish a GLOBAL /
                     // platform disable from one specific to this city.

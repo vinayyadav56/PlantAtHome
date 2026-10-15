@@ -140,6 +140,35 @@ class CheckoutCoverageGateTest extends ServiceabilityTestCase
         $this->assertSame([], CoverageBridge::allowedShops([1], '302001', 'tools'), 'a rule written for Tools does narrow them');
     }
 
+    public function test_the_global_catalogue_fallback_is_narrowed_only_by_rules_written_for_its_vertical(): void
+    {
+        $this->setFlag(true);
+        // Shop 1's own delivery area as a vendor: Gurgaon, every vertical ('*').
+        $this->coverage->addCoverage(1, 'district', ['district_id' => $this->geo['gurgaon']]);
+
+        $this->assertTrue(CoverageBridge::fallbackCovers(1, '302001', 'plants'), "a '*' area never confines the nationwide fallback");
+        $this->assertSame([], CoverageBridge::allowedShops([1], '302001', 'plants'), 'its vendor role is narrowed exactly as before');
+
+        $this->coverage->addCoverage(1, 'district', ['district_id' => $this->geo['gurgaon'], 'vertical' => 'plants']);
+        $this->assertFalse(CoverageBridge::fallbackCovers(1, '302001', 'plants'), 'a rule written for Plants does narrow it');
+        $this->assertTrue(CoverageBridge::fallbackCovers(1, '122001', 'plants'), 'to the area it names');
+
+        $this->setFlag(false);
+        $this->assertTrue(CoverageBridge::fallbackCovers(1, '302001', 'plants'), 'gate off: never narrowed');
+    }
+
+    public function test_the_postal_master_knows_a_real_pin(): void
+    {
+        $this->assertTrue(CoverageBridge::isKnownPincode('122001'));
+        $this->assertTrue(CoverageBridge::isKnownPincode(' 122 001 '), 'formatting is ignored');
+        $this->assertFalse(CoverageBridge::isKnownPincode('999999'));
+        $this->assertFalse(CoverageBridge::isKnownPincode('122099'), 'an inactive pin is not deliverable');
+        $this->assertFalse(CoverageBridge::isKnownPincode(null));
+
+        DB::table('postal_codes')->delete();
+        $this->assertNull(CoverageBridge::isKnownPincode('122001'), 'an empty master cannot say: callers fail open');
+    }
+
     public function test_flag_off_means_no_gate_even_for_an_uncovered_pincode(): void
     {
         $this->setFlag(null); // flag absent (default OFF)

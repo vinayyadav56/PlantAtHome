@@ -1195,6 +1195,8 @@ class ProductController extends CoreController
 
             $options = \Illuminate\Support\Arr::get($data, $root . 'variation_options');
             $variantPrices = [];
+            // Global catalogue: a size no vendor here prices still sells, at its catalogue price.
+            $global = app(\Marvel\Services\ServiceAvailabilityService::class)->globalFallbackFor($productId) !== null;
             if (is_array($options) && $options) {
                 foreach ($options as $i => $opt) {
                     $row = $rows[(int) ($opt['id'] ?? 0)] ?? null;
@@ -1206,6 +1208,12 @@ class ProductController extends CoreController
                         $options[$i]['city_available'] = true;
                         $options[$i]['city_stock'] = $row->effectiveStock();
                         $options[$i]['vendor_count'] = (int) $row->vendor_count;
+                    } elseif ($global) {
+                        $options[$i]['city_available'] = true;
+                        $catalogue = (float) (($opt['sale_price'] ?? null) ?: ($opt['price'] ?? 0));
+                        if ($catalogue > 0) {
+                            $variantPrices[] = $catalogue;
+                        }
                     } else {
                         $options[$i]['city_available'] = false;
                     }
@@ -2163,8 +2171,11 @@ class ProductController extends CoreController
             if ($type_id) {
                 $products_query = $products_query->where('type_id', '=', $type_id);
             }
-            // City-first scope (same policy as the listing).
+            // City-first scope and the Operations vertical filter (same policy as the listing).
             $products_query = (new \Marvel\Services\AvailabilityService())->applyCityScope($products_query, $city, false, 'products.id');
+            if (($verticals = app(\Marvel\Services\ServiceAvailabilityService::class)->verticalFilterForCity($city)) !== null) {
+                $products_query = $products_query->whereHas('type', fn ($t) => $t->whereIn('slug', $verticals));
+            }
             // ->toArray() here, not a raw Collection: Cache::remember stores what
             // this returns, and storing MODELS means every append re-fires when
             // the cached value is rehydrated and serialised. Measured: this
@@ -2217,6 +2228,9 @@ class ProductController extends CoreController
                 $products_query = $products_query->where('type_id', '=', $type_id);
             }
             $products_query = (new \Marvel\Services\AvailabilityService())->applyCityScope($products_query, $city, false, 'products.id');
+            if (($verticals = app(\Marvel\Services\ServiceAvailabilityService::class)->verticalFilterForCity($city)) !== null) {
+                $products_query = $products_query->whereHas('type', fn ($t) => $t->whereIn('slug', $verticals));
+            }
             // Serialise before caching — see the note in popularProducts().
             // Measured: 132 queries on a cache HIT before this change.
             $products = $this->withDerivedBundleStock($products_query->take($limit)->get());

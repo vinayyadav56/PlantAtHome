@@ -608,7 +608,9 @@ class AvailabilityService
      * the storefront.
      *
      * Single-seller products (Tools) ship nationwide, so a restricted set (1 or 3) always
-     * includes them — except under `availability=local`, which they never satisfy.
+     * includes them — except under `availability=local`, which they never satisfy. So do
+     * global-catalogue products (Plants while vendors onboard) wherever their vertical is
+     * open in the city: a vendor city shows its vendors' plants AND the rest of the catalogue.
      */
     public function cityScopeProductIds(string $city, bool $localOnly = false)
     {
@@ -619,27 +621,43 @@ class AvailabilityService
             }
             $vendorSub = $this->availabilityProductIdQuery($key, $localOnly);
             if ((clone $vendorSub)->exists()) {
-                return $this->withSingleSeller($vendorSub, $localOnly); // (1) marketplace live here — strict
+                return $this->withSingleSeller($vendorSub, $localOnly, $key); // (1) marketplace live here — strict
             }
             if ($this->cityIsServiceable($key)) {
                 return null;        // (2) serviceable + unmapped — full catalog
             }
-            return $this->withSingleSeller($vendorSub, $localOnly); // (3) not serviceable — empty -> empty state
+            return $this->withSingleSeller($vendorSub, $localOnly, $key); // (3) not serviceable — empty -> empty state
         } catch (\Throwable $e) {
             return null;            // never empty the store on a fault
         }
     }
 
-    /** The city's product-id set ∪ every single-seller product (a `product_id` query either way). */
-    private function withSingleSeller($vendorSub, bool $localOnly)
+    /**
+     * The city's product-id set ∪ every nationwide product (a `product_id` query either way):
+     * live single-seller verticals (bundles excluded — they have no seller rows) and the
+     * global-catalogue verticals open in this city (bundles included — the fallback needs none).
+     */
+    private function withSingleSeller($vendorSub, bool $localOnly, string $city = '')
     {
-        $typeIds = $localOnly ? [] : array_keys(app(ServiceAvailabilityService::class)->singleSellerTypeIds());
-        if (!$typeIds) {
+        if ($localOnly) {
             return $vendorSub;
         }
-        $sellerProducts = Product::query()->select('id as product_id')->whereIn('type_id', $typeIds)
-            ->where(fn ($q) => $q->whereNull('product_type')->orWhere('product_type', '!=', \Marvel\Enums\ProductType::BUNDLE));
-        return DB::query()->fromSub($vendorSub->toBase()->union($sellerProducts->toBase()), 'cs')->select('product_id');
+        $svc = app(ServiceAvailabilityService::class);
+        $sellerTypes = array_keys($svc->singleSellerTypeIds(true));
+        $globalTypes = array_keys($svc->globalCatalogueTypeIds($city !== '' ? $city : null));
+        if (!$sellerTypes && !$globalTypes) {
+            return $vendorSub;
+        }
+        $nationwide = Product::query()->select('id as product_id')->where(function ($q) use ($sellerTypes, $globalTypes) {
+            if ($sellerTypes) {
+                $q->orWhere(fn ($w) => $w->whereIn('type_id', $sellerTypes)
+                    ->where(fn ($b) => $b->whereNull('product_type')->orWhere('product_type', '!=', \Marvel\Enums\ProductType::BUNDLE)));
+            }
+            if ($globalTypes) {
+                $q->orWhereIn('type_id', $globalTypes);
+            }
+        });
+        return DB::query()->fromSub($vendorSub->toBase()->union($nationwide->toBase()), 'cs')->select('product_id');
     }
 
     /**
