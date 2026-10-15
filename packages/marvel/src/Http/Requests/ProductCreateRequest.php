@@ -87,14 +87,21 @@ class ProductCreateRequest extends FormRequest
             // a repeated id would hit the pivot's unique index as a 500 instead
             // of a validation error (and used to silently double the size chips).
             'variations.*'                 => ['distinct'],
-            'variation_options'            => ['array'],
+            // Variants: combinations, deletes and SKUs in Marvel\Rules\ValidVariationOptions, plus
+            // its per-row type and range rules.
+            'variation_options'            => ['array', new \Marvel\Rules\ValidVariationOptions($this->input('variations'), null, $this->input('product_type'))],
+            ...\Marvel\Rules\ValidVariationOptions::rowRules(true),
             // Specifications (attribute values) — see Marvel\Rules\ValidAttributeValues. The required
             // ones are checked in ProductController against the status the create stores.
             'attribute_values'             => ['nullable', 'array', new \Marvel\Rules\ValidAttributeValues()],
             'quantity'                     => ['nullable', 'integer'],
             'unit'                         => ['required', 'string'],
             'description'                  => ['nullable', 'string', 'max:10000'],
-            'sku'                          => ['string', 'unique:variation_options,sku'],
+            // Blank = generated on save. Checked against products, the table whose unique index it meets.
+            'sku'                          => ['nullable', 'string', 'max:191', 'unique:products,sku'],
+            // GS1 barcode number and manufacturer part number (a variant carries its own).
+            'gtin'                         => ['nullable', 'string', new \Marvel\Rules\Gtin()],
+            'mpn'                          => ['nullable', 'string', 'max:64'],
             'image'                        => ['nullable', 'array'], // an image-less product (the seeded tools) must stay editable
             'size_guide'                   => ['nullable', 'array'],
             'gallery'                      => ['nullable', 'array'],
@@ -115,7 +122,6 @@ class ProductCreateRequest extends FormRequest
             'is_digital'                   => ['boolean'],
             'is_external'                  => ['boolean'],
             'is_rental'                    => ['boolean'],
-            "variation_options.upsert.*.sku" => ['string', 'unique:variation_options,sku'],
             // Bundle composition + config (authoritative rules live in BundleController).
             'bundle_type'                  => ['nullable', 'string', Rule::in(['manual', 'auto'])],
             'pricing_mode'                 => ['nullable', 'string', Rule::in(['fixed', 'percentage', 'flat', 'margin'])],
@@ -145,6 +151,12 @@ class ProductCreateRequest extends FormRequest
             'plant_attribute.sunlight'               => ['nullable', 'string', 'max:100'],
             'plant_attribute.water_requirement'      => ['nullable', 'string', 'max:100'],
         ];
+    }
+
+    /** A variant's fields are named after it: "The Red / L price must be greater than 0." */
+    public function attributes()
+    {
+        return \Marvel\Rules\ValidVariationOptions::attributeNames($this->input('variation_options'));
     }
 
     public function failedValidation(Validator $validator)

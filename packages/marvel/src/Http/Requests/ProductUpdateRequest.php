@@ -83,7 +83,18 @@ class ProductUpdateRequest extends FormRequest
             'unit'                         => ['string'],
             'description'                  => ['nullable', 'string', 'max:10000'],
             'quantity'                     => ['nullable', 'integer'],
-            'sku'                          => ['string', Rule::unique('variation_options')->where(fn ($query) => $query->whereSku($this->sku))],
+            // Checked against products (the table whose unique index it meets), this product excepted.
+            'sku'                          => ['nullable', 'string', 'max:191', Rule::unique('products', 'sku')->ignore($this->productId())],
+            // GS1 barcode number and manufacturer part number (a variant carries its own).
+            'gtin'                         => ['nullable', 'string', new \Marvel\Rules\Gtin()],
+            'mpn'                          => ['nullable', 'string', 'max:64'],
+            // updateProduct syncs these straight into the pivot, whose unique index a repeat would hit.
+            'variations'                   => ['array'],
+            'variations.*'                 => ['distinct'],
+            // Variants: combinations, deletes (also by a switch to simple) and SKUs in
+            // Marvel\Rules\ValidVariationOptions, plus its per-row type and range rules.
+            'variation_options'            => ['array', new \Marvel\Rules\ValidVariationOptions($this->input('variations'), $this->productId(), $this->input('product_type'))],
+            ...\Marvel\Rules\ValidVariationOptions::rowRules(false),
             'image'                        => ['nullable', 'array'], // an image-less product (the seeded tools) must stay editable
             'size_guide'                   => ['nullable', 'array'],
             'gallery'                      => ['nullable', 'array'],
@@ -91,7 +102,7 @@ class ProductUpdateRequest extends FormRequest
             'status'                       => ['string', Rule::in($productStatus)],
             // Specifications (attribute values) — see Marvel\Rules\ValidAttributeValues. The required
             // ones are checked in ProductController against the status the save stores.
-            'attribute_values'             => ['nullable', 'array', new \Marvel\Rules\ValidAttributeValues(is_numeric($this->route('product') ?? $this->input('id')) ? (int) ($this->route('product') ?? $this->input('id')) : null)],
+            'attribute_values'             => ['nullable', 'array', new \Marvel\Rules\ValidAttributeValues($this->productId())],
             'height'                       => ['nullable', 'string'],
             'length'                       => ['nullable', 'string'],
             'width'                        => ['nullable', 'string'],
@@ -131,6 +142,20 @@ class ProductUpdateRequest extends FormRequest
             'plant_attribute.sunlight'               => ['nullable', 'string', 'max:100'],
             'plant_attribute.water_requirement'      => ['nullable', 'string', 'max:100'],
         ];
+    }
+
+    /** A variant's fields are named after it: "The Red / L price must be greater than 0." */
+    public function attributes()
+    {
+        return \Marvel\Rules\ValidVariationOptions::attributeNames($this->input('variation_options'));
+    }
+
+    /** The product being edited: the {product} route parameter, else the payload's id. */
+    private function productId(): ?int
+    {
+        $id = $this->route('product') ?? $this->input('id');
+
+        return is_numeric($id) ? (int) $id : null;
     }
 
     public function failedValidation(Validator $validator)

@@ -56,6 +56,9 @@ class GetSingleProductResource extends Resource
             'my_review'                    => $this->my_review,
             'in_wishlist'                  => $this->in_wishlist,
             'sku'                          => $this->sku,
+            // GS1 barcode number and manufacturer part number; each variation_options row carries its own.
+            'gtin'                         => $this->gtin,
+            'mpn'                          => $this->mpn,
             'gallery'                      => $this->gallery,
             'image'                        => $this->image,
             'size_guide'                   => $this->size_guide,

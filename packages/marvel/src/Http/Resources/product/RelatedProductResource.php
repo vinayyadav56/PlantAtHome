@@ -3,6 +3,7 @@
 namespace Marvel\Http\Resources;
 
 use Illuminate\Http\Request;
+use Marvel\Enums\ProductType;
 
 class RelatedProductResource extends Resource
 {
@@ -14,7 +15,7 @@ class RelatedProductResource extends Resource
      */
     public function toArray($request)
     {
-        return [
+        $data = [
             'id'                   => $this->id,
             'name'                 => $this->name,
             'slug'                 => $this->slug,
@@ -31,5 +32,19 @@ class RelatedProductResource extends Resource
             'price'                => $this->price,
             'unit'                 => $this->unit
         ];
+        // A variable product is only ever added with a variant: its cheapest enabled one
+        // (ProductRepository::fetchRelated), or null when it has none to sell.
+        if ($this->product_type === ProductType::VARIABLE) {
+            $v = $this->default_variation;
+            $data['default_variation'] = $v ? [
+                'id'         => $v->id,
+                'title'      => $v->title,
+                'price'      => $v->price,
+                'sale_price' => $v->sale_price,
+                'options'    => $v->options,
+            ] : null;
+        }
+
+        return $data;
     }
 }

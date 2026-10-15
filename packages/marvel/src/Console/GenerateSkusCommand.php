@@ -7,7 +7,8 @@ use Marvel\Database\Models\Product;
 use Marvel\Services\SkuGenerator;
 
 /**
- * Backfills unique SKUs onto products (and their variations) that don't have one.
+ * Backfills unique SKUs onto products and variations that don't have one, including the
+ * variations of products that already have their own SKU.
  * Idempotent — only fills empty SKUs unless --force is passed.
  *
  *   php artisan plantathome:generate-skus
@@ -23,11 +24,10 @@ class GenerateSkusCommand extends Command
     {
         $force = (bool) $this->option('force');
 
-        $query = Product::query()->with(['type', 'categories', 'variation_options']);
+        $query = Product::query()->with(['type', 'categories']);
         if (!$force) {
-            $query->where(function ($w) {
-                $w->whereNull('sku')->orWhere('sku', '');
-            });
+            $blank = fn ($q) => $q->whereNull('sku')->orWhere('sku', '');
+            $query->where(fn ($w) => $w->where($blank)->orWhereHas('variation_options', fn ($v) => $v->where($blank)));
         }
 
         $products = 0;
@@ -41,13 +41,7 @@ class GenerateSkusCommand extends Command
                     $products++;
                 }
 
-                foreach ($product->variation_options as $i => $option) {
-                    if ($force || empty($option->sku)) {
-                        $option->sku = $gen->forVariation($product, $option, $i);
-                        $option->saveQuietly();
-                        $variations++;
-                    }
-                }
+                $variations += $gen->fillVariantSkus($product, $force);
             }
         });
 

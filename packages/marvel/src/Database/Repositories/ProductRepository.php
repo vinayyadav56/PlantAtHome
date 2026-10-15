@@ -150,7 +150,45 @@ class ProductRepository extends BaseRepository
     ];
     public function getProductDataArray(): array
     {
-        return $this->dataArray;
+        // gtin/mpn come with 2026_10_16_000100, and deploys migrate after the code serves.
+        return \Illuminate\Support\Facades\Schema::hasColumns('products', ['gtin', 'mpn'])
+            ? [...$this->dataArray, 'gtin', 'mpn']
+            : $this->dataArray;
+    }
+
+    /**
+     * The variant columns a save payload may write. Anything else a client sends back (appends such
+     * as blocked_dates, a city flag, product_id) is not written; gtin/mpn once they exist.
+     */
+    private function variantColumns(): array
+    {
+        $columns = ['title', 'price', 'sale_price', 'quantity', 'is_disable', 'sku', 'options', 'image', 'is_digital', 'language'];
+
+        return \Illuminate\Support\Facades\Schema::hasColumns('variation_options', ['gtin', 'mpn'])
+            ? [...$columns, 'gtin', 'mpn']
+            : $columns;
+    }
+
+    /**
+     * The chosen axis values as plain ids. The admin sends [{attribute_value_id}], and attach/sync
+     * read a list of arrays as {position => pivot attributes}: every save re-attached everything,
+     * and a value whose id equalled a list position was rewritten in place (a unique-index 500).
+     */
+    private function variationValueIds($variations): array
+    {
+        return collect(is_array($variations) ? $variations : [])
+            ->map(fn ($v) => (int) (is_array($v) ? ($v['attribute_value_id'] ?? 0) : $v))
+            ->filter()->unique()->values()->all();
+    }
+
+    /** A variant row as written: whitelisted columns, a blank title made from its option values ("Red/5 L"). */
+    private function variantRow(array $row, array $columns): array
+    {
+        if (trim((string) ($row['title'] ?? '')) === '') {
+            $row['title'] = collect(is_array($row['options'] ?? null) ? $row['options'] : [])->pluck('value')->implode('/');
+        }
+
+        return array_intersect_key($row, array_flip($columns));
     }
 
     public function boot()
@@ -361,7 +399,7 @@ class ProductRepository extends BaseRepository
     public function storeProduct($request, $setting)
     {
         try {
-            $data = $this->normalizeNumericFields($request->only($this->dataArray));
+            $data = $this->normalizeNumericFields($request->only($this->getProductDataArray()));
             $data['slug'] = $this->makeSlug($request);
 
             if ($setting->options["isProductReview"] ?? false) {
@@ -415,21 +453,18 @@ class ProductRepository extends BaseRepository
                 $product->tags()->attach($request['tags']);
             }
             if (isset($request['variations'])) {
-                $product->variations()->attach($request['variations']);
+                $product->variations()->attach($this->variationValueIds($request['variations']));
             }
             if (isset($request['variation_options'])) {
+                $columns = $this->variantColumns();
 
-                foreach ($request['variation_options']['upsert'] as $variation_option) {
+                foreach ($request['variation_options']['upsert'] ?? [] as $variation_option) {
 
                     if (isset($variation_option['is_digital']) && $variation_option['is_digital']) {
                         $file = $variation_option['digital_file'];
-                        unset($variation_option['digital_file']);
-
-                        unset($variation_option['inform_purchased_customer']);
-                        unset($variation_option['product_update_message']);
                     }
 
-                    $new_variation_option = $product->variation_options()->create($variation_option);
+                    $new_variation_option = $product->variation_options()->create($this->variantRow($variation_option, $columns));
 
                     if (isset($variation_option['is_digital']) && $variation_option['is_digital']) {
                         $digital_file = $new_variation_option->digital_file()->create($file);
@@ -448,19 +483,15 @@ class ProductRepository extends BaseRepository
 
             // PlantAtHome: auto-assign a unique SKU when none was supplied (categories
             // are attached above, so the SKU can include the category code).
+            $skuGen = app(\Marvel\Services\SkuGenerator::class);
             if (empty($product->sku)) {
-                $product->load(['type', 'categories', 'variation_options']);
-                $skuGen = app(\Marvel\Services\SkuGenerator::class);
+                $product->load(['type', 'categories']);
                 $product->sku = $skuGen->forProduct($product);
-                foreach ($product->variation_options as $i => $opt) {
-                    if (empty($opt->sku)) {
-                        $opt->sku = $skuGen->forVariation($product, $opt, $i);
-                        $opt->saveQuietly();
-                    }
-                }
             }
 
             $product->save();
+            // Every variant sent without a SKU, whether or not the product brought its own.
+            $skuGen->fillVariantSkus($product);
 
             // PlantAtHome: register any uploaded Featured/Gallery photos into the
             // plant photo library (product_images) on create. Plants only.
@@ -674,7 +705,7 @@ class ProductRepository extends BaseRepository
                 $product->pickup_locations()->sync($request['pickup_locations']);
             }
             if (isset($request['variations'])) {
-                $product->variations()->sync($request['variations']);
+                $product->variations()->sync($this->variationValueIds($request['variations']));
             }
             if (isset($request['persons'])) {
                 $product->persons()->sync($request['persons']);
@@ -694,6 +725,7 @@ class ProductRepository extends BaseRepository
                 }
             }
             if (isset($request['variation_options'])) {
+                $columns = $this->variantColumns();
                 if (isset($request['variation_options']['upsert'])) {
                     foreach ($request['variation_options']['upsert'] as $key => $variation) {
 
@@ -702,12 +734,9 @@ class ProductRepository extends BaseRepository
                         if (isset($variation['is_digital']) && $variation['is_digital']) {
 
                             $file = $variation['digital_file'];
-                            unset($variation['digital_file']);
-                            unset($variation['inform_purchased_customer']);
-                            unset($variation['product_update_message']);
 
                             if (isset($variation['id'])) {
-                                $product->variation_options()->where('id', $variation['id'])->update($variation);
+                                $product->variation_options()->where('id', $variation['id'])->update($this->variantRow($variation, $columns));
 
                                 try {
                                     $updated_variation = Variation::findOrFail($variation['id']);
@@ -739,7 +768,7 @@ class ProductRepository extends BaseRepository
                                     ]);
                                 }
                             } else {
-                                $new_variation = $product->variation_options()->create($variation);
+                                $new_variation = $product->variation_options()->create($this->variantRow($variation, $columns));
                                 $digital_file = $new_variation->digital_file()->create($file);
                                 $new_variation->update([
                                     'digital_file_tracker' => $digital_file->id
@@ -747,24 +776,18 @@ class ProductRepository extends BaseRepository
                             }
                         } else {
                             if (isset($variation['id'])) {
-                                $product->variation_options()->where('id', $variation['id'])->update($variation);
+                                $product->variation_options()->where('id', $variation['id'])->update($this->variantRow($variation, $columns));
                             } else {
-                                $product->variation_options()->create($variation);
+                                $product->variation_options()->create($this->variantRow($variation, $columns));
                             }
                         }
                     }
                 }
-                if (isset($request['variation_options']['delete'])) {
-                    foreach ($request['variation_options']['delete'] as $key => $id) {
-                        try {
-                            $product->variation_options()->where('id', $id)->delete();
-                        } catch (Exception $e) {
-                            //
-                        }
-                    }
-                }
+                // ValidVariationOptions refused the save if any of these has orders, reviews, seller
+                // prices or stock movements, so a failure here is a real error: it is not swallowed.
+                $product->variation_options()->whereIn('id', $request['variation_options']['delete'] ?? [])->delete();
             }
-            $data = $this->normalizeNumericFields($request->only($this->dataArray));
+            $data = $this->normalizeNumericFields($request->only($this->getProductDataArray()));
             $data['sale_price'] = isset($request['sale_price']) && $request['sale_price'] !== '' ? $request['sale_price'] : null;
 
             // Who may set which status (a vendor's proposal stays in review): statusForUpdate.
@@ -773,10 +796,11 @@ class ProductRepository extends BaseRepository
                 $data['status'] = $status;
             }
 
+            // The SKU stays: nulling it on every edit lost the one storeProduct assigned, and vendor
+            // price sheets find a product by it.
             if ($request->product_type == ProductType::VARIABLE) {
                 $data['price'] = NULL;
                 $data['sale_price'] = NULL;
-                $data['sku'] = NULL;
             }
             if ($request->product_type == ProductType::SIMPLE) {
                 $data['max_price'] = $data['price'];
@@ -823,6 +847,8 @@ class ProductRepository extends BaseRepository
                 $product->variation_options()->delete();
             }
             $product->save();
+            // Variants saved without a SKU get {product SKU}-{suffix}, on every save (not only create).
+            app(\Marvel\Services\SkuGenerator::class)->fillVariantSkus($product);
 
             // PlantAtHome: keep the plant photo library (product_images) in sync with
             // the curated Featured/Gallery the editor submitted. Plants only.
@@ -855,8 +881,8 @@ class ProductRepository extends BaseRepository
 
             if ($setting->options["enableEmailForDigitalProduct"]) {
                 if ($request->product_type == 'variable') {
-                    foreach ($request['variation_options']['upsert'] as $variation_data) {
-                        if ($variation_data['inform_purchased_customer']) {
+                    foreach ($request['variation_options']['upsert'] ?? [] as $variation_data) {
+                        if (!empty($variation_data['inform_purchased_customer'])) {
                             event(new DigitalProductUpdateEvent($product, $request->user(), [
                                 'inform_customer' => $variation_data['inform_purchased_customer'],
                                 'update_message' => $variation_data['product_update_message'] ?? ''
@@ -959,7 +985,27 @@ class ProductRepository extends BaseRepository
                 ->orderBy('products.id');
             // City-first scope (same policy as the listing).
             $query = (new \Marvel\Services\AvailabilityService())->applyCityScope($query, $city, false, 'products.id');
-            return $query->limit($limit)->get();
+            $related = $query->limit($limit)->get();
+
+            // "Add all" must add a variable companion WITH a variant: give each its cheapest enabled,
+            // priced one (null when it has none), all in one query. Price is a VARCHAR, so compare in PHP.
+            $variable = $related->where('product_type', ProductType::VARIABLE);
+            if ($variable->isNotEmpty()) {
+                $price = fn ($v) => (float) ($v->sale_price ?: $v->price);
+                $cheapest = Variation::whereIn('product_id', $variable->pluck('id'))
+                    ->where('is_disable', false)
+                    ->get(['id', 'product_id', 'title', 'price', 'sale_price', 'options'])
+                    ->each->setAppends([]) // no blocked_dates query per row when serialized
+                    ->filter(fn ($v) => $price($v) > 0)
+                    ->sortBy('id')->sortBy($price) // stable: equal prices keep id order
+                    ->unique('product_id') // the first, i.e. cheapest, row of each product
+                    ->keyBy('product_id');
+                foreach ($variable as $p) {
+                    $p->setRelation('default_variation', $cheapest->get($p->id));
+                }
+            }
+
+            return $related;
         } catch (Exception $e) {
             Log::warning('fetchRelated failed', ['slug' => $slug, 'error' => $e->getMessage()]);
             return [];
