@@ -37,6 +37,8 @@ class ProductAttributeSchema
 
         $definitions = PlantAttributeDefinition::query()
             ->when(!$withInactive, fn ($q) => $q->where('is_active', true))
+            // A variant axis (Colour, Capacity) is chosen per variant, never a product specification.
+            ->where('is_variant_axis', false)
             ->where(fn ($q) => $q->whereNull('type_id')->when($typeId, fn ($w) => $w->orWhere('type_id', $typeId)))
             ->with(['terms', 'categories:id'])
             ->orderBy('sort')->orderBy('name')

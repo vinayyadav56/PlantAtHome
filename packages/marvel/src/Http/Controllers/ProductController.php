@@ -1139,23 +1139,47 @@ class ProductController extends CoreController
      * flagged `city_available: false` — silently repricing something nobody can
      * actually deliver would be worse than showing it as unavailable.
      *
+     * A single-seller product (Tools, `city_based === false`) has no city and
+     * no projection rows: with or without ?city, each variant is flagged
+     * `city_available` = its seller can supply it now. Its prices are the
+     * mirrored ones (AvailabilityService::mirrorSingleSeller), never touched here.
+     *
      * Fail-open: any fault leaves the master prices untouched.
      */
     private function attachCityPricing(array $data, Request $request): array
     {
         try {
-            if (!$request->filled('city')) {
-                return $data;
-            }
-            $svc = new \Marvel\Services\AvailabilityService();
-            $key = $svc->normalizeCityKey((string) $request->city);
-
             // This response is UNWRAPPED (JsonResource::withoutWrapping is on),
             // so the product fields sit at the root — but attachAvailability
             // writes a `data.availability` key, and a future config flip could
             // wrap it again. Resolve the root once and address everything
             // through it rather than hardcoding either shape.
             $root = isset($data['data']['id']) ? 'data.' : '';
+
+            if (\Illuminate\Support\Arr::get($data, $root . 'city_based') === false) {
+                // ponytail: one sellingPrice() per variant per PDP hit (outside the PDP cache);
+                // batch the seller rows into one query if tools grow dozens of variants.
+                $options = \Illuminate\Support\Arr::get($data, $root . 'variation_options');
+                $product = is_array($options) && $options
+                    ? \Marvel\Database\Models\Product::find((int) \Illuminate\Support\Arr::get($data, $root . 'id'))
+                    : null;
+                if ($product) {
+                    $pricing = new \Marvel\Services\PricingService();
+                    foreach ($options as $i => $opt) {
+                        $r = $pricing->sellingPrice($product, (int) ($opt['id'] ?? 0));
+                        $options[$i]['city_available'] = !empty($r['has_vendor_cost']) && !empty($r['available']) && $r['price'] > 0;
+                    }
+                    \Illuminate\Support\Arr::set($data, $root . 'variation_options', $options);
+                }
+                return $data;
+            }
+
+            if (!$request->filled('city')) {
+                return $data;
+            }
+            $svc = new \Marvel\Services\AvailabilityService();
+            $key = $svc->normalizeCityKey((string) $request->city);
+
             $productId = (int) \Illuminate\Support\Arr::get($data, $root . 'id');
             if ($key === '' || !$productId) {
                 return $data;

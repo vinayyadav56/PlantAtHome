@@ -7,10 +7,12 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Marvel\Database\Models\AttributeValue;
 use Marvel\Database\Repositories\AttributeValueRepository;
 use Marvel\Exceptions\MarvelException;
 use Marvel\Http\Requests\AttributeValueRequest;
 use Marvel\Http\Resources\AttributeValueResource;
+use Marvel\Services\VariantAxisSync;
 use Prettus\Validator\Exceptions\ValidatorException;
 use Symfony\Component\HttpFoundation\Exception\BadRequestException;
 
@@ -46,6 +48,7 @@ class AttributeValueController extends CoreController
     {
         try {
             if ($this->repository->hasPermission($request->user(), $request->shop_id)) {
+                VariantAxisSync::assertUnmanaged((int) $request->attribute_id);
                 $validatedData = $request->validated();
                 return $this->repository->create($validatedData);
             }
@@ -89,6 +92,9 @@ class AttributeValueController extends CoreController
     public function updateAttributeValues(AttributeValueRequest $request)
     {
         if ($this->repository->hasPermission($request->user(), $request->shop_id)) {
+            // Outside the try below, which turns every error into a 404. Both the value's own
+            // attribute and the one the payload would move it to.
+            VariantAxisSync::assertUnmanaged((int) $request->attribute_id, (int) AttributeValue::whereKey($request->id)->value('attribute_id'));
             try {
                 $validatedData = $request->except('id');
                 return $this->repository->findOrFail($request->id)->update($validatedData);
@@ -125,6 +131,7 @@ class AttributeValueController extends CoreController
         $shop_id = $this->repository->findOrFail($request->id)->attribute->shop_id;
         if ($this->repository->hasPermission($request->user(), $shop_id)) {
             $attributesValue =  $this->repository->findOrFail($request->id);
+            VariantAxisSync::assertUnmanaged((int) $attributesValue->attribute_id);
             $attributesValue->delete();
             return $attributesValue;
         }

@@ -87,9 +87,12 @@ class ApplySizePricingCommand extends Command
             return !($limit > 0 && $converted >= $limit);
         });
 
-        // 4. Flat-price any remaining ₹0 non-plant products (tools/farmbox demo).
+        // 4. Flat-price any remaining ₹0 non-plant products (tools/farmbox demo). Never a
+        //    variable one: its price is NULL by design (the variants carry the prices), and this
+        //    would flatten it to a simple product with an invented price.
         $flat = 0;
         Product::where('type_id', '!=', $plantsType->id)->where('language', 'en')
+            ->where('product_type', '!=', 'variable')
             ->where(function ($q) {
                 $q->whereNull('price')->orWhere('price', 0);
             })

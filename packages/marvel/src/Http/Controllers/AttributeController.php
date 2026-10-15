@@ -14,6 +14,7 @@ use Illuminate\Database\Eloquent\Collection;
 use Illuminate\Database\Eloquent\ModelNotFoundException;
 use Marvel\Database\Repositories\AttributeRepository;
 use Marvel\Http\Resources\AttributeResource;
+use Marvel\Services\VariantAxisSync;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 class AttributeController extends CoreController
@@ -119,6 +120,7 @@ class AttributeController extends CoreController
         } catch (\Exception $e) {
             throw new HttpException(404, NOT_FOUND);
         }
+        VariantAxisSync::assertUnmanaged((int) $attribute->id);
         $request->merge(['shop_id' => null]); // attributes are global
         return $this->repository->updateAttribute($request, $attribute);
     }
@@ -147,6 +149,7 @@ class AttributeController extends CoreController
         } catch (\Exception $e) {
             throw new HttpException(404, NOT_FOUND);
         }
+        VariantAxisSync::assertUnmanaged((int) $attribute->id);
         $attribute->delete();
         return $attribute;
     }

@@ -357,22 +357,52 @@ class AvailabilityService
      * margin is ONE nationwide price, mirrored onto the product row so listing, price filter,
      * sort, cart, PDP and checkout's catalogue fallback all read it with no city lookup. No
      * usable seller row ⇒ out of stock with the price untouched — never a null/0 price, which
-     * ApplySizePricingCommand would then "fix" with an invented one. Simple products only:
-     * variation prices are not mirrored.
+     * ApplySizePricingCommand would then "fix" with an invented one.
+     *
+     * A variable tool is priced per variant, exactly as location-price and checkout charge it:
+     * each enabled variant its seller can sell takes that price (sale price cleared), the
+     * product's min/max span them, and it is in stock while any of them sells. Its own
+     * price/sale_price stay NULL, and a seller row with no variant prices none of it.
      */
     private function mirrorSingleSeller(Product $product): void
     {
         ProductCityAvailability::where('product_id', $product->id)->delete();
 
-        $r = $this->pricing->sellingPrice($product);
-        $update = (!empty($r['has_vendor_cost']) && !empty($r['available']) && $r['price'] > 0)
-            ? ['price' => $r['price'], 'min_price' => $r['price'], 'max_price' => $r['price'], 'sale_price' => null, 'in_stock' => true]
-            : ['in_stock' => false];
+        $sellable = fn (array $r) => !empty($r['has_vendor_cost']) && !empty($r['available']) && $r['price'] > 0;
+        $changed = false;
+        if ($product->product_type === \Marvel\Enums\ProductType::VARIABLE) {
+            $prices = [];
+            // Query builder, not Variation, like the product write below: no model events or accessors.
+            $variants = DB::table('variation_options')->where('product_id', $product->id)
+                ->where('is_disable', false)->get(['id', 'price', 'sale_price']);
+            foreach ($variants as $vo) {
+                $r = $this->pricing->sellingPrice($product, (int) $vo->id);
+                if (!$sellable($r)) {
+                    continue; // keeps its stored price: never 0/null
+                }
+                $prices[] = $r['price'];
+                if ((float) $vo->price != $r['price'] || $vo->sale_price !== null) { // price is a VARCHAR
+                    DB::table('variation_options')->where('id', $vo->id)->update(['price' => $r['price'], 'sale_price' => null]);
+                    $changed = true;
+                }
+            }
+            $update = $prices
+                ? ['min_price' => min($prices), 'max_price' => max($prices), 'in_stock' => true]
+                : ['in_stock' => false];
+        } else {
+            $r = $this->pricing->sellingPrice($product);
+            $update = $sellable($r)
+                ? ['price' => $r['price'], 'min_price' => $r['price'], 'max_price' => $r['price'], 'sale_price' => null, 'in_stock' => true]
+                : ['in_stock' => false];
+        }
         // Write only what changed, through the query builder: no model observers, and the
         // daily recompute doesn't churn a row that already matches.
         $update = array_filter($update, fn ($v, $k) => $product->getAttribute($k) != $v, ARRAY_FILTER_USE_BOTH);
         if ($update) {
             DB::table('products')->where('id', $product->id)->update($update);
+            $changed = true;
+        }
+        if ($changed) {
             self::bustCatalogCache();
         }
     }

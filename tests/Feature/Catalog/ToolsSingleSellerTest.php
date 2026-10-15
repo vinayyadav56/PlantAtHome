@@ -217,6 +217,11 @@ final class ToolsSingleSellerTest extends TestCase
                 $t->unsignedBigInteger('order_id'), $t->unsignedBigInteger('product_id'), $t->unsignedBigInteger('variation_option_id')->nullable(),
                 $t->integer('order_quantity')->nullable(), $t->string('unit_price')->nullable(), $t->string('subtotal')->nullable(), $t->timestamps(),
             ],
+            'variation_options' => fn (Blueprint $t) => [
+                $t->unsignedBigInteger('product_id'), $t->string('title'), $t->string('price'), $t->string('sale_price')->nullable(),
+                $t->unsignedBigInteger('quantity')->default(0), $t->boolean('is_disable')->default(false), $t->string('sku')->nullable(),
+                $t->json('options')->nullable(), $t->string('language')->default('en'), $t->timestamps(),
+            ],
         ];
         foreach ($tables as $name => $cols) {
             Schema::create($name, function (Blueprint $t) use ($cols) {
@@ -226,10 +231,10 @@ final class ToolsSingleSellerTest extends TestCase
         }
     }
 
-    private function vpp(int $shopId, int $productId, float $rate): void
+    private function vpp(int $shopId, int $productId, float $rate, ?int $variationOptionId = null): void
     {
         DB::table('vendor_product_prices')->insert([
-            'shop_id' => $shopId, 'product_id' => $productId, 'vendor_selling_price' => $rate,
+            'shop_id' => $shopId, 'product_id' => $productId, 'variation_option_id' => $variationOptionId, 'vendor_selling_price' => $rate,
             'is_available' => 1, 'review_status' => 'approved', 'fulfillment_mode' => 'courier',
         ]);
     }
@@ -404,6 +409,63 @@ final class ToolsSingleSellerTest extends TestCase
         $svc->recomputeForProduct(21);
         $this->assertSame(0, (int) DB::table('products')->find(21)->in_stock);
         $this->assertEquals(220, (float) DB::table('products')->find(21)->price);
+    }
+
+    /**
+     * A variable tool (Phase 5): each enabled variant its seller sells is priced as checkout
+     * charges it; the PDP flags each variant, with or without a city.
+     */
+    public function test_a_variable_tool_is_priced_and_flagged_per_variant(): void
+    {
+        DB::table('products')->insert(['id' => 24, 'name' => 'Sprayer', 'slug' => 'sprayer', 'type_id' => 2, 'shop_id' => 1,
+            'product_type' => 'variable', 'price' => null, 'sale_price' => null, 'min_price' => 100, 'max_price' => 999, 'in_stock' => 1]);
+        $variant = fn (int $id, string $title, string $price, array $over = []) => array_merge([
+            'id' => $id, 'product_id' => 24, 'title' => $title, 'price' => $price, 'sale_price' => null, 'is_disable' => 0,
+            'options' => json_encode([['name' => 'Capacity', 'value' => $title]]),
+        ], $over);
+        DB::table('variation_options')->insert([
+            $variant(241, '5 L', '100'),
+            $variant(242, '8 L', '900', ['sale_price' => '850']),
+            $variant(243, '12 L', '999'),
+            $variant(244, '16 L', '50', ['is_disable' => 1]),
+        ]);
+        $this->vpp(1, 24, 200, 241);
+        $this->vpp(1, 24, 300, 242);
+        $this->vpp(7, 24, 150, 243);   // not the seller: inert
+        $this->vpp(1, 24, 10, 244);    // switched off in the admin
+        $this->vpp(1, 24, 5);          // a whole-product row prices no variant
+        $flags = function (?string $city): array {
+            $payload = ['id' => 24, 'city_based' => false, 'variation_options' => [['id' => 241], ['id' => 243]]];
+            $data = (new \ReflectionMethod(ProductController::class, 'attachCityPricing'))
+                ->invoke(app(ProductController::class), $payload, Request::create('/', 'GET', $city ? ['city' => $city] : []));
+
+            return array_column($data['variation_options'], 'city_available');
+        };
+
+        (new AvailabilityService())->recomputeForProduct(24);
+
+        $vo = fn (int $id) => DB::table('variation_options')->find($id);
+        $this->assertEquals([220, 330], [(float) $vo(241)->price, (float) $vo(242)->price], 'seller rate + the Tools 10%');
+        $this->assertNull($vo(242)->sale_price, 'the cart reads sale_price first');
+        $this->assertSame(['999', '50'], [$vo(243)->price, $vo(244)->price], 'unsellable or switched off: untouched, never 0');
+        $tool = DB::table('products')->find(24);
+        $this->assertEquals([220, 330], [(float) $tool->min_price, (float) $tool->max_price]);
+        $this->assertSame(1, (int) $tool->in_stock);
+        $this->assertNull($tool->price, 'a variable product keeps a NULL price');
+        $this->assertEquals(330, (new PricingService())->sellingPrice(Product::find(24), 242, null, 'Delhi')['price'], 'what checkout charges, in any city');
+        $this->assertSame([true, false], $flags(null), 'the server render sends no city');
+        $this->assertSame([true, false], $flags('Delhi'));
+        $plant = ['id' => 11, 'city_based' => true, 'variation_options' => [['id' => 1]]];
+        $this->assertSame($plant, (new \ReflectionMethod(ProductController::class, 'attachCityPricing'))
+            ->invoke(app(ProductController::class), $plant, Request::create('/', 'GET')), 'plants without a city: untouched');
+
+        // Sold out: out of stock, the last range kept (never 0/null), every variant unselectable.
+        DB::table('vendor_product_prices')->where('product_id', 24)->update(['track_stock' => 1, 'stock_qty' => 0]);
+        (new AvailabilityService())->recomputeForProduct(24);
+        $tool = DB::table('products')->find(24);
+        $this->assertSame(0, (int) $tool->in_stock);
+        $this->assertEquals([220, 330], [(float) $tool->min_price, (float) $tool->max_price]);
+        $this->assertSame([false, false], $flags(null));
     }
 
     public function test_a_product_form_save_is_re_mirrored(): void

@@ -13,6 +13,7 @@ use Marvel\Database\Models\PlantCollection;
 use Marvel\Database\Models\Product;
 use Marvel\Enums\Permission;
 use Marvel\Enums\ProductStatus;
+use Marvel\Services\VariantAxisSync;
 
 /**
  * Admin catalog taxonomy: attribute definitions + their terms, dynamic collections, and
@@ -21,6 +22,8 @@ use Marvel\Enums\ProductStatus;
  */
 class PlantTaxonomyController extends Controller
 {
+    private const AXIS_SINGLE = 'Only a single-choice attribute can be a variant option: each variant has exactly one value of it.';
+
     private function assertCatalogAdmin(Request $request): void
     {
         $user = $request->user();
@@ -92,6 +95,7 @@ class PlantTaxonomyController extends Controller
             'is_facet'        => (bool) $d->is_facet,
             'is_active'       => (bool) $d->is_active,
             'is_variant_axis' => (bool) $d->is_variant_axis,
+            'attribute_id'    => $d->attribute_id ? (int) $d->attribute_id : null,
             'help_text'       => $d->help_text,
             'sort'            => (int) $d->sort,
             'terms'           => $d->relationLoaded('terms')
@@ -118,6 +122,9 @@ class PlantTaxonomyController extends Controller
             'type' => 'required|in:' . implode(',', PlantAttributeDefinition::TYPES),
             'code' => 'nullable|string|max:64|regex:/^[a-z0-9-]+$/',
         ]);
+        if (!empty($data['is_variant_axis']) && $data['type'] !== 'single') {
+            return response()->json(['is_variant_axis' => [self::AXIS_SINGLE]], 422);
+        }
         $scopes = $data['scopes'] ?? null;
         unset($data['scopes']);
         $data['slug'] = $this->uniqueSlug($data['name'], 'plant_attribute_definitions');
@@ -140,10 +147,16 @@ class PlantTaxonomyController extends Controller
             $data = array_intersect_key($data, array_flip(['name', 'type', 'is_facet', 'is_active', 'sort', 'slug']));
         }
         $data['created_by_user_id'] = $request->user()?->id;
-        $def = PlantAttributeDefinition::create($data);
-        if ($scopes !== null && $this->generalised()) {
-            $this->syncScopes($def, $scopes);
-        }
+        // One transaction with the variant axis's legacy attribute: a clash (e.g. "Size") keeps nothing.
+        $def = DB::transaction(function () use ($data, $scopes) {
+            $def = PlantAttributeDefinition::create($data);
+            if ($scopes !== null && $this->generalised()) {
+                $this->syncScopes($def, $scopes);
+            }
+            app(VariantAxisSync::class)->sync($def);
+
+            return $def;
+        });
         $this->bustProducts();
         return response()->json($this->definitionPayload($def->fresh($this->generalised() ? ['terms', 'categories'] : ['terms'])), 201);
     }
@@ -161,15 +174,26 @@ class PlantTaxonomyController extends Controller
             && DB::table('plant_attribute_product')->where('definition_id', $def->id)->exists()) {
             return response()->json(['type' => ['Products already use this attribute: its kind of value cannot change. Retire it and create a new one.']], 422);
         }
+        $axis = (bool) ($data['is_variant_axis'] ?? $def->is_variant_axis);
+        if ($axis && ($data['type'] ?? $def->type) !== 'single') {
+            return response()->json(['is_variant_axis' => [self::AXIS_SINGLE]], 422);
+        }
+        // Variants store the axis name as text: renaming an axis in use would strand them.
+        if ($axis && isset($data['name']) && $data['name'] !== $def->name && ($n = app(VariantAxisSync::class)->productsUsing($def))) {
+            return response()->json(['name' => ["Variants of {$n} " . Str::plural('product', $n) . " use \"{$def->name}\": it cannot be renamed. Create a new attribute instead."]], 422);
+        }
         $scopes = $data['scopes'] ?? null;
         unset($data['scopes'], $data['code']);
         if (!$this->generalised()) {
             $data = array_intersect_key($data, array_flip(['name', 'type', 'is_facet', 'is_active', 'sort']));
         }
-        $def->fill($data)->save();
-        if ($scopes !== null && $this->generalised()) {
-            $this->syncScopes($def, $scopes);
-        }
+        DB::transaction(function () use ($def, $data, $scopes) {
+            $def->fill($data)->save();
+            if ($scopes !== null && $this->generalised()) {
+                $this->syncScopes($def, $scopes);
+            }
+            app(VariantAxisSync::class)->sync($def);
+        });
         $this->bustProducts();
         return response()->json($this->definitionPayload($def->fresh($this->generalised() ? ['terms', 'categories'] : ['terms'])));
     }
@@ -255,10 +279,15 @@ class PlantTaxonomyController extends Controller
         if (PlantAttributeTerm::where('definition_id', $def->id)->where('slug', $slug)->exists()) {
             return response()->json(['message' => 'That value already exists for this attribute.'], 422);
         }
-        $term = PlantAttributeTerm::create([
-            'definition_id' => $def->id, 'value' => $data['value'], 'slug' => $slug,
-            'sort' => $data['sort'] ?? 0, 'is_active' => true,
-        ]);
+        $term = DB::transaction(function () use ($def, $data, $slug) {
+            $term = PlantAttributeTerm::create([
+                'definition_id' => $def->id, 'value' => $data['value'], 'slug' => $slug,
+                'sort' => $data['sort'] ?? 0, 'is_active' => true,
+            ]);
+            app(VariantAxisSync::class)->sync($def);
+
+            return $term;
+        });
         $this->bustProducts();
         return response()->json($term, 201);
     }
@@ -267,11 +296,29 @@ class PlantTaxonomyController extends Controller
     {
         $this->assertCatalogAdmin($request);
         $term = PlantAttributeTerm::findOrFail($id);
-        $term->fill($request->validate([
+        $data = $request->validate([
             'value'     => 'sometimes|string|max:191',
             'sort'      => 'sometimes|integer',
             'is_active' => 'sometimes|boolean',
-        ]))->save();
+        ]);
+        $def = $term->definition;
+        // Variants store a variant option's value as text: one in use is never renamed, and two
+        // options may not read the same.
+        if ($def?->is_variant_axis && isset($data['value']) && $data['value'] !== $term->value) {
+            if (PlantAttributeTerm::where('definition_id', $def->id)->whereKeyNot($term->id)
+                ->whereRaw('LOWER(value) = ?', [mb_strtolower($data['value'])])->exists()) {
+                return response()->json(['value' => ["\"{$data['value']}\" is already an option of {$def->name}."]], 422);
+            }
+            if ($n = app(VariantAxisSync::class)->productsUsing($def, $term->slug)) {
+                return response()->json(['value' => ["Variants of {$n} " . Str::plural('product', $n) . " use \"{$term->value}\": add a new option instead of renaming it."]], 422);
+            }
+        }
+        DB::transaction(function () use ($term, $data, $def) {
+            $term->fill($data)->save();
+            if ($def) {
+                app(VariantAxisSync::class)->sync($def);
+            }
+        });
         $this->bustProducts();
         return response()->json($term);
     }
@@ -281,9 +328,14 @@ class PlantTaxonomyController extends Controller
     {
         $this->assertCatalogAdmin($request);
         $ids = $request->validate(['ids' => 'required|array', 'ids.*' => 'integer'])['ids'];
-        foreach ($ids as $i => $termId) {
-            PlantAttributeTerm::where('definition_id', $definitionId)->where('id', $termId)->update(['sort' => ($i + 1) * 10]);
-        }
+        DB::transaction(function () use ($ids, $definitionId) {
+            foreach ($ids as $i => $termId) {
+                PlantAttributeTerm::where('definition_id', $definitionId)->where('id', $termId)->update(['sort' => ($i + 1) * 10]);
+            }
+            if ($def = PlantAttributeDefinition::find($definitionId)) {
+                app(VariantAxisSync::class)->sync($def);
+            }
+        });
         $this->bustProducts();
         return response()->json(['ok' => true]);
     }
