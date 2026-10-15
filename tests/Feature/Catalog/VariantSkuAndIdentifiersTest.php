@@ -238,6 +238,25 @@ final class VariantSkuAndIdentifiersTest extends TestCase
         $this->assertNull(DB::table('products')->find(1)->sku);
     }
 
+    public function test_a_variable_products_price_range_comes_from_its_variants(): void
+    {
+        // The admin form sent min_price NULL whenever sale prices were blank (it compared a blank
+        // sale price as the cheapest): every save of a sized plant showed "₹0 – …".
+        $payload = $this->adminPayload(1);
+        $payload['min_price'] = null;
+        $payload['max_price'] = null;
+        $this->update(1, $payload);
+        $range = fn () => array_map('floatval', (array) DB::table('products')->where('id', 1)->first(['min_price', 'max_price']));
+        $this->assertSame(['min_price' => 249.0, 'max_price' => 659.0], $range());
+
+        // A lower sale price counts; a switched-off variant does not.
+        $payload = $this->adminPayload(1);
+        $payload['variation_options']['upsert'][1]['sale_price'] = 199;   // Medium on sale
+        $payload['variation_options']['upsert'][2]['is_disable'] = true;  // Large off
+        $this->update(1, $payload);
+        $this->assertSame(['min_price' => 199.0, 'max_price' => 449.0], $range());
+    }
+
     public function test_a_variant_sku_is_used_once(): void
     {
         $taken = $this->adminPayload(2);

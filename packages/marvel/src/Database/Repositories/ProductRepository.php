@@ -170,6 +170,36 @@ class ProductRepository extends BaseRepository
     }
 
     /**
+     * A variable product's price range, from its own enabled variants (a lower sale price counts),
+     * never from the client: the admin form derived it by comparing a blank sale price as the
+     * cheapest, so every save of a sized plant stored min_price NULL (cards and the product page
+     * then read "₹0 – …"). Nothing priced: the stored range stays. Single-seller products are
+     * re-mirrored from the seller's rates right after (ProductController::updateProduct).
+     */
+    private function syncVariantPriceRange($product): void
+    {
+        if ($product->product_type !== ProductType::VARIABLE) {
+            return;
+        }
+        $rows = \Illuminate\Support\Facades\DB::table('variation_options')->where('product_id', $product->id)->where('is_disable', false)->get(['price', 'sale_price']);
+        $effective = $rows->map(function ($v) {
+            $price = (float) $v->price;
+            $sale = (float) $v->sale_price;
+
+            return $sale > 0 && $sale < $price ? $sale : $price;
+        })->filter(fn ($p) => $p > 0);
+        $regular = $rows->map(fn ($v) => (float) $v->price)->filter(fn ($p) => $p > 0);
+        if ($effective->isEmpty() || $regular->isEmpty()) {
+            return;
+        }
+        $range = ['min_price' => $effective->min(), 'max_price' => $regular->max()];
+        if ((float) $product->min_price != $range['min_price'] || (float) $product->max_price != $range['max_price'] || $product->min_price === null) {
+            \Illuminate\Support\Facades\DB::table('products')->where('id', $product->id)->update($range);
+            $product->forceFill($range);
+        }
+    }
+
+    /**
      * The chosen axis values as plain ids. The admin sends [{attribute_value_id}], and attach/sync
      * read a list of arrays as {position => pivot attributes}: every save re-attached everything,
      * and a value whose id equalled a list position was rewritten in place (a unique-index 500).
@@ -492,6 +522,7 @@ class ProductRepository extends BaseRepository
             $product->save();
             // Every variant sent without a SKU, whether or not the product brought its own.
             $skuGen->fillVariantSkus($product);
+            $this->syncVariantPriceRange($product);
 
             // PlantAtHome: register any uploaded Featured/Gallery photos into the
             // plant photo library (product_images) on create. Plants only.
@@ -849,6 +880,7 @@ class ProductRepository extends BaseRepository
             $product->save();
             // Variants saved without a SKU get {product SKU}-{suffix}, on every save (not only create).
             app(\Marvel\Services\SkuGenerator::class)->fillVariantSkus($product);
+            $this->syncVariantPriceRange($product);
 
             // PlantAtHome: keep the plant photo library (product_images) in sync with
             // the curated Featured/Gallery the editor submitted. Plants only.
