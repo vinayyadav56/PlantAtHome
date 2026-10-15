@@ -88,9 +88,9 @@ class VariantDeliveryChargeController extends CoreController
      */
     private function sizeValues()
     {
-        $attributeIds = Attribute::where(function ($q) {
-            $q->whereRaw('LOWER(slug) = ?', ['size'])->orWhereRaw('LOWER(name) = ?', ['size']);
-        })->pluck('id');
+        // Slug only — the master checkout charges from (VariantResolver). A variant
+        // axis merely NAMED Size is not a parcel size.
+        $attributeIds = Attribute::whereRaw('LOWER(slug) = ?', ['size'])->pluck('id');
 
         if ($attributeIds->isEmpty()) {
             return collect();
@@ -107,9 +107,7 @@ class VariantDeliveryChargeController extends CoreController
     {
         $isSize = DB::table('attributes')
             ->where('id', $value->attribute_id)
-            ->where(function ($q) {
-                $q->whereRaw('LOWER(slug) = ?', ['size'])->orWhereRaw('LOWER(name) = ?', ['size']);
-            })
+            ->whereRaw('LOWER(slug) = ?', ['size'])
             ->exists();
 
         if (!$isSize) {

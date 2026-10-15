@@ -19,7 +19,7 @@ use Illuminate\Support\Facades\Schema;
  * PlantAtHomePotSeeder and both ApplySizePricing commands write the second
  * shape, so id-only matching would silently miss a large part of the catalogue
  * and quietly charge those lines nothing for delivery. Hence: trust the id when
- * it is present AND belongs to a Size attribute (the 2026-09-17 merge re-pointed
+ * it is present AND belongs to the Size attribute (the 2026-09-17 merge re-pointed
  * pivots but never rewrote this JSON, so an id can outlive the row it named),
  * otherwise fall back to the value text, then to the option title.
  *
@@ -30,7 +30,7 @@ class VariantResolver
     /** @var array<int, object|null> variation_option_id => size row (null = resolved to nothing) */
     private array $memo = [];
 
-    /** @var array<int, object>|null attribute_values.id => row, for every Size attribute */
+    /** @var array<int, object>|null attribute_values.id => row, for the Size attribute (slug `size`) */
     private ?array $sizeValues = null;
 
     /** @var array<string, object>|null lowercased value text => row */
@@ -55,11 +55,15 @@ class VariantResolver
         }
         $this->warm(array_keys($ids));
 
+        // The Size charges are the plants' parcel sizes. A single-seller product
+        // (Tools) pays its own products.delivery_charge and carries no S/M/L code,
+        // whatever its variants are called ("Large" on any axis or in a title).
+        $sellers = app(ServiceAvailabilityService::class);
         $out = [];
         foreach ($lines as $line) {
             $pid = (int) ($line['product_id'] ?? 0);
             $vid = (int) ($line['variation_option_id'] ?? 0);
-            $out[$pid . ':' . $vid] = $vid > 0 ? ($this->memo[$vid] ?? null) : null;
+            $out[$pid . ':' . $vid] = $vid > 0 && $sellers->singleSellerFor($pid) === null ? ($this->memo[$vid] ?? null) : null;
         }
 
         return $out;
@@ -168,9 +172,12 @@ class VariantResolver
 
         $rows = DB::table('attribute_values')
             ->join('attributes', 'attributes.id', '=', 'attribute_values.attribute_id')
-            ->where(function ($q) {
-                $q->whereRaw('LOWER(attributes.slug) = ?', ['size'])->orWhereRaw('LOWER(attributes.name) = ?', ['size']);
-            })
+            // THE Size attribute, by slug like helpers' sizeValueIds(): a variant
+            // axis merely NAMED Size (Sluggable makes it size-1) has no charges.
+            ->whereRaw('LOWER(attributes.slug) = ?', ['size'])
+            // Charged rows first, so a charge-less duplicate never wins the text index.
+            ->orderByRaw('attribute_values.delivery_charge IS NULL')
+            ->orderBy('attribute_values.id')
             ->get([
                 'attribute_values.id',
                 'attribute_values.value',
@@ -182,8 +189,8 @@ class VariantResolver
         foreach ($rows as $row) {
             $this->sizeValues[(int) $row->id] = $row;
             $key = strtolower(trim((string) $row->value));
-            // First writer wins: production has carried duplicate Size values, and
-            // they agree on the text — which is the only thing being matched here.
+            // First writer wins (a charged row, by the order above): production has
+            // carried duplicate Size values, and they agree on the text.
             if ($key !== '' && !isset($this->sizeValuesByText[$key])) {
                 $this->sizeValuesByText[$key] = $row;
             }

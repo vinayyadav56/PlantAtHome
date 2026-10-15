@@ -6,6 +6,7 @@ namespace Tests\Feature\Tax;
 
 use Illuminate\Support\Facades\DB;
 use Marvel\Database\Repositories\CheckoutRepository;
+use Marvel\Services\ServiceAvailabilityService;
 use Marvel\Services\Tax\GstService;
 use Marvel\Services\VariantResolver;
 
@@ -164,6 +165,43 @@ final class VariantDeliveryTest extends TaxTestCase
             'freight should follow the goods it carries, not their price'
         );
         $this->assertSame(300.0, round($byParcel['delivery_taxable'] + $byParcel['delivery_tax_amount'], 2));
+    }
+
+    public function test_a_charge_less_large_elsewhere_never_takes_the_masters_charge(): void
+    {
+        // A variant axis merely NAMED Size (Sluggable: size-1), and a leftover copy of
+        // the Size attribute itself — both with a charge-less "Large", both loaded first.
+        $axis = DB::table('attributes')->insertGetId(['slug' => 'size-1', 'name' => 'Size', 'language' => 'en']);
+        $axisLarge = DB::table('attribute_values')->insertGetId(['attribute_id' => $axis, 'value' => 'Large', 'language' => 'en']);
+        $copy = DB::table('attributes')->insertGetId(['slug' => 'size', 'name' => 'Size', 'language' => 'en']);
+        DB::table('attribute_values')->insert(['attribute_id' => $copy, 'value' => 'Large', 'language' => 'en']);
+        $this->sizeMaster();
+        $pid = $this->product(null);
+        $byText = $this->variationOption($pid, 'Large');
+        $byAxisId = $this->variationOption($pid, 'Large', $axisLarge);
+
+        $charges = $this->checkout()->perLineDelivery([$this->cartLine($pid, $byText), $this->cartLine($pid, $byAxisId)]);
+
+        $this->assertSame(200.0, $charges[$pid . ':' . $byText], 'the charged Large wins the text match');
+        $this->assertSame(200.0, $charges[$pid . ':' . $byAxisId], 'an axis value is not part of the Size master');
+    }
+
+    public function test_a_single_seller_variant_called_large_keeps_its_products_charge(): void
+    {
+        $sizes = $this->sizeMaster();
+        $toolId = DB::table('products')->insertGetId(['delivery_charge' => 49.0, 'is_taxable' => 0]);
+        $tool = $this->variationOption($toolId, 'Large', $sizes['Large']);
+        $plantId = $this->product(null);
+        $plant = $this->variationOption($plantId, 'Large');
+        $this->mock(ServiceAvailabilityService::class, fn ($m) => $m->shouldReceive('singleSellerFor')
+            ->andReturnUsing(fn ($product) => $product === $toolId ? 1 : null));
+
+        $charges = $this->checkout()->perLineDelivery([$this->cartLine($toolId, $tool, 500.0, 2), $this->cartLine($plantId, $plant)]);
+
+        $this->assertSame(98.0, $charges[$toolId . ':' . $tool], 'a tool ships at its own charge, never the plant Large');
+        $this->assertSame(200.0, $charges[$plantId . ':' . $plant], 'plants keep the per-size charge');
+        $line = (new VariantResolver())->mapForLines([['product_id' => $toolId, 'variation_option_id' => $tool]]);
+        $this->assertNull($line[$toolId . ':' . $tool], 'and no S/M/L code reaches its invoice');
     }
 
     public function test_the_resolver_reports_the_master_code(): void

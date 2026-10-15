@@ -255,6 +255,10 @@ class OrderRepository extends BaseRepository
         // the address's own, whether or not the client declared a city. Fails
         // open exactly as it does in verify (flag off, no zip, module absent).
         $checkoutGate->assertCoverage($request);
+        // Every line names a live variant of its OWN product (or none, when it
+        // has none) — refused before pricing, so a foreign or switched-off
+        // variant can never set a price, a delivery charge or a stock decrement.
+        $checkoutGate->assertVariantLines($request);
         // Deliver-to-someone-else: a recipient must be identifiable for the courier.
         if (($request['deliver_to'] ?? null) === 'someone_else') {
             $shipAddr = (array) ($request['shipping_address'] ?? []);
@@ -848,7 +852,7 @@ class OrderRepository extends BaseRepository
             return (float) $margin;
         }
         if (!empty($voId)) {
-            $v = Variation::find($voId);
+            $v = Variation::where('product_id', $item['product_id'] ?? null)->find($voId);
             return (float) ($v && $v->sale_price ? $v->sale_price : optional($v)->price);
         }
         $p = Product::find($item['product_id'] ?? null);
@@ -1038,16 +1042,9 @@ class OrderRepository extends BaseRepository
                     if ($productData->product_type === ProductType::SIMPLE) {
                         $this->storeOrderedFile($productData, $product['order_quantity'], $customer_id, $order->tracking_number);
                     } else if ($productData->product_type === ProductType::VARIABLE) {
-                        // A variable line without its variation used to hit
-                        // findOrFail(null) → an opaque 404 ("No query results
-                        // for model [Variation]") that killed the whole order.
-                        // Refuse with something the customer can act on.
-                        if (empty($product['variation_option_id'])) {
-                            throw new HttpResponseException(response()->json([
-                                'message' => "'{$productData->name}' is missing its size/option selection — please remove it from your cart and add it again.",
-                            ], 422));
-                        }
-                        $variation_option = Variation::with('digital_file')->findOrFail($product['variation_option_id']);
+                        // A missing or foreign variant never gets here: storeOrder's
+                        // assertVariantLines refused the cart with INVALID_VARIANT.
+                        $variation_option = $productData->variation_options()->with('digital_file')->findOrFail($product['variation_option_id']);
                         $this->storeOrderedFile($variation_option, $product['order_quantity'], $customer_id, $order->tracking_number);
                     }
                 }
@@ -1109,7 +1106,7 @@ class OrderRepository extends BaseRepository
                     $productData->availabilities()->create($product);
                 }
             } else {
-                $variation_option = Variation::findOrFail($product['variation_option_id']);
+                $variation_option = Variation::where('product_id', $product['product_id'])->findOrFail($product['variation_option_id']);
                 unset($product['variation_option_id']);
                 if (TRANSLATION_ENABLED) {
                     $this->processAllTranslatedVariations($variation_option, $product);

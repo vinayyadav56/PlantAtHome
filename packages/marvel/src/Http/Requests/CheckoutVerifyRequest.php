@@ -21,6 +21,10 @@ class CheckoutVerifyRequest extends FormRequest
             'amount'           => 'required|numeric',
             'customer_id'      => 'nullable|exists:Marvel\Database\Models\User,id',
             'products'         => 'required|array',
+            // Same line rules as order create, so the preview can never price what the order refuses.
+            'products.*.product_id'          => 'required|integer|min:1',
+            'products.*.variation_option_id' => 'nullable|integer|min:1',
+            'products.*.order_quantity'      => 'required|integer|min:1',
             // Admin preview overrides — applied only for SUPER_ADMIN callers.
             'delivery_fee_override' => 'nullable|numeric|min:0',
             'manual_discount'       => 'nullable|numeric|min:0',

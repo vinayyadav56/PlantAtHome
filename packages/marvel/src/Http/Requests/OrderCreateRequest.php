@@ -44,6 +44,10 @@ class OrderCreateRequest extends FormRequest
             'payment_gateway'         => ['required', Rule::in(PaymentGatewayType::getValues())],
             'altered_payment_gateway' => 'nullable|string',
             'products'                => 'required|array|max:100', // cap lines: each is O(1+) DB queries in storeOrder
+            // The charged subtotal multiplies by order_quantity raw: -1 or 0.5 lowered the bill.
+            'products.*.product_id'          => 'required|integer|min:1',
+            'products.*.variation_option_id' => 'nullable|integer|min:1',
+            'products.*.order_quantity'      => 'required|integer|min:1',
             'card'                    => 'array',
             'token'                   => 'nullable|string',
             'use_wallet_points'       => 'nullable|boolean',

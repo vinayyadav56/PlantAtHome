@@ -32,7 +32,8 @@ trait CalculatePaymentTrait
                 }
 
                 if (isset($item['variation_option_id'])) {
-                    $variation = Variation::findOrFail($item['variation_option_id']);
+                    // Scoped to the line's product: another product's variant must never set this price.
+                    $variation = Variation::where('product_id', $item['product_id'] ?? null)->findOrFail($item['variation_option_id']);
                     $subtotal += $this->calculateEachItemTotal($variation, $qty);
                 } else {
                     $product = Product::findOrFail($item['product_id']);

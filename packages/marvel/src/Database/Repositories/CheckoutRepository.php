@@ -38,33 +38,32 @@ class CheckoutRepository
         $wallet = $user->wallet ?? null;
         $settings = Settings::getData();
         $minimumOrderAmount = isset($settings['options']['minimumOrderAmount']) ? $settings['options']['minimumOrderAmount'] : 0;
-        $unavailable_products = $this->checkStock($request['products']);
 
-        // A VARIABLE product line with no variation_option_id can never be
-        // ordered (order-create needs the variation) — old carts contain such
-        // ghost lines (added before option-selection was enforced) and they
-        // used to sail through verify only to 404 the order. Reported as a
-        // SEPARATE line-level key (NOT unavailable_products, which is
-        // product-level — flagging the product there would also kill the
-        // customer's valid variation lines of the same product).
-        $invalid_option_lines = [];
+        // Lines order-create will refuse (variant missing, foreign, unknown or
+        // switched off) are reported LINE by line — unavailable_products is
+        // product-level and would also kill the product's valid lines — and
+        // left out of everything below, so amount, shipping and tax equal what
+        // the order charges once the client drops them.
+        $invalid_variant_lines = [];
         try {
-            $ids = collect($request['products'])->pluck('product_id')->filter()->unique()->values()->all();
-            if (!empty($ids)) {
-                $variableIds = Product::whereIn('id', $ids)
-                    ->where('product_type', 'variable')->pluck('id')
-                    ->map(fn ($i) => (int) $i)->flip();
-                foreach ((array) $request['products'] as $line) {
-                    $pid = (int) ($line['product_id'] ?? 0);
-                    if ($pid && isset($variableIds[$pid]) && empty($line['variation_option_id'])) {
-                        $invalid_option_lines[] = $pid;
-                    }
-                }
-                $invalid_option_lines = array_values(array_unique($invalid_option_lines));
-            }
+            $invalid_variant_lines = $this->variantLineProblems((array) $request['products']);
         } catch (\Throwable $e) {
             // fail open — the order-create guard still refuses cleanly
         }
+        if ($invalid_variant_lines) {
+            $flagged = array_flip(array_map(fn ($p) => $p['product_id'] . ':' . (int) $p['variation_option_id'], $invalid_variant_lines));
+            $request['products'] = array_values(array_filter(
+                (array) $request['products'],
+                fn ($l) => !isset($flagged[(int) ($l['product_id'] ?? 0) . ':' . (int) ($l['variation_option_id'] ?? 0)])
+            ));
+        }
+        // Old clients read this one: product ids of VARIABLE lines sent without a variant.
+        $invalid_option_lines = array_values(array_unique(array_column(
+            array_filter($invalid_variant_lines, fn ($p) => $p['reason'] === 'option_missing'),
+            'product_id'
+        )));
+
+        $unavailable_products = $this->checkStock($request['products']);
 
         // Operations Control Center — block any cart line whose vertical is
         // currently unavailable in the shipping city. FAIL OPEN: no city ⇒ no gate.
@@ -198,7 +197,8 @@ class CheckoutRepository
         // order amount" error instead of the real "item unavailable" reason. Let
         // the storefront show the unavailable items (returned below) first; the
         // next verify — after the shopper removes them — re-applies this check.
-        if (empty($unavailable_products) && $total < $minimumOrderAmount) {
+        // Invalid variant lines are excluded the same way, so they count too.
+        if (empty($unavailable_products) && empty($invalid_variant_lines) && $total < $minimumOrderAmount) {
             throw new HttpException(400, 'Minimum order amount is ' . $minimumOrderAmount);
         }
         // Products the engine would have to tax at 0% because nothing is configured.
@@ -250,6 +250,9 @@ class CheckoutRepository
             // exactly the option-less line — the product's valid variation
             // lines stay orderable.
             'invalid_option_lines' => $invalid_option_lines,
+            // Every line order-create would refuse, with why ({product_id,
+            // variation_option_id, reason}); none of them is in the totals.
+            'invalid_variant_lines' => $invalid_variant_lines,
             'city_stock'           => $city_stock,
             // Shopping-City gate: null when OK / not applicable; else
             // { code, shopping_city, address_city } for the storefront mismatch dialog.
@@ -643,6 +646,72 @@ class CheckoutRepository
         throw new \Illuminate\Http\Exceptions\HttpResponseException(
             response()->json($gate['coverage'], 422)
         );
+    }
+
+    /**
+     * Cart lines that can never become order lines, with why:
+     *   option_missing  a VARIABLE product sent without its variant
+     *   not_found       the variant does not exist, or is another product's
+     *   not_variable    a variant sent for a product that has none
+     *   disabled        the variant is switched off
+     * Every server-side price, delivery charge and stock decrement keys on the
+     * line's variation_option_id, so a foreign one used to bring its own price.
+     * One entry per distinct line. Query builder: two light queries, no models.
+     *
+     * @param  array<int, array> $lines cart lines ({product_id, variation_option_id?})
+     * @return array<int, array{product_id: int, variation_option_id: ?int, reason: string}>
+     */
+    public function variantLineProblems(array $lines): array
+    {
+        $pids = array_values(array_unique(array_filter(array_map(fn ($l) => (int) ($l['product_id'] ?? 0), $lines))));
+        $vids = array_values(array_unique(array_filter(array_map(fn ($l) => (int) ($l['variation_option_id'] ?? 0), $lines))));
+        $types = $pids ? \Illuminate\Support\Facades\DB::table('products')->whereIn('id', $pids)->pluck('product_type', 'id')->all() : [];
+        $variants = $vids
+            ? \Illuminate\Support\Facades\DB::table('variation_options')->whereIn('id', $vids)->get(['id', 'product_id', 'is_disable'])->keyBy('id')->all()
+            : [];
+
+        $out = [];
+        foreach ($lines as $line) {
+            $pid = (int) ($line['product_id'] ?? 0);
+            $vid = (int) ($line['variation_option_id'] ?? 0);
+            $variable = strtolower((string) ($types[$pid] ?? '')) === \Marvel\Enums\ProductType::VARIABLE;
+            $variant = $variants[$vid] ?? null;
+            $reason = match (true) {
+                !$vid => $variable ? 'option_missing' : null,
+                !$variant || (int) $variant->product_id !== $pid => 'not_found',
+                !$variable => 'not_variable',
+                (bool) $variant->is_disable => 'disabled',
+                default => null,
+            };
+            if ($reason !== null) {
+                $out[$pid . ':' . $vid] = ['product_id' => $pid, 'variation_option_id' => $vid ?: null, 'reason' => $reason];
+            }
+        }
+
+        return array_values($out);
+    }
+
+    /**
+     * The blocking form, for order creation: refuse the cart before anything is
+     * priced, naming the products, with the lines for clients to drop. Fails
+     * closed — verify() is the advisory side.
+     */
+    public function assertVariantLines($request): void
+    {
+        $problems = $this->variantLineProblems((array) ($request['products'] ?? []));
+        if (!$problems) {
+            return;
+        }
+        $names = \Illuminate\Support\Facades\DB::table('products')
+            ->whereIn('id', array_unique(array_column($problems, 'product_id')))
+            ->pluck('name')->filter()->all();
+
+        throw new \Illuminate\Http\Exceptions\HttpResponseException(response()->json([
+            'code'    => 'INVALID_VARIANT',
+            'message' => 'The option you picked for ' . (Arr::join($names, ', ', ' and ') ?: 'an item in your cart')
+                . ' is no longer available — remove it from your cart and add it again.',
+            'lines'   => $problems,
+        ], 422));
     }
 
     /**

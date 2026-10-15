@@ -220,7 +220,8 @@ class PricingService
                 // (false) — its unit_price ?? null contract is unchanged.
                 $unit = null;
                 if (!empty($vo)) {
-                    $v = \Marvel\Database\Models\Variation::find((int) $vo);
+                    // Scoped to the line's product: another product's cheaper variant must never price it.
+                    $v = \Marvel\Database\Models\Variation::where('product_id', $product->id)->find((int) $vo);
                     $unit = $v ? (float) ($v->sale_price ?: $v->price) : null;
                 }
                 if ($unit === null) {
