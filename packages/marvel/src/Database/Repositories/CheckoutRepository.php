@@ -366,6 +366,24 @@ class CheckoutRepository
                     $shopIds[(int) $sid] = true;
                 }
             }
+            // Global catalogue: a line no nursery in the delivery city supplies locally ships by
+            // courier from the fallback shop — that shop is an origin, and the line is not local.
+            $localLines = $this->cityBasedProductIds($request);
+            $svc = app(\Marvel\Services\ServiceAvailabilityService::class);
+            $global = array_filter($localLines, fn ($pid) => $svc->globalFallbackFor($pid) !== null);
+            if ($global) {
+                $shipCity = is_array($request['shipping_address'] ?? null) ? ($request['shipping_address']['city'] ?? null) : null;
+                $here = $shipCity ?: ($dest->city_name ?: $dest->district_name);
+                $localHere = $here
+                    ? array_flip(array_map('intval', (new \Marvel\Services\AvailabilityService())->availableProductIdsInCity((string) $here, true)))
+                    : [];
+                foreach ($global as $pid) {
+                    if (!isset($localHere[$pid])) {
+                        $shopIds[(int) $svc->globalFallbackFor($pid)] = true;
+                        $localLines = array_values(array_diff($localLines, [$pid]));
+                    }
+                }
+            }
             $originStates = [];
             if ($shopIds) {
                 foreach (\Marvel\Database\Models\Shop::whereIn('id', array_keys($shopIds))->get(['id', 'address']) as $shop) {
@@ -395,8 +413,9 @@ class CheckoutRepository
 
             $anyInterstate = (bool) array_filter(array_keys($originStates), fn ($s) => $s !== $destState);
             $shipCityKnown = !empty($dest->city_name) || !empty($dest->district_name);
-            // A Tools-only cart ships by courier from its seller — never "local".
-            $localAvailable = empty($unavailableProducts) && $shipCityKnown && $this->cityBasedProductIds($request);
+            // A Tools-only cart ships by courier from its seller — never "local"; nor does a
+            // global-catalogue line no nursery here supplies.
+            $localAvailable = empty($unavailableProducts) && $shipCityKnown && $localLines;
 
             return [
                 [

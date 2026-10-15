@@ -322,6 +322,19 @@ final class GlobalPlantCatalogueTest extends TestCase
         $this->assertEquals(450, $out['max_price']);
     }
 
+    public function test_delivery_methods_never_call_a_fallback_line_local(): void
+    {
+        // Pune (Maharashtra) has no nursery: the fallback (Karnataka) ships it interstate.
+        $res = $this->verify(['shipping_address' => ['city' => 'Pune', 'zip' => '411001'], 'products' => [$this->line(12)]]);
+        $methods = collect($res['delivery_methods'])->keyBy('slug');
+        $this->assertFalse($methods['local']['available']);
+        $this->assertTrue($methods['standard_interstate']['available']);
+
+        // Delhi's nursery supplies plant 11 locally: still local there.
+        $res = $this->verify(['shipping_address' => ['city' => 'Delhi', 'zip' => '110001'], 'products' => [$this->line(11)]]);
+        $this->assertTrue(collect($res['delivery_methods'])->keyBy('slug')['local']['available']);
+    }
+
     // ── 4. Catalogue rules still decide ─────────────────────────────────────
 
     public function test_draft_unlisted_unpriced_and_deleted_plants_cannot_be_bought(): void
