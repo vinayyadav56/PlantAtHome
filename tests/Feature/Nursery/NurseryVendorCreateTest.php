@@ -191,6 +191,7 @@ class NurseryVendorCreateTest extends NurseryTestCase
 
         $this->postJson('/api/v1/nurseries', $this->registration([
             'name'           => 'Pickup Nursery',
+            'address'        => ['area' => 'Camp', 'landmark' => 'Near the temple', 'country' => 'India'],
             'owner_email'    => 'pickup.owner@example.test',
             'owner_name'     => 'Pickup Owner',
             'owner_password' => 'Secret#123',
@@ -203,6 +204,10 @@ class NurseryVendorCreateTest extends NurseryTestCase
         $this->assertEquals(1, $door->auto_register);
         $this->assertSame('pending', $door->status);
         $this->assertNull($door->address, 'it reads the nursery profile until Shiprocket holds it');
+
+        // Every address key the form sends survives the create (nested rules used to drop them).
+        $address = json_decode((string) DB::table('shops')->where('id', $shopId)->value('address'), true);
+        $this->assertSame(['Camp', 'Near the temple', 'India', '12'], [$address['area'] ?? null, $address['landmark'] ?? null, $address['country'] ?? null, $address['house_no'] ?? null]);
     }
 
     public function test_a_nursery_without_a_house_number_or_phone_is_refused(): void

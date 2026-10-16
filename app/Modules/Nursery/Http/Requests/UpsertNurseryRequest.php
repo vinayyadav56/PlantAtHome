@@ -70,6 +70,12 @@ class UpsertNurseryRequest extends FormRequest
             $rules['address.city'] = ['required', 'string', 'max:120'];
             $rules['address.state'] = ['required', 'string', 'max:120'];
             $rules['address.zip'] = ['required', 'regex:/^[1-9][0-9]{5}$/'];
+            // Every other key the form sends, as in ShopCreateRequest: once address.* has rules,
+            // validated() drops any address key without one, and the create stores it verbatim.
+            $rules['address.street_address2'] = ['nullable', 'string', 'max:255'];
+            $rules['address.area'] = ['nullable', 'string', 'max:120'];
+            $rules['address.landmark'] = ['nullable', 'string', 'max:255'];
+            $rules['address.country'] = ['nullable', 'string', 'max:64'];
             $rules['mobile'] = ['required', 'string', 'regex:/^[0-9]{10}$/'];
         }
 

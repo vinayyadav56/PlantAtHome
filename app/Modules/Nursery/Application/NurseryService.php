@@ -127,18 +127,27 @@ class NurseryService
 
             $nursery->fill($data)->save();
 
-            // Mirror the fulfilment choice onto the legacy `shops` row. The consumers of
-            // delivery_mode — MatchingService, OrderItemService, MetricsService — all read
-            // shops.delivery_mode, not the nursery row, so a V2-only write would be invisible
-            // to the fulfilment engine. Guarded on the columns existing (deploy lag).
+            // Mirror onto the legacy `shops` row the fields with a live consumer there. The
+            // fulfilment engine (MatchingService, OrderItemService, MetricsService) reads
+            // shops.delivery_mode/self_delivery; the courier pickup reads shops.address, mobile,
+            // name and lat/lng (a new nursery's pickup IS its registered address until Shiprocket
+            // holds it), so an onboarding correction must reach it. Guarded on the columns
+            // existing (deploy lag).
             //
-            // ponytail: V2 update mirrors NOTHING else to legacy today — a name or address
-            // edit on a V2-backed env never reaches `shops` either. That is a wider strangler
-            // gap; this closes only the two fields with a live consumer behind them.
+            // ponytail: settings and the rest still don't mirror — settings would clobber
+            // legacy-only keys (pickup_choice). Mirror more when something reads it.
+            $pickupKeys = ['address', 'mobile', 'name', 'lat', 'lng'];
             if ($nursery->legacy_id !== null
-                && (array_key_exists('delivery_mode', $data) || array_key_exists('self_delivery', $data))) {
+                && array_intersect(array_keys($data), [...$pickupKeys, 'delivery_mode', 'self_delivery'])) {
                 $schema = $this->db->getSchemaBuilder();
                 $mirror = [];
+                foreach ($pickupKeys as $column) {
+                    if (array_key_exists($column, $data) && $schema->hasColumn('shops', $column)) {
+                        $mirror[$column] = $column === 'address' && $data[$column] !== null
+                            ? json_encode($data[$column])
+                            : $data[$column];
+                    }
+                }
                 if (array_key_exists('delivery_mode', $data) && $schema->hasColumn('shops', 'delivery_mode')) {
                     $mirror['delivery_mode'] = $data['delivery_mode'];
                 }

@@ -69,6 +69,39 @@ class NurseryFulfilmentTest extends NurseryTestCase
         $this->assertSame('Ravi', json_decode((string) $row->self_delivery, true)['contact_name'] ?? null);
     }
 
+    public function test_an_address_correction_reaches_the_legacy_shop_the_pickup_reads(): void
+    {
+        // A new nursery's courier pickup IS its registered address (openForNewVendor), read from
+        // `shops` — so a correction made on the V2 form must land there. Settings never mirror.
+        Schema::create('shops', function ($t) {
+            $t->id();
+            $t->string('name')->nullable();
+            $t->json('address')->nullable();
+            $t->string('mobile')->nullable();
+            $t->decimal('lat', 10, 7)->nullable();
+            $t->decimal('lng', 10, 7)->nullable();
+            $t->json('settings')->nullable();
+            $t->string('delivery_mode', 16)->default('platform');
+            $t->json('self_delivery')->nullable();
+            $t->timestamps();
+        });
+        $legacyId = DB::table('shops')->insertGetId(['name' => 'Fix Me', 'settings' => json_encode(['pickup_choice' => 'staff']), 'created_at' => now(), 'updated_at' => now()]);
+
+        $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
+        $uuid = $this->postJson('/api/v1/nurseries', $this->registration(['name' => 'Fix Me', 'slug' => 'fix-me']), $admin)->json('data.uuid');
+        DB::table('nursery_nurseries')->where('uuid', $uuid)->update(['legacy_id' => $legacyId]);
+
+        $moved = ['house_no' => '7', 'street_address' => 'FC Road', 'area' => 'Shivajinagar', 'city' => 'Pune', 'state' => 'Maharashtra', 'zip' => '411004'];
+        $this->patchJson("/api/v1/nurseries/{$uuid}", ['address' => $moved, 'mobile' => '9123456780', 'lat' => 18.53, 'lng' => 73.84], $admin)
+            ->assertStatus(200);
+
+        $row = DB::table('shops')->where('id', $legacyId)->first();
+        $this->assertSame($moved, json_decode((string) $row->address, true));
+        $this->assertSame('9123456780', $row->mobile);
+        $this->assertEqualsWithDelta(18.53, (float) $row->lat, 0.0001);
+        $this->assertSame('staff', json_decode((string) $row->settings, true)['pickup_choice'] ?? null, 'settings never mirror');
+    }
+
     public function test_an_invalid_mode_is_rejected(): void
     {
         $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
