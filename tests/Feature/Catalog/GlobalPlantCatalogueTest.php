@@ -289,6 +289,37 @@ final class GlobalPlantCatalogueTest extends TestCase
         }
     }
 
+    public function test_any_address_in_india_checks_out_whatever_city_the_shopper_picked(): void
+    {
+        // Owner, 2026-10-17: deliverable from everywhere. The postal master files Gangtok under "East Sikkim"
+        // and a Motihari shopper picks Patna — but two cities without a nursery of their own sell the same
+        // plant at the same price from the same fallback shop, so the shopper's pick changes nothing.
+        $gate = fn (array $order) => (new CheckoutRepository())->shoppingCityMismatch($order);
+        foreach (['Gangtok', 'Jaipur'] as $picked) {
+            $order = ['shopping_city' => $picked, 'shipping_address' => ['city' => 'Pune', 'zip' => '411001'],
+                'products' => [$this->line(12), $this->line(16, 1, 161)]];
+            $this->assertNull($gate($order), $picked);
+            $res = $this->verify($order);
+            $this->assertNull($res['city_mismatch'], $picked);
+            $this->assertSame([], $res['unavailable_products'], $picked);
+        }
+
+        // A nursery on either side keeps the check: its plant sells at the nursery's price there.
+        $this->assertNotNull($gate(['shopping_city' => 'Delhi', 'shipping_address' => ['city' => 'Pune', 'zip' => '411001'], 'products' => [$this->line(11)]]));
+        $this->assertNotNull($gate(['shopping_city' => 'Pune', 'shipping_address' => ['city' => 'Delhi', 'zip' => '110001'], 'products' => [$this->line(11)]]));
+        // ...while a plant no Delhi nursery stocks ships from a Delhi cart to Pune like any other.
+        $this->assertNull($gate(['shopping_city' => 'Delhi', 'shipping_address' => ['city' => 'Pune', 'zip' => '411001'], 'products' => [$this->line(12)]]));
+
+        // A paused city still refuses the plant: that was never the city check's job.
+        $res = $this->verify(['shopping_city' => 'Jaipur', 'shipping_address' => ['city' => 'Rewari', 'zip' => '123401'], 'products' => [$this->line(12)]]);
+        $this->assertContains(12, $res['unavailable_products']);
+
+        // Switch off: the check is back exactly as before.
+        DB::table('global_vertical_settings')->where('vertical_slug', 'plants')->update(['settings' => json_encode(['catalogue_mode' => 'city'])]);
+        $this->fresh();
+        $this->assertNotNull($gate(['shopping_city' => 'Jaipur', 'shipping_address' => ['city' => 'Pune', 'zip' => '411001'], 'products' => [$this->line(12)]]));
+    }
+
     public function test_the_same_listing_serves_every_city_without_touching_product_rows(): void
     {
         $before = DB::table('products')->orderBy('id')->get()->map(fn ($p) => (array) $p)->all();

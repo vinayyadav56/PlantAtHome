@@ -532,6 +532,17 @@ class CheckoutRepository
             if ($norm->normalizeCityKey((string) $addressCity) === $norm->normalizeCityKey($shoppingCity)) {
                 return null;
             }
+            // A nationwide catalogue (Plants, owner 2026-10-17: deliverable from everywhere): where no
+            // nursery stocks these lines in either city, both get the same plant at the same price from
+            // the same fallback shop, so the city the shopper picked changes nothing. The postal master
+            // names many towns by district (Gangtok = "East Sikkim"), which made this refuse them.
+            $lines = $this->cityBasedProductIds($request);
+            $svc = app(\Marvel\Services\ServiceAvailabilityService::class);
+            if ($lines && collect($lines)->every(fn ($id) => $svc->globalFallbackFor($id) !== null)
+                && !$norm->availabilityProductIdQuery($shoppingCity)->whereIn('product_id', $lines)->exists()
+                && !$norm->availabilityProductIdQuery((string) $addressCity)->whereIn('product_id', $lines)->exists()) {
+                return null;
+            }
             return [
                 'code'          => 'SHOPPING_CITY_MISMATCH',
                 'shopping_city' => $shoppingCity,
