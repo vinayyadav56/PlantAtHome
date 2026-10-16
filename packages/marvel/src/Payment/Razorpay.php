@@ -89,6 +89,28 @@ class Razorpay extends Base implements PaymentInterface
     }
 
     /**
+     * Where the money stands on a Razorpay ORDER, asked before a checkout attempt is switched to
+     * Cash on Delivery or abandoned: 'captured' (it is paid — place it as paid, never as COD),
+     * 'authorized' (a payment is still settling — don't close the attempt under it) or 'none'.
+     * Throws when Razorpay can't be asked: closing an attempt blind could leave a customer charged
+     * for an order they were told was cancelled.
+     */
+    public function paymentState(string $razorpayOrderId): string
+    {
+        $state = 'none';
+        foreach ($this->api->order->fetch($razorpayOrderId)->payments()->items ?? [] as $p) {
+            $status = $p->status ?? '';
+            if ($status === 'captured' || !empty($p->captured)) {
+                return 'captured';
+            }
+            if ($status === 'authorized') {
+                $state = 'authorized';
+            }
+        }
+        return $state;
+    }
+
+    /**
      * Refund (full or partial) against a captured payment. Idempotent at Razorpay via the
      * receipt (our refund id). Returns ['id', 'amount' (paise), 'status'].
      */
@@ -260,17 +282,19 @@ class Razorpay extends Base implements PaymentInterface
     public function updatePaymentOrderStatus($request, $orderStatus, $paymentStatus): void
     {
         $payload = $request->payload['payment']['entity'];
-        $paymentIntent = PaymentIntent::whereJsonContains('payment_intent_info', ['payment_id' => $payload['order_id']])->first();
+        $paymentIntent = PaymentIntent::where('payment_intent_info->payment_id', $payload['order_id'] ?? '')->first();
         if (!$paymentIntent) {
             return; // unknown intent — nothing to reconcile
         }
 
         // H2 — on a successful capture, the signature-verified captured amount MUST
-        // cover the amount we registered with Razorpay (paid_total − wallet, stored
-        // on the intent in rupees). Reject underpayment so a partial/tampered
-        // capture can never mark an order fully paid.
+        // cover the amount we registered with Razorpay (paid_total − wallet). Reject
+        // underpayment so a partial/tampered capture can never mark an order fully paid.
+        // The intent stores Razorpay's own order amount (getIntent), which is already in
+        // PAISE — multiplying it again made every capture look 100× underpaid, so the
+        // webhook could never confirm a payment.
         if ($paymentStatus === PaymentStatus::SUCCESS) {
-            $expectedPaise = (int) round(((float) data_get($paymentIntent->payment_intent_info, 'amount', 0)) * 100);
+            $expectedPaise = (int) data_get($paymentIntent->payment_intent_info, 'amount', 0);
             $capturedPaise = (int) ($payload['amount'] ?? 0);
             if ($expectedPaise > 0 && $capturedPaise < $expectedPaise) {
                 \Illuminate\Support\Facades\Log::warning('Razorpay capture underpaid — not marking SUCCESS', [
@@ -295,6 +319,23 @@ class Razorpay extends Base implements PaymentInterface
                 $order, 'razorpay', (string) ($payload['id'] ?? ''), (int) ($payload['amount'] ?? 0),
                 (int) ($payload['fee'] ?? 0), (int) ($payload['tax'] ?? 0), (array) $payload, 'system:razorpay-webhook'
             );
+            // Money landed on a checkout attempt that was already closed: the customer
+            // abandoned it or switched it to Cash on Delivery, then a payment (e.g. a UPI
+            // collect approved late) still went through. The capture is recorded above; the
+            // order must not flip to paid, so someone has to refund the payment.
+            // ponytail: manual refund for now; auto-refund via RefundService if it recurs.
+            if ($order->payment_status !== PaymentStatus::SUCCESS
+                && (in_array($order->order_status, [OrderStatus::CANCELLED, OrderStatus::FAILED], true)
+                    || \Marvel\Enums\PaymentGatewayType::isCashOnDelivery($order->payment_gateway))) {
+                \Illuminate\Support\Facades\Log::error('Razorpay captured a payment on a closed checkout attempt — refund it', [
+                    'order_id' => $order->id, 'rzp_payment_id' => $payload['id'] ?? null, 'amount_paise' => $payload['amount'] ?? null,
+                ]);
+                \Marvel\Database\Models\OrderEvent::record($order->id, 'payment.captured_on_closed_attempt', [
+                    'rzp_payment_id' => $payload['id'] ?? null,
+                    'amount_paise'   => $payload['amount'] ?? null,
+                ], 'Payment captured after this checkout attempt was closed — refund it');
+                return;
+            }
         }
         $this->webhookSuccessResponse($order, $orderStatus, $paymentStatus);
     }

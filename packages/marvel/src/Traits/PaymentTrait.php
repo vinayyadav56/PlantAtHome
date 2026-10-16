@@ -381,6 +381,12 @@ trait PaymentTrait
         $isFinal = $this->checkOrderStatusIsFinal($order);
         if ($isFinal) return;
 
+        // A paid order never moves backwards. Gateways deliver webhooks out of order, so a late
+        // payment.authorized / payment.failed must not undo a capture already recorded.
+        if ($order->payment_status === PaymentStatus::SUCCESS && $payment_status !== PaymentStatus::SUCCESS) {
+            return;
+        }
+
         // Idempotency: payment gateways legitimately replay webhooks. If the order is already
         // in the target payment + order state, this is a duplicate delivery — return without
         // re-saving or re-firing PaymentSuccess (which re-sends payment emails + billable SMS

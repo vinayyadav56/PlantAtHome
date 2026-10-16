@@ -139,7 +139,11 @@ trait PaymentStatusManagerWithOrderTrait
                             $this->paymentSuccess($order);
                             break;
                         case "attempted":
-                            $this->paymentProcessing($order);
+                            // Razorpay says "attempted" for a payment still settling AND for an
+                            // order whose only attempts failed — it is not proof of anything.
+                            // Marking it payment-processing left failed attempts stuck there
+                            // forever (the stale sweep skips processing). The webhook or the
+                            // reconcile command settles it.
                             break;
                         case "failed":
                             $this->paymentFailed($order);
@@ -458,6 +462,17 @@ trait PaymentStatusManagerWithOrderTrait
      */
     protected function paymentSuccess($order): void
     {
+        // Settle once. The confirm call, the thank-you page, reconcile and the webhook can all
+        // report the same capture, and a second pass re-fired PaymentSuccess (another "payment
+        // received" message). A final or COD order is a closed attempt: a late capture on it is
+        // the webhook's to alert on, never a reason to flip it to paid.
+        // ponytail: two writers in the same instant can still both pass; row-lock them if it shows.
+        $order->refresh();
+        if ($order->payment_status === PaymentStatus::SUCCESS
+            || in_array($order->order_status, [OrderStatus::COMPLETED, OrderStatus::CANCELLED, OrderStatus::REFUNDED], true)
+            || \Marvel\Enums\PaymentGatewayType::isCashOnDelivery($order->payment_gateway)) {
+            return;
+        }
         $order->order_status = OrderStatus::PROCESSING;
         $order->payment_status = PaymentStatus::SUCCESS;
         $order->save();
