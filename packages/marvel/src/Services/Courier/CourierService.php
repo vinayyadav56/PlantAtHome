@@ -752,6 +752,8 @@ class CourierService
             ];
         }
 
+        // Exactly what Shiprocket is sent for this door, so the row can say the same once it holds it.
+        $sent = $location ? $this->shippingClient()->pickupAddressOf($shop, $location) : [];
         $res = $this->shippingClient()->registerPickup($shop, $nickname, $location);
         $ok  = (bool) ($res['ok'] ?? false);
 
@@ -764,7 +766,7 @@ class CourierService
                 'provider_pickup_code'   => ($res['pickup_code'] ?? null) ?: $location->provider_pickup_code,
                 'last_synced_at'         => Carbon::now(),
                 'last_error'             => null,
-            ])->save();
+            ] + $this->registeredAddress($location, $sent))->save();
             // Only the door that owns the legacy nickname stamps the shop columns — a second yard
             // would otherwise silently repoint every booking that still reads them.
             if ($nickname === $legacyName) {
@@ -785,6 +787,79 @@ class CourierService
             'outcome'              => $res['outcome'] ?? null,
             'error'                => $res['error'] ?? null,
         ];
+    }
+
+    /**
+     * The registered address, for the door's BLANK fields only. A registration door
+     * (VendorPickupLocation::openForNewVendor) holds no address and follows the vendor profile up
+     * to this point; Shiprocket has no API to update a registered address, so from here on the row
+     * must keep saying what the partner holds rather than drift with later profile edits.
+     */
+    private function registeredAddress(VendorPickupLocation $location, array $sent): array
+    {
+        $columns = [
+            'contact_name' => ['name', 96], 'phone' => ['phone', 24], 'address' => ['address', 255],
+            'address_2' => ['line2', 255], 'city' => ['city', 96], 'state' => ['state', 96], 'pincode' => ['pincode', 12],
+        ];
+        $fill = [];
+        foreach ($columns as $column => [$key, $max]) {
+            $value = trim((string) ($sent[$key] ?? ''));
+            if ($value !== '' && trim((string) $location->{$column}) === '') {
+                $fill[$column] = mb_substr($value, 0, $max);
+            }
+        }
+        if (!(float) $location->lat && !(float) $location->lng && (float) ($sent['lat'] ?? 0) && (float) ($sent['lng'] ?? 0)) {
+            $fill['lat'] = (float) $sent['lat'];
+            $fill['lng'] = (float) $sent['lng'];
+        }
+        return $fill;
+    }
+
+    /**
+     * Register at Shiprocket every pickup a vendor got from its own registration once that vendor
+     * is live, so a partner nursery never needs a separate registration step
+     * (courier:register-vendor-pickups, every 5 minutes).
+     *
+     * - While Shiprocket is off here it touches nothing: the doors wait as `pending`, and the first
+     *   run after it is switched on registers them.
+     * - Vendors whose staff choose the warehouse per parcel (PlantAtHome) are skipped: their doors
+     *   are its own warehouses, registered by hand with the owner's go.
+     * - A refused door is stamped `failed` with the reason and is not retried: fixing the address
+     *   and pressing Register is a person's call.
+     *   ponytail: a transport blip lands as `failed` too; retry those here if it ever bites.
+     */
+    public function registerVendorPickups(): array
+    {
+        if (!$this->shippingServiceEnabled()) {
+            return ['registered' => 0, 'failed' => 0, 'waiting' => 'courier off'];
+        }
+        $doors = VendorPickupLocation::with('shop')
+            ->where('auto_register', true)
+            ->where('status', 'pending')
+            ->whereHas('shop', fn ($q) => $q->where('is_active', true))
+            ->orderBy('id')
+            ->get()
+            ->reject(fn (VendorPickupLocation $door) => $door->shop->requiresPickupChoice());
+        if ($doors->isEmpty()) {
+            return ['registered' => 0, 'failed' => 0];
+        }
+        $shiprocket = (array) ($this->shippingClient()->getPartnerConfig('shiprocket')['data'] ?? []);
+        if (empty($shiprocket['configured']) || empty($shiprocket['enabled'])) {
+            return ['registered' => 0, 'failed' => 0, 'waiting' => 'shiprocket off', 'pending' => $doors->count()];
+        }
+
+        $registered = $failed = 0;
+        foreach ($doors as $door) {
+            $res = $this->syncPickupLocation($door->shop, $door);
+            $res['ok'] ? $registered++ : $failed++;
+            Log::info('courier.vendor_pickup.auto_register', [
+                'shop_id'     => $door->shop_id,
+                'location_id' => $door->id,
+                'ok'          => (bool) $res['ok'],
+                'error'       => $res['error'] ?? null,
+            ]);
+        }
+        return ['registered' => $registered, 'failed' => $failed];
     }
 
     /** The vendor's default door (is_default first, then oldest), or null when it has none. */

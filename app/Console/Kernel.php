@@ -67,6 +67,10 @@ class Kernel extends ConsoleKernel
         // hold the lock for 24h.
         $schedule->command('courier:sweep-undispatched')->everyFifteenMinutes()->withoutOverlapping(5);
 
+        // A partner nursery's own pickup (opened at registration) is registered at Shiprocket
+        // once the nursery is approved. Touches nothing while Shiprocket is off.
+        $schedule->command('courier:register-vendor-pickups')->everyFiveMinutes()->withoutOverlapping(10);
+
         // The half the sweep above cannot see: it watches unbooked SHIPMENTS, and a shipment
         // only exists once an order has a vendor. With auto-assignment opt-in, an unassigned
         // order had no watchdog at all — no vendor, no shipment, and invisible to the vendor

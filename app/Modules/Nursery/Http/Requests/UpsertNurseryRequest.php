@@ -22,7 +22,7 @@ class UpsertNurseryRequest extends FormRequest
             ? Nursery::query()->where('uuid', $identifier)->orWhere('slug', $identifier)->value('id')
             : null;
 
-        return [
+        $rules = [
             'name'            => [$this->isMethod('POST') ? 'required' : 'sometimes', 'string', 'max:255'],
             'slug'            => ['nullable', 'string', 'max:255', Rule::unique('nursery_nurseries', 'slug')->ignore($ignoreId)],
             'description'     => ['nullable', 'string'],
@@ -60,5 +60,19 @@ class UpsertNurseryRequest extends FormRequest
             'owner_name'           => ['nullable', 'string', 'max:255'],
             'owner_password'       => ['nullable', 'string', 'min:8', 'required_with:owner_email'],
         ];
+
+        // Registration = the vendor's pickup address (VendorPickupLocation::openForNewVendor), so
+        // a new nursery needs the same complete address and phone as the legacy ShopCreateRequest.
+        if ($this->isMethod('POST')) {
+            $rules['address'] = ['required', 'array'];
+            $rules['address.street_address'] = ['required', 'string', 'max:255'];
+            $rules['address.house_no'] = ['required', 'string', 'max:120'];
+            $rules['address.city'] = ['required', 'string', 'max:120'];
+            $rules['address.state'] = ['required', 'string', 'max:120'];
+            $rules['address.zip'] = ['required', 'regex:/^[1-9][0-9]{5}$/'];
+            $rules['mobile'] = ['required', 'string', 'regex:/^[0-9]{10}$/'];
+        }
+
+        return $rules;
     }
 }

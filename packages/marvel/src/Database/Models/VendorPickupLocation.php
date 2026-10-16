@@ -4,6 +4,7 @@ namespace Marvel\Database\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Support\Facades\Schema;
 
 /**
  * One physical door a vendor loads from, mapped 1:1 to a partner pickup location.
@@ -30,8 +31,28 @@ class VendorPickupLocation extends Model
         'lat'            => 'float',
         'lng'            => 'float',
         'is_default'     => 'boolean',
+        'auto_register'  => 'boolean',
         'last_synced_at' => 'datetime',
     ];
+
+    /**
+     * The pickup a partner nursery gets from its own registration — nobody types it in twice.
+     *
+     * It holds NO address of its own: pickupAddressOf() fills every blank door field from the
+     * vendor, so until Shiprocket accepts it the pickup simply IS the vendor's current registered
+     * address, onboarding corrections included. CourierService::syncPickupLocation copies the
+     * registered address in on success. auto_register lets courier:register-vendor-pickups
+     * register it once the vendor is live; PlantAtHome's own warehouses are added by hand.
+     */
+    public static function openForNewVendor(int $shopId): void
+    {
+        $row = ['shop_id' => $shopId, 'label' => 'Primary', 'is_default' => true];
+        // Railway runs migrate in the background on deploy: never fail a vendor create in that gap.
+        if (Schema::hasColumn('vendor_pickup_locations', 'auto_register')) {
+            $row['auto_register'] = true;
+        }
+        static::forceCreate($row);
+    }
 
     public function shop(): BelongsTo
     {

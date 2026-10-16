@@ -341,6 +341,11 @@ class NurseryService
         }
         $shopId = $this->db->table('shops')->insertGetId($shop);
 
+        // Same as a legacy-created vendor: its pickup IS its registered address, no separate step.
+        if ($schema->hasTable('vendor_pickup_locations')) {
+            \Marvel\Database\Models\VendorPickupLocation::openForNewVendor($shopId);
+        }
+
         $paymentInfo = optional($nursery->balance)->payment_info;
         if ($paymentInfo !== null && $schema->hasTable('balances')) {
             $this->db->table('balances')->insert([

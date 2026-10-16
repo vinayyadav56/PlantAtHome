@@ -19,11 +19,11 @@ class NurseryAdminFlowTest extends NurseryTestCase
         $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
 
         // ── Create: lands in pending with an empty balance ────────────────
-        $created = $this->postJson('/api/v1/nurseries', [
+        $created = $this->postJson('/api/v1/nurseries', $this->registration([
             'name'        => 'Green Leaf Nursery',
             'slug'        => 'green-leaf',
             'description' => 'Test vendor',
-        ], $admin);
+        ]), $admin);
         $created->assertStatus(201)
             ->assertJsonPath('data.status', 'pending')
             ->assertJsonPath('data.balance.current_balance', 0);

@@ -35,7 +35,7 @@ class NurseryFulfilmentTest extends NurseryTestCase
     public function test_fulfilment_fields_persist_on_a_v2_update_and_round_trip(): void
     {
         $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
-        $uuid = $this->postJson('/api/v1/nurseries', ['name' => 'Self Deliverer', 'slug' => 'self-deliverer'], $admin)
+        $uuid = $this->postJson('/api/v1/nurseries', $this->registration(['name' => 'Self Deliverer', 'slug' => 'self-deliverer']), $admin)
             ->assertStatus(201)->json('data.uuid');
 
         $this->patchJson("/api/v1/nurseries/{$uuid}", [
@@ -56,7 +56,7 @@ class NurseryFulfilmentTest extends NurseryTestCase
         $legacyId = DB::table('shops')->insertGetId(['name' => 'Mirror Me', 'delivery_mode' => 'platform', 'created_at' => now(), 'updated_at' => now()]);
 
         $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
-        $uuid = $this->postJson('/api/v1/nurseries', ['name' => 'Mirror Me', 'slug' => 'mirror-me'], $admin)->json('data.uuid');
+        $uuid = $this->postJson('/api/v1/nurseries', $this->registration(['name' => 'Mirror Me', 'slug' => 'mirror-me']), $admin)->json('data.uuid');
         DB::table('nursery_nurseries')->where('uuid', $uuid)->update(['legacy_id' => $legacyId]);
 
         $this->patchJson("/api/v1/nurseries/{$uuid}", [
@@ -72,7 +72,7 @@ class NurseryFulfilmentTest extends NurseryTestCase
     public function test_an_invalid_mode_is_rejected(): void
     {
         $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
-        $uuid = $this->postJson('/api/v1/nurseries', ['name' => 'Bad Mode', 'slug' => 'bad-mode'], $admin)->json('data.uuid');
+        $uuid = $this->postJson('/api/v1/nurseries', $this->registration(['name' => 'Bad Mode', 'slug' => 'bad-mode']), $admin)->json('data.uuid');
 
         $this->patchJson("/api/v1/nurseries/{$uuid}", ['delivery_mode' => 'drone'], $admin)->assertStatus(422);
     }

@@ -16,6 +16,7 @@ use Marvel\Database\Models\OwnershipTransfer;
 use Marvel\Database\Models\Product;
 use Marvel\Database\Models\Shop;
 use Marvel\Database\Models\User;
+use Marvel\Database\Models\VendorPickupLocation;
 use Marvel\Database\Models\VendorProductPrice;
 use Marvel\Database\Models\VendorServiceArea;
 use Marvel\Services\AvailabilityService;
@@ -260,6 +261,8 @@ class ShopRepository extends BaseRepository
                 $data['created_by'] = $request->user()->id ?? null;
                 $data['updated_by'] = $request->user()->id ?? null;
                 $shop = $this->create($data);
+                // The vendor's pickup IS its registered address — never a separate step.
+                VendorPickupLocation::openForNewVendor($shop->id);
                 if (isset($request['categories'])) {
                     $shop->categories()->attach($request['categories']);
                 }

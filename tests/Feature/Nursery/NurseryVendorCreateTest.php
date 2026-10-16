@@ -35,7 +35,7 @@ class NurseryVendorCreateTest extends NurseryTestCase
     {
         $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
 
-        $response = $this->postJson('/api/v1/nurseries', [
+        $response = $this->postJson('/api/v1/nurseries', $this->registration([
             'name'           => 'Test Nursery',
             'description'    => 'Full vendor payload',
             'contact_person' => 'Ravi Kumar',
@@ -53,7 +53,7 @@ class NurseryVendorCreateTest extends NurseryTestCase
             'owner_email'    => 'vendor.owner@example.test',
             'owner_name'     => 'Vendor Owner',
             'owner_password' => 'Secret#123',
-        ], $admin);
+        ]), $admin);
 
         // ── Response: auto-slug + vendor fields + owner + email flag ──────
         $response->assertStatus(201)
@@ -147,7 +147,7 @@ class NurseryVendorCreateTest extends NurseryTestCase
     {
         // What the admin's Add Vendor wizard sends when the Fulfilment step is untouched.
         $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
-        $res = $this->postJson('/api/v1/nurseries', [
+        $res = $this->postJson('/api/v1/nurseries', $this->registration([
             'name'    => 'Wizard Default Nursery',
             'address' => ['city' => 'Delhi', 'zip' => '110017', 'state' => 'Delhi', 'street_address' => 'E-512, Test Street'],
             // The wizard always provisions the owner (super-admin create); the legacy
@@ -155,7 +155,7 @@ class NurseryVendorCreateTest extends NurseryTestCase
             'owner_email'    => 'wizard.owner@example.test',
             'owner_name'     => 'Wizard Owner',
             'owner_password' => 'Secret#123',
-        ], $admin);
+        ]), $admin);
 
         $res->assertStatus(201)->assertJsonPath('data.delivery_mode', 'platform');
         $uuid = $res->json('data.uuid');
@@ -166,7 +166,7 @@ class NurseryVendorCreateTest extends NurseryTestCase
     public function test_create_keeps_self_delivery_in_both_models(): void
     {
         $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
-        $res = $this->postJson('/api/v1/nurseries', [
+        $res = $this->postJson('/api/v1/nurseries', $this->registration([
             'name'          => 'Own Fleet Nursery',
             'address'       => ['city' => 'Delhi', 'zip' => '110017'],
             'delivery_mode' => 'self',
@@ -174,7 +174,7 @@ class NurseryVendorCreateTest extends NurseryTestCase
             'owner_email'   => 'fleet.owner@example.test',
             'owner_name'    => 'Fleet Owner',
             'owner_password' => 'Secret#123',
-        ], $admin);
+        ]), $admin);
 
         $res->assertStatus(201)->assertJsonPath('data.delivery_mode', 'self');
         $shop = DB::table('shops')->where('slug', 'own-fleet-nursery')->first();
@@ -182,12 +182,50 @@ class NurseryVendorCreateTest extends NurseryTestCase
         $this->assertSame('Fleet Lead', json_decode($shop->self_delivery, true)['contact_name'] ?? null);
     }
 
+    public function test_a_new_nursery_gets_its_pickup_from_its_registration(): void
+    {
+        // The real door table and its auto_register column, as production has them.
+        (require base_path('packages/marvel/database/migrations/2026_08_14_000100_create_vendor_pickup_locations_table.php'))->up();
+        (require base_path('packages/marvel/database/migrations/2026_10_16_000100_add_auto_register_to_vendor_pickup_locations.php'))->up();
+        $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
+
+        $this->postJson('/api/v1/nurseries', $this->registration([
+            'name'           => 'Pickup Nursery',
+            'owner_email'    => 'pickup.owner@example.test',
+            'owner_name'     => 'Pickup Owner',
+            'owner_password' => 'Secret#123',
+        ]), $admin)->assertStatus(201);
+
+        $shopId = DB::table('shops')->where('slug', 'pickup-nursery')->value('id');
+        $door = DB::table('vendor_pickup_locations')->where('shop_id', $shopId)->sole();
+        $this->assertSame('Primary', $door->label);
+        $this->assertEquals(1, $door->is_default);
+        $this->assertEquals(1, $door->auto_register);
+        $this->assertSame('pending', $door->status);
+        $this->assertNull($door->address, 'it reads the nursery profile until Shiprocket holds it');
+    }
+
+    public function test_a_nursery_without_a_house_number_or_phone_is_refused(): void
+    {
+        $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
+
+        $res = $this->postJson('/api/v1/nurseries', [
+            'name'    => 'Incomplete Nursery',
+            'address' => ['street_address' => 'MG Road', 'city' => 'Pune', 'state' => 'Maharashtra', 'zip' => '411001'],
+        ], $admin);
+
+        $res->assertStatus(422);
+        $fields = array_column($res->json('errors') ?? [], 'field');
+        $this->assertContains('address.house_no', $fields);
+        $this->assertContains('mobile', $fields);
+    }
+
     public function test_duplicate_name_gets_suffixed_slug(): void
     {
         $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
 
-        $first = $this->postJson('/api/v1/nurseries', ['name' => 'Green Valley'], $admin);
-        $second = $this->postJson('/api/v1/nurseries', ['name' => 'Green Valley'], $admin);
+        $first = $this->postJson('/api/v1/nurseries', $this->registration(['name' => 'Green Valley']), $admin);
+        $second = $this->postJson('/api/v1/nurseries', $this->registration(['name' => 'Green Valley']), $admin);
 
         $first->assertStatus(201)->assertJsonPath('data.slug', 'green-valley');
         $second->assertStatus(201)->assertJsonPath('data.slug', 'green-valley-2');
@@ -201,11 +239,11 @@ class NurseryVendorCreateTest extends NurseryTestCase
         // Demo owner.b already exists in identity — reuse, never duplicate.
         $before = DB::table('identity_users')->where('email', 'owner.b@plantathome.test')->first();
 
-        $response = $this->postJson('/api/v1/nurseries', [
+        $response = $this->postJson('/api/v1/nurseries', $this->registration([
             'name'           => 'Reuse Nursery',
             'owner_email'    => 'owner.b@plantathome.test',
             'owner_password' => 'IgnoredForExisting#1',
-        ], $admin);
+        ]), $admin);
         $response->assertStatus(201)
             ->assertJsonPath('data.owner.email', 'owner.b@plantathome.test');
 

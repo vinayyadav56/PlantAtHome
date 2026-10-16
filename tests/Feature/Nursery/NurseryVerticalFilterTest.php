@@ -39,7 +39,7 @@ class NurseryVerticalFilterTest extends NurseryTestCase
         $admin = $this->bearer($this->accessToken('admin@plantathome.test'));
 
         foreach ([['Plant Vendor', 'plant-vendor', 34], ['Pot Vendor', 'pot-vendor', 35]] as [$name, $slug, $legacyId]) {
-            $this->postJson('/api/v1/nurseries', ['name' => $name, 'slug' => $slug], $admin)->assertStatus(201);
+            $this->postJson('/api/v1/nurseries', $this->registration(['name' => $name, 'slug' => $slug]), $admin)->assertStatus(201);
             DB::table('nursery_nurseries')->where('slug', $slug)->update(['legacy_id' => $legacyId]);
         }
 

@@ -40,8 +40,9 @@ class ShopCreateRequest extends FormRequest
             // Vendor profile fields (validate format whenever provided).
             'contact_person'         => ['nullable', 'string', 'max:191'],
             // Phone must be unique across vendors — checked against BOTH the
-            // mobile column and the legacy settings->contact JSON path.
-            'mobile'                 => ['nullable', 'string', 'regex:/^[0-9]{10}$/', new UniquePhone(null)],
+            // mobile column and the legacy settings->contact JSON path. Required at
+            // registration: it is the pickup contact the courier calls.
+            'mobile'                 => ['required', 'string', 'regex:/^[0-9]{10}$/', new UniquePhone(null)],
             'upi'                    => ['nullable', 'string', 'regex:/^[\w.\-]{2,256}@[a-zA-Z]{2,64}$/'],
             // Vendor owner credentials — an admin-created vendor gets a dedicated login
             // (see ShopRepository::storeShop). Required for super-admins so no vendor is
@@ -64,13 +65,14 @@ class ShopCreateRequest extends FormRequest
             'image'                  => ['nullable', 'array'],
             'cover_image'            => ['nullable', 'array'],
             'settings'               => ['array'],
-            'address'                => ['array'],
             // Vendor address = a courier PICKUP address: partners refuse lines
             // without street/city/state and Shiprocket 422s without a valid PIN
-            // (the "Greater Kailash" incident). Enforced whenever an address is
-            // sent; house/flat number is prompted client-side.
+            // (the "Greater Kailash" incident) or a house/plot number on line 1.
+            // Required at registration: it becomes the vendor's pickup with no
+            // separate step (VendorPickupLocation::openForNewVendor).
+            'address'                => ['required', 'array'],
             'address.street_address' => ['required_with:address', 'string', 'max:255'],
-            'address.house_no'       => ['nullable', 'string', 'max:120'],
+            'address.house_no'       => ['required', 'string', 'max:120'],
             'address.street_address2' => ['nullable', 'string', 'max:255'],
             'address.area'           => ['nullable', 'string', 'max:120'],
             'address.landmark'       => ['nullable', 'string', 'max:255'],

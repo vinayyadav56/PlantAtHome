@@ -12,6 +12,7 @@ use Marvel\Database\Models\Shop;
 use Marvel\Database\Models\VendorPickupLocation;
 use Marvel\Enums\Permission;
 use Marvel\Services\Courier\CourierService;
+use Marvel\Services\Courier\ShippingServiceClient;
 use Marvel\Services\ShipmentPlanner;
 
 /**
@@ -803,10 +804,19 @@ class CourierShipmentController extends CoreController
     public function pickupLocations(Request $request, $id)
     {
         $shop = Shop::findOrFail($id);
+        $client = new ShippingServiceClient();
+        $locations = VendorPickupLocation::where('shop_id', $id)
+            ->orderByDesc('is_default')->orderBy('id')->get()
+            // What a booking would actually send. A nursery's registration door has no address of
+            // its own (openForNewVendor) and uses the vendor's, so the panel shows this, not blanks.
+            ->each(function (VendorPickupLocation $l) use ($client, $shop) {
+                $a = $client->pickupAddressOf($shop, $l);
+                $l->setAttribute('pickup_address', implode(', ', array_filter([$a['address'] ?? '', $a['line2'] ?? '', $a['city'] ?? '', $a['state'] ?? ''])));
+                $l->setAttribute('pickup_pincode', (string) ($a['pincode'] ?? ''));
+            });
         return response()->json([
             'ok'            => true,
-            'locations'     => VendorPickupLocation::where('shop_id', $id)
-                ->orderByDesc('is_default')->orderBy('id')->get(),
+            'locations'     => $locations,
             // 'staff' = staff choose the location for every parcel (Shop::requiresPickupChoice).
             'pickup_choice' => $shop->requiresPickupChoice() ? 'staff' : 'default',
         ]);
