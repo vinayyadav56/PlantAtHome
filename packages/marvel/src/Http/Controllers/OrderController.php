@@ -60,17 +60,25 @@ class OrderController extends CoreController
     public function index(Request $request)
     {
         $limit = $request->limit ? $request->limit : 10;
-        $repository = $this->fetchOrders($request);
+        $query = $this->fetchOrders($request);
+        // Only PLACED orders are orders (owner rule, 2026-10-16): an online-payment checkout is a
+        // payment attempt until it is paid or switched to Cash on Delivery, and shows in no list —
+        // customer, admin or vendor. A super admin can list the attempts with ?awaiting_payment=1.
+        if ($request->boolean('awaiting_payment') && $request->user()?->hasPermissionTo(Permission::SUPER_ADMIN)) {
+            $query->whereNull('orders.placed_at');
+        } else {
+            $query->whereNotNull('orders.placed_at');
+        }
         // ?has_rto=1 — only orders with at least one bounced (return-to-origin)
         // shipment. RTO is a SHIPMENT state, deliberately not an order status
         // (what happens to the order after a bounce is the operator's decision),
         // so it cannot ride the normal order_status search and filters here.
+        // fetchOrders() hands back a query builder, which has no scopeQuery (that is the
+        // repository's) — calling it threw, so this filter never worked.
         if ($request->boolean('has_rto')) {
-            $repository = $repository->scopeQuery(
-                fn ($q) => $q->whereHas('shipments', fn ($s) => $s->where('status', 'rto'))
-            );
+            $query->whereHas('shipments', fn ($s) => $s->where('status', 'rto'));
         }
-        $orders = $repository->paginate($limit)->withQueryString();
+        $orders = $query->paginate($limit)->withQueryString();
 
         // The order LIST grew large enough to get truncated mid-stream (the admin
         // orders list then showed empty). The Order model eager-loads
@@ -229,8 +237,7 @@ class OrderController extends CoreController
             if ($idempotencyKey !== '') {
                 $existing = $this->repository->findByIdempotencyKey($idempotencyKey, $customerId);
                 if ($existing) {
-                    $existing->makeVisible('tracking_token');
-                    return $existing;
+                    return $this->replayedOrder($existing);
                 }
                 $request->merge(['idempotency_key' => $idempotencyKey]);
             }
@@ -247,8 +254,7 @@ class OrderController extends CoreController
                 if ($isKeyRace) {
                     $existing = $this->repository->findByIdempotencyKey($idempotencyKey, $customerId);
                     if ($existing) {
-                        $existing->makeVisible('tracking_token');
-                        return $existing;
+                        return $this->replayedOrder($existing);
                     }
                 }
                 throw $e;
@@ -821,6 +827,115 @@ class OrderController extends CoreController
         } catch (MarvelException $e) {
             throw new MarvelException(NOT_FOUND);
         }
+    }
+
+    /**
+     * A duplicate checkout POST (same Idempotency-Key) gets the original order back — with its
+     * payment intent, which the checkout needs to open the payment window. Without it a retried
+     * click read as "payment failed" and offered Cash on Delivery for an order already being paid.
+     */
+    private function replayedOrder(Order $existing): Order
+    {
+        $existing->makeVisible('tracking_token');
+        if (!in_array($existing->payment_gateway, [
+            PaymentGatewayType::CASH, PaymentGatewayType::CASH_ON_DELIVERY, PaymentGatewayType::FULL_WALLET_PAYMENT,
+        ], true)) {
+            $existing['payment_intent'] = $this->attachPaymentIntent($existing->tracking_number);
+        }
+        return $existing;
+    }
+
+    /**
+     * POST orders/{tracking_number}/cash-on-delivery — the payment-failed prompt's "Yes" (owner
+     * rule, 2026-10-16): place an unpaid online-payment checkout as a Cash on Delivery order.
+     * {status: 'placed' | 'paid'}; 409 PAYMENT_IN_PROGRESS while a payment is still settling,
+     * 409 ATTEMPT_CLOSED once cancelled, 422 COD_DISABLED, 503 when Razorpay can't be asked.
+     */
+    public function cashOnDelivery(Request $request, string $tracking_number)
+    {
+        $order = $this->paymentAttempt($request, $tracking_number);
+        if ($order->placed_at) {
+            return ['status' => 'placed', 'tracking_number' => $order->tracking_number];
+        }
+        if ($settled = $this->settleIfPaid($order)) {
+            return $settled;
+        }
+        if ($this->repository->switchToCashOnDelivery($order) === 'closed') {
+            return response()->json([
+                'code'    => 'ATTEMPT_CLOSED',
+                'message' => 'This checkout was already closed. Please place your order again.',
+            ], 409);
+        }
+        return ['status' => 'placed', 'tracking_number' => $order->tracking_number];
+    }
+
+    /**
+     * POST orders/{tracking_number}/abandon-payment — the prompt's "No": close the unpaid attempt
+     * now, giving back its stock, coupon and wallet points; the customer stays on checkout with the
+     * cart. {status: 'abandoned' | 'placed' | 'paid'}. Idempotent.
+     */
+    public function abandonPayment(Request $request, string $tracking_number)
+    {
+        $order = $this->paymentAttempt($request, $tracking_number);
+        if ($order->placed_at) {
+            return ['status' => 'placed', 'tracking_number' => $order->tracking_number];
+        }
+        if ($settled = $this->settleIfPaid($order)) {
+            return $settled;
+        }
+        $this->repository->closeUnpaidOrder($order, 'customer:abandon');
+        return ['status' => 'abandoned', 'tracking_number' => $order->tracking_number];
+    }
+
+    /**
+     * The parent order behind a checkout attempt, for the holder of its per-order token only (the
+     * token every checkout gets back from POST /orders). These routes are public, so there is no
+     * logged-in user to check; a wrong token looks exactly like a missing order.
+     */
+    private function paymentAttempt(Request $request, string $trackingNumber): Order
+    {
+        $order = Order::where('tracking_number', $trackingNumber)->whereNull('parent_id')->first();
+        if (!$order || !$order->tokenGrantsAccess((string) $request->input('token', ''))) {
+            abort(404);
+        }
+        return $order;
+    }
+
+    /**
+     * Before an attempt is switched or closed, ask Razorpay whether money moved: a captured payment
+     * means it is paid (place it as paid, never as COD — the customer would pay twice), an
+     * authorised one is still settling. Fails closed: without an answer, nothing changes.
+     */
+    private function settleIfPaid(Order $order)
+    {
+        if ($order->payment_gateway !== PaymentGatewayType::RAZORPAY) {
+            return null;
+        }
+        $intent = \Marvel\Database\Models\PaymentIntent::where('order_id', $order->id)->latest('id')->first();
+        $razorpayOrderId = $intent ? data_get($intent->payment_intent_info, 'payment_id') : null;
+        if (!$razorpayOrderId) {
+            return null; // the payment window never opened (the provider was unavailable)
+        }
+        try {
+            $state = app(\Marvel\Payments\Razorpay::class)->paymentState((string) $razorpayOrderId);
+        } catch (\Throwable $e) {
+            \Illuminate\Support\Facades\Log::warning('payment attempt: Razorpay could not be asked', ['order_id' => $order->id, 'error' => $e->getMessage()]);
+            return response()->json([
+                'code'    => 'PAYMENT_STATUS_UNKNOWN',
+                'message' => "We couldn't check your payment just now. Please try again in a moment.",
+            ], 503);
+        }
+        if ($state === 'captured') {
+            $this->paymentSuccess($order);
+            return ['status' => 'paid', 'tracking_number' => $order->tracking_number];
+        }
+        if ($state === 'authorized') {
+            return response()->json([
+                'code'    => 'PAYMENT_IN_PROGRESS',
+                'message' => 'Your payment is still being confirmed. Please wait a moment and try again.',
+            ], 409);
+        }
+        return null;
     }
 
     /**

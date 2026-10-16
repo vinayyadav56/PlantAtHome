@@ -22,6 +22,11 @@ class SendOrderStatusChangedNotification implements ShouldQueue
      */
     public function handle(OrderStatusChanged $event)
     {
+        // Never placed (an online-payment attempt that was not paid): nobody was told this order
+        // exists, so it gets no lifecycle messages either.
+        if (!$event->order->placed_at) {
+            return;
+        }
 
         $order = $event->order;
         $customer = $event->order->customer;

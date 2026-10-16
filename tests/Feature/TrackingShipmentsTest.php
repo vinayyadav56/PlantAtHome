@@ -49,6 +49,7 @@ final class TrackingShipmentsTest extends TestCase
             $t->timestamps();
         });
         Schema::create('orders', function (Blueprint $t) {
+            $t->timestamp('placed_at')->nullable()->useCurrent(); // a placed order unless a test says otherwise
             $t->bigIncrements('id');
             $t->string('tracking_number')->unique();
             $t->string('tracking_token')->nullable();

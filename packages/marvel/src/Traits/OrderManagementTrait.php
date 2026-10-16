@@ -32,6 +32,21 @@ trait OrderManagementTrait
     {
         $prev_order_status = $order->order_status;
 
+        // An online-payment checkout that was never paid is not an order yet (owner rule,
+        // 2026-10-16): nothing here may move it into fulfilment. The customer's "No" on the
+        // payment-failed prompt or the stale-unpaid sweep closes it, giving back stock, coupon and
+        // wallet points — a plain status change would not.
+        // Read from the row when the instance lacks it: one loaded (or just inserted) before the
+        // order was placed, or before the column's default was applied, is not proof of anything.
+        $placedAt = $order->placed_at
+            ?? ($order->exists ? \Marvel\Database\Models\Order::whereKey($order->id)->value('placed_at') : null);
+        if (!$placedAt) {
+            throw new \Symfony\Component\HttpKernel\Exception\HttpException(
+                422,
+                'This checkout was never paid, so it is not an order yet. It closes on its own if the customer does not pay.'
+            );
+        }
+
         // C4 — reject illegal/backward transitions that corrupt money + inventory.
         // CANCELLED/REFUNDED are final; a COMPLETED order may only move to REFUNDED
         // (refunds run through their own atomic flow, not this path). This blocks

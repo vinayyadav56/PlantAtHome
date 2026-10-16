@@ -31,9 +31,8 @@ use Marvel\Enums\Permission;
 use Marvel\Enums\ProductType;
 use Marvel\Enums\PaymentGatewayType;
 use Marvel\Enums\PaymentStatus;
-use Marvel\Events\OrderCreated;
 use Marvel\Events\OrderProcessed;
-use Marvel\Events\OrderReceived;
+use Marvel\Events\OrderCancelled;
 use Marvel\Exceptions\MarvelBadRequestException;
 use Marvel\Traits\CalculatePaymentTrait;
 use Marvel\Traits\OrderManagementTrait;
@@ -276,6 +275,12 @@ class OrderRepository extends BaseRepository
         //     'wallet_currency' => 0
         // ]);
 
+        // 'COD' is a legacy alias that assertCodAllowed, the sweeps and the courier stack already read
+        // as Cash on Delivery; normalise it so this switch does too, instead of filing it as an
+        // unpaid online attempt that nothing would ever place.
+        if (strtoupper((string) $request->payment_gateway) === 'COD') {
+            $request['payment_gateway'] = PaymentGatewayType::CASH_ON_DELIVERY;
+        }
         $fullWalletOrCODPayment = $request?->isFullWalletPayment ? PaymentGatewayType::FULL_WALLET_PAYMENT : PaymentGatewayType::CASH_ON_DELIVERY;
         $payment_gateway_type = !empty($request->payment_gateway) ? $request->payment_gateway : $fullWalletOrCODPayment;
 
@@ -563,12 +568,8 @@ class OrderRepository extends BaseRepository
         // coupon/wallet row locks open for a Razorpay round-trip meant any PSP
         // latency spike serialised every concurrent checkout behind it.
 
-        if ($payment_gateway_type === PaymentGatewayType::CASH_ON_DELIVERY || $payment_gateway_type === PaymentGatewayType::CASH) {
-            $this->orderStatusManagementOnCOD($order, OrderStatus::PENDING, OrderStatus::PROCESSING);
-        } else {
-            $this->orderStatusManagementOnPayment($order, OrderStatus::PENDING, PaymentStatus::PENDING);
-        }
-
+        // No status event here. COD's was a no-op; a prepaid order's sent "Order is now Pending" for
+        // what is only a payment attempt until it is paid (createOrder → placeOrder).
         event(new OrderProcessed($order));
 
         return $order;
@@ -705,6 +706,9 @@ class OrderRepository extends BaseRepository
             } catch (\Throwable $e) {
                 unset($orderInput['customer_email']);
             }
+            // Unplaced until placeOrder() below, or until payment success / the COD switch for an
+            // online-payment attempt (the column itself defaults to "placed" for other insert paths).
+            $orderInput['placed_at'] = null;
             $order = $this->create($orderInput);
             // Pricing override audit — one site so the normal and full-wallet
             // paths both record it. Never fatal: the order stands regardless.
@@ -778,9 +782,12 @@ class OrderRepository extends BaseRepository
             }
             $this->createChildOrder($order->id, $request);
             //  $this->calculateShopIncome($order);
-            $invoiceData = $this->createInvoiceDataForEmail($request, $order);
-            $customer = $request->user() ?? null;
-            event(new OrderCreated($order, $invoiceData, $customer));
+            // COD, cash and wallet orders are payable now, and an order staff create for a customer
+            // was meant to exist — place those at once. An online-payment checkout stays a payment
+            // attempt (no announcement, in no list) until it is paid or switched to Cash on Delivery.
+            if ($order->payment_status !== PaymentStatus::PENDING || self::isStaffOrder($request)) {
+                $this->placeOrder($order, $this->createInvoiceDataForEmail($request, $order), $request->user() ?? null);
+            }
             return $order;
         } catch (Exception $e) {
             throw $e;
@@ -1004,6 +1011,15 @@ class OrderRepository extends BaseRepository
         return $request->user()->id ?? null;
     }
 
+    /**
+     * An order staff place for a customer (the admin custom-order flow): it was meant to exist, so it
+     * is placed at creation whatever the gateway. Same caller rule as effectiveCustomerId.
+     */
+    public static function isStaffOrder($request): bool
+    {
+        return (bool) $request->user()?->hasPermissionTo(Permission::SUPER_ADMIN);
+    }
+
     public static function pivotRows(array $products): array
     {
         static $cols = null;
@@ -1220,11 +1236,12 @@ class OrderRepository extends BaseRepository
                 'vendor_cost_total' => $vendorCost,
                 'language'         => $language,
                 "payment_gateway"  => $request->payment_gateway,
+                // Placed with the parent: placeOrder() stamps the children and fires OrderReceived.
+                'placed_at'        => null,
             ];
 
             $order = $this->create($orderInput);
             $order->products()->attach(self::pivotRows($this->processProducts($cartProduct,  $request['customer_id'],  $order)));
-            event(new OrderReceived($order));
         }
     }
 
@@ -1353,6 +1370,114 @@ class OrderRepository extends BaseRepository
                 'message' => 'Cash on delivery is currently unavailable — please choose an online payment method.',
             ], 422));
         }
+    }
+
+    /**
+     * Close an online-payment attempt that was never paid: the customer answered "No" to the
+     * payment-failed prompt, or the stale sweep found it abandoned. Cancels the parent and its
+     * children and gives back what the attempt held: stock (OrderCancelled → restore), the coupon
+     * slot and the wallet points. An attempt that was never placed stays silent — nobody was told it
+     * existed (the notification listeners skip unplaced orders). Idempotent: a closed, paid or COD
+     * order returns false and is left alone.
+     */
+    public function closeUnpaidOrder(Order $order, string $actor): bool
+    {
+        $closed = DB::transaction(function () use ($order, $actor) {
+            $locked = Order::whereKey($order->id)->lockForUpdate()->first();
+            if (!$locked
+                || $locked->payment_status === PaymentStatus::SUCCESS
+                || in_array($locked->order_status, [OrderStatus::CANCELLED, OrderStatus::REFUNDED, OrderStatus::COMPLETED], true)
+                || PaymentGatewayType::isCashOnDelivery($locked->payment_gateway)
+                || $locked->payment_gateway === PaymentGatewayType::FULL_WALLET_PAYMENT) {
+                return null;
+            }
+            $prev = $locked->order_status;
+            $locked->order_status = OrderStatus::CANCELLED;
+            $locked->payment_status = PaymentStatus::FAILED;
+            $locked->save();
+            // A direct save skips the guarded seam — call the accounting hook explicitly (an unpaid
+            // order has no capture, so it is a no-op; kept for one consistent path).
+            \Marvel\Services\Accounting\AccountingPostingService::onOrderStatusChanged($locked, $prev, OrderStatus::CANCELLED, $actor);
+            Order::where('parent_id', $locked->id)
+                ->whereNotIn('order_status', [OrderStatus::CANCELLED, OrderStatus::REFUNDED])
+                ->update(['order_status' => OrderStatus::CANCELLED, 'payment_status' => PaymentStatus::FAILED]);
+            $this->restoreWalletPoints($locked);
+            return $locked;
+        });
+        if (!$closed) {
+            return false;
+        }
+        // Outside the transaction, like the interactive cancel: the stock restore is idempotent
+        // (orders.inventory_restored) and the coupon release floors at 0.
+        event(new OrderCancelled($closed));
+        if (!empty($closed->coupon_id)) {
+            app(\Marvel\Database\Repositories\CouponRepository::class)->release((int) $closed->coupon_id, (int) $closed->id);
+        }
+        return true;
+    }
+
+    /**
+     * Give back the wallet points an unpaid attempt took at creation (manageWalletAmount). An
+     * attempt only ever holds the partial-wallet debit, which takes the wallet's whole balance and
+     * records it in rupees rounded to 2 dp; round() turns that back into exactly those points
+     * (₹33.33 × 3 → 100) where the debit's intval would lose one. Deleting the record makes a
+     * second call a no-op.
+     */
+    private function restoreWalletPoints(Order $order): void
+    {
+        $held = OrderWalletPoint::where('order_id', $order->id)->lockForUpdate()->first();
+        if (!$held) {
+            return;
+        }
+        $wallet = $order->customer_id
+            ? Wallet::where('customer_id', $order->customer_id)->lockForUpdate()->first()
+            : null;
+        if ($wallet) {
+            $points = (int) round((float) $held->amount * $this->currencyToWalletRatio());
+            $wallet->available_points += $points;
+            $wallet->points_used = max(0, $wallet->points_used - $points);
+            $wallet->save();
+        }
+        $held->delete();
+    }
+
+    /**
+     * The payment-failed prompt's "Yes": turn an unpaid online-payment attempt into a Cash on
+     * Delivery order and place it. Mirrors a COD checkout — gateway, statuses, and invoice numbers
+     * (a model save() fires the stamping hook, on the parent and each child) — and keeps everything
+     * the attempt already holds: stock, coupon, wallet points (cash at the door is paid_total −
+     * wallet, as for any COD order) and the payment intents, which the webhook needs to recognise a
+     * capture that lands on it later.
+     *
+     * @return string 'placed' (now or already) | 'closed' (cancelled, refunded or paid: nothing to switch)
+     */
+    public function switchToCashOnDelivery(Order $order): string
+    {
+        $this->assertNotUnderMaintenance(request());
+        $this->assertCodAllowed(['payment_gateway' => PaymentGatewayType::CASH_ON_DELIVERY]);
+
+        return DB::transaction(function () use ($order) {
+            $locked = Order::whereKey($order->id)->lockForUpdate()->first();
+            if (!$locked) {
+                return 'closed';
+            }
+            if ($locked->placed_at) {
+                return 'placed';
+            }
+            if ($locked->payment_status === PaymentStatus::SUCCESS
+                || in_array($locked->order_status, [OrderStatus::CANCELLED, OrderStatus::REFUNDED, OrderStatus::COMPLETED, OrderStatus::FAILED], true)) {
+                return 'closed';
+            }
+            foreach ([$locked, ...Order::where('parent_id', $locked->id)->get()] as $row) {
+                $row->altered_payment_gateway = $row->payment_gateway;
+                $row->payment_gateway = PaymentGatewayType::CASH_ON_DELIVERY;
+                $row->payment_status = PaymentStatus::CASH_ON_DELIVERY;
+                $row->order_status = OrderStatus::PROCESSING;
+                $row->save();
+            }
+            $this->placeOrder($locked);
+            return 'placed';
+        });
     }
 
     /** Customer coordinates from the order's shipping_address.location (if shared). */

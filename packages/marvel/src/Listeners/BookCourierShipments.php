@@ -13,12 +13,12 @@ use RuntimeException;
 use Throwable;
 
 /**
- * Auto-book courier shipments once an order is confirmed AND payable. Registered on BOTH
- * OrderProcessed (COD + full-wallet — confirmed at creation) and PaymentSuccess (prepaid —
- * confirmed only after the PSP settles). This split matters: a PREPAID order's OrderProcessed
- * fires while payment_status is still PENDING, so booking there would dispatch couriers for
- * orders that may never be paid (the stale-unpaid sweep would then cancel them). So we book
- * only when the order is COD or payment-success.
+ * Auto-book courier shipments once an order is placed AND payable. Registered on OrderCreated,
+ * which fires once when the order is placed (at creation for COD/cash/wallet/staff orders, on
+ * payment success for an online checkout, or when a failed payment is switched to Cash on
+ * Delivery), and on PaymentSuccess for an order that was placed before it was paid. The payable
+ * guard below still matters: a staff order on an online gateway is placed while its payment is
+ * pending, and must not dispatch couriers for money that may never arrive.
  *
  * ShouldQueue + the redis connection's after_commit ⇒ this runs OFF the checkout request,
  * AFTER the order transaction commits: a slow or failing shipping service can never block or

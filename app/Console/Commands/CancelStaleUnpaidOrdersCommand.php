@@ -3,14 +3,12 @@
 namespace App\Console\Commands;
 
 use Illuminate\Console\Command;
-use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use Marvel\Database\Models\Order;
-use Marvel\Database\Repositories\CouponRepository;
+use Marvel\Database\Repositories\OrderRepository;
 use Marvel\Enums\OrderStatus;
 use Marvel\Enums\PaymentGatewayType;
 use Marvel\Enums\PaymentStatus;
-use Marvel\Events\OrderCancelled;
 
 /**
  * Cancel stale unpaid PREPAID orders so their stock and coupon slots return.
@@ -19,10 +17,12 @@ use Marvel\Events\OrderCancelled;
  * transaction. When the customer abandons payment (or the gateway webhook only
  * reports `payment.failed`, which deliberately keeps the order payable for a
  * retry), nothing ever times the order out — the stock and the coupon slot
- * leak forever. This sweep closes that loop through the EXISTING cancel
- * machinery: OrderCancelled ⇒ ProductInventoryRestore (idempotent via
- * orders.inventory_restored, parent+children aware) and CouponRepository::release
- * (floors at 0, keyed on the usage ledger).
+ * leak forever. This sweep closes that loop with OrderRepository::closeUnpaidOrder,
+ * the same close as the customer's "No" on the payment-failed prompt:
+ * OrderCancelled ⇒ ProductInventoryRestore (idempotent via orders.inventory_restored,
+ * parent+children aware), CouponRepository::release (floors at 0, keyed on the usage
+ * ledger) and the wallet points the attempt took. A never-placed attempt is closed
+ * silently — nobody was told it existed.
  *
  * COD/CASH orders are exempt (payment happens at the door), and so are
  * full-wallet orders (paid instantly at creation).
@@ -44,11 +44,12 @@ class CancelStaleUnpaidOrdersCommand extends Command
 
         $stale = Order::whereNull('parent_id')
             ->where('created_at', '<', now()->subHours($hours))
-            // Only cancel orders still strictly PENDING. PROCESSING ('attempted' at
-            // Razorpay) may still settle and is reconciled by
-            // plantathome:reconcile-razorpay-pending — cancelling it could void a
+            // Strictly PENDING, plus a never-placed attempt the webhook marked FAILED (it kept its
+            // stock, coupon and wallet points forever before). PROCESSING may still settle and is
+            // reconciled by plantathome:reconcile-razorpay-pending — cancelling it could void a
             // payment that captures moments later.
-            ->where('payment_status', PaymentStatus::PENDING)
+            ->where(fn ($q) => $q->where('payment_status', PaymentStatus::PENDING)
+                ->orWhere(fn ($f) => $f->where('payment_status', PaymentStatus::FAILED)->whereNull('placed_at')))
             ->whereIn('order_status', [OrderStatus::PENDING, OrderStatus::PROCESSING])
             // COD is stored as any of CASH_ON_DELIVERY/COD/CASH depending on the
             // client (see PaymentGatewayType::isCashOnDelivery) — exclude all
@@ -69,36 +70,18 @@ class CancelStaleUnpaidOrdersCommand extends Command
         }
 
         $cancelled = 0;
+        $repository = app(OrderRepository::class);
         foreach ($stale as $order) {
             if ($dryRun) {
                 $this->line("would cancel: #{$order->tracking_number} ({$order->payment_gateway}, created {$order->created_at})");
                 continue;
             }
             try {
-                DB::transaction(function () use ($order) {
-                    $prev = $order->order_status;
-                    $order->order_status = OrderStatus::CANCELLED;
-                    $order->payment_status = PaymentStatus::FAILED;
-                    $order->save();
-                    // Direct save bypasses the guarded seam — invoke the accounting hook explicitly
-                    // (an unpaid order has no capture, so this is a no-op; kept for one consistent path).
-                    \Marvel\Services\Accounting\AccountingPostingService::onOrderStatusChanged($order, $prev, OrderStatus::CANCELLED, 'system:stale-cancel');
-                    // Children mirror the parent so vendor views stay consistent.
-                    Order::where('parent_id', $order->id)
-                        ->whereNotIn('order_status', [OrderStatus::CANCELLED, OrderStatus::REFUNDED])
-                        ->update([
-                            'order_status'   => OrderStatus::CANCELLED,
-                            'payment_status' => PaymentStatus::FAILED,
-                        ]);
-                });
-                // Outside the txn like the interactive cancel path: the restore
-                // listener is idempotent (orders.inventory_restored) and the
-                // coupon release floors at 0 — replays are safe.
-                event(new OrderCancelled($order));
-                if (!empty($order->coupon_id)) {
-                    app(CouponRepository::class)->release((int) $order->coupon_id, (int) $order->id);
+                // The same close as the customer's "No" on the payment-failed prompt: cancels the
+                // parent and children and gives back stock, the coupon slot and wallet points.
+                if ($repository->closeUnpaidOrder($order, 'system:stale-cancel')) {
+                    $cancelled++;
                 }
-                $cancelled++;
             } catch (\Throwable $e) {
                 Log::warning('stale-unpaid sweep: cancel failed', [
                     'order_id' => $order->id,

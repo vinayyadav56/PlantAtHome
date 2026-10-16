@@ -491,6 +491,13 @@ Route::post('/email/verification-notification', [UserController::class, 'sendVer
 // Payment submission keyed by a guessable tracking_number — throttle to stop
 // enumeration/replay storms against the live payment processor.
 Route::post('orders/payment', [OrderController::class, 'submitPayment'])->middleware('throttle:20,1');
+// The payment-failed prompt (owner rule, 2026-10-16): "Yes" places the unpaid online checkout as
+// Cash on Delivery, "No" closes it and gives back its stock, coupon and wallet points. Public like
+// the routes above; the per-order token from POST /orders is the credential.
+Route::post('orders/{tracking_number}/cash-on-delivery', [OrderController::class, 'cashOnDelivery'])
+    ->middleware(['service.available:orders', 'throttle:10,1']);
+Route::post('orders/{tracking_number}/abandon-payment', [OrderController::class, 'abandonPayment'])
+    ->middleware('throttle:10,1');
 // ⚠️ These call a PAID LLM. Unauthenticated they are an open, unmetered spend
 // tap on our OpenAI account (which has already hit its billing hard limit once).
 // Both are only ever called from the admin product form via the authed

@@ -88,16 +88,17 @@ class EventServiceProvider extends ServiceProvider
         ],
         OrderCreated::class => [
             SendOrderCreationNotification::class,
-            StoredOrderNotifyLogsListener::class
+            StoredOrderNotifyLogsListener::class,
+            // OrderCreated fires once, when the order is PLACED (placeOrder): at creation for
+            // COD/cash/wallet/staff orders, on payment success for an online checkout, or when a
+            // failed payment is switched to Cash on Delivery — which fires no OrderProcessed.
+            BookCourierShipments::class,
         ],
         OrderReceived::class => [
             SendOrderReceivedNotification::class
         ],
         OrderProcessed::class => [
             ProductInventoryDecrement::class,
-            // COD + full-wallet orders are confirmed at creation ⇒ auto-book here. Prepaid
-            // orders are still payment-PENDING at this point; they book on PaymentSuccess.
-            BookCourierShipments::class,
         ],
         OrderCancelled::class => [
             ProductInventoryRestore::class,
@@ -115,7 +116,8 @@ class EventServiceProvider extends ServiceProvider
         ],
         PaymentSuccess::class => [
             SendPaymentSuccessNotification::class,
-            // Prepaid orders become fulfilable only once payment settles ⇒ auto-book here.
+            // An order placed before it was paid (a staff order on an online gateway, or one placed
+            // before 2026-10-16) gets no second OrderCreated, so it books here. Idempotent per leg.
             BookCourierShipments::class,
         ],
         PaymentFailed::class => [

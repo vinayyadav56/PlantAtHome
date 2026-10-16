@@ -42,6 +42,7 @@ final class StaleUnpaidSweepTest extends TestCase
         DB::purge('sqlite');
 
         Schema::create('orders', function (Blueprint $t) {
+            $t->timestamp('placed_at')->nullable()->useCurrent(); // a placed order unless a test says otherwise
             $t->bigIncrements('id');
             $t->string('tracking_number')->unique();
             $t->unsignedBigInteger('customer_id')->nullable();
@@ -104,6 +105,28 @@ final class StaleUnpaidSweepTest extends TestCase
             $t->timestamps();
             $t->unique(['coupon_id', 'order_id']);
         });
+        // The wallet points an attempt took at creation, given back when it is closed.
+        Schema::create('order_wallet_points', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('order_id');
+            $t->decimal('amount', 10, 2)->default(0);
+            $t->timestamps();
+        });
+        Schema::create('wallets', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('customer_id');
+            $t->integer('total_points')->default(0);
+            $t->integer('points_used')->default(0);
+            $t->integer('available_points')->default(0);
+            $t->timestamps();
+        });
+        Schema::create('settings', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->text('options')->nullable();
+            $t->string('language')->default('en');
+            $t->timestamps();
+        });
+        DB::table('settings')->insert(['options' => json_encode(['currencyToWalletRatio' => 3]), 'language' => 'en']); // production's ratio
     }
 
     private function makeOrder(array $attrs = []): Order
@@ -176,5 +199,37 @@ final class StaleUnpaidSweepTest extends TestCase
 
         // Second run finds nothing (status now cancelled) — event fired once.
         Event::assertDispatched(OrderCancelled::class, 1);
+    }
+
+    public function test_a_never_placed_attempt_the_webhook_failed_is_swept_and_its_wallet_points_return(): void
+    {
+        // The webhook marks a failed payment payment-failed (not pending), and the sweep used to look
+        // only at pending — so such an attempt held its stock, coupon and wallet points forever.
+        Event::fake([OrderCancelled::class]);
+        $attempt = $this->makeOrder(['payment_status' => 'payment-failed', 'placed_at' => null, 'customer_id' => 7]);
+        // The partial-wallet debit took the whole balance: 100 points, recorded as ₹33.33 at 3 per rupee.
+        DB::table('order_wallet_points')->insert(['order_id' => $attempt->id, 'amount' => 33.33]);
+        DB::table('wallets')->insert(['customer_id' => 7, 'total_points' => 100, 'points_used' => 100, 'available_points' => 0]);
+
+        $this->artisan('orders:cancel-stale-unpaid')->assertSuccessful();
+        $this->artisan('orders:cancel-stale-unpaid')->assertSuccessful();
+
+        $this->assertSame('order-cancelled', $attempt->fresh()->order_status);
+        Event::assertDispatched(OrderCancelled::class, 1);
+        $wallet = DB::table('wallets')->where('customer_id', 7)->first();
+        $this->assertSame(100, (int) $wallet->available_points, 'exactly the 100 points it took — intval would give 99');
+        $this->assertSame(0, (int) $wallet->points_used);
+        $this->assertSame(0, DB::table('order_wallet_points')->count());
+    }
+
+    public function test_a_placed_order_marked_failed_is_left_alone(): void
+    {
+        // Announced at creation (every order before 2026-10-16): a failed payment status on its own
+        // is not the sweep's to close — only a pending one, as before.
+        $placed = $this->makeOrder(['payment_status' => 'payment-failed']);
+
+        $this->artisan('orders:cancel-stale-unpaid')->assertSuccessful();
+
+        $this->assertSame('order-pending', $placed->fresh()->order_status);
     }
 }

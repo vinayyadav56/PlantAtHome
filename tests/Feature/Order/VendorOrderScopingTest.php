@@ -41,6 +41,7 @@ final class VendorOrderScopingTest extends TestCase
         DB::purge('sqlite');
 
         Schema::create('orders', function (Blueprint $t) {
+            $t->timestamp('placed_at')->nullable()->useCurrent(); // a placed order unless a test says otherwise
             $t->bigIncrements('id');
             $t->string('tracking_number')->nullable();
             $t->unsignedBigInteger('parent_id')->nullable();
@@ -64,6 +65,31 @@ final class VendorOrderScopingTest extends TestCase
             $t->bigIncrements('id');
             $t->unsignedBigInteger('order_id');
             $t->unsignedBigInteger('product_id');
+            // The pivot columns the Order model's products relation reads (index() eager-loads it).
+            $t->unsignedBigInteger('variation_option_id')->nullable();
+            $t->integer('order_quantity')->nullable();
+            $t->string('unit_price')->nullable();
+            $t->string('subtotal')->nullable();
+            $t->timestamps();
+        });
+        // index() also eager-loads customers and products, and has_rto filters on shipments.
+        Schema::create('users', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->string('name')->nullable();
+            $t->string('email')->nullable();
+            $t->timestamps();
+        });
+        Schema::create('products', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->string('name')->nullable();
+            $t->timestamps();
+            $t->timestamp('deleted_at')->nullable();
+        });
+        Schema::create('shipments', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('order_id');
+            $t->string('status')->nullable();
+            $t->timestamps();
         });
 
         // OrderController's constructor reads Settings::first().
@@ -133,5 +159,69 @@ final class VendorOrderScopingTest extends TestCase
             ->pluck('id')->map(fn ($i) => (int) $i)->all();
 
         $this->assertSame([], $ids, 'shop 99 supplies nothing in this order');
+    }
+
+    /** The ids index() lists — what the admin, vendor and customer screens actually show. */
+    private function listed(Request $request): array
+    {
+        return app(OrderController::class)->index($request)->getCollection()
+            ->pluck('id')->map(fn ($i) => (int) $i)->all();
+    }
+
+    private function customerRequest(int $customerId, array $params = []): Request
+    {
+        $request = new Request($params);
+        $request->setUserResolver(fn () => new class ($customerId) {
+            public function __construct(public int $id)
+            {
+            }
+
+            public function hasPermissionTo($permission): bool
+            {
+                return false;
+            }
+        });
+        return $request;
+    }
+
+    /** An online checkout nobody has paid for yet: parent 4 (customer 9) and its vendor-33 child 5. */
+    private function unpaidAttempt(): void
+    {
+        $row = ['shop_id' => 12, 'customer_id' => 9, 'placed_at' => null, 'payment_gateway' => 'RAZORPAY',
+                'payment_status' => 'payment-pending', 'order_status' => 'order-pending', 'created_at' => now(), 'updated_at' => now()];
+        DB::table('orders')->insert([
+            ['id' => 4, 'tracking_number' => 'T4', 'parent_id' => null] + $row,
+            ['id' => 5, 'tracking_number' => 'T5', 'parent_id' => 4] + $row,
+        ]);
+        DB::table('order_items')->insert(['order_id' => 4, 'product_id' => 100, 'assigned_shop_id' => 33, 'created_at' => now(), 'updated_at' => now()]);
+        DB::table('order_product')->insert(['order_id' => 5, 'product_id' => 100]);
+    }
+
+    public function test_an_unpaid_online_checkout_is_in_no_list(): void
+    {
+        // Owner rule (2026-10-16): it is only a payment attempt until it is paid or switched to COD.
+        $this->unpaidAttempt();
+        DB::table('orders')->where('id', 3)->update(['customer_id' => 9]);
+
+        $this->assertEqualsCanonicalizing([1, 3], $this->listed($this->adminRequest()), 'admin: placed orders only');
+        $this->assertSame([2], $this->listed($this->adminRequest(['shop_id' => 33])), 'vendor 33: not the unpaid child');
+        $this->assertSame([3], $this->listed($this->customerRequest(9)), 'the customer: only what they actually ordered');
+    }
+
+    public function test_the_admin_can_still_see_the_attempts_awaiting_payment(): void
+    {
+        $this->unpaidAttempt();
+
+        $this->assertSame([4], $this->listed($this->adminRequest(['awaiting_payment' => 1])));
+        // Only a super admin gets that view; a customer asking for it still sees placed orders only.
+        $this->assertSame([], $this->listed($this->customerRequest(9, ['awaiting_payment' => 1])));
+    }
+
+    public function test_the_rto_filter_works(): void
+    {
+        // fetchOrders() returns a query builder, which has no scopeQuery — the filter used to throw.
+        DB::table('shipments')->insert(['order_id' => 3, 'status' => 'rto', 'created_at' => now(), 'updated_at' => now()]);
+
+        $this->assertSame([3], $this->listed($this->adminRequest(['has_rto' => 1])));
     }
 }

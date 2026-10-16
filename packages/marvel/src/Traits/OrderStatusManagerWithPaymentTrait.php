@@ -8,6 +8,8 @@ use Marvel\Database\Models\Order;
 use Marvel\Enums\OrderStatus;
 use Marvel\Enums\PaymentStatus;
 use Marvel\Events\OrderCancelled;
+use Marvel\Events\OrderCreated;
+use Marvel\Events\OrderReceived;
 use Marvel\Events\OrderDelivered;
 use Marvel\Events\OrderStatusChanged;
 use Marvel\Events\PaymentFailed;
@@ -152,6 +154,9 @@ trait OrderStatusManagerWithPaymentTrait
 
         switch ($payment_status) {
             case PaymentStatus::SUCCESS:
+                // A paid online checkout becomes a placed order here — the one hook the browser
+                // confirm, the webhook and reconcile all go through. No-op when already placed.
+                $this->placeOrder($order);
                 event(new PaymentSuccess($order));
                 break;
             case PaymentStatus::FAILED:
@@ -175,6 +180,37 @@ trait OrderStatusManagerWithPaymentTrait
                 break;
         }
         $this->fireEventOnOrderStatus($order, $order_status);
+    }
+
+    /**
+     * Place an order: the ONE moment it is announced ("Order placed" to the customer, the owner and
+     * vendors — OrderCreated, OrderReceived per child, which also books couriers) and starts showing
+     * in the order lists. COD, cash, wallet and staff-created orders are placed when they are
+     * created; an online-payment checkout only once its payment succeeds or the customer switches it
+     * to Cash on Delivery (owner rule, 2026-10-16). Exactly once: whoever stamps placed_at first
+     * announces and gets true, so the confirm call, the webhook, reconcile and the COD switch can race.
+     */
+    public function placeOrder(Order $order, ?array $invoiceData = null, $customer = null): bool
+    {
+        $now = now();
+        if (Order::whereKey($order->id)->whereNull('placed_at')->update(['placed_at' => $now]) !== 1) {
+            return false;
+        }
+        Order::where('parent_id', $order->id)->update(['placed_at' => $now]);
+        $order->forceFill(['placed_at' => $now])->syncOriginalAttribute('placed_at');
+        // After commit: an order announced inside a transaction that then rolls back would have
+        // told the customer about an order that does not exist. Runs at once outside a transaction.
+        DB::afterCommit(function () use ($order, $invoiceData, $customer) {
+            event(new OrderCreated(
+                $order,
+                $invoiceData ?? app(\Marvel\Database\Repositories\OrderRepository::class)->createInvoiceDataForEmail(request(), $order),
+                $customer ?? $order->customer,
+            ));
+            foreach (Order::where('parent_id', $order->id)->get() as $child) {
+                event(new OrderReceived($child));
+            }
+        });
+        return true;
     }
 
     /**

@@ -40,6 +40,7 @@ final class OrderStatusTransitionTest extends TestCase
         DB::purge('sqlite');
 
         Schema::create('orders', function (Blueprint $t) {
+            $t->timestamp('placed_at')->nullable()->useCurrent(); // a placed order unless a test says otherwise
             $t->bigIncrements('id');
             $t->string('tracking_number')->unique();
             $t->unsignedBigInteger('customer_id')->nullable();
@@ -124,6 +125,20 @@ final class OrderStatusTransitionTest extends TestCase
             $this->assertStringContainsString($to, $e->getMessage());
         }
         $this->assertSame($from, $order->fresh()->order_status, 'a rejected transition must not persist');
+    }
+
+    public function test_an_unpaid_online_checkout_cannot_be_moved_into_fulfilment(): void
+    {
+        // Not an order until it is paid or switched to COD (owner rule, 2026-10-16); closing it is
+        // the customer's "No" or the stale sweep, which give back stock, coupon and wallet points.
+        $attempt = $this->makeOrder(OrderStatus::PENDING, ['placed_at' => null]);
+        try {
+            (new StateMachine())->changeOrderStatus($attempt, OrderStatus::PROCESSING);
+            $this->fail('an unpaid checkout must not advance');
+        } catch (HttpException $e) {
+            $this->assertSame(422, $e->getStatusCode());
+        }
+        $this->assertSame(OrderStatus::PENDING, $attempt->fresh()->order_status);
     }
 
     public function test_one_step_advance_is_allowed(): void

@@ -24,6 +24,11 @@ class SendOrderCancelledNotification implements ShouldQueue
      */
     public function handle(OrderCancelled $event)
     {
+        // Never placed (an online-payment attempt that was not paid): nobody was told this order
+        // exists, so it gets no lifecycle messages either.
+        if (!$event->order->placed_at) {
+            return;
+        }
         $emailReceiver = $this->getWhichUserWillGetEmail(EventType::ORDER_CANCELLED, $event->order->language);
         if ($emailReceiver['customer'] && $event->order->customer && $event->order->parent_id == null) {
             app(\Marvel\Services\EmailService::class)->send(

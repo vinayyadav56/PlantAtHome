@@ -262,6 +262,7 @@ class AnalyticsController extends CoreController
                 $query =  DB::table('orders as A')
                     ->where('A.parent_id', '=', null)
                     ->whereDate('A.created_at', '>', Carbon::now()->subDays($days))
+                    ->whereNotNull('A.placed_at') // an unpaid online checkout is not an order
                     ->select(
                         'A.order_status',
                         DB::raw('count(*) as order_count')
@@ -275,6 +276,7 @@ class AnalyticsController extends CoreController
                 $query =  DB::table('orders as A')
                     ->where('A.parent_id', '!=', null)
                     ->whereDate('A.created_at', '>', Carbon::now()->subDays($days))
+                    ->whereNotNull('A.placed_at') // an unpaid online checkout is not an order
                     ->whereIn('A.shop_id', $shops)
                     ->select(
                         'A.order_status',
@@ -289,6 +291,7 @@ class AnalyticsController extends CoreController
                 $query =  DB::table('orders as A')
                     ->where('A.parent_id', '!=', null)
                     ->whereDate('A.created_at', '>', Carbon::now()->subDays($days))
+                    ->whereNotNull('A.placed_at') // an unpaid online checkout is not an order
                     ->where('A.shop_id', '=', $shop)
                     ->select(
                         'A.order_status',
@@ -801,6 +804,7 @@ class AnalyticsController extends CoreController
         $limit = (int) ($request->limit ?? 20);
         $base = DB::table('orders')
             ->whereNotNull('parent_id')
+            ->whereNotNull('placed_at') // an unpaid online checkout is not waiting on anyone
             ->whereIn('order_status', [OrderStatus::PENDING, OrderStatus::PROCESSING])
             ->where(fn ($w) => $w->whereNull('vendor_shop_id')->orWhere('assignment_status', 'unassigned'));
 

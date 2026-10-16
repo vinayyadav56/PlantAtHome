@@ -22,6 +22,11 @@ class SendPaymentFailedNotification implements ShouldQueue
      */
     public function handle(PaymentFailed $event)
     {
+        // Never placed (an online-payment attempt that was not paid): nobody was told this order
+        // exists, so it gets no lifecycle messages either.
+        if (!$event->order->placed_at) {
+            return;
+        }
         $emailReceiver = $this->getWhichUserWillGetEmail(EventType::ORDER_PAYMENT_FAILED, $event->order->language ?? DEFAULT_LANGUAGE);
         if ($emailReceiver['vendor']) {
             foreach ($event->order->children as $key => $child_order) {

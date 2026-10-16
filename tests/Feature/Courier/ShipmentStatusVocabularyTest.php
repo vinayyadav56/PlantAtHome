@@ -79,6 +79,7 @@ final class ShipmentStatusVocabularyTest extends TestCase
         // resolving $shipment->order to null keeps the customer-order advance (a separate seam,
         // covered by ShipmentReconcileTest) out of these assertions.
         Schema::create('orders', function (Blueprint $t) {
+            $t->timestamp('placed_at')->nullable()->useCurrent(); // a placed order unless a test says otherwise
             $t->bigIncrements('id');
             $t->string('order_status')->default('order-processing');
             $t->timestamps();

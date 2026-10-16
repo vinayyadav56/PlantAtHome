@@ -50,6 +50,7 @@ abstract class TrackingTestCase extends TestCase
             $t->timestamps();
         });
         Schema::create('orders', function ($t) {
+            $t->timestamp('placed_at')->nullable()->useCurrent(); // a placed order unless a test says otherwise
             $t->id();
             $t->unsignedBigInteger('parent_id')->nullable();
             $t->unsignedBigInteger('customer_id')->nullable();

@@ -56,7 +56,14 @@ class ReconcileRazorpayPendingCommand extends Command
 
         $q = Order::whereNull('parent_id')
             ->where('payment_gateway', PaymentGatewayType::RAZORPAY)
-            ->whereIn('payment_status', [PaymentStatus::PENDING, PaymentStatus::PROCESSING])
+            ->where(fn ($w) => $w->whereIn('payment_status', [PaymentStatus::PENDING, PaymentStatus::PROCESSING])
+                // A never-placed attempt the webhook marked FAILED can still be paid by a retry in
+                // the same payment window (Razorpay reports per attempt). If that retry's confirm
+                // got lost, this is the only thing that places it before the stale sweep closes it.
+                ->orWhere(fn ($f) => $f->where('payment_status', PaymentStatus::FAILED)
+                    ->whereNull('placed_at')
+                    ->where('order_status', '!=', \Marvel\Enums\OrderStatus::CANCELLED)
+                    ->where('created_at', '>=', now()->subHours(48))))
             ->orderByDesc('id');
         if ($this->option('order')) {
             $q->where('tracking_number', $this->option('order'));

@@ -23,6 +23,7 @@ abstract class OrdersTestCase extends AccountingTestCase
         Schema::create('products', function ($t) { $t->id(); $t->string('name')->nullable(); $t->unsignedBigInteger('shop_id')->nullable(); $t->softDeletes(); $t->timestamps(); }); // Product soft-deletes: the eager-load filters deleted_at
         Schema::create('balances', function ($t) { $t->id(); $t->unsignedBigInteger('shop_id'); $t->double('admin_commission_rate')->nullable(); $t->double('total_earnings')->default(0); $t->double('withdrawn_amount')->default(0); $t->double('current_balance')->default(0); });
         Schema::create('orders', function ($t) {
+            $t->timestamp('placed_at')->nullable()->useCurrent(); // a placed order unless a test says otherwise
             $t->id(); $t->unsignedBigInteger('parent_id')->nullable(); $t->string('tracking_number')->nullable(); $t->unsignedBigInteger('customer_id')->nullable(); $t->unsignedBigInteger('shop_id')->nullable();
             $t->string('order_status')->nullable(); $t->string('payment_status')->nullable(); $t->string('payment_gateway')->nullable(); $t->unsignedBigInteger('coupon_id')->nullable();
             $t->double('amount')->nullable(); $t->double('sales_tax')->nullable(); $t->double('delivery_fee')->nullable(); $t->double('discount')->nullable(); $t->double('total')->nullable(); $t->double('paid_total')->nullable();

@@ -543,7 +543,8 @@ class MetricsService
 
     private function orders()
     {
-        return DB::table('orders')->whereNull('deleted_at');
+        // Placed orders only: an unpaid online-payment checkout is not an order (2026-10-16).
+        return DB::table('orders')->whereNull('deleted_at')->whereNotNull('placed_at');
     }
 
     /** Customer-facing orders (the parent rows; full paid_total, no double-count). */
