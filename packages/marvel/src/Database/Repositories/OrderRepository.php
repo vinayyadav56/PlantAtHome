@@ -1012,12 +1012,18 @@ class OrderRepository extends BaseRepository
     }
 
     /**
-     * An order staff place for a customer (the admin custom-order flow): it was meant to exist, so it
-     * is placed at creation whatever the gateway. Same caller rule as effectiveCustomerId.
+     * An order staff place FOR a customer (the admin custom-order flow names customer_id): it was
+     * meant to exist, so it is placed at creation whatever the gateway. A super admin buying on the
+     * storefront for themselves is an ordinary customer — their online order waits for payment like
+     * anyone's. Same caller rule as effectiveCustomerId, which storeOrder applies to customer_id first.
      */
     public static function isStaffOrder($request): bool
     {
-        return (bool) $request->user()?->hasPermissionTo(Permission::SUPER_ADMIN);
+        $user = $request->user();
+        return $user
+            && $user->hasPermissionTo(Permission::SUPER_ADMIN)
+            && !empty($request['customer_id'])
+            && (int) $request['customer_id'] !== (int) $user->id;
     }
 
     public static function pivotRows(array $products): array

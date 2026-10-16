@@ -65,4 +65,22 @@ final class AdminOrderPrimitivesTest extends TestCase
         $req = $this->requestAs(null, ['customer_id' => 42]);
         $this->assertNull(OrderRepository::effectiveCustomerId($req));
     }
+
+    public function test_an_order_placed_for_a_customer_is_a_staff_order(): void
+    {
+        // Placed at creation whatever the gateway: ops created it on purpose (2026-10-16).
+        $this->assertTrue(OrderRepository::isStaffOrder($this->requestAs($this->superAdmin(1), ['customer_id' => 42])));
+    }
+
+    public function test_a_super_admin_shopping_for_themselves_waits_for_payment_like_anyone(): void
+    {
+        $this->assertFalse(OrderRepository::isStaffOrder($this->requestAs($this->superAdmin(1), [])));
+        $this->assertFalse(OrderRepository::isStaffOrder($this->requestAs($this->superAdmin(1), ['customer_id' => 1])));
+    }
+
+    public function test_only_a_super_admin_places_staff_orders(): void
+    {
+        $this->assertFalse(OrderRepository::isStaffOrder($this->requestAs($this->staff(7), ['customer_id' => 42])));
+        $this->assertFalse(OrderRepository::isStaffOrder($this->requestAs(null, ['customer_id' => 42])));
+    }
 }
