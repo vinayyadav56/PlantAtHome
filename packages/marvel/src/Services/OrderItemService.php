@@ -601,7 +601,9 @@ class OrderItemService
                 // computes a different key and silently undoes the move. A parcel mixing two
                 // lanes or two doors is also one nobody can actually collect.
                 $targetDoor = $target->pickup_location_id ? (int) $target->pickup_location_id : null;
-                $itemsDoor = self::pickupLocationIdFor($shopId);
+                // A shop whose staff choose the door per parcel has no door of its own for the
+                // lines: they simply join the target parcel, door and all.
+                $itemsDoor = self::requiresPickupChoice($shopId) ? $targetDoor : self::pickupLocationIdFor($shopId);
                 if ((int) $target->shop_id !== $shopId
                     || ($target->fulfillment_mode ?: 'courier') !== $mode
                     || $targetDoor !== $itemsDoor) {
@@ -1850,11 +1852,25 @@ class OrderItemService
             if (!\Illuminate\Support\Facades\Schema::hasTable('vendor_pickup_locations')) {
                 return null;
             }
+            // Staff choose this shop's door for every parcel: no automatic default.
+            if (self::requiresPickupChoice($shopId)) {
+                return null;
+            }
             $id = \Marvel\Database\Models\VendorPickupLocation::where('shop_id', $shopId)
                 ->orderByDesc('is_default')->orderBy('id')->value('id');
             return $id ? (int) $id : null;
         } catch (\Throwable $e) {
             return null;
+        }
+    }
+
+    /** Whether staff choose this shop's pickup door per parcel (Shop::requiresPickupChoice). */
+    private static function requiresPickupChoice(int $shopId): bool
+    {
+        try {
+            return (bool) \Marvel\Database\Models\Shop::find($shopId, ['id', 'settings'])?->requiresPickupChoice();
+        } catch (\Throwable $e) {
+            return false;
         }
     }
 

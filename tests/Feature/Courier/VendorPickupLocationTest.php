@@ -309,6 +309,72 @@ final class VendorPickupLocationTest extends TestCase
         Http::assertSent(fn ($request) => (int) ($request->data()['courier_id'] ?? 0) === 51);
     }
 
+    // ── staff choose the warehouse (owner 2026-10-16) ───────────────────
+
+    public function test_a_staff_choice_vendor_is_never_booked_or_quoted_from_its_default_door(): void
+    {
+        $this->shop(5, ['settings' => json_encode(['pickup_choice' => 'staff'])]);
+        $this->location(5, ['status' => 'verified', 'provider_location_name' => 'shop-5']);
+        $shipment = $this->shipment(5);
+        Http::fake();
+
+        $book = (new CourierService())->book($shipment);
+        $this->assertSame('PICKUP_NOT_CHOSEN', $book['code']);
+        $this->assertStringContainsString('Choose which Vendor 5 location ships this order', $book['error']);
+        $this->assertSame('PICKUP_NOT_CHOSEN', (new CourierService())->quoteShipment($shipment)['code']);
+        Http::assertNothingSent();
+    }
+
+    public function test_staff_choose_the_location_and_the_booking_leaves_from_it(): void
+    {
+        $this->shop(5, ['settings' => json_encode(['pickup_choice' => 'staff'])]);
+        $this->shop(6);
+        $this->location(5, ['status' => 'verified', 'provider_location_name' => 'shop-5']);
+        $mysuru = $this->location(5, ['label' => 'Mysuru', 'city' => 'Mysuru', 'is_default' => false,
+            'status' => 'verified', 'provider_location_name' => 'shop-5-2']);
+        $pending = $this->location(5, ['label' => 'Hubballi', 'city' => 'Hubballi', 'is_default' => false]);
+        $foreign = $this->location(6, ['status' => 'verified', 'provider_location_name' => 'shop-6']);
+        $shipment = $this->shipment(5);
+        $choose = fn (int $door) => app(CourierShipmentController::class)->choosePickupLocation(
+            Request::create("/api/shipments/{$shipment->id}/pickup-location", 'POST', ['pickup_location_id' => $door]),
+            $shipment->id,
+        );
+
+        $this->assertSame(422, $choose($foreign->id)->getStatusCode(), "never another vendor's yard");
+        $this->assertNull($shipment->fresh()->pickup_location_id);
+
+        // An unregistered warehouse can be chosen; booking then names the real blocker.
+        $this->assertSame(200, $choose($pending->id)->getStatusCode());
+        $this->assertSame('PICKUP_NOT_REGISTERED', (new CourierService())->book($shipment->fresh())['code']);
+
+        $this->assertSame(200, $choose($mysuru->id)->getStatusCode());
+        $this->assertSame($mysuru->id, (int) $shipment->fresh()->pickup_location_id);
+        Http::fake(['*/v1/shipments' => Http::response(['partner' => 'shiprocket', 'status' => 'assigned'], 200)]);
+        (new CourierService())->book($shipment->fresh());
+        Http::assertSent(fn ($request) => str_contains($request->url(), '/v1/shipments')
+            && ($request->data()['pickup_location'] ?? null) === 'shop-5-2');
+
+        // Once booked, where it ships from is locked.
+        $shipment->forceFill(['provider_order_id' => 'SR-1', 'status' => 'assigned'])->save();
+        $this->assertSame(409, $choose($pending->id)->getStatusCode());
+    }
+
+    public function test_the_staff_choice_switch_merges_into_the_vendor_settings(): void
+    {
+        $this->shop(5, ['settings' => json_encode(['contact' => '9876543210', 'location' => ['lat' => 12.9, 'lng' => 77.6]])]);
+        $ctl = app(CourierShipmentController::class);
+        $set = fn (bool $staff) => $ctl->setPickupChoice(Request::create('/api/shops/5/pickup-choice', 'POST', ['staff' => $staff]), 5);
+
+        $this->assertSame('staff', $set(true)->getData(true)['pickup_choice']);
+        $settings = json_decode(DB::table('shops')->where('id', 5)->value('settings'), true);
+        $this->assertSame(['contact' => '9876543210', 'location' => ['lat' => 12.9, 'lng' => 77.6], 'pickup_choice' => 'staff'], $settings,
+            'every other vendor setting survives');
+        $this->assertSame('staff', $ctl->pickupLocations(Request::create('/api/shops/5/pickup-locations'), 5)->getData(true)['pickup_choice']);
+
+        $this->assertSame('default', $set(false)->getData(true)['pickup_choice']);
+        $this->assertArrayNotHasKey('pickup_choice', json_decode(DB::table('shops')->where('id', 5)->value('settings'), true));
+    }
+
     // ── pickup resolution ────────────────────────────────────────────────
 
     // ── §67/§68 marketplace: origin recorded, and reused ─────────────────────────────────────

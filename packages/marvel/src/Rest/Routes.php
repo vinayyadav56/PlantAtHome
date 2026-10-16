@@ -1250,6 +1250,9 @@ Route::group(['middleware' => ['permission:' . Permission::SUPER_ADMIN, 'auth:sa
     Route::put('pickup-locations/{id}', [CourierShipmentController::class, 'updatePickupLocation'])->whereNumber('id');
     Route::post('pickup-locations/{id}/register', [CourierShipmentController::class, 'registerPickupLocation'])->whereNumber('id');
     Route::post('pickup-locations/{id}/set-default', [CourierShipmentController::class, 'setDefaultPickupLocation'])->whereNumber('id');
+    // Staff choose which location ships each parcel (PlantAtHome's own warehouses), per shop.
+    Route::post('shops/{id}/pickup-choice', [CourierShipmentController::class, 'setPickupChoice']);
+    Route::post('shipments/{id}/pickup-location', [CourierShipmentController::class, 'choosePickupLocation']);
     // Multi-partner shipping (Shiprocket + Borzo): ranked quotes, mode-routed dispatch, cancel.
     Route::get('shipments/{id}/shipping-quotes', [CourierShipmentController::class, 'quotes']);
     Route::post('shipments/{id}/dispatch', [CourierShipmentController::class, 'dispatchShipment']);

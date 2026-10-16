@@ -155,6 +155,30 @@ final class VendorShipmentGroupingTest extends TestCase
             $t->timestamps();
         });
         // buildRequest loads the vendor shop for the pickup address.
+        // A vendor's pickup doors (warehouses): the grouping key and the staff-choice rule read them.
+        Schema::create('vendor_pickup_locations', function (Blueprint $t) {
+            $t->bigIncrements('id');
+            $t->unsignedBigInteger('shop_id');
+            $t->string('label', 64);
+            $t->string('contact_name', 96)->nullable();
+            $t->string('phone', 24)->nullable();
+            $t->string('address', 255)->nullable();
+            $t->string('address_2', 255)->nullable();
+            $t->string('city', 96)->nullable();
+            $t->string('state', 96)->nullable();
+            $t->string('country', 64)->default('India');
+            $t->string('pincode', 12)->nullable();
+            $t->decimal('lat', 10, 7)->nullable();
+            $t->decimal('lng', 10, 7)->nullable();
+            $t->string('partner', 24)->default('shiprocket');
+            $t->string('provider_location_name', 64)->nullable();
+            $t->string('provider_pickup_code', 64)->nullable();
+            $t->string('status', 16)->default('pending');
+            $t->timestamp('last_synced_at')->nullable();
+            $t->string('last_error', 255)->nullable();
+            $t->boolean('is_default')->default(false);
+            $t->timestamps();
+        });
         Schema::create('shops', function (Blueprint $t) {
             $t->bigIncrements('id');
             $t->string('name')->nullable();
@@ -241,6 +265,63 @@ final class VendorShipmentGroupingTest extends TestCase
     private function service(int $vendorShopId = 7): OrderItemService
     {
         return new OrderItemService(new FakeAssignmentEngine($vendorShopId));
+    }
+
+    /** Two warehouses for a vendor; $staff = staff choose the door per parcel (owner 2026-10-16). */
+    private function doors(int $shopId, bool $staff): array
+    {
+        DB::table('shops')->insert(['id' => $shopId, 'name' => "Vendor {$shopId}",
+            'settings' => json_encode($staff ? ['pickup_choice' => 'staff', 'contact' => '9876543210'] : [])]);
+        $make = fn (string $label, bool $default) => DB::table('vendor_pickup_locations')->insertGetId([
+            'shop_id' => $shopId, 'label' => $label, 'city' => $label, 'state' => 'Karnataka', 'pincode' => '560001',
+            'address' => '12 Garden Road', 'phone' => '9876543210', 'is_default' => $default,
+        ]);
+        return [$make('Bengaluru', true), $make('Mysuru', false)];
+    }
+
+    public function test_a_staff_choice_vendor_parcel_starts_with_no_door_while_others_take_their_default(): void
+    {
+        $this->doors(7, true);
+        [$default8] = $this->doors(8, false);
+        $order = $this->makeOrder();
+        $a = $this->makeItem($order);
+        $b = $this->makeItem($order);
+
+        $this->service(7)->assignItems($order, [['order_item_id' => $a->id, 'shop_id' => 7]]);
+        $this->service(8)->assignItems($order, [['order_item_id' => $b->id, 'shop_id' => 8]]);
+
+        $this->assertNull(Shipment::find($a->fresh()->shipment_id)->pickup_location_id, 'staff choose: no automatic warehouse');
+        $this->assertSame($default8, (int) Shipment::find($b->fresh()->shipment_id)->pickup_location_id, 'any other vendor: its default door, as before');
+    }
+
+    public function test_a_chosen_door_survives_regroup_and_lines_can_join_its_parcel(): void
+    {
+        [, $mysuru] = $this->doors(7, true);
+        $order = $this->makeOrder();
+        $a = $this->makeItem($order);
+        $b = $this->makeItem($order);
+        $svc = $this->service(7);
+        $svc->assignItems($order, [['order_item_id' => $a->id, 'shop_id' => 7], ['order_item_id' => $b->id, 'shop_id' => 7]]);
+        $svc->splitShipment($order, [$b->id]);
+        $parcel = Shipment::find($a->fresh()->shipment_id);
+        $this->assertNotSame($parcel->id, (int) $b->fresh()->shipment_id);
+
+        // Staff choose the Mysuru warehouse for the first parcel (what POST shipments/{id}/pickup-location does).
+        $parcel->forceFill(['pickup_location_id' => $mysuru])->save();
+
+        // A door-less line of the same vendor may join that parcel, and takes its door.
+        $res = $svc->clubItems($order, [$b->id], $parcel->id);
+        $this->assertSame(1, $res['applied'], json_encode($res['rejected']));
+        $this->assertSame($parcel->id, (int) $b->fresh()->shipment_id);
+
+        // Assigning another line (which regroups the order) keeps the chosen warehouse, and the
+        // new line gets a parcel of its own that waits for staff to choose again.
+        $c = $this->makeItem($order);
+        $svc->assignItems($order, [['order_item_id' => $c->id, 'shop_id' => 7]]);
+        $this->assertSame($mysuru, (int) $parcel->fresh()->pickup_location_id);
+        $this->assertSame($parcel->id, (int) $a->fresh()->shipment_id);
+        $this->assertNotSame($parcel->id, (int) $c->fresh()->shipment_id);
+        $this->assertNull(Shipment::find($c->fresh()->shipment_id)->pickup_location_id);
     }
 
     public function test_multi_item_same_vendor_override_creates_one_shipment(): void

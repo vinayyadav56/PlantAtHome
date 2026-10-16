@@ -802,12 +802,64 @@ class CourierShipmentController extends CoreController
     /** GET shops/{id}/pickup-locations */
     public function pickupLocations(Request $request, $id)
     {
-        Shop::findOrFail($id);
+        $shop = Shop::findOrFail($id);
         return response()->json([
-            'ok'        => true,
-            'locations' => VendorPickupLocation::where('shop_id', $id)
+            'ok'            => true,
+            'locations'     => VendorPickupLocation::where('shop_id', $id)
                 ->orderByDesc('is_default')->orderBy('id')->get(),
+            // 'staff' = staff choose the location for every parcel (Shop::requiresPickupChoice).
+            'pickup_choice' => $shop->requiresPickupChoice() ? 'staff' : 'default',
         ]);
+    }
+
+    /**
+     * POST shops/{id}/pickup-choice {staff: bool} — whether staff choose which of this shop's
+     * locations ships each parcel (PlantAtHome's own warehouses) instead of its default door.
+     * Merged into settings key by key: the general shop update replaces the whole object.
+     */
+    public function setPickupChoice(Request $request, $id)
+    {
+        $data = $request->validate(['staff' => ['required', 'boolean']]);
+        $shop = Shop::findOrFail($id);
+        $settings = is_array($shop->settings) ? $shop->settings : [];
+        if ($data['staff']) {
+            $settings['pickup_choice'] = 'staff';
+        } else {
+            unset($settings['pickup_choice']);
+        }
+        $shop->forceFill(['settings' => $settings])->save();
+        \Illuminate\Support\Facades\Log::info('shop.pickup_choice', [
+            'shop_id' => $shop->id, 'staff' => (bool) $data['staff'], 'by' => optional($request->user())->id,
+        ]);
+
+        return response()->json(['ok' => true, 'pickup_choice' => $shop->requiresPickupChoice() ? 'staff' : 'default']);
+    }
+
+    /**
+     * POST shipments/{id}/pickup-location {pickup_location_id} — the location (door) this parcel
+     * ships from. Any of the shipment's own vendor's locations; booking still refuses one the
+     * courier never accepted (pickupBlocker). Locked once booked.
+     */
+    public function choosePickupLocation(Request $request, $id)
+    {
+        $data = $request->validate(['pickup_location_id' => ['required', 'integer']]);
+        $shipment = $this->shipment($id);
+        if ($shipment->isLiveBooked()) {
+            return $this->conflict('This shipment is already booked — cancel the booking before changing where it ships from.');
+        }
+        $door = VendorPickupLocation::where('shop_id', $shipment->shop_id)->find($data['pickup_location_id']);
+        if (!$door) {
+            return response()->json(['ok' => false, 'error' => "That location does not belong to this shipment's vendor."], 422);
+        }
+        $shipment->forceFill(['pickup_location_id' => $door->id])->save();
+        \Marvel\Database\Models\OrderEvent::record($shipment->order_id, 'shipment.pickup_chosen', [
+            'shipment_id'        => $shipment->id,
+            'pickup_location_id' => $door->id,
+            'label'              => $door->label,
+            'city'               => $door->city,
+        ]);
+
+        return response()->json(['ok' => true, 'shipment' => $shipment->fresh(), 'location' => $door]);
     }
 
     /** POST shops/{id}/pickup-locations — add a door. Registering it is a separate, explicit step. */

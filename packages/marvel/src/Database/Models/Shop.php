@@ -80,6 +80,18 @@ class Shop extends Model
      * shop; vendor shops are pure suppliers (inventory + service areas only).
      * Find-or-create keeps fresh installs working; cached for the life of the process.
      */
+    /**
+     * Staff choose which of this shop's pickup locations (its warehouses) ships each shipment —
+     * settings.pickup_choice = 'staff' (owner 2026-10-16, PlantAtHome's own warehouses). Such a
+     * shop's shipments are created without a door and cannot be booked or quoted until one is
+     * chosen. Absent: the default door, as for every vendor today.
+     */
+    public function requiresPickupChoice(): bool
+    {
+        $settings = is_array($this->settings) ? $this->settings : [];
+        return ($settings['pickup_choice'] ?? null) === 'staff';
+    }
+
     public static function masterId(): int
     {
         if (static::$masterIdCache !== null) {

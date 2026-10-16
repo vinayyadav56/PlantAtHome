@@ -295,6 +295,10 @@ class CourierService
         if (($shipment->provider_order_id || $shipment->awb_number) && $shipment->status !== 'cancelled') {
             return ['ok' => false, 'error' => 'This vendor shipment is already booked — cancel the existing booking first to rebook.'];
         }
+        // Staff choose this vendor's warehouse per parcel: never fall back to its default door.
+        if ($err = $this->pickupChoiceBlocker($shipment)) {
+            return ['ok' => false, 'code' => 'PICKUP_NOT_CHOSEN', 'error' => $err];
+        }
         // An assignment is a SNAPSHOT, and this is the last moment it can be checked before a
         // real courier is sent to a real address. A vendor can soft-delete the inventory row,
         // zero the stock, lose review approval or drop the service area between checkout and
@@ -422,6 +426,23 @@ class CourierService
             }
         }
         return $rows->first(); // is_default first, then oldest
+    }
+
+    /**
+     * Why this parcel cannot go to a courier yet because no warehouse was chosen for it, or null.
+     * Only for a shop whose staff choose the door per parcel (Shop::requiresPickupChoice): its
+     * parcel must carry a door of its own — pickupLocationFor() would otherwise answer with the
+     * default door, which is exactly the automatic choice the owner ruled out.
+     */
+    public function pickupChoiceBlocker(Shipment $shipment): ?string
+    {
+        $shop = $shipment->shop;
+        if (!$shop || !$shop->requiresPickupChoice()) {
+            return null;
+        }
+        $chosen = $shipment->pickup_location_id
+            && VendorPickupLocation::where('shop_id', $shipment->shop_id)->whereKey($shipment->pickup_location_id)->exists();
+        return $chosen ? null : sprintf('Choose which %s location ships this order first.', $shop->name ?: 'vendor');
     }
 
     /**
@@ -632,6 +653,10 @@ class CourierService
      */
     public function quoteShipment(Shipment $shipment, ?bool $cod = null, ?string $mode = null): array
     {
+        // A quote from the wrong warehouse is worse than none: choose the door first.
+        if ($err = $this->pickupChoiceBlocker($shipment)) {
+            return ['ok' => false, 'code' => 'PICKUP_NOT_CHOSEN', 'error' => $err, 'quotes' => [], 'cheapest' => null];
+        }
         $order = $shipment->order;
         $cod = $cod ?? ($order && PaymentGatewayType::isCashOnDelivery($order->payment_gateway));
         $mode = $mode ?: $this->modeOf($shipment);
