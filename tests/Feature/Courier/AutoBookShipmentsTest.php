@@ -234,6 +234,20 @@ final class AutoBookShipmentsTest extends TestCase
         $this->assertSame('pending', $shipment->fresh()->status);
     }
 
+    public function test_a_parcel_waiting_for_its_warehouse_is_skipped_not_failed(): void
+    {
+        $order = $this->makeOrder(['payment_gateway' => 'CASH_ON_DELIVERY', 'order_status' => 'order-processing']);
+        $waiting = $this->makeShipment($order);
+        $ready = $this->makeShipment($order);
+        $this->courier->waitingFor = [$waiting->id];
+
+        // No exception: nothing retries, nothing lands in failed_jobs.
+        $this->book(new OrderProcessed($order));
+
+        $this->assertNull($waiting->fresh()->provider_order_id, 'left for staff to choose a warehouse');
+        $this->assertNotNull($ready->fresh()->provider_order_id, 'the other leg still books');
+    }
+
     public function test_one_vendor_group_stays_booked_when_a_sibling_fails(): void
     {
         // Vendor groups book independently: A must not be rolled back because B's
@@ -377,6 +391,8 @@ class FakeCourier extends CourierService
     public bool $fail = false;
     /** @var int[] shipment ids that fail while the rest succeed. */
     public array $failFor = [];
+    /** @var int[] shipment ids still waiting for staff to choose their warehouse. */
+    public array $waitingFor = [];
 
     public function __construct()
     {
@@ -405,6 +421,9 @@ class FakeCourier extends CourierService
     public function book(Shipment $shipment, ?string $partnerCode = null, ?int $courierId = null, array $options = []): array
     {
         $this->booked[] = (int) $shipment->id;
+        if (in_array((int) $shipment->id, $this->waitingFor, true)) {
+            return ['ok' => false, 'code' => 'PICKUP_NOT_CHOSEN', 'error' => 'Choose which PlantAtHome location ships this order first.'];
+        }
         if ($this->fail || in_array((int) $shipment->id, $this->failFor, true)) {
             return ['ok' => false, 'error' => 'shipping service down'];
         }

@@ -114,6 +114,18 @@ class BookCourierShipments implements ShouldQueue
                     $res = ['ok' => false, 'error' => $e->getMessage()];
                 }
 
+                // Waiting for staff to choose which warehouse ships it (a vendor whose staff
+                // choose the location per parcel): that is the operator's step, not a booking
+                // failure — no retry storm, no failed job. The undispatched sweep still flags
+                // the parcel if nobody chooses.
+                if (($res['code'] ?? null) === 'PICKUP_NOT_CHOSEN') {
+                    Log::info('courier.autobook.waiting_for_pickup_choice', [
+                        'order_id'    => $order->id,
+                        'shipment_id' => $shipment->id,
+                    ]);
+                    continue;
+                }
+
                 foreach ((array) ($res['replanned'] ?? []) as $newId) {
                     $replanned[] = (int) $newId;
                 }
