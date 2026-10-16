@@ -109,6 +109,15 @@ class RouteServiceProvider extends ServiceProvider
             return Limit::perMinute(1200)->by('track:'.($request->header('CF-Connecting-IP') ?: $request->ip()));
         });
 
+        // The payment-failed prompt's Yes / No (POST orders/{tracking_number}/cash-on-delivery and
+        // abandon-payment). Keyed on the ORDER, not the IP: the unnamed throttle:N,1 counts every
+        // throttled route from one address in a single bucket, so a shopper behind CGNAT — or anyone
+        // who had just placed an order — got a 429 on the very answer that places or closes their
+        // checkout. The per-order token is the credential; this only stops hammering one order.
+        RateLimiter::for('payment-attempt', function (Request $request) {
+            return Limit::perMinute(10)->by('payment-attempt:'.$request->route('tracking_number'));
+        });
+
         // The crawler leg: one caller (the storefront's proxy.ts), bursts when a
         // search engine crawls. One shared bucket, generous.
         RateLimiter::for('track-crawl', function () {

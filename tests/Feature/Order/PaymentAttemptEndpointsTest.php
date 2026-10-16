@@ -319,4 +319,17 @@ final class PaymentAttemptEndpointsTest extends TestCase
         $this->no()->assertOk()->assertJson(['status' => 'placed']);
         Event::assertNotDispatched(OrderCancelled::class);
     }
+
+    public function test_other_throttled_traffic_from_the_same_address_never_blocks_the_answer(): void
+    {
+        // The unnamed throttle:N,1 keeps ONE counter per IP across every throttled route, so a
+        // shopper who had just placed an order (or sits behind CGNAT) got a 429 on "No" — staging
+        // showed it. The prompt's answers count per order instead.
+        $this->attempt();
+        for ($i = 0; $i < 12; $i++) {
+            $this->postJson('/api/orders/payment', []);
+        }
+
+        $this->no()->assertOk()->assertJson(['status' => 'abandoned']);
+    }
 }

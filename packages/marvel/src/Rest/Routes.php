@@ -495,9 +495,9 @@ Route::post('orders/payment', [OrderController::class, 'submitPayment'])->middle
 // Cash on Delivery, "No" closes it and gives back its stock, coupon and wallet points. Public like
 // the routes above; the per-order token from POST /orders is the credential.
 Route::post('orders/{tracking_number}/cash-on-delivery', [OrderController::class, 'cashOnDelivery'])
-    ->middleware(['service.available:orders', 'throttle:10,1']);
+    ->middleware(['service.available:orders', 'throttle:payment-attempt']);
 Route::post('orders/{tracking_number}/abandon-payment', [OrderController::class, 'abandonPayment'])
-    ->middleware('throttle:10,1');
+    ->middleware('throttle:payment-attempt');
 // ⚠️ These call a PAID LLM. Unauthenticated they are an open, unmetered spend
 // tap on our OpenAI account (which has already hit its billing hard limit once).
 // Both are only ever called from the admin product form via the authed
