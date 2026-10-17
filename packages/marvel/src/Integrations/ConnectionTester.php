@@ -110,6 +110,7 @@ class ConnectionTester
             'razorpay'  => $this->testRazorpay(),
             'openai'    => $this->testBearer('https://api.openai.com/v1/models', $this->integrations->secret('openai', 'api_key')),
             'anthropic' => $this->testAnthropic(),
+            'plant_doctor' => $this->testPlantDoctor(),
             'sendgrid'  => $this->testBearer('https://api.sendgrid.com/v3/scopes', $this->integrations->secret('sendgrid', 'api_key')),
             'google_maps' => $this->testGoogleMaps(),
             'whatsapp'  => $this->testWhatsapp(),
@@ -484,6 +485,38 @@ class ConnectionTester
     private function result(string $status, bool $ok, string $message, array $detail = []): array
     {
         return ['status' => $status, 'ok' => $ok, 'message' => $message, 'detail' => $detail];
+    }
+
+    /**
+     * Read-only Plant Doctor probe. /health proves the service is up and says which models it
+     * runs; an empty POST to /plant-diagnosis with the key proves the key is accepted — 401 means
+     * it is not, a validation 4xx means it got past auth — without buying a diagnosis.
+     */
+    private function testPlantDoctor(): array
+    {
+        $url = rtrim((string) ($this->integrations->config('plant_doctor', 'service_url')
+            ?: config('services.plant_doctor.service_url')), '/');
+        $key = $this->integrations->secret('plant_doctor', 'service_api_key')
+            ?: (string) config('services.plant_doctor.service_api_key');
+        if ($url === '') {
+            return $this->result(IntegrationProvider::HEALTH_UNKNOWN, false, 'Not configured: Service URL is missing.');
+        }
+        $health = Http::timeout(15)->get($url . '/health');
+        if (!$health->successful()) {
+            return $this->result(IntegrationProvider::HEALTH_UNKNOWN, false, 'Service /health returned ' . $health->status());
+        }
+        $auth = Http::withHeaders(['X-Api-Key' => $key])->timeout(15)->post($url . '/plant-diagnosis', []);
+        if (in_array($auth->status(), [401, 403], true)) {
+            return $this->result(IntegrationProvider::HEALTH_AUTH_FAILED, false, 'The service rejected this API key.');
+        }
+        if ($auth->status() >= 500) {
+            return $this->result(IntegrationProvider::HEALTH_UNKNOWN, false, 'Service returned ' . $auth->status() . ' to an empty request.');
+        }
+        return $this->result(IntegrationProvider::HEALTH_CONNECTED, true, 'Service up; the API key is accepted.', [
+            'gate_model' => $health->json('gate_model'),
+            'diagnosis_model' => $health->json('diagnosis_model'),
+            'plant_id' => (bool) $health->json('plant_id'),
+        ]);
     }
 
     /**

@@ -39,8 +39,10 @@ class PlantDoctorController extends CoreController
     private function tokenPrice(?string $model): array
     {
         $prices = (array) $this->cfg('prices', []);
-        if ($model !== null && $model !== '' && isset($prices[$model])) {
-            return $prices[$model];
+        // OpenAI reports the dated snapshot it ran (gpt-5.4-mini-2026-03-17); the table is keyed by the base id.
+        $base = $model !== null ? preg_replace('/-\d{4}-\d{2}-\d{2}$/', '', $model) : null;
+        if ($base !== null && $base !== '' && isset($prices[$base])) {
+            return $prices[$base];
         }
         if ($model !== null && $model !== '') {
             Log::warning('plant-doctor: unpriced model, billed at the fallback price', ['model' => $model]);
@@ -558,7 +560,7 @@ class PlantDoctorController extends CoreController
         $logs = PlantDoctorLog::latest('created_at')->limit($limit)->get([
             'id', 'user_id', 'plant_name', 'condition_summary', 'top_severity',
             'overall_health_score', 'image_url', 'total_tokens',
-            'cost_inr', 'created_at', 'outcome', 'identified_species', 'confidence_level', 'duration_ms',
+            'cost_inr', 'created_at', 'is_plant', 'outcome', 'gate_rule', 'identified_species', 'confidence_level', 'duration_ms',
         ]);
 
         return response()->json(['data' => $logs, 'count' => $logs->count()]);

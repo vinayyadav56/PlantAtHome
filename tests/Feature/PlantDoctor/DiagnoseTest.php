@@ -267,6 +267,17 @@ final class DiagnoseTest extends TestCase
         Http::assertSent(fn ($request) => $request->data()['diagnosis_model'] === null);
     }
 
+    public function test_a_dated_model_snapshot_is_priced_as_its_base_model(): void
+    {
+        $body = $this->serviceBody('plant_detected');
+        $body['usage']['stages'] = [
+            ['stage' => 'gate', 'model' => 'gate-m-2026-03-17', 'input_tokens' => 1000, 'output_tokens' => 0, 'latency_ms' => 1],
+        ];
+        Http::fake([self::SERVICE . '/*' => Http::response($body, 200)]);
+        $this->diagnose(['image_base64' => $this->jpeg()])->assertOk();
+        $this->assertEqualsWithDelta(0.001, PlantDoctorLog::latest('id')->first()->cost_usd, 1e-6); // 1000 × 1 / 1M, not the fallback
+    }
+
     public function test_an_unpriced_model_is_billed_at_the_fallback_and_logged(): void
     {
         Log::spy();
