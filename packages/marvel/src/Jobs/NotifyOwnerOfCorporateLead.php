@@ -55,14 +55,11 @@ class NotifyOwnerOfCorporateLead implements ShouldQueue
                 return;
             }
 
-            // A queue retry re-runs handle(); one message per lead per hour.
-            if (! Cache::add('owner_notify:corporate_lead:' . $lead->id, 1, 3600)) {
-                return;
-            }
-            // And at most HOURLY_CAP alerts an hour in total: a flood of spoofed leads must
-            // not become a flood of paid messages. The leads themselves still land in admin.
-            Cache::add(self::HOURLY_KEY, 0, 3600);
-            if ((int) Cache::increment(self::HOURLY_KEY) > self::HOURLY_CAP) {
+            // At most HOURLY_CAP alerts an hour in total: a flood of spoofed leads must not
+            // become a flood of paid messages. Checked BEFORE the per-lead token is written and
+            // counted only for leads that actually send, so a capped lead is simply not
+            // alerted (it is still in admin) rather than marked as done.
+            if ((int) Cache::get(self::HOURLY_KEY, 0) >= self::HOURLY_CAP) {
                 Log::notice('sms.corporate_lead.capped', ['lead_id' => $lead->id]);
                 return;
             }
@@ -71,6 +68,13 @@ class NotifyOwnerOfCorporateLead implements ShouldQueue
             if (! $gateway) {
                 return;
             }
+
+            // A queue retry re-runs handle(); one message per lead per hour.
+            if (! Cache::add('owner_notify:corporate_lead:' . $lead->id, 1, 3600)) {
+                return;
+            }
+            Cache::add(self::HOURLY_KEY, 0, 3600);
+            Cache::increment(self::HOURLY_KEY);
 
             $message = __('sms.owner.corporateLead.message', [
                 'COMPANY'  => $lead->company ?: 'a company',

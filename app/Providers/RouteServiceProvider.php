@@ -128,9 +128,11 @@ class RouteServiceProvider extends ServiceProvider
             return [
                 Limit::perMinute(10)->by('lead-submit:'.($request->header('CF-Connecting-IP') ?: $request->ip())),
                 Limit::perMinute(3)->by('lead-phone:'.(self::otpPhoneKey($request) ?: 'none')),
-                // Site-wide ceiling: both keys above are client-controlled at the origin, so this
-                // is what bounds the table (and the owner alerts) when someone rotates them.
-                Limit::perMinute(30)->by('lead-submit:all'),
+                // Circuit breaker per form: both keys above are client-controlled at the origin,
+                // so this bounds the table when someone rotates them. Far above any real peak
+                // (a few enquiries a day), because anyone can fill a constant-keyed bucket and
+                // lock the form for everyone else; per form so one cannot take down the other.
+                Limit::perMinute(120)->by('lead-submit:all:'.($request->is('*corporate-leads') ? 'corporate' : 'garden')),
             ];
         });
 

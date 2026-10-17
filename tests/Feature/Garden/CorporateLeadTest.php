@@ -178,16 +178,20 @@ final class CorporateLeadTest extends TestCase
             ->postJson('/api/corporate-leads', $this->payload(['phone' => '+919000000001']))->assertStatus(201);
     }
 
-    public function test_a_site_wide_ceiling_holds_when_both_client_keys_rotate(): void
+    public function test_a_per_form_ceiling_holds_when_both_client_keys_rotate(): void
     {
-        for ($i = 1; $i <= 30; $i++) {
-            $this->withHeader('CF-Connecting-IP', '198.51.100.' . $i)
+        for ($i = 1; $i <= 120; $i++) {
+            $this->withHeader('CF-Connecting-IP', '198.51.' . intdiv($i, 200) . '.' . ($i % 200 + 1))
                 ->postJson('/api/corporate-leads', $this->payload(['phone' => '+9190000' . sprintf('%05d', $i)]))
                 ->assertStatus(201);
         }
-        $this->withHeader('CF-Connecting-IP', '198.51.100.31')
+        $this->withHeader('CF-Connecting-IP', '198.51.100.250')
             ->postJson('/api/corporate-leads', $this->payload(['phone' => '+919000099999']))
             ->assertStatus(429);
+        // The garden form has its own breaker, so the flood above does not lock it.
+        $this->withHeader('CF-Connecting-IP', '198.51.100.251')
+            ->postJson('/api/garden-leads', ['name' => 'Asha Rao', 'phone' => '+919000099998'])
+            ->assertStatus(201);
     }
 
     public function test_the_owner_alert_is_dispatched_only_when_its_toggle_is_on(): void
