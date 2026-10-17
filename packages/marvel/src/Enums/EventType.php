@@ -31,4 +31,7 @@ final class EventType extends Enum
      */
     public const CUSTOMER_REGISTERED   = 'customerSignup';
 
+    /** A corporate-gifting enquiry landed (settings.options.smsEvent.admin.corporateLead). */
+    public const CORPORATE_LEAD        = 'corporateLead';
+
 }

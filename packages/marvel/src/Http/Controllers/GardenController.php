@@ -9,6 +9,7 @@ use Marvel\Database\Models\GardenLead;
 use Marvel\Database\Models\GardenPackage;
 use Marvel\Database\Models\GardenPackageTemplate;
 use Marvel\Database\Models\GardenPackageVisit;
+use Marvel\Jobs\NotifyOwnerOfCorporateLead;
 
 class GardenController extends CoreController
 {
@@ -52,25 +53,62 @@ class GardenController extends CoreController
     /** Public — landing-page lead capture. */
     public function storeLead(Request $request): JsonResponse
     {
+        // The /corporate-leads route is authoritative for the source, and a
+        // proposal needs someone to write back to: company, email, city required.
+        $corporate = $request->is('*corporate-leads');
+        $need = $corporate ? 'required' : 'nullable';
         $data = $request->validate([
             'name' => 'required|string|max:191',
             'phone' => 'required|string|max:32',
-            'email' => 'nullable|email|max:191',
-            'city' => 'nullable|string|max:191',
+            'email' => "{$need}|email|max:191",
+            'city' => "{$need}|string|max:191",
             'state' => 'nullable|string|max:191',
             'garden_type' => 'nullable|string|max:64',
             'space_size' => 'nullable|string|max:64',
             'budget_range' => 'nullable|string|max:64',
             'message' => 'nullable|string|max:2000',
             'source' => 'nullable|string|max:32',
-            'company' => 'nullable|string|max:191',
+            'company' => "{$need}|string|max:191",
             'occasion' => 'nullable|string|max:64',
             'quantity' => 'nullable|string|max:64',
+            'meta' => 'nullable|array',
+            'meta.preferred_date' => 'nullable|date|after_or_equal:today',
+            // Checked on the array, not `.*`, so the error keys `meta.plant_preferences`
+            // (the storefront maps 422 keys straight onto its fields).
+            'meta.plant_preferences' => ['nullable', 'array', 'max:6', function ($attr, $value, $fail) {
+                foreach ((array) $value as $v) {
+                    if (!in_array($v, ['indoor', 'air_purifying', 'low_maintenance', 'flowering', 'succulents_desk', 'other'], true)) {
+                        $fail('The selected plant preferences are invalid.');
+                        return;
+                    }
+                }
+            }],
+        ], [], [
+            // Readable names in 422 messages: the storefront shows them under the fields.
+            'meta.preferred_date'    => 'preferred delivery date',
+            'meta.plant_preferences' => 'plant preferences',
+            'city'                   => 'delivery city',
         ]);
-        // The /corporate-leads route is authoritative for the source.
-        $source = $request->is('*corporate-leads') ? 'corporate' : ($data['source'] ?? 'garden');
-        $this->assertCityAcceptsWork($data['city'] ?? null, $source);
-        $lead = GardenLead::create($data + ['status' => 'new', 'source' => $source]);
+        $source = $corporate ? 'corporate' : ($data['source'] ?? 'garden');
+        // Corporate gifting ships pan-India; the city gate is for garden visits only.
+        if (!$corporate) {
+            $this->assertCityAcceptsWork($data['city'] ?? null, $source);
+        }
+        // Only the two known keys: validated() keeps whatever else was sent under `meta`.
+        $meta = array_filter([
+            'preferred_date' => $data['meta']['preferred_date'] ?? null,
+            'plant_preferences' => $data['meta']['plant_preferences'] ?? null,
+        ]);
+        unset($data['meta']);
+        // array_merge, not `+`: with `+` a client-sent `source` won over the route's.
+        $lead = GardenLead::create(array_merge($data, ['status' => 'new', 'source' => $source, 'meta' => $meta ?: null]));
+        if ($corporate && NotifyOwnerOfCorporateLead::isEnabled()) {
+            try {
+                NotifyOwnerOfCorporateLead::dispatch($lead->id)->afterCommit();
+            } catch (\Throwable $e) {
+                \Log::warning('sms.corporate_lead.dispatch_failed', ['lead_id' => $lead->id, 'error' => $e->getMessage()]);
+            }
+        }
         $msg = $source === 'corporate'
             ? 'Thanks! Our gifting team will reach out with a tailored proposal.'
             : 'Thanks! Our garden team will reach out shortly.';

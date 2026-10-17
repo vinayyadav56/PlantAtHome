@@ -10,6 +10,10 @@ return [
             'message' => 'New signup on PlantAtHome: :NAME (:CONTACT).',
             'subject' => 'New customer signed up',
         ],
+        'corporateLead' => [
+            'message' => 'New corporate gifting enquiry on PlantAtHome: :COMPANY, :NAME (:PHONE), :QUANTITY for :OCCASION.',
+            'subject' => 'New corporate gifting enquiry',
+        ],
     ],
     'order' => [
         'cancelOrder'         => [

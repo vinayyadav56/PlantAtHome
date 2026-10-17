@@ -272,13 +272,16 @@ Route::middleware(['auth:sanctum', 'throttle:20,1'])->group(function () {
 
 // Garden service — public lead capture + active package templates for the page,
 // and the Razorpay payment-link webhook. Lead capture is rate-limited per IP to
-// stop form-spam from flooding the leads table.
+// stop form-spam from flooding the leads table — on its own bucket (the unnamed
+// throttle:N,1 is shared with locations/* and delivery-options, see
+// RouteServiceProvider). Corporate gifting is pan-India: scope `leads` so an
+// orders pause never 503s an enquiry (only stop_platform applies).
 Route::post('garden-leads', [GardenController::class, 'storeLead'])
     ->middleware('service.available')
-    ->middleware('throttle:10,1');
+    ->middleware('throttle:lead-submit');
 Route::post('corporate-leads', [GardenController::class, 'storeLead'])
-    ->middleware('service.available')
-    ->middleware('throttle:10,1');
+    ->middleware('service.available:leads')
+    ->middleware('throttle:lead-submit');
 Route::get('garden-package-templates', [GardenController::class, 'templates']);
 Route::post('webhooks/razorpay-garden', [GardenController::class, 'razorpayWebhook'])->middleware('throttle:120,1');
 

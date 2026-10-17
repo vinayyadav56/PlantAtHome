@@ -118,6 +118,19 @@ class RouteServiceProvider extends ServiceProvider
             return Limit::perMinute(10)->by('payment-attempt:'.$request->route('tracking_number'));
         });
 
+        // Lead forms (garden-leads, corporate-leads). Own bucket, keyed like `track`: the
+        // unnamed throttle:10,1 counts every throttled route from one address together, so a
+        // visitor who had just browsed locations/* and delivery-options got a 429 on the form.
+        // Two buckets: per address, and per phone number regardless of address — the header is
+        // client-controlled when the origin is reached around Cloudflare, so an IP-only key
+        // would let one caller file unlimited leads by rotating it.
+        RateLimiter::for('lead-submit', function (Request $request) {
+            return [
+                Limit::perMinute(10)->by('lead-submit:'.($request->header('CF-Connecting-IP') ?: $request->ip())),
+                Limit::perMinute(3)->by('lead-phone:'.(self::otpPhoneKey($request) ?: 'none')),
+            ];
+        });
+
         // The crawler leg: one caller (the storefront's proxy.ts), bursts when a
         // search engine crawls. One shared bucket, generous.
         RateLimiter::for('track-crawl', function () {

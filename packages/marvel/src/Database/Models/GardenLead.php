@@ -10,6 +10,7 @@ class GardenLead extends Model
     protected $fillable = [
         'name', 'phone', 'email', 'city', 'state', 'garden_type',
         'space_size', 'budget_range', 'message', 'status',
-        'source', 'company', 'occasion', 'quantity',
+        'source', 'company', 'occasion', 'quantity', 'meta',
     ];
+    protected $casts = ['meta' => 'array'];
 }
