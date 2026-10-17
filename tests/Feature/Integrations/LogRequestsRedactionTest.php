@@ -57,6 +57,20 @@ final class LogRequestsRedactionTest extends TestCase
         $this->assertSame('***redacted***', $out['nested']['porter_api_key']);
     }
 
+    /** A customer's photo is personal data and ~8 KB per row of pure noise in the request log. */
+    public function test_plant_doctor_photos_are_redacted(): void
+    {
+        $out = $this->redact([
+            'image_base64' => str_repeat('/9j/4AAQ', 200),
+            'thumb'        => 'data:image/jpeg;base64,/9j/4AAQ',
+            'symptoms'     => 'leaves turning yellow',
+        ]);
+
+        $this->assertSame('***redacted***', $out['image_base64']);
+        $this->assertSame('***redacted***', $out['thumb']);
+        $this->assertSame('leaves turning yellow', $out['symptoms']);
+    }
+
     /**
      * The suffix rule must not swallow keys that carry no secret but make a log readable —
      * idempotency_key is what ties a duplicated request to its original, and secret_name is a

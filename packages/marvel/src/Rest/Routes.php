@@ -232,8 +232,10 @@ Route::post('voice-search/log', [VoiceSearchController::class, 'storeLog'])
 // forwards a photo/symptoms to the microservice. Rate-limited + budget-capped
 // since each call incurs AI cost.
 Route::get('plant-doctor/settings', [PlantDoctorController::class, 'getSettings']);
+// `service.available:ai` is an unknown scope to the kill-switch middleware, so only the
+// platform-wide stop applies — which is the one that should also stop paid AI calls.
 Route::post('plant-doctor/diagnose', [PlantDoctorController::class, 'diagnose'])
-    ->middleware('throttle:30,1');
+    ->middleware(['service.available:ai', 'throttle:30,1']);
 // Plant Doctor consultation history — customer-owned rows (user_id always from
 // the token). Auth-gated; store is rate-limited alongside the diagnose cap.
 Route::middleware('auth:sanctum')->group(function () {

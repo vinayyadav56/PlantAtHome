@@ -68,6 +68,27 @@ return [
     'plant_doctor' => [
         'service_url' => env('PLANT_DOCTOR_SERVICE_URL'),
         'service_api_key' => env('PLANT_DOCTOR_SERVICE_API_KEY'),
+        // Proxy timeout; the service's own deadline (80 s) sits under it on purpose.
+        'timeout' => (int) env('PLANT_DOCTOR_TIMEOUT', 90),
+        // Caps checked before anything is sent on: the base64 string (prod nginx takes 12M bodies)
+        // and the decoded image. The service applies its own, stricter checks after decoding.
+        'max_image_base64_chars' => (int) env('PLANT_DOCTOR_MAX_IMAGE_B64', 8 * 1024 * 1024),
+        'max_image_bytes' => (int) env('PLANT_DOCTOR_MAX_IMAGE_BYTES', 6 * 1024 * 1024),
+        'min_edge' => 160,
+        'max_edge' => 12000,
+        // Diagnosis models the admin may pick; the service only honours ids it allow-lists too.
+        'models' => ['gpt-5.4', 'gpt-5.4-mini', 'gpt-4.1', 'gpt-4o'],
+        // USD per 1M tokens [input, output]. Array access, not dotted keys: ids contain dots.
+        // An unpriced model is billed at fallback_price and logged, so the budget still trips.
+        'prices' => [
+            'gpt-5.4-mini' => [0.75, 4.50],
+            'gpt-4o-mini' => [0.15, 0.60],
+            'gpt-4o' => [2.50, 10.00],
+            'gpt-4.1-mini' => [0.40, 1.60],
+            'gpt-4.1' => [2.00, 8.00],
+        ],
+        'fallback_price' => [5.00, 20.00],
+        'usd_to_inr' => (float) env('USD_TO_INR', 83.5),
     ],
 
     'care_plan' => [

@@ -13,6 +13,7 @@ class PlantDoctorLog extends Model
         'prompt_tokens', 'completion_tokens', 'total_tokens',
         'cost_usd', 'cost_inr', 'created_at',
         'is_plant', 'identified_species', 'id_confidence',
+        'outcome', 'gate_rule', 'confidence_level', 'duration_ms',
     ];
     protected $casts = [
         'user_id' => 'int',
@@ -25,6 +26,7 @@ class PlantDoctorLog extends Model
         'created_at' => 'datetime',
         'is_plant' => 'bool',
         'id_confidence' => 'float',
+        'duration_ms' => 'int',
     ];
     public $timestamps = false;
 }

@@ -44,6 +44,9 @@ class LogRequests
         // integration credential field names that the exact-match list above missed
         'aws_secret_access_key', 'secret_access_key', 'auth_key', 'webhook_secret',
         'webhook_verify_token', 'app_secret', 'server_key', 'private_key', 'sync_key',
+        // Customer photos (Plant Doctor diagnose + consultation thumbnails): bulky and personal,
+        // and the key names carry no secret-shaped suffix for the rule below to catch.
+        'image_base64', 'thumb',
     ];
     // Any key ending like this is a secret whatever its prefix (razorpay_key_secret,
     // partner_api_token, service_api_key). Suffix-only, so `secret_name` — the Secrets
