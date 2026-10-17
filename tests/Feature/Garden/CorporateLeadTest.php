@@ -178,6 +178,18 @@ final class CorporateLeadTest extends TestCase
             ->postJson('/api/corporate-leads', $this->payload(['phone' => '+919000000001']))->assertStatus(201);
     }
 
+    public function test_a_site_wide_ceiling_holds_when_both_client_keys_rotate(): void
+    {
+        for ($i = 1; $i <= 30; $i++) {
+            $this->withHeader('CF-Connecting-IP', '198.51.100.' . $i)
+                ->postJson('/api/corporate-leads', $this->payload(['phone' => '+9190000' . sprintf('%05d', $i)]))
+                ->assertStatus(201);
+        }
+        $this->withHeader('CF-Connecting-IP', '198.51.100.31')
+            ->postJson('/api/corporate-leads', $this->payload(['phone' => '+919000099999']))
+            ->assertStatus(429);
+    }
+
     public function test_the_owner_alert_is_dispatched_only_when_its_toggle_is_on(): void
     {
         Bus::fake();
@@ -217,5 +229,11 @@ final class CorporateLeadTest extends TestCase
             return $body['to'] === '919996469046'
                 && $text === 'New corporate gifting enquiry on PlantAtHome: Acme Pvt Ltd, Asha Rao (+919876543210), 100-249 for Employee gifting.';
         });
+
+        // Site-wide hourly cap: once it is reached, further leads still save but send nothing.
+        \Illuminate\Support\Facades\Cache::put(NotifyOwnerOfCorporateLead::HOURLY_KEY, NotifyOwnerOfCorporateLead::HOURLY_CAP, 3600);
+        $capped = GardenLead::create($this->payload(['phone' => '+919000000002']) + ['status' => 'new', 'source' => 'corporate']);
+        (new NotifyOwnerOfCorporateLead($capped->id))->handle();
+        Http::assertSentCount(1);
     }
 }

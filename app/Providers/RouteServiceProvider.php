@@ -128,6 +128,9 @@ class RouteServiceProvider extends ServiceProvider
             return [
                 Limit::perMinute(10)->by('lead-submit:'.($request->header('CF-Connecting-IP') ?: $request->ip())),
                 Limit::perMinute(3)->by('lead-phone:'.(self::otpPhoneKey($request) ?: 'none')),
+                // Site-wide ceiling: both keys above are client-controlled at the origin, so this
+                // is what bounds the table (and the owner alerts) when someone rotates them.
+                Limit::perMinute(30)->by('lead-submit:all'),
             ];
         });
 
